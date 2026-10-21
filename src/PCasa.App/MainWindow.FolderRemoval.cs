@@ -38,9 +38,18 @@ public partial class MainWindow
             if (removeMonitoredRoot)
             {
                 // No scan may repopulate this folder after the removal barrier.
-                var before = _imageCatalog.CountAll();
-                await Task.Run(() => _folderRepository.Remove(folderId));
-                removed = Math.Max(0, before - _imageCatalog.CountAll());
+                removed = 0;
+                await _scheduler.EnqueueAsync(
+                    $"monitor-remove:{folder.CanonicalPath}:{folderId}",
+                    SchedulerPriority.Interactive,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var before = _imageCatalog.CountAll();
+                        _folderRepository.Remove(folderId);
+                        removed = Math.Max(0, before - _imageCatalog.CountAll());
+                        return Task.CompletedTask;
+                    });
                 ForgetFolderActivity(normalized);
             }
             else
@@ -72,6 +81,17 @@ public partial class MainWindow
             CompleteFolderRemoval();
         }
     }
+
+    // All manager add entries use the same priority-ordered operation.
+    private Task AddFolderFromManagerAsync(string path)
+        => _scheduler.EnqueueAsync(
+            $"monitor-add:{path}", SchedulerPriority.UserAction,
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                _folderRepository.Add(path);
+                return Task.CompletedTask;
+            });
 
     private void HideFolderFromCurrentGallery(string path)
     {

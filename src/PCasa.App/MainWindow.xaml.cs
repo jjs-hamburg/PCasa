@@ -37,7 +37,7 @@ public partial class MainWindow : Window
         _database.Initialize();
         _folderRepository = new FolderRepository(_database);
         _imageCatalog = new ImageCatalogRepository(_database);
-        _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache());
+        _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
         InitializeAppearance();
     }
 

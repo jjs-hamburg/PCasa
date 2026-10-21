@@ -33,6 +33,7 @@ public partial class FolderManagerWindow : Window
     private readonly Func<long, string, bool, Task<int>>? _removeFolderAsync;
     private readonly CatalogRemovalService _catalogRemovalService;
     private readonly PCasaScheduler? _scheduler;
+    private readonly Func<string, Task>? _addFolderAsync;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -44,12 +45,14 @@ public partial class FolderManagerWindow : Window
 
     public FolderManagerWindow(FolderRepository repository, bool serverDatabaseConfigured,
         Func<long, string, bool, Task<int>>? removeFolderAsync = null,
-        PCasaScheduler? scheduler = null)
+        PCasaScheduler? scheduler = null,
+        Func<string, Task>? addFolderAsync = null)
     {
         InitializeComponent();
         _repository = repository;
         _removeFolderAsync = removeFolderAsync;
         _scheduler = scheduler;
+        _addFolderAsync = addFolderAsync;
         _catalogRemovalService = new CatalogRemovalService(new LocalDatabase());
         _backgroundScanSettings = BackgroundScanSettings.Load();
 
@@ -335,7 +338,12 @@ public partial class FolderManagerWindow : Window
             if (node.IsSystemFolder && node.Root is null)
             {
                 if (!excluded)
-                    _repository.Add(node.LocalPath);
+                {
+                    if (_addFolderAsync is not null)
+                        await _addFolderAsync(node.LocalPath);
+                    else
+                        await Task.Run(() => _repository.Add(node.LocalPath));
+                }
                 saved = true;
                 Reload(expandSystemFolder: node.LocalPath);
             }
@@ -382,7 +390,7 @@ public partial class FolderManagerWindow : Window
         }
     }
 
-    private void AddFolder_Click(object sender, RoutedEventArgs e)
+    private async void AddFolder_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog
         {
@@ -393,7 +401,10 @@ public partial class FolderManagerWindow : Window
 
         try
         {
-            _repository.Add(dialog.FolderName);
+            if (_addFolderAsync is not null)
+                await _addFolderAsync(dialog.FolderName);
+            else
+                await Task.Run(() => _repository.Add(dialog.FolderName));
             Reload();
             FoldersChanged?.Invoke(this, EventArgs.Empty);
         }

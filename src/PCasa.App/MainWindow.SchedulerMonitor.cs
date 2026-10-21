@@ -23,6 +23,7 @@ public partial class MainWindow
         grid.Columns.Add(new GridViewColumn { Header = "Priorität", DisplayMemberBinding = new System.Windows.Data.Binding("Priority"), Width = 95 });
         grid.Columns.Add(new GridViewColumn { Header = "Status", DisplayMemberBinding = new System.Windows.Data.Binding("State"), Width = 100 });
         grid.Columns.Add(new GridViewColumn { Header = "Eingang", DisplayMemberBinding = new System.Windows.Data.Binding("SubmittedAt"), Width = 175 });
+        grid.Columns.Add(new GridViewColumn { Header = "Laufzeit", DisplayMemberBinding = new System.Windows.Data.Binding("Duration"), Width = 100 });
         grid.Columns.Add(new GridViewColumn { Header = "Fehler", DisplayMemberBinding = new System.Windows.Data.Binding("Error"), Width = 220 });
         list.View = grid;
 
@@ -30,7 +31,7 @@ public partial class MainWindow
         {
             Title = "PCasa – Scheduler-Monitor (nur Anzeige)",
             Owner = this,
-            Width = 1030,
+            Width = 1130,
             Height = 440,
             MinWidth = 650,
             MinHeight = 250,

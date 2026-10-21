@@ -105,7 +105,7 @@ public partial class MainWindow
             {
                 await _scheduler.EnqueueAsync(
                     "browse-cache:foreground",
-                    SchedulerPriority.UserAction,
+                    SchedulerPriority.Background,
                     token =>
                     {
                         result = _browseCacheBuilder.BuildMissing(progress, token);
@@ -418,7 +418,8 @@ public partial class MainWindow
             _folderRepository,
             serverDatabaseConfigured: false,
             removeFolderAsync: RemoveFolderFromPcasaAsync,
-            scheduler: _scheduler)
+            scheduler: _scheduler,
+            addFolderAsync: AddFolderFromManagerAsync)
         {
             Owner = this
         };

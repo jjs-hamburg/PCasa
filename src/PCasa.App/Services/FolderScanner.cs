@@ -231,6 +231,7 @@ public sealed class FolderScanner
                             locations.AddRange(packStore.CreateTiers(
                                 localPath, new BrowseThumbnailProfile(largeTiers),
                                 cancellationToken));
+                        var keywords = ImageTagRepository.ReadKeywords(localPath);
                         scanSession.Upsert(new CatalogImageData(
                             folder.Id,
                             photoFolderId,
@@ -245,7 +246,6 @@ public sealed class FolderScanner
                             thumbnail.Path));
                         // Read metadata once on import/change. A failed metadata read
                         // is retried by the separate resumable tag backfill.
-                        var keywords = ImageTagRepository.ReadKeywords(localPath);
                         if (keywords is not null)
                             scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
                         scanSession.SaveBrowseLocations(
