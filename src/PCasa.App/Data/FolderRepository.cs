@@ -139,7 +139,7 @@ public sealed class FolderRepository
         command.Parameters.AddWithValue("$id", monitoredFolderId);
         command.Parameters.AddWithValue("$path", normalized);
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        command.ExecuteNonQuery();
+        var changed = command.ExecuteNonQuery();
 
         if (excluded)
         {
@@ -179,6 +179,21 @@ public sealed class FolderRepository
             }
         }
 
+        if (changed > 0)
+        {
+            // A change to exclusions invalidates old scans in the SAME transaction.
+            using var source = connection.CreateCommand();
+            source.Transaction = transaction;
+            source.CommandText = """
+                UPDATE scheduler_sources
+                SET generation = generation + 1, updated_utc = $now
+                WHERE canonical_path = $path AND desired_present = 1;
+                """;
+            source.Parameters.AddWithValue("$path", monitored.CanonicalPath);
+            source.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            if (source.ExecuteNonQuery() != 1)
+                throw new OperationCanceledException("Source removed during exclusion.");
+        }
         transaction.Commit();
     }
 

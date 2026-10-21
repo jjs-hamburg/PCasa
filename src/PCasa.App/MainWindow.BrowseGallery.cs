@@ -417,7 +417,8 @@ public partial class MainWindow
         var window = new FolderManagerWindow(
             _folderRepository,
             serverDatabaseConfigured: false,
-            removeFolderAsync: RemoveFolderFromPcasaAsync)
+            removeFolderAsync: RemoveFolderFromPcasaAsync,
+            scheduler: _scheduler)
         {
             Owner = this
         };

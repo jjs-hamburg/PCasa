@@ -81,13 +81,13 @@ public sealed class CatalogRemovalService
     // The same transactional pruning as RemovePath, but physical cache
     // maintenance is deferred. Used when a user excludes a subtree.
     public int DetachSubtree(long monitoredFolderId, string localPath,
-        IProgress<string>? progress = null)
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
         return Remove(monitoredFolderId, normalized, prefix,
             removeRoot: false, progress, deferCleanup: true,
-            requireExcludedPath: normalized);
+            requireExcludedPath: normalized, cancellationToken: cancellationToken);
     }
 
     // Removing a monitored root is a user-facing catalog operation. Do not
@@ -200,18 +200,22 @@ public sealed class CatalogRemovalService
     // Reuse the same deletion and cache cleanup as explicit folder removal.
     public int RemoveMissing(long folderId, string localDirectory,
         IReadOnlySet<string> currentPaths, IProgress<string>? progress = null,
-        bool recursive = true, CancellationToken cancellationToken = default)
+        bool recursive = true, CancellationToken cancellationToken = default,
+        string? sourceCanonicalPath = null, long? expectedGeneration = null)
     {
         var normalized = Path.GetFullPath(localDirectory).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
         return Remove(folderId, normalized, prefix, removeRoot: false, progress,
-            currentPaths, recursive, cancellationToken);
+            currentPaths, recursive, cancellationToken,
+            sourceCanonicalPath: sourceCanonicalPath,
+            expectedGeneration: expectedGeneration);
     }
 
     private int Remove(long folderId, string path, string prefix, bool removeRoot,
         IProgress<string>? progress, IReadOnlySet<string>? currentPaths = null,
         bool recursive = true, CancellationToken cancellationToken = default,
-        bool deferCleanup = false, string? requireExcludedPath = null)
+        bool deferCleanup = false, string? requireExcludedPath = null,
+        string? sourceCanonicalPath = null, long? expectedGeneration = null)
     {
         lock (CacheLock)
         {
@@ -227,6 +231,25 @@ public sealed class CatalogRemovalService
                 // Re-inclusion can overtake an already queued exclusion cleanup.
                 // Check the current desired state inside the same SQLite write
                 // transaction as the DELETE, not before acquiring CacheLock.
+                if (sourceCanonicalPath is not null)
+                {
+                    if (expectedGeneration is null)
+                        throw new ArgumentException("Missing source generation.");
+                    using var guard = connection.CreateCommand();
+                    guard.Transaction = transaction;
+                    guard.CommandText = """
+                        SELECT EXISTS(
+                            SELECT 1 FROM scheduler_sources s
+                            JOIN monitored_folders m ON m.canonical_path = s.canonical_path
+                            WHERE m.id = $folderId AND s.canonical_path = $path
+                              AND s.generation = $generation AND s.desired_present = 1);
+                        """;
+                    guard.Parameters.AddWithValue("$folderId", folderId);
+                    guard.Parameters.AddWithValue("$path", sourceCanonicalPath);
+                    guard.Parameters.AddWithValue("$generation", expectedGeneration.Value);
+                    if (Convert.ToInt32(guard.ExecuteScalar()) != 1)
+                        throw new OperationCanceledException("Old scan may not prune catalog.");
+                }
                 if (requireExcludedPath is not null)
                 {
                     using var guard = connection.CreateCommand();

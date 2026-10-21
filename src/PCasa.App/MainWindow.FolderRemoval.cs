@@ -45,7 +45,7 @@ public partial class MainWindow
             }
             else
             {
-                removed = await new FolderExclusionService(_folderRepository, _database)
+                removed = await new FolderExclusionService(_folderRepository, _database, _scheduler)
                     .ChangeAsync(folderId, normalized, excluded: true,
                         (id, changedPath, excluded) =>
                             BrowseFolderManager_ExclusionChanged(this,

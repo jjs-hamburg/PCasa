@@ -32,6 +32,7 @@ public partial class FolderManagerWindow : Window
     private readonly FolderRepository _repository;
     private readonly Func<long, string, bool, Task<int>>? _removeFolderAsync;
     private readonly CatalogRemovalService _catalogRemovalService;
+    private readonly PCasaScheduler? _scheduler;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -42,11 +43,13 @@ public partial class FolderManagerWindow : Window
     private bool _busy;
 
     public FolderManagerWindow(FolderRepository repository, bool serverDatabaseConfigured,
-        Func<long, string, bool, Task<int>>? removeFolderAsync = null)
+        Func<long, string, bool, Task<int>>? removeFolderAsync = null,
+        PCasaScheduler? scheduler = null)
     {
         InitializeComponent();
         _repository = repository;
         _removeFolderAsync = removeFolderAsync;
+        _scheduler = scheduler;
         _catalogRemovalService = new CatalogRemovalService(new LocalDatabase());
         _backgroundScanSettings = BackgroundScanSettings.Load();
 
@@ -347,7 +350,7 @@ public partial class FolderManagerWindow : Window
                 {
                     var progress = new Progress<string>(status =>
                         CleanupStatusChanged?.Invoke(status));
-                    await new FolderExclusionService(_repository, new LocalDatabase())
+                    await new FolderExclusionService(_repository, new LocalDatabase(), _scheduler)
                         .ChangeAsync(monitoredRoot.Id, node.LocalPath, excluded,
                             (id, path, isExcluded) =>
                                 FolderExclusionChanged?.Invoke(this,

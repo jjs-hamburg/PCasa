@@ -14,8 +14,10 @@ public sealed class ImageCatalogRepository
         _database = database;
     }
 
-    public CatalogScanSession CreateScanSession()
-        => new(_database.OpenConnection());
+    public CatalogScanSession CreateScanSession(string? sourcePath = null,
+        long? folderId = null, long? generation = null,
+        CancellationToken cancellationToken = default)
+        => new(_database.OpenConnection(), sourcePath, folderId, generation, cancellationToken);
 
     public int CountAll()
     {
@@ -160,10 +162,23 @@ public sealed class CatalogScanSession : IDisposable
     private SqliteTransaction? _transaction;
     private int _pendingWrites;
     private bool _disposed;
+    private readonly string? _sourcePath;
+    private readonly long? _folderId;
+    private readonly long? _generation;
+    private readonly CancellationToken _cancellationToken;
 
-    public CatalogScanSession(SqliteConnection connection)
+    public CatalogScanSession(SqliteConnection connection,
+        string? sourcePath = null, long? folderId = null, long? generation = null,
+        CancellationToken cancellationToken = default)
     {
+        if ((sourcePath is null) != (folderId is null) ||
+            (sourcePath is null) != (generation is null))
+            throw new ArgumentException("Source fence requires source, folder ID and generation.");
         _connection = connection;
+        _sourcePath = sourcePath;
+        _folderId = folderId;
+        _generation = generation;
+        _cancellationToken = cancellationToken;
 
         _selectState = connection.CreateCommand();
         _selectState.CommandText =
@@ -486,16 +501,50 @@ public sealed class CatalogScanSession : IDisposable
         }
     }
 
+    // Never keep an earlier write transaction open across slow image/SMB decoding.
+    public void FlushPending()
+    {
+        ThrowIfDisposed();
+        CommitBatch();
+    }
+
     private void CommitBatch()
     {
-        if (_transaction is null)
+        if (_transaction is null) return;
+        try
         {
-            return;
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (_sourcePath is not null)
+            {
+                // Check in the SAME SQLite transaction as catalog mutations.
+                using var guard = _connection.CreateCommand();
+                guard.Transaction = _transaction;
+                guard.CommandText = """
+                    SELECT EXISTS(
+                        SELECT 1 FROM scheduler_sources s
+                        JOIN monitored_folders m ON m.canonical_path = s.canonical_path
+                        WHERE s.canonical_path = $path AND s.generation = $generation
+                          AND s.desired_present = 1 AND m.id = $folderId);
+                    """;
+                guard.Parameters.AddWithValue("$path", _sourcePath);
+                guard.Parameters.AddWithValue("$generation", _generation!.Value);
+                guard.Parameters.AddWithValue("$folderId", _folderId!.Value);
+                if (Convert.ToInt32(guard.ExecuteScalar()) != 1)
+                    throw new OperationCanceledException("Scan source generation is obsolete.");
+            }
+            _cancellationToken.ThrowIfCancellationRequested();
+            _transaction.Commit();
         }
-
-        _transaction.Commit();
-        _transaction.Dispose();
-        ClearTransactionState();
+        catch
+        {
+            try { _transaction.Rollback(); } catch { /* Already completed. */ }
+            throw;
+        }
+        finally
+        {
+            _transaction.Dispose();
+            ClearTransactionState();
+        }
     }
 
     private void ClearTransactionState()

@@ -123,6 +123,10 @@ public sealed class FolderScanner
         var progressClock = Stopwatch.StartNew();
         var catalogCommitClock = Stopwatch.StartNew();
 
+        var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
+        if (sourceState is not { DesiredPresent: true })
+            throw new OperationCanceledException("The monitored source was removed.");
+        var generation = sourceState.Value.Generation;
         var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
 
         // Do not even enumerate excluded subtrees. Merely filtering files
@@ -135,7 +139,8 @@ public sealed class FolderScanner
 
         var profile = _browseProfile.Get();
         using var packStore = new PackedThumbnailStore();
-        var scanSession = _catalog.CreateScanSession();
+        var scanSession = _catalog.CreateScanSession(
+            folder.CanonicalPath, folder.Id, generation, cancellationToken);
         try
         {
             foreach (var localPath in specificFile is null
@@ -204,6 +209,7 @@ public sealed class FolderScanner
                     {
                         cancellationToken.ThrowIfCancellationRequested();
 
+                        scanSession.FlushPending();
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             localPath,
                             canonicalPath,
@@ -274,7 +280,8 @@ public sealed class FolderScanner
                 if (catalogCommitClock.ElapsedMilliseconds >= 1000)
                 {
                     scanSession.Dispose();
-                    scanSession = _catalog.CreateScanSession();
+                    scanSession = _catalog.CreateScanSession(
+                        folder.CanonicalPath, folder.Id, generation, cancellationToken);
                     catalogCommitClock.Restart();
                 }
 
@@ -315,7 +322,9 @@ public sealed class FolderScanner
             // deleting missing catalog entries. A shallow scan must not prune
             // images from nested folders it never visited.
             removed = cleanup.RemoveMissing(folder.Id, scanRoot, observedPaths,
-                recursive: recursive, cancellationToken: cancellationToken);
+                recursive: recursive, cancellationToken: cancellationToken,
+                sourceCanonicalPath: folder.CanonicalPath,
+                expectedGeneration: generation);
         }
 
         if (imageFilesSeen > 0 && updated == 0 && unchanged == 0 && failed == imageFilesSeen)

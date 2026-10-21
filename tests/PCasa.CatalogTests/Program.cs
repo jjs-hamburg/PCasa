@@ -23,6 +23,9 @@ internal static class Program
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
+        Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
+        Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
+        Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
 
         Run("Missing thumbnail tier is scheduled for repair", MissingThumbnailIsRepaired, failures);
         Run("Externally deleted image is pruned", DeletedFileIsPruned, failures);
@@ -65,7 +68,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {51 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {54 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -590,6 +593,70 @@ internal static class Program
         Require(db, 1);
         if (!File.Exists(original))
             throw new Exception("The original file was unexpectedly removed.");
+    }
+
+    private static void ExclusionAdvancesGeneration()
+    {
+        using var sandbox = new Sandbox();
+        var (db, root, _) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+        var child = Path.Combine(sandbox.Images, "Excluded");
+        var g1 = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        folders.SetExcluded(root.Id, child, true);
+        var g2 = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        if (g2 != g1 + 1) throw new Exception("Exclusion did not invalidate scans.");
+        folders.SetExcluded(root.Id, child, true);
+        if (folders.GetSourceState(root.CanonicalPath)!.Value.Generation != g2)
+            throw new Exception("Duplicate request advanced source generation.");
+        folders.SetExcluded(root.Id, child, false);
+        if (folders.GetSourceState(root.CanonicalPath)!.Value.Generation != g2 + 1)
+            throw new Exception("Re-inclusion did not invalidate scans.");
+    }
+
+    private static void StaleScanBatchRollsBack()
+    {
+        using var sandbox = new Sandbox();
+        var (db, root, _) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+        var gen = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        using var session = new ImageCatalogRepository(db).CreateScanSession(
+            root.CanonicalPath, root.Id, gen);
+        folders.SetExcluded(root.Id, Path.Combine(sandbox.Images, "Excluded"), true);
+        var rejected = false;
+        try
+        {
+            session.GetOrCreatePhotoFolder(root.Id, sandbox.Images, root.CanonicalPath, "Old");
+            session.FlushPending();
+        }
+        catch (OperationCanceledException) { rejected = true; }
+        if (!rejected) throw new Exception("Old scan was allowed to commit.");
+        using var dbRead = db.OpenConnection();
+        using var command = dbRead.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM photo_folders;";
+        if (Convert.ToInt64(command.ExecuteScalar()) != 0)
+            throw new Exception("Stale scan left a committed photo folder.");
+    }
+
+    private static void StaleScanCleanupPreservesImages()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "Keep.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+        var folders = new FolderRepository(db);
+        var oldGen = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        folders.SetExcluded(root.Id, Path.Combine(sandbox.Images, "Excluded"), true);
+        var rejected = false;
+        try
+        {
+            new CatalogRemovalService(db).RemoveMissing(
+                root.Id, sandbox.Images, new HashSet<string>(),
+                sourceCanonicalPath: root.CanonicalPath, expectedGeneration: oldGen);
+        }
+        catch (OperationCanceledException) { rejected = true; }
+        if (!rejected) throw new Exception("Old scan was allowed to prune.");
+        Require(db, 1);
     }
 
     private static void CanceledScanPreservesCatalog()
@@ -1663,7 +1730,8 @@ internal static class Program
         var service = new FolderExclusionService(new FolderRepository(db), db);
         var concurrentScan = Task.Run(() => scanner.Scan(root));
         var exclusion = service.ChangeAsync(root.Id, child, true);
-        Task.WhenAll(concurrentScan, exclusion).GetAwaiter().GetResult();
+        try { Task.WhenAll(concurrentScan, exclusion).GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { /* Old scan was invalidated. */ }
         Require(db, 1);
         foreach (var file in removedPaths)
             if (!File.Exists(file))
