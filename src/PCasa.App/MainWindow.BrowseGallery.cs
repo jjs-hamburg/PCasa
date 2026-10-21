@@ -47,6 +47,9 @@ public partial class MainWindow
         Closed += BrowseWindow_Closed;
 
         await EnsureBrowseCacheAndRefreshAsync();
+        // Also resume unfinished explicit Add operations after a restart,
+        // independent of FileSystemWatcher/background scan preferences.
+        QueuePendingInitialScans();
         StartTagBackfill();
     }
 
@@ -496,7 +499,11 @@ public partial class MainWindow
             window.FolderExclusionChanged -= BrowseFolderManager_ExclusionChanged;
         }
 
-        _ = EnsureBrowseCacheAndRefreshAsync();
+        // The monitor may be off or an earlier cache job may still be
+        // running. Do not gate the new root's visibility on either condition.
+        RefreshFolderTree(preserveGalleryAnchor: true);
+        QueuePendingInitialScans();
+        _ = RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
     }
 
     private void BrowseStatus_Click(object sender, MouseButtonEventArgs e)
