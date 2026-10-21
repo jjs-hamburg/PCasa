@@ -18,6 +18,7 @@ internal static class Program
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
         Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
+        Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -64,7 +65,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {50 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {51 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -213,6 +214,33 @@ internal static class Program
             catch (TaskCanceledException) { }
             if (oldExecuted || !newExecuted || !old.IsCanceled)
                 throw new Exception("Canceled work ran or fresh work was lost.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerRejectsMidFlightInvalidation()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var current = true;
+            var job = scheduler.EnqueueAsync("source", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                },
+                () => current);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            current = false;
+            release.TrySetResult();
+            try { await job.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (TaskCanceledException) { }
+            if (!job.IsCanceled ||
+                scheduler.Snapshot().Single(x => x.Key == "source").State != SchedulerJobState.Canceled)
+                throw new Exception("Invalidated running source was reported as completed.");
         }
         Check().GetAwaiter().GetResult();
     }
