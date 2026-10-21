@@ -1,0 +1,353 @@
+using System.IO;
+using Microsoft.Data.Sqlite;
+
+namespace PCasa.App.Data;
+
+public sealed class LocalDatabase
+{
+    public string DatabasePath { get; }
+
+    public LocalDatabase(string? databasePath = null)
+    {
+        DatabasePath = databasePath ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PCasa", "pcasa.db");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(DatabasePath))!);
+    }
+
+    public SqliteConnection OpenConnection()
+    {
+        var connection = new SqliteConnection($"Data Source={DatabasePath};Mode=ReadWriteCreate;Cache=Shared");
+        connection.Open();
+
+        using var pragma = connection.CreateCommand();
+        pragma.CommandText = "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;";
+        pragma.ExecuteNonQuery();
+
+        return connection;
+    }
+
+    public void Initialize()
+    {
+        using var connection = OpenConnection();
+
+        using (var journalMode = connection.CreateCommand())
+        {
+            journalMode.CommandText = "PRAGMA journal_mode = WAL;";
+            journalMode.ExecuteScalar();
+        }
+
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS monitored_folders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    local_path TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    canonical_path TEXT NOT NULL,
+                    is_network INTEGER NOT NULL CHECK (is_network IN (0, 1)),
+                    server_sync_enabled INTEGER NOT NULL DEFAULT 0 CHECK (server_sync_enabled IN (0, 1)),
+                    created_utc TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS photo_folders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL,
+                    canonical_path TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    display_name TEXT NOT NULL,
+                    indexed_utc TEXT NOT NULL,
+                    FOREIGN KEY (monitored_folder_id) REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS images (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    folder_id INTEGER NOT NULL,
+                    photo_folder_id INTEGER NULL,
+                    local_path TEXT NOT NULL,
+                    canonical_path TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    file_name TEXT NOT NULL,
+                    extension TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    modified_utc_ticks INTEGER NOT NULL,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL,
+                    thumbnail_path TEXT NOT NULL,
+                    indexed_utc TEXT NOT NULL,
+                    FOREIGN KEY (folder_id) REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS excluded_folders (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL COLLATE NOCASE,
+                    created_utc TEXT NOT NULL,
+                    PRIMARY KEY (monitored_folder_id, local_path),
+                    FOREIGN KEY (monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS thumbnail_entries (
+                    image_id INTEGER NOT NULL,
+                    tier INTEGER NOT NULL,
+                    pack_file TEXT NOT NULL,
+                    byte_offset INTEGER NOT NULL,
+                    byte_length INTEGER NOT NULL,
+                    pixel_width INTEGER NOT NULL,
+                    pixel_height INTEGER NOT NULL,
+                    source_modified_utc_ticks INTEGER NOT NULL,
+                    PRIMARY KEY (image_id, tier),
+                    FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS browse_cache_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    tiers_csv TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL
+                );
+
+                INSERT INTO browse_cache_settings (id, tiers_csv, updated_utc)
+                VALUES (1, '96,192,384', strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                ON CONFLICT(id) DO NOTHING;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        // One durable metadata index shared by scanner, sidebar and tag search.
+        // FTS rows are synchronized by SQLite triggers; no second in-memory tag list.
+        using (var tags = connection.CreateCommand())
+        {
+            tags.CommandText = """
+                CREATE TABLE IF NOT EXISTS image_tags (
+                    image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                    keywords TEXT NOT NULL DEFAULT '',
+                    source_modified_utc_ticks INTEGER NOT NULL
+                );
+                CREATE VIRTUAL TABLE IF NOT EXISTS image_tags_fts USING fts5(
+                    keywords, content='image_tags', content_rowid='image_id',
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                CREATE TRIGGER IF NOT EXISTS image_tags_insert AFTER INSERT ON image_tags BEGIN
+                    INSERT INTO image_tags_fts(rowid, keywords)
+                    VALUES (new.image_id, new.keywords);
+                END;
+                CREATE TRIGGER IF NOT EXISTS image_tags_delete AFTER DELETE ON image_tags BEGIN
+                    INSERT INTO image_tags_fts(image_tags_fts, rowid, keywords)
+                    VALUES ('delete', old.image_id, old.keywords);
+                END;
+                CREATE TRIGGER IF NOT EXISTS image_tags_update AFTER UPDATE ON image_tags BEGIN
+                    INSERT INTO image_tags_fts(image_tags_fts, rowid, keywords)
+                    VALUES ('delete', old.image_id, old.keywords);
+                    INSERT INTO image_tags_fts(rowid, keywords)
+                    VALUES (new.image_id, new.keywords);
+                END;
+                """;
+            tags.ExecuteNonQuery();
+        }
+
+        // A root can be removed from the catalog immediately. Orphaned
+        // thumbnails and packed-cache bytes are reclaimed later at idle.
+        // This durable marker makes interrupted cleanup resume after restart.
+        using (var maintenance = connection.CreateCommand())
+        {
+            maintenance.CommandText = """
+                CREATE TABLE IF NOT EXISTS cache_maintenance (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    cleanup_pending INTEGER NOT NULL DEFAULT 0
+                        CHECK (cleanup_pending IN (0, 1))
+                );
+                INSERT INTO cache_maintenance(id, cleanup_pending)
+                VALUES (1, 0) ON CONFLICT(id) DO NOTHING;
+                """;
+            maintenance.ExecuteNonQuery();
+        }
+
+        // The last used tags are shared by every sidebar opening in this local
+        // catalogue, rather than being lost with the window's in-memory state.
+        using (var recent = connection.CreateCommand())
+        {
+            recent.CommandText = """
+                CREATE TABLE IF NOT EXISTS recent_tags (
+                    tag TEXT PRIMARY KEY COLLATE NOCASE,
+                    last_used_utc TEXT NOT NULL
+                );
+                """;
+            recent.ExecuteNonQuery();
+        }
+
+        EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
+        RemoveLegacyRelativePath(connection, "photo_folders");
+        RemoveLegacyRelativePath(connection, "images");
+
+        using var indexes = connection.CreateCommand();
+        indexes.CommandText =
+            """
+            CREATE INDEX IF NOT EXISTS idx_photo_folders_path
+                ON photo_folders(canonical_path COLLATE NOCASE);
+
+            CREATE INDEX IF NOT EXISTS idx_images_photo_folder_name
+                ON images(photo_folder_id, file_name COLLATE NOCASE);
+
+            CREATE INDEX IF NOT EXISTS idx_images_file_name
+                ON images(file_name COLLATE NOCASE);
+
+            CREATE INDEX IF NOT EXISTS idx_thumbnail_entries_tier_image
+                ON thumbnail_entries(tier, image_id);
+
+            -- Compaction finds all entries belonging to one pack. Without this
+            -- index it scans the entire thumbnail table once per pack file.
+            CREATE INDEX IF NOT EXISTS idx_thumbnail_entries_pack_offset
+                ON thumbnail_entries(pack_file, byte_offset);
+
+            -- Folder reconciliation limits image candidates to one monitored root.
+            CREATE INDEX IF NOT EXISTS idx_images_root_local
+                ON images(folder_id, local_path COLLATE NOCASE);
+            """;
+        indexes.ExecuteNonQuery();
+        // Cache jobs are persistent: interrupted writes remain pending after restart.
+        // Existing image and pack data are never reset by this migration.
+        using (var jobs = connection.CreateCommand())
+        {
+            jobs.CommandText = """
+                CREATE TABLE IF NOT EXISTS browse_cache_jobs (
+                    image_id INTEGER PRIMARY KEY,
+                    state TEXT NOT NULL DEFAULT 'PENDING',
+                    updated_utc TEXT NOT NULL,
+                    FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS browse_cache_tracking (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    tiers_csv TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS pcasa_cache_image_added
+                AFTER INSERT ON images BEGIN
+                    INSERT OR REPLACE INTO browse_cache_jobs(image_id, state, updated_utc)
+                    VALUES (NEW.id, 'PENDING', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+                END;
+                CREATE TRIGGER IF NOT EXISTS pcasa_cache_image_changed
+                AFTER UPDATE OF modified_utc_ticks ON images
+                WHEN OLD.modified_utc_ticks <> NEW.modified_utc_ticks BEGIN
+                    INSERT OR REPLACE INTO browse_cache_jobs(image_id, state, updated_utc)
+                    VALUES (NEW.id, 'PENDING', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+                END;
+                """;
+            jobs.ExecuteNonQuery();
+        }
+
+        // One-time adoption of existing catalogs: only incomplete tier sets
+        // are queued. A changed tier profile invalidates the old completion
+        // assumption; it is not a reason to delete cached pack files.
+        using (var profileCommand = connection.CreateCommand())
+        {
+            profileCommand.CommandText =
+                "SELECT tiers_csv FROM browse_cache_settings WHERE id = 1;";
+            var csv = (string?)profileCommand.ExecuteScalar() ?? "96,192,384";
+            using var previousCommand = connection.CreateCommand();
+            previousCommand.CommandText =
+                "SELECT tiers_csv FROM browse_cache_tracking WHERE id = 1;";
+            var previous = (string?)previousCommand.ExecuteScalar();
+            if (!string.Equals(previous, csv, StringComparison.Ordinal))
+            {
+                using var transaction = connection.BeginTransaction();
+                using var enqueue = connection.CreateCommand();
+                enqueue.Transaction = transaction;
+                if (previous is null)
+                {
+                    var tiers = csv.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(int.Parse).ToArray();
+                    var parameters = tiers.Select((_, i) => "$tier" + i).ToArray();
+                    enqueue.CommandText = $"""
+                        INSERT OR IGNORE INTO browse_cache_jobs(image_id, state, updated_utc)
+                        SELECT i.id, 'PENDING', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                        FROM images i
+                        WHERE (SELECT COUNT(*) FROM thumbnail_entries te
+                               WHERE te.image_id = i.id
+                                 AND te.source_modified_utc_ticks = i.modified_utc_ticks
+                                 AND te.tier IN ({string.Join(",", parameters)})) < $required;
+                        """;
+                    for (var i = 0; i < tiers.Length; i++)
+                        enqueue.Parameters.AddWithValue(parameters[i], tiers[i]);
+                    enqueue.Parameters.AddWithValue("$required", tiers.Length);
+                }
+                else
+                {
+                    enqueue.CommandText = """
+                        INSERT OR IGNORE INTO browse_cache_jobs(image_id, state, updated_utc)
+                        SELECT id, 'PENDING', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                        FROM images;
+                        """;
+                }
+                enqueue.ExecuteNonQuery();
+                using var update = connection.CreateCommand();
+                update.Transaction = transaction;
+                update.CommandText = """
+                    INSERT INTO browse_cache_tracking(id, tiers_csv) VALUES(1, $csv)
+                    ON CONFLICT(id) DO UPDATE SET tiers_csv = excluded.tiers_csv;
+                    """;
+                update.Parameters.AddWithValue("$csv", csv);
+                update.ExecuteNonQuery();
+                transaction.Commit();
+            }
+        }
+    }
+
+    private static void EnsureColumn(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string columnDefinition)
+    {
+        if (ColumnExists(connection, tableName, columnName))
+        {
+            return;
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};";
+        alter.ExecuteNonQuery();
+    }
+
+    private static void RemoveLegacyRelativePath(
+        SqliteConnection connection,
+        string tableName)
+    {
+        if (!ColumnExists(connection, tableName, "relative_path"))
+        {
+            return;
+        }
+
+        if (string.Equals(tableName, "images", StringComparison.OrdinalIgnoreCase))
+        {
+            using var dropIndex = connection.CreateCommand();
+            dropIndex.CommandText = "DROP INDEX IF EXISTS idx_images_folder_relative;";
+            dropIndex.ExecuteNonQuery();
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} DROP COLUMN relative_path;";
+        alter.ExecuteNonQuery();
+    }
+
+    private static bool ColumnExists(
+        SqliteConnection connection,
+        string tableName,
+        string columnName)
+    {
+        using var info = connection.CreateCommand();
+        info.CommandText = $"PRAGMA table_info({tableName});";
+
+        using var reader = info.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(
+                reader.GetString(1),
+                columnName,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

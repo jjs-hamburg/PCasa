@@ -1,0 +1,60 @@
+name: Package Windows Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore src/PCasa.App/PCasa.App.csproj -r win-x64
+
+      - name: Publish self-contained Windows x64 test build
+        run: >-
+          dotnet publish src/PCasa.App/PCasa.App.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --no-restore
+          -p:Version=0.1.0-preview.1
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o publish/PCasa
+
+      # upload-artifact creates the downloadable ZIP itself.
+      # Upload the published files DIRECTLY instead of uploading a ZIP file:
+      # PCasa-Windows-x64-Test.zip -> PCasa.App.exe + supporting files.
+      - name: Bundle verified lossless metadata tool
+        shell: pwsh
+        run: ./.github/scripts/install-exiftool.ps1 -Destination "publish/PCasa/exiftool"
+
+      - name: Verify publish directory
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) {
+            throw "Published PCasa.App.exe is missing"
+          }
+          if (Get-ChildItem "publish/PCasa" -File -Filter "*.zip") {
+            throw "Published application folder must not contain a nested ZIP"
+          }
+
+      - name: Upload flat Windows test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-Windows-x64-Test
+          path: publish/PCasa/
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,24 @@
+name: Catalog Integration Tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  catalog:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install verified lossless metadata tool
+        shell: pwsh
+        run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
+
+      - name: Run catalog integration tests with isolated SQLite database
+        env:
+          PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
+        run: dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release

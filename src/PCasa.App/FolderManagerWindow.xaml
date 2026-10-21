@@ -1,0 +1,99 @@
+<Window x:Class="PCasa.App.FolderManagerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PCasa – Ordnermanager"
+        Width="1050" Height="650" MinWidth="830" MinHeight="450"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource PcasaWindowBrush}" Foreground="{DynamicResource PcasaTextBrush}">
+    <Window.Resources>
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+        </Style>
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+        </Style>
+        <Style TargetType="{x:Type Button}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}" />
+        </Style>
+        <Style TargetType="{x:Type TreeViewItem}" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+        </Style>
+    </Window.Resources>
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="Überwachte Ordner" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="Unterordner können einzeln ausgeschlossen werden. Dateien auf dem Datenträger werden niemals gelöscht."
+                       Margin="0,5,0,0" Opacity="0.7" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" MinWidth="280" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="1.3*" MinWidth="230" />
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
+                    Background="{DynamicResource PcasaPanelBrush}">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Ordnerstruktur – Desktop, Bilder, Dokumente und überwachte Ordner"
+                               FontWeight="SemiBold" Margin="12,11,12,9" />
+                    <TreeView x:Name="FolderManagerTree"
+                              Background="Transparent"
+                              BorderThickness="0"
+                              Margin="5,0,5,5"
+                              SelectedItemChanged="FolderManagerTree_SelectedItemChanged">
+                        <TreeView.Resources>
+                            <!-- Override PCasa's global photo-tree string-only
+                                 header so an interactive inclusion checkbox can
+                                 actually render inside a TreeViewItem. -->
+                            <DataTemplate x:Key="ManagerFolderHeaderTemplate">
+                                <ContentPresenter Content="{Binding}" />
+                            </DataTemplate>
+                        </TreeView.Resources>
+                    </TreeView>
+                </DockPanel>
+            </Border>
+
+            <StackPanel Grid.Column="2" Margin="4,8,4,0">
+                <TextBlock Text="Ausgewählter Ordner" FontWeight="SemiBold" />
+                <TextBlock x:Name="SelectedFolderText" Margin="0,9,0,0"
+                           TextWrapping="Wrap" Text="Bitte links einen Ordner auswählen." />
+                <TextBlock x:Name="SelectedModeText" Margin="0,18,0,0"
+                           Opacity="0.8" TextWrapping="Wrap" />
+                <TextBlock Margin="0,20,0,0" Opacity="0.7" TextWrapping="Wrap"
+                           Text="Häkchen: in PCasa einlesen. Ohne Häkchen: Ordner und alle seine Unterordner aus dem Katalog ausschließen. Die Originaldateien bleiben unverändert." />
+                <TextBlock Margin="0,12,0,0" Opacity="0.7" TextWrapping="Wrap"
+                           Text="Ein ausgeschlossener übergeordneter Ordner muss zuerst wieder aktiviert werden, bevor seine Unterordner separat eingestellt werden können." />
+                <CheckBox x:Name="ServerSyncCheckBox"
+                          Margin="0,24,0,0" Visibility="Collapsed"
+                          Content="Server-Synchronisierung dieser Wurzel"
+                          Click="ServerSync_Click" />
+            </StackPanel>
+        </Grid>
+
+        <DockPanel Grid.Row="2" Margin="0,14,0,0" LastChildFill="False">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal"
+                        VerticalAlignment="Center">
+                <Button x:Name="AddFolderButton" Content="Ordner hinzufügen"
+                        Padding="14,7" Margin="0,0,8,0" Click="AddFolder_Click" />
+                <Button x:Name="RemoveFolderButton" Content="Wurzel entfernen"
+                        Padding="14,7" Click="RemoveFolder_Click" />
+                <CheckBox x:Name="BackgroundScanCheckBox"
+                          Margin="24,0,0,0" VerticalAlignment="Center"
+                          Content="Automatisch im Hintergrund einlesen"
+                          Click="BackgroundScan_Click" />
+            </StackPanel>
+            <Button DockPanel.Dock="Right" Content="Schließen"
+                    Padding="18,7" IsDefault="True" Click="Close_Click" />
+        </DockPanel>
+    </Grid>
+</Window>

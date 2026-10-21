@@ -1,0 +1,229 @@
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using Microsoft.Data.Sqlite;
+using PCasa.App.Controls;
+using PCasa.App.Data;
+using PCasa.App.Models;
+using PCasa.App.Services;
+
+internal static class TagFlow
+{
+    public static int Run()
+    {
+        // The entrypoint blocks execution outside ephemeral GitHub Actions.
+        var sourceRoot = Path.Combine(Path.GetTempPath(),
+            "PCasa-WpfTagFlow-" + Guid.NewGuid().ToString("N"));
+        var albumA = Path.Combine(sourceRoot, "A");
+        var albumB = Path.Combine(sourceRoot, "B");
+        Directory.CreateDirectory(albumA);
+        Directory.CreateDirectory(albumB);
+
+        PCasa.App.MainWindow? window = null;
+        try
+        {
+            for (var i = 0; i < 12; i++)
+            {
+                CreatePhoto(Path.Combine(albumA, $"a-{i:00}.jpg"));
+                CreatePhoto(Path.Combine(albumB, $"b-{i:00}.jpg"));
+            }
+
+            var db = new LocalDatabase();
+            db.Initialize();
+            var repo = new FolderRepository(db);
+            repo.Add(sourceRoot);
+            var root = repo.GetAll().Single(folder =>
+                string.Equals(folder.LocalPath, sourceRoot,
+                    StringComparison.OrdinalIgnoreCase));
+            var scanner = new FolderScanner(new ImageCatalogRepository(db),
+                new ThumbnailCache(), repo, new BrowseThumbnailProfileRepository(db));
+            scanner.Scan(root);
+
+            var catalog = new ImageCatalogRepository(db);
+            var folders = catalog.GetPhotoFolders();
+            var a = folders.Single(folder =>
+                string.Equals(folder.LocalPath, albumA, StringComparison.OrdinalIgnoreCase));
+            var b = folders.Single(folder =>
+                string.Equals(folder.LocalPath, albumB, StringComparison.OrdinalIgnoreCase));
+            if (catalog.CountAll() != 24)
+                throw new Exception("Synthetic WPF catalog is incomplete.");
+
+            using (var connection = db.OpenConnection())
+            using (var update = connection.CreateCommand())
+            {
+                update.CommandText = """
+                    UPDATE image_tags
+                    SET keywords = CASE
+                        WHEN image_id IN (
+                            SELECT id FROM images WHERE photo_folder_id = $a
+                        ) THEN 'roma'
+                        ELSE 'berlin'
+                    END;
+                    """;
+                update.Parameters.AddWithValue("$a", a.Id);
+                update.ExecuteNonQuery();
+            }
+            // A controlled UI test should not run an independent folder monitor.
+            new BackgroundScanSettings { Enabled = false }.Save();
+
+            var app = new PCasa.App.App();
+            app.InitializeComponent();
+            window = new PCasa.App.MainWindow
+            {
+                // Narrower viewport forces several thumbnail rows per folder;
+                // the second folder can then occupy the top of the viewport.
+                Width = 1040,
+                Height = 670
+            };
+            window.Show();
+
+            var surface = (BrowseGallerySurface?)window.FindName("BrowseSurface")
+                ?? throw new Exception("Missing real gallery surface.");
+            var scroller = (ScrollViewer?)window.FindName("BrowseScrollViewer")
+                ?? throw new Exception("Missing gallery ScrollViewer.");
+            var tree = (TreeView?)window.FindName("FoldersTree")
+                ?? throw new Exception("Missing folder tree.");
+            var search = (TextBox?)window.FindName("TagSearchBox")
+                ?? throw new Exception("Missing tag search field.");
+            var status = (TextBlock?)window.FindName("StatusText")
+                ?? throw new Exception("Missing status line.");
+
+            Until(window, () => surface.GetFolderOffset(a.Id) is not null &&
+                surface.GetFolderOffset(b.Id) is not null,
+                "Catalog pictures never appeared in the WPF gallery.");
+
+            var monitoredRootItem = Walk(tree).FirstOrDefault(item =>
+                string.Equals(ReadPath(item), sourceRoot,
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new Exception("Monitored root is missing from tree.");
+            var albumBItem = Walk(tree).FirstOrDefault(item =>
+                string.Equals(ReadPath(item), albumB,
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new Exception("Album B missing from tree.");
+            FolderTreeNavigation.ExpandAncestors(monitoredRootItem);
+            monitoredRootItem.IsSelected = true;
+            Until(window, () => ReferenceEquals(tree.SelectedItem, monitoredRootItem),
+                "Parent folder could not be selected.");
+
+            var albumBTop = surface.GetFolderOffset(b.Id)!.Value;
+            scroller.ScrollToVerticalOffset(albumBTop + 100);
+            Until(window,
+                () => surface.GetFolderIdAtOffset(scroller.VerticalOffset + 4) == b.Id,
+                "Cannot scroll second album into top of viewport; target=" +
+                albumBTop.ToString("F1") + ", actual=" +
+                scroller.VerticalOffset.ToString("F1") + ", extent=" +
+                scroller.ExtentHeight.ToString("F1") + ", viewport=" +
+                scroller.ViewportHeight.ToString("F1"));
+            surface.SetViewport(scroller.VerticalOffset,
+                Math.Max(1, scroller.ViewportHeight));
+            var original = surface.CaptureImageAnchor(scroller.VerticalOffset)
+                ?? throw new Exception("Cannot remember original photo.");
+
+            // ScrollChanged normally synchronizes tree selection to the album.
+            // Explicitly choose the parent AFTER scrolling so this test
+            // captures an intentional parent-folder focus before searching.
+            monitoredRootItem.IsSelected = true;
+            Until(window, () => ReferenceEquals(tree.SelectedItem, monitoredRootItem),
+                "Could not restore explicit parent selection before search.");
+
+            search.Text = "roma";
+            Until(window, () => status.Text.Contains("Bilder mit Tags: roma",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   surface.GetFolderOffset(a.Id) is not null &&
+                   surface.GetFolderOffset(b.Id) is null,
+                "Live tag search did not filter to album A.");
+            if (!ReferenceEquals(tree.SelectedItem, monitoredRootItem))
+                throw new Exception("Tag search changed the original parent focus.");
+            Console.WriteLine("PASS: Real tag search filters SQLite-indexed photos without changing tree focus.");
+
+            FolderTreeNavigation.ExpandAncestors(albumBItem);
+            albumBItem.IsSelected = true;
+            Until(window, () => ReferenceEquals(tree.SelectedItem, albumBItem),
+                "Could not navigate inside search results.");
+
+            search.Clear();
+            Until(window, () => !status.Text.Contains("Bilder mit Tags:",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   surface.GetFolderOffset(b.Id) is not null &&
+                   ReferenceEquals(tree.SelectedItem, monitoredRootItem),
+                "Leaving search did not restore the original tree focus.");
+
+            surface.SetViewport(scroller.VerticalOffset,
+                Math.Max(1, scroller.ViewportHeight));
+            var restoredOffset = surface.GetImageAnchorOffset(
+                original.ImageId, original.RelativeY)
+                ?? throw new Exception("Original image vanished when search ended.");
+            if (Math.Abs(restoredOffset - scroller.VerticalOffset) >
+                    Math.Max(200, surface.ThumbnailWidth * 2))
+                throw new Exception("Leaving tag search did not restore photo position.");
+            Console.WriteLine("PASS: Clearing live search restores original parent selection and photo anchor.");
+
+            window.Close();
+            window = null;
+            Console.WriteLine("RESULT: Live WPF tag-search round trip passed.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("FAIL: WPF tag-search round trip: " + ex);
+            return 1;
+        }
+        finally
+        {
+            try { window?.Close(); }
+            catch (Exception closeEx) { Console.Error.WriteLine(closeEx); }
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(sourceRoot, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    private static void CreatePhoto(string path)
+    {
+        var pixels = new byte[64 * 64 * 4];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 75; pixels[i + 1] = 125;
+            pixels[i + 2] = 180; pixels[i + 3] = 255;
+        }
+        var bitmap = BitmapSource.Create(64, 64, 96, 96,
+            PixelFormats.Bgr32, null, pixels, 64 * 4);
+        var encoder = new JpegBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+    }
+
+    private static IEnumerable<TreeViewItem> Walk(ItemsControl parent)
+    {
+        foreach (var item in parent.Items.OfType<TreeViewItem>())
+        {
+            yield return item;
+            foreach (var descendant in Walk(item))
+                yield return descendant;
+        }
+    }
+
+    private static string? ReadPath(TreeViewItem item) =>
+        item.Tag?.GetType().GetProperty("FullPath")?.GetValue(item.Tag) as string;
+
+    private static void Until(Window window, Func<bool> predicate, string message)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(25);
+        while (DateTime.UtcNow < deadline)
+        {
+            window.UpdateLayout();
+            var frame = new DispatcherFrame();
+            window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,
+                new Action(() => frame.Continue = false));
+            Dispatcher.PushFrame(frame);
+            if (predicate()) return;
+            Thread.Sleep(40);
+        }
+        throw new TimeoutException(message);
+    }
+}
