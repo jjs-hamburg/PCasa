@@ -33,6 +33,7 @@ internal static class Program
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
+        Run("User-added empty root is immediately persisted and resumes initial import after restart", NewlyAddedFolderInitialImportSurvivesRestart, failures);
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
@@ -90,7 +91,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {76 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {77 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -1199,6 +1200,60 @@ internal static class Program
     // G02: The exclusion callback is a deterministic synchronization point:
     // the old removal has not started yet, but the newer desired state is
     // already persisted. No sleeps or scheduler timing assumptions.
+    private static void NewlyAddedFolderInitialImportSurvivesRestart()
+    {
+        using var sandbox = new Sandbox();
+        var (db, root, scanner) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+
+        // A monitored root is durable and discoverable in the folder tree
+        // BEFORE even the first image has been scanned or cached.
+        if (new FolderRepository(db).GetAll().All(f => f.Id != root.Id) ||
+            new ImageCatalogRepository(db).CountAll() != 0 ||
+            folders.GetPendingInitialScans().All(f => f.Id != root.Id))
+            throw new Exception("Adding an empty root was not instantly persisted with its scan request.");
+
+        // Simulate a shutdown/cancellation before import: only DB state
+        // survives, not any in-memory task, timer or enabled watcher.
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            try
+            {
+                scanner.Scan(root, cancellationToken: canceled.Token);
+                throw new Exception("Canceled initial scan was silently accepted.");
+            }
+            catch (OperationCanceledException) { }
+        }
+        if (new FolderRepository(db).GetPendingInitialScans().All(f => f.Id != root.Id))
+            throw new Exception("Canceled first import lost its durable request.");
+
+        var photo = Path.Combine(sandbox.Images, "first.jpg");
+        WriteJpeg(photo);
+        var generationBefore = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        scanner.Scan(root);
+        Require(db, 1);
+        if (new FolderRepository(db).GetPendingInitialScans().Any(f => f.Id == root.Id))
+            throw new Exception("Successful full import did not acknowledge its durable request.");
+
+        // Remove and immediately re-add the same path. The old source token
+        // cannot acknowledge or overwrite the newer root's pending import.
+        folders.Remove(root.Id);
+        folders.Add(sandbox.Images);
+        var replacement = new FolderRepository(db).GetAll().Single();
+        if (replacement.Id == root.Id ||
+            new FolderRepository(db).GetPendingInitialScans().All(f => f.Id != replacement.Id))
+            throw new Exception("Re-added folder was not independently queued for first import.");
+        if (folders.CompleteInitialScan(replacement.Id, generationBefore))
+            throw new Exception("Obsolete initial scan acknowledged a newer re-add.");
+        if (folders.GetPendingInitialScans().All(f => f.Id != replacement.Id))
+            throw new Exception("Old scan erased the new import request.");
+        scanner.Scan(replacement);
+        Require(db, 1);
+        if (new FolderRepository(db).GetPendingInitialScans().Count != 0)
+            throw new Exception("Re-added folder import did not converge.");
+    }
+
     private static void SourceGenerationSurvivesReAdd()
     {
         using var sandbox = new Sandbox();
