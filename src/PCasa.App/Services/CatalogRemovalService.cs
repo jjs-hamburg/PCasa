@@ -212,8 +212,11 @@ public sealed class CatalogRemovalService
     {
         var normalized = Path.GetFullPath(localDirectory).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
+        // Reconciliation is a catalog operation, not a pack-compaction job.
+        // Schedule physical cache reclamation for the idle worker; a full scan
+        // must never monopolize CacheLock while copying large pack files.
         return Remove(folderId, normalized, prefix, removeRoot: false, progress,
-            currentPaths, recursive, cancellationToken,
+            currentPaths, recursive, cancellationToken, deferCleanup: true,
             sourceCanonicalPath: sourceCanonicalPath,
             expectedGeneration: expectedGeneration);
     }
