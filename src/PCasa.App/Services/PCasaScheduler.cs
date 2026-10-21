@@ -94,7 +94,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         throw new OperationCanceledException();
                     SetState(item, SchedulerJobState.Running);
                     await item.Operation(linked.Token);
+                    // The operation may finish after its monitored source was
+                    // removed. Never report such an obsolete job as completed.
                     linked.Token.ThrowIfCancellationRequested();
+                    if (item.IsCurrent is not null && !item.IsCurrent())
+                        throw new OperationCanceledException();
                     SetState(item, SchedulerJobState.Completed);
                     item.Completion.TrySetResult();
                 }
