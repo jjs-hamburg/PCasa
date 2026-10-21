@@ -130,7 +130,17 @@ public partial class MainWindow
             if (monitoredId is long folderId)
             {
                 var progress = new Progress<string>(message => StatusText.Text = message);
-                await Task.Run(() => new CatalogRemovalService(_database).RemovePath(folderId, path, progress));
+                // The file has already been moved to the recycle bin.
+                // Serialize its catalog cleanup with other catalog operations.
+                await _scheduler.EnqueueAsync(
+                    $"image-delete-cleanup:{folderId}:{path}",
+                    SchedulerPriority.UserAction,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        new CatalogRemovalService(_database).RemovePath(folderId, path, progress);
+                        return Task.CompletedTask;
+                    });
                 await RefreshBrowseGalleryAsync(forceIndexReload: true);
             }
             else
