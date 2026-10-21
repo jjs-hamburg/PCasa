@@ -86,9 +86,16 @@ public partial class MainWindow
         try
         {
             var service = _catalogRemovalService;
-            var changed = await Task.Run(
-                () => service.RunPendingMaintenance(cancellation.Token),
-                cancellation.Token);
+            bool changed = false;
+            await _scheduler.EnqueueAsync(
+                "cache-maintenance",
+                SchedulerPriority.Idle,
+                token =>
+                {
+                    changed = service.RunPendingMaintenance(token);
+                    return Task.CompletedTask;
+                },
+                cancellationToken: cancellation.Token);
             // Once the pack index was committed, cancellation must not skip
             // this refresh: the existing on-screen gallery still has old
             // pack offsets. Prioritize consistency over the next queued job.
