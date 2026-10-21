@@ -70,7 +70,7 @@ public partial class MainWindow
             // No network probe is run on Dispatcher, and a failed/offline
             // first import never clears the durable request or its tree node.
             if (!await Task.Run(() => Directory.Exists(folder.LocalPath), cancellation.Token))
-                throw new DirectoryNotFoundException($
+                throw new DirectoryNotFoundException(
                     $"Überwachter Ordner momentan nicht erreichbar: {folder.LocalPath}");
 
             TrackFolderActivity(folder.LocalPath, "Working", recursive: true);
