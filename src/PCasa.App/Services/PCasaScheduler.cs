@@ -2,7 +2,7 @@ namespace PCasa.App.Services;
 
 public enum SchedulerPriority { Interactive = 0, UserAction = 1, Background = 2, Idle = 3 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
-public enum SchedulerWorkKind { Catalog, ViewerRead, ThumbnailRead }
+public enum SchedulerWorkKind { Catalog, CatalogRead, ViewerRead, ThumbnailRead }
 
 public sealed record SchedulerJobSnapshot(
     long Id, string Key, SchedulerPriority Priority, SchedulerJobState State,
@@ -27,11 +27,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneInteractive = 2;
     private const int LaneViewer = 3;
     private const int LaneThumbnail = 4;
+    private const int LaneCatalogRead = 5;
     private readonly object _gate = new();
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, 5).Select(_ => new SemaphoreSlim(0)).ToArray();
+        Enumerable.Range(0, 6).Select(_ => new SemaphoreSlim(0)).ToArray();
     private readonly WorkItem?[] _runningPriorityJobs = new WorkItem?[2];
     private int _catalogForegroundRunning;
     private int _catalogInteractiveRunning;
@@ -52,7 +53,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
             Task.Run(() => RunAsync(LaneViewer)),
             Task.Run(() => RunAsync(LaneViewer)),
             Task.Run(() => RunAsync(LaneThumbnail)),
-            Task.Run(() => RunAsync(LaneThumbnail))
+            Task.Run(() => RunAsync(LaneThumbnail)),
+            Task.Run(() => RunAsync(LaneCatalogRead)),
+            Task.Run(() => RunAsync(LaneCatalogRead))
         };
     }
 
@@ -60,6 +63,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         => kind switch
         {
             SchedulerWorkKind.ViewerRead => LaneViewer,
+            SchedulerWorkKind.CatalogRead => LaneCatalogRead,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
             _ => priority switch
             {
