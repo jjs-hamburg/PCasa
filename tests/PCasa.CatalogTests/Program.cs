@@ -13,6 +13,8 @@ internal static class Program
     private static int Main()
     {
         var failures = new List<string>();
+        Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
+        Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -59,8 +61,65 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {45 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {47 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    private static void SchedulerPriorityOrdering()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var order = new List<string>();
+            var first = scheduler.EnqueueAsync("blocking", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var background = scheduler.EnqueueAsync("later-background", SchedulerPriority.Background,
+                _ => { order.Add("background"); return Task.CompletedTask; });
+            var user = scheduler.EnqueueAsync("user", SchedulerPriority.UserAction,
+                _ => { order.Add("user"); return Task.CompletedTask; });
+            release.TrySetResult();
+            await Task.WhenAll(first, background, user).WaitAsync(TimeSpan.FromSeconds(5));
+            if (!order.SequenceEqual(new[] { "user", "background" }))
+                throw new Exception("Queued user action did not outrank background work.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerRejectsStaleGeneration()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blocker = scheduler.EnqueueAsync("block", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var current = true;
+            var executed = false;
+            var stale = scheduler.EnqueueAsync("stale", SchedulerPriority.Background,
+                _ => { executed = true; return Task.CompletedTask; }, () => current);
+            current = false;
+            release.TrySetResult();
+            await blocker.WaitAsync(TimeSpan.FromSeconds(5));
+            try { await stale.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (TaskCanceledException) { }
+            if (executed || !stale.IsCanceled ||
+                scheduler.Snapshot().Last().State != SchedulerJobState.Canceled)
+                throw new Exception("Stale queued work was not canceled.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void Run(string name, Action test, List<string> failures)
