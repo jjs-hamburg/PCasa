@@ -46,10 +46,10 @@ public partial class MainWindow
         BrowseSurface.LayoutReflowed += BrowseSurface_LayoutReflowed;
         Closed += BrowseWindow_Closed;
 
-        await EnsureBrowseCacheAndRefreshAsync();
-        // Also resume unfinished explicit Add operations after a restart,
-        // independent of FileSystemWatcher/background scan preferences.
+        // A persistent user Add must outrank all startup cache preparation.
+        // Start its scheduler work BEFORE any background cache repair.
         QueuePendingInitialScans();
+        await EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();
     }
 
@@ -82,6 +82,9 @@ public partial class MainWindow
         RefreshFolderTree(preserveGalleryAnchor: false);
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // The foreground initial import owns the status/progress display.
+        // Never launch a competing startup cache build that can hide it.
+        if (_manualScanRunning) return;
         if (imageCount == 0)
         {
             StatusText.Text = "0 Bilder";
@@ -220,7 +223,8 @@ public partial class MainWindow
 
         if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
         {
-            StatusText.Text = $"Galerieindex {tier}px laden...";
+            if (!_isScanning && !_manualScanRunning)
+                StatusText.Text = $"Galerieindex {tier}px laden...";
             IReadOnlyList<BrowseThumbnailIndexEntry> index = Array.Empty<BrowseThumbnailIndexEntry>();
             try
             {
