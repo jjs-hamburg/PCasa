@@ -37,6 +37,7 @@ internal static class Program
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
         Run("Compacted pack file names are never reused", CompactedPackNamesAreNeverReused, failures);
         Run("Scan reconciliation defers physical cache compaction", ScanReconciliationDefersCacheMaintenance, failures);
+        Run("Manual removal passes slow scan preparation without stale commit", ManualRemovalOvertakesScanReconciliationPreparation, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
         Run("Older background scan cannot prune a newer manual scan", OldBackgroundScanDoesNotPruneManualResults, failures);
@@ -86,7 +87,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {72 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {73 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -655,6 +656,47 @@ internal static class Program
             if (Directory.Exists(cacheRoot))
                 Directory.Delete(cacheRoot, recursive: true);
         }
+    }
+
+    private static void ManualRemovalOvertakesScanReconciliationPreparation()
+    {
+        using var sandbox = new Sandbox();
+        var photo = Path.Combine(sandbox.Images, "pending.jpg");
+        WriteJpeg(photo);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var observed = new GatedObservedPaths(new[] { photo }, entered, release);
+        var generation = new FolderRepository(db)
+            .GetSourceState(root.CanonicalPath)!.Value.Generation;
+        var operation = Task.Run(() => new CatalogRemovalService(db).RemoveMissing(
+            root.Id, sandbox.Images, observed,
+            sourceCanonicalPath: root.CanonicalPath,
+            expectedGeneration: generation));
+        try
+        {
+            if (!entered.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Reconciliation did not reach its preparation gate.");
+            // Removing a monitored root must not wait for an older scan's
+            // potentially huge TEMP-table build under the cache lock.
+            var removal = Task.Run(() => new FolderRepository(db).Remove(root.Id));
+            if (!removal.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Manual folder removal waited for reconciliation preparation.");
+        }
+        finally
+        {
+            release.Set();
+        }
+        try
+        {
+            operation.GetAwaiter().GetResult();
+            throw new Exception("Outdated scan was permitted to commit after root removal.");
+        }
+        catch (OperationCanceledException) { }
+        Require(db, 0);
     }
 
     private static void ScanReconciliationDefersCacheMaintenance()
@@ -2453,6 +2495,41 @@ internal static class Program
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream = File.Create(path);
         encoder.Save(stream);
+    }
+
+    private sealed class GatedObservedPaths : IReadOnlySet<string>
+    {
+        private readonly HashSet<string> _paths;
+        private readonly ManualResetEventSlim _entered;
+        private readonly ManualResetEventSlim _release;
+
+        public GatedObservedPaths(IEnumerable<string> paths,
+            ManualResetEventSlim entered, ManualResetEventSlim release)
+        {
+            _paths = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+            _entered = entered;
+            _release = release;
+        }
+
+        public int Count => _paths.Count;
+        public bool Contains(string item) => _paths.Contains(item);
+        public bool IsProperSubsetOf(IEnumerable<string> other) => _paths.IsProperSubsetOf(other);
+        public bool IsProperSupersetOf(IEnumerable<string> other) => _paths.IsProperSupersetOf(other);
+        public bool IsSubsetOf(IEnumerable<string> other) => _paths.IsSubsetOf(other);
+        public bool IsSupersetOf(IEnumerable<string> other) => _paths.IsSupersetOf(other);
+        public bool Overlaps(IEnumerable<string> other) => _paths.Overlaps(other);
+        public bool SetEquals(IEnumerable<string> other) => _paths.SetEquals(other);
+
+        public IEnumerator<string> GetEnumerator()
+        {
+            _entered.Set();
+            if (!_release.Wait(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("Reconciliation gate was never released.");
+            return _paths.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
     }
 
     private sealed class Sandbox : IDisposable
