@@ -33,6 +33,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly SemaphoreSlim[] _signals =
         Enumerable.Range(0, 5).Select(_ => new SemaphoreSlim(0)).ToArray();
     private readonly WorkItem?[] _runningPriorityJobs = new WorkItem?[2];
+    private int _catalogForegroundRunning;
+    private int _catalogInteractiveRunning;
     private readonly CancellationTokenSource?[] _runningYield = new CancellationTokenSource?[2];
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
@@ -149,12 +151,34 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 CancellationTokenSource? yieldRequest = null;
                 lock (_gate)
                 {
-                    item = _pending.Where(x => LaneFor(x.Priority, x.Kind) == lane)
-                        .OrderBy(x => x.Priority).ThenBy(x => x.Id).FirstOrDefault();
+                    // A free background worker must not pick the next job while
+                    // a higher-priority catalog request is pending or running.
+                    // Otherwise parallel workers can reverse the logical order.
+                    var blockedByHigherPriority =
+                        lane == LaneBackground &&
+                        (_catalogForegroundRunning > 0 ||
+                         _pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                             x.Priority <= SchedulerPriority.UserAction)) ||
+                        lane == LaneUserAction &&
+                        (_catalogInteractiveRunning > 0 ||
+                         _pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                             x.Priority == SchedulerPriority.Interactive));
+                    item = blockedByHigherPriority ? null :
+                        _pending.Where(x => LaneFor(x.Priority, x.Kind) == lane)
+                            .OrderBy(x => x.Priority).ThenBy(x => x.Id).FirstOrDefault();
                     if (item is not null)
                     {
                         _pending.Remove(item);
                         item.YieldRequested = false;
+                        if (item.Kind == SchedulerWorkKind.Catalog)
+                        {
+                            if (lane == LaneUserAction) _catalogForegroundRunning++;
+                            if (lane == LaneInteractive)
+                            {
+                                _catalogForegroundRunning++;
+                                _catalogInteractiveRunning++;
+                            }
+                        }
                         if (lane <= LaneUserAction)
                         {
                             yieldRequest = new CancellationTokenSource();
@@ -217,15 +241,37 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     }
                     finally
                     {
-                        if (lane <= LaneUserAction)
+                        lock (_gate)
                         {
-                            lock (_gate)
+                            if (lane <= LaneUserAction &&
+                                ReferenceEquals(_runningPriorityJobs[lane], item))
                             {
-                                if (ReferenceEquals(_runningPriorityJobs[lane], item))
+                                _runningPriorityJobs[lane] = null;
+                                _runningYield[lane] = null;
+                            }
+                            if (item.Kind == SchedulerWorkKind.Catalog)
+                            {
+                                if (lane == LaneUserAction) _catalogForegroundRunning--;
+                                if (lane == LaneInteractive)
                                 {
-                                    _runningPriorityJobs[lane] = null;
-                                    _runningYield[lane] = null;
+                                    _catalogForegroundRunning--;
+                                    _catalogInteractiveRunning--;
                                 }
+                            }
+                            // A blocked lane consumed a signal without taking
+                            // a job. Wake it when higher priority work drains.
+                            if (!_shutdown.IsCancellationRequested)
+                            {
+                                if (_catalogInteractiveRunning == 0 &&
+                                    !_pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                                        x.Priority == SchedulerPriority.Interactive) &&
+                                    _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneUserAction))
+                                    _signals[LaneUserAction].Release();
+                                if (_catalogForegroundRunning == 0 &&
+                                    !_pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                                        x.Priority <= SchedulerPriority.UserAction) &&
+                                    _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneBackground))
+                                    _signals[LaneBackground].Release();
                             }
                         }
                     }
