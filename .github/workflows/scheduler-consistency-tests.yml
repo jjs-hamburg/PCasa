@@ -1,7 +1,10 @@
 name: Scheduler Consistency Tests
 
-# Explicit opt-in only. No push/PR triggers, packaging, or release.
+# Run automatically on scheduler branch changes; never package or release.
 on:
+  push:
+    branches:
+      - scheduler-consistency
   workflow_dispatch:
 
 permissions:
