@@ -230,21 +230,12 @@ public sealed class PackedThumbnailStore : IDisposable
             }
         }
 
-        var nextNumber = existing.Count == 0
-            ? 1
-            : ParsePackNumber(existing[^1], prefix) + 1;
-
-        return Path.Combine(_cacheRoot, $"{prefix}{nextNumber:000000}.pack");
-    }
-
-    private static int ParsePackNumber(string path, string prefix)
-    {
-        var fileName = Path.GetFileNameWithoutExtension(path);
-        var numberText = fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? fileName[prefix.Length..]
-            : string.Empty;
-
-        return int.TryParse(numberText, out var number) ? number : 0;
+        // Compaction may delete an old numbered pack while a thumbnail reader
+        // still holds its (FileShare.Delete) handle. Reusing that same name for
+        // a new pack would make the reader serve bytes from the deleted file.
+        // v2 names sort after legacy numeric names and are never recycled.
+        return Path.Combine(_cacheRoot,
+            $"{prefix}v2-{DateTime.UtcNow.Ticks:D19}-{Guid.NewGuid():N}.pack");
     }
 
     private static int TierQuality(int tier)
