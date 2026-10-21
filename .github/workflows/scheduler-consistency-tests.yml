@@ -33,3 +33,19 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
+
+      - name: Publish self-contained Windows x64 acceptance package
+        shell: pwsh
+        run: |
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
+          Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
+          if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
+          if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
+      - name: Upload scheduler acceptance test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-Scheduler-Abnahme-win-x64
+          path: publish/PCasa/
+          if-no-files-found: error
+          retention-days: 14

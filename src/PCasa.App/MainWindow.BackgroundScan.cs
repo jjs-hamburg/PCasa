@@ -497,7 +497,10 @@ public partial class MainWindow
                                 !File.Exists(request.Path) &&
                                 !Directory.Exists(request.Path))
                             {
-                                removed = _catalogRemovalService.RemovePath(folder.Id, request.Path);
+                                removed = _catalogRemovalService.RemovePath(
+                                    folder.Id, request.Path, cancellationToken: token,
+                                    sourceCanonicalPath: folder.CanonicalPath,
+                                    expectedGeneration: deletionSource.Value.Generation);
                             }
                             return Task.CompletedTask;
                         },

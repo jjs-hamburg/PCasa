@@ -73,38 +73,44 @@ public partial class MainWindow
     private async void DuplicateImage(long id)
     {
         var path = GetImagePath(id);
-        if (path is null || !File.Exists(path)) return;
+        if (path is null) return;
         try
         {
-            var folder = Path.GetDirectoryName(path)!;
-            var stem = Path.GetFileNameWithoutExtension(path);
-            var ext = Path.GetExtension(path);
-            var target = Path.Combine(folder, stem + " - Kopie" + ext);
-            var suffix = 2;
-            while (File.Exists(target))
-                target = Path.Combine(folder, stem + $" - Kopie ({suffix++})" + ext);
+            var folderId = GetContextMonitoredFolderId(id);
+            var monitored = folderId is long monitoredId
+                ? _folderRepository.GetAll().FirstOrDefault(item => item.Id == monitoredId)
+                : null;
+            var source = monitored is null
+                ? null : _folderRepository.GetSourceState(monitored.CanonicalPath);
+            string? target = null;
             StatusText.Text = "Duplikat wird erstellt …";
-            await Task.Run(() => File.Copy(path, target));
-            if (GetContextMonitoredFolderId(id) is long folderId &&
-                _folderRepository.GetAll().FirstOrDefault(item => item.Id == folderId) is { } monitored)
-            {
-                StatusText.Text = "Duplikat wird in den Katalog aufgenommen …";
-                var source = _folderRepository.GetSourceState(monitored.CanonicalPath);
-                if (source is { DesiredPresent: true })
+            await _scheduler.EnqueueAsync(
+                $"image-duplicate:{id}:{path}", SchedulerPriority.Interactive,
+                token =>
                 {
-                    await _scheduler.EnqueueAsync(
-                        $"image-duplicate-scan:{monitored.Id}:{source.Value.Generation}:{target}",
-                        SchedulerPriority.UserAction,
-                        token =>
-                        {
-                            _folderScanner.ScanFile(monitored, target, cancellationToken: token);
-                            return Task.CompletedTask;
-                        },
-                        () => _folderRepository.IsCurrentSourceGeneration(
-                            monitored.CanonicalPath, source.Value.Generation, true));
-                }
+                    token.ThrowIfCancellationRequested();
+                    if (monitored is not null &&
+                        (source is not { DesiredPresent: true } ||
+                         !_folderRepository.IsCurrentSourceGeneration(
+                             monitored.CanonicalPath, source.Value.Generation, true)))
+                        throw new OperationCanceledException("Die überwachte Quelle wurde geändert.");
+                    if (!File.Exists(path))
+                        throw new FileNotFoundException("Das Original ist nicht mehr vorhanden.", path);
+                    var directory = Path.GetDirectoryName(path)!;
+                    var stem = Path.GetFileNameWithoutExtension(path);
+                    var ext = Path.GetExtension(path);
+                    var copy = Path.Combine(directory, stem + " - Kopie" + ext);
+                    var suffix = 2;
+                    while (File.Exists(copy))
+                        copy = Path.Combine(directory, stem + $" - Kopie ({suffix++})" + ext);
+                    File.Copy(path, copy);
+                    target = copy;
+                    if (monitored is not null)
+                        _folderScanner.ScanFile(monitored, copy, cancellationToken: token);
+                    return Task.CompletedTask;
+                });
+            if (monitored is not null)
                 await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: true);
-            }
             StatusText.Text = "Dupliziert: " + Path.GetFileName(target);
         }
         catch (Exception ex) { ShowFileActionError(ex); }
@@ -116,43 +122,39 @@ public partial class MainWindow
         if (path is null) return;
         try
         {
-            // Network deletion is explicit and irreversible; never fall back
-            // from a failed local recycle-bin operation to permanent deletion.
             var network = await Task.Run(() => PathClassifier.Classify(path).IsNetwork);
             var question = network
-                ? $"Netzlaufwerk: Datei ENDGÜLTIG löschen?\\n\\n" +
-                  $"Dieser Vorgang kann nicht rückgängig gemacht werden.\\n\\n{path}"
-                : $"Datei in den Windows-Papierkorb verschieben?\\n\\n{path}";
+                ? $"Netzlaufwerk: Datei ENDGÜLTIG löschen?\n\n" +
+                  $"Dieser Vorgang kann nicht rückgängig gemacht werden.\n\n{path}"
+                : $"Datei in den Windows-Papierkorb verschieben?\n\n{path}";
             if (MessageBox.Show(this, question, "Bild löschen",
                     MessageBoxButton.YesNo, MessageBoxImage.Warning,
                     MessageBoxResult.No) != MessageBoxResult.Yes)
                 return;
 
             var monitoredId = GetContextMonitoredFolderId(id);
-            if (network)
-                await Task.Run(() => File.Delete(path));
-            else
-                await Task.Run(() => FileSystem.DeleteFile(
-                    path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin));
-
-            StatusText.Text = "Datei gelöscht · Katalog aktualisieren …";
-            if (monitoredId is long folderId)
-            {
-                // A one-image detach is transactional and schedules cache
-                // reclamation for idle rather than compacting every pack now.
-                await _scheduler.EnqueueAsync(
-                    $"image-delete-cleanup:{folderId}:{id}",
-                    SchedulerPriority.Interactive,
-                    token =>
-                    {
-                        token.ThrowIfCancellationRequested();
+            StatusText.Text = "Bild löschen …";
+            await _scheduler.EnqueueAsync(
+                $"image-delete:{id}:{path}", SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Physical file operation and catalog detachment occupy one
+                    // scheduler job. A canceled queued request cannot delete.
+                    if (network)
+                        File.Delete(path);
+                    else
+                        FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
+                            RecycleOption.SendToRecycleBin);
+                    if (monitoredId is long folderId)
                         new CatalogRemovalService(_database).DetachImage(id, path);
-                        return Task.CompletedTask;
-                    });
+                    // No cancel between physical deletion and catalog update:
+                    // if the file moved, always finish the short DB cleanup.
+                    return Task.CompletedTask;
+                });
+            if (monitoredId is long)
                 await RefreshBrowseGalleryAsync(forceIndexReload: true);
-            }
-            else
-                StatusText.Text = "Gelöscht: " + Path.GetFileName(path);
+            StatusText.Text = "Gelöscht: " + Path.GetFileName(path);
         }
         catch (Exception ex)
         {

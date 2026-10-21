@@ -27,6 +27,8 @@ internal static class Program
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
+        Run("Stale watcher delete cannot overwrite newer folder decision", StaleWatcherDeleteIsRejected, failures);
+        Run("Source change in final scan progress rejects stale pruning", StaleScanFinalProgressRejectsPruning, failures);
 
         Run("Missing thumbnail tier is scheduled for repair", MissingThumbnailIsRepaired, failures);
         Run("Externally deleted image is pruned", DeletedFileIsPruned, failures);
@@ -69,7 +71,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {55 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {57 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -688,6 +690,62 @@ internal static class Program
         }
         catch (OperationCanceledException) { rejected = true; }
         if (!rejected) throw new Exception("Old scan was allowed to prune.");
+        Require(db, 1);
+    }
+
+    private static void StaleWatcherDeleteIsRejected()
+    {
+        using var sandbox = new Sandbox();
+        var file = Path.Combine(sandbox.Images, "keep.jpg");
+        WriteJpeg(file);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+        var folders = new FolderRepository(db);
+        var generation = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        folders.SetExcluded(root.Id, Path.Combine(sandbox.Images, "Other"), true);
+        var rejected = false;
+        try
+        {
+            new CatalogRemovalService(db).RemovePath(root.Id, file,
+                sourceCanonicalPath: root.CanonicalPath, expectedGeneration: generation);
+        }
+        catch (OperationCanceledException) { rejected = true; }
+        if (!rejected) throw new Exception("Stale watcher work deleted catalog data.");
+        Require(db, 1);
+    }
+
+    private sealed class InlineProgress<T>(Action<T> onProgress) : IProgress<T>
+    {
+        public void Report(T value) => onProgress(value);
+    }
+
+    private static void StaleScanFinalProgressRejectsPruning()
+    {
+        using var sandbox = new Sandbox();
+        var deleted = Path.Combine(sandbox.Images, "deleted.jpg");
+        var retained = Path.Combine(sandbox.Images, "retained.jpg");
+        WriteJpeg(deleted);
+        WriteJpeg(retained);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 2);
+        File.Delete(deleted);
+        var folders = new FolderRepository(db);
+        var changes = 0;
+        var callback = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.CurrentFile is not null) return;
+            folders.SetExcluded(root.Id, Path.Combine(sandbox.Images, "Other"), true);
+            changes++;
+        });
+        var canceled = false;
+        try { scanner.Scan(root, callback); }
+        catch (OperationCanceledException) { canceled = true; }
+        if (!canceled || changes != 1)
+            throw new Exception("Final scan boundary failed to reject obsolete work.");
+        Require(db, 2);
+        scanner.Scan(root);
         Require(db, 1);
     }
 

@@ -21,11 +21,15 @@ public sealed class CatalogRemovalService
             "PCasa");
     }
 
-    public int RemovePath(long monitoredFolderId, string localPath, IProgress<string>? progress = null)
+    public int RemovePath(long monitoredFolderId, string localPath,
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        string? sourceCanonicalPath = null, long? expectedGeneration = null)
     {
         var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
-        return Remove(monitoredFolderId, normalized, prefix, removeRoot: false, progress);
+        return Remove(monitoredFolderId, normalized, prefix, removeRoot: false, progress,
+            cancellationToken: cancellationToken,
+            sourceCanonicalPath: sourceCanonicalPath, expectedGeneration: expectedGeneration);
     }
 
     public int RemoveFolder(long monitoredFolderId, IProgress<string>? progress = null)

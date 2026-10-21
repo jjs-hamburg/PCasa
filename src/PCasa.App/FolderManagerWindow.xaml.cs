@@ -392,6 +392,7 @@ public partial class FolderManagerWindow : Window
 
     private async void AddFolder_Click(object sender, RoutedEventArgs e)
     {
+        if (_busy) return;
         var dialog = new OpenFolderDialog
         {
             Title = "Ordner zur dauerhaften Überwachung auswählen"
@@ -399,6 +400,9 @@ public partial class FolderManagerWindow : Window
 
         if (dialog.ShowDialog(this) != true) return;
 
+        _busy = true;
+        AddFolderButton.IsEnabled = false;
+        RemoveFolderButton.IsEnabled = false;
         try
         {
             if (_addFolderAsync is not null)
@@ -413,6 +417,12 @@ public partial class FolderManagerWindow : Window
             MessageBox.Show(this,
                 "Der Ordner konnte nicht hinzugefügt werden.\n\n" + ex.Message,
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _busy = false;
+            AddFolderButton.IsEnabled = true;
+            UpdateSelectedDetails();
         }
     }
 
