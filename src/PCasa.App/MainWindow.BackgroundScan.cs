@@ -540,14 +540,26 @@ public partial class MainWindow
                             $"{value.CacheRepaired:N0} Cache-Reparaturen · {value.Unchanged:N0} unverändert" +
                             (value.Failed > 0 ? $" · {value.Failed:N0} Fehler" : string.Empty);
                     });
-                    var result = await Task.Run(
-                        () => request.Kind == BackgroundFolderChangeKind.ScanFile
-                            ? _folderScanner.ScanFile(
-                                folder, scanPath, scanProgress, scanCancellation.Token)
-                            : _folderScanner.ScanDirectory(
-                                folder, scanPath, request.Recursive,
-                                progress: scanProgress, scanCancellation.Token),
+                    var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
+                    if (sourceState is not { DesiredPresent: true })
+                        continue;
+                    ScanResult? scanResult = null;
+                    await _scheduler.EnqueueAsync(
+                        $"background-scan:{folder.Id}:{scanPath}",
+                        SchedulerPriority.Background,
+                        token =>
+                        {
+                            scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
+                                ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token)
+                                : _folderScanner.ScanDirectory(
+                                    folder, scanPath, request.Recursive,
+                                    progress: scanProgress, token);
+                            return Task.CompletedTask;
+                        },
+                        () => _folderRepository.IsCurrentSourceGeneration(
+                            folder.CanonicalPath, sourceState.Value.Generation, true),
                         scanCancellation.Token);
+                    var result = scanResult ?? throw new OperationCanceledException();
                     catalogChanged |= result.CatalogChanged;
                     TrackFolderActivity(
                         request.Kind == BackgroundFolderChangeKind.ScanFile
