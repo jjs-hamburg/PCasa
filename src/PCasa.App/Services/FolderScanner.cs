@@ -356,6 +356,18 @@ public sealed class FolderScanner
                 firstFailure);
         }
 
+        // Exactly the same complete scanner path clears the persistent
+        // first-import request, whether invoked manually or by the monitor.
+        // A partial/file scan or a failed enumeration never acknowledges it.
+        if (specificFile is null && recursive && failed == 0 &&
+            string.Equals(FolderExclusionRules.Normalize(scanRoot),
+                FolderExclusionRules.Normalize(folder.LocalPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _folderRepository.CompleteInitialScan(folder.Id, generation);
+        }
+
         return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed);
 
         void ReportProgress(string? currentFile, bool force = false)
