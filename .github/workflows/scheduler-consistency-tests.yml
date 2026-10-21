@@ -33,6 +33,10 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
+      - name: Exercise real WPF context-menu folder removal under active cache lock
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-removal
 
       - name: Publish self-contained Windows x64 acceptance package
         shell: pwsh
