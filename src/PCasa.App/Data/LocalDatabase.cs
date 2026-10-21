@@ -199,10 +199,22 @@ public sealed class LocalDatabase
             sources.ExecuteNonQuery();
         }
 
-        // Existing monitored roots retain their current catalog state. Only
-        // explicitly re-added/new roots carry an outstanding first scan.
-        EnsureColumn(connection, "monitored_folders", "initial_scan_pending",
-            "INTEGER NOT NULL DEFAULT 0");
+        // One-time upgrade for folders added by older builds that never
+        // initiated their first scan: do not strand an empty monitored root.
+        // Completed (including intentionally empty) scans are not repeatedly
+        // requeued on every startup: this runs ONLY when the column is new.
+        if (!ColumnExists(connection, "monitored_folders", "initial_scan_pending"))
+        {
+            EnsureColumn(connection, "monitored_folders", "initial_scan_pending",
+                "INTEGER NOT NULL DEFAULT 0");
+            using var migrate = connection.CreateCommand();
+            migrate.CommandText = """
+                UPDATE monitored_folders SET initial_scan_pending = 1
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM images i WHERE i.folder_id = monitored_folders.id);
+                """;
+            migrate.ExecuteNonQuery();
+        }
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");
