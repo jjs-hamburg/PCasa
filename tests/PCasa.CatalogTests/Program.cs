@@ -16,6 +16,7 @@ internal static class Program
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
+        Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -62,7 +63,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {48 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {49 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -152,6 +153,30 @@ internal static class Program
             if (record.State != SchedulerJobState.Completed ||
                 record.Priority != SchedulerPriority.UserAction)
                 throw new Exception("Coalesced work did not retain promoted priority.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerShutdownCancelsQueuedWork()
+    {
+        static async Task Check()
+        {
+            var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var executed = false;
+            var running = scheduler.EnqueueAsync("running", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var pending = scheduler.EnqueueAsync("pending", SchedulerPriority.UserAction,
+                _ => { executed = true; return Task.CompletedTask; });
+            await scheduler.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            if (executed || !running.IsCanceled || !pending.IsCanceled ||
+                scheduler.Snapshot().Any(x => x.State is SchedulerJobState.Running or SchedulerJobState.Queued))
+                throw new Exception("Scheduler shutdown did not cancel active and pending jobs.");
         }
         Check().GetAwaiter().GetResult();
     }
