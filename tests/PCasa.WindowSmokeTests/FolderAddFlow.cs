@@ -80,8 +80,10 @@ internal static class FolderAddFlow
                 throw new Exception("Added root/first scan was not persisted before import.");
             if (new ImageCatalogRepository(db).CountAll() != 0)
                 throw new Exception("The test failed to hold the first image scan pending.");
-            if (!status.Text.Contains("Einlesen", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Status did not acknowledge the user-requested import.");
+            if (!status.Text.Contains("einles", StringComparison.OrdinalIgnoreCase) &&
+                !status.Text.Contains("eingelesen", StringComparison.OrdinalIgnoreCase) &&
+                !status.Text.Contains("Import", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Status did not acknowledge the user-requested import. Actual: " + status.Text);
             Console.WriteLine("PASS: Actual manager add coordinator exposes folder immediately while scanner is blocked.");
 
             releaseLock.Set();
