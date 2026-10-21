@@ -53,9 +53,10 @@ public sealed class FolderRepository
         command.CommandText =
             """
             INSERT OR IGNORE INTO monitored_folders
-                (local_path, canonical_path, is_network, server_sync_enabled, created_utc)
+                (local_path, canonical_path, is_network, server_sync_enabled,
+                 created_utc, initial_scan_pending)
             VALUES
-                ($localPath, $canonicalPath, $isNetwork, 0, $createdUtc);
+                ($localPath, $canonicalPath, $isNetwork, 0, $createdUtc, 1);
             """;
         command.Parameters.AddWithValue("$localPath", classification.LocalPath);
         command.Parameters.AddWithValue("$canonicalPath", classification.CanonicalPath);
@@ -81,7 +82,55 @@ public sealed class FolderRepository
             source.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             source.ExecuteNonQuery();
         }
+        // Selecting an already-monitored root again is also an explicit
+        // request to read it, even if the old first-scan request was lost.
+        using (var pending = connection.CreateCommand())
+        {
+            pending.Transaction = transaction;
+            pending.CommandText = """
+                UPDATE monitored_folders SET initial_scan_pending = 1
+                WHERE local_path = $path COLLATE NOCASE;
+                """;
+            pending.Parameters.AddWithValue("$path", classification.LocalPath);
+            pending.ExecuteNonQuery();
+        }
         transaction.Commit();
+    }
+
+    // A durable first-import request survives cancellation, app restart and
+    // a temporarily unreachable SMB share. It is not conditional on the
+    // optional background folder watcher being enabled.
+    public IReadOnlyList<MonitoredFolder> GetPendingInitialScans()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var connection = _database.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT local_path FROM monitored_folders
+                WHERE initial_scan_pending = 1;
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) paths.Add(reader.GetString(0));
+        }
+        return GetAll().Where(folder => paths.Contains(folder.LocalPath)).ToArray();
+    }
+
+    public bool CompleteInitialScan(long folderId, long expectedGeneration)
+    {
+        using var connection = _database.OpenConnection();
+        using var update = connection.CreateCommand();
+        update.CommandText = """
+            UPDATE monitored_folders SET initial_scan_pending = 0
+            WHERE id = $id AND initial_scan_pending = 1
+              AND EXISTS (
+                  SELECT 1 FROM scheduler_sources s
+                  WHERE s.canonical_path = monitored_folders.canonical_path
+                    AND s.generation = $generation AND s.desired_present = 1);
+            """;
+        update.Parameters.AddWithValue("$id", folderId);
+        update.Parameters.AddWithValue("$generation", expectedGeneration);
+        return update.ExecuteNonQuery() == 1;
     }
 
     public void Remove(long id, IProgress<string>? progress = null)
