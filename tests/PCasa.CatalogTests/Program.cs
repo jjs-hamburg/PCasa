@@ -35,6 +35,7 @@ internal static class Program
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
+        Run("Scan reconciliation defers physical cache compaction", ScanReconciliationDefersCacheMaintenance, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
         Run("Older background scan cannot prune a newer manual scan", OldBackgroundScanDoesNotPruneManualResults, failures);
@@ -84,7 +85,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {70 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {71 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -621,6 +622,30 @@ internal static class Program
         Require(db, 0);
         if (!removal.HasPendingMaintenance())
             throw new Exception("Watcher delete did not persist deferred cache cleanup.");
+    }
+
+    private static void ScanReconciliationDefersCacheMaintenance()
+    {
+        using var sandbox = new Sandbox();
+        var photo = Path.Combine(sandbox.Images, "prune.jpg");
+        WriteJpeg(photo);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+
+        var maintenance = new CatalogRemovalService(db);
+        if (maintenance.HasPendingMaintenance())
+            throw new Exception("Initial scan unexpectedly requested cache reclamation.");
+
+        File.Delete(photo);
+        var scan = scanner.Scan(root);
+        if (scan.Removed != 1 || !scan.CatalogChanged)
+            throw new Exception("Reconciliation failed to remove the missing image.");
+        Require(db, 0);
+        if (!maintenance.HasPendingMaintenance())
+            throw new Exception("Scan reconciliation ran synchronous cleanup instead of scheduling idle maintenance.");
+        if (new BrowseCacheRepository(db).GetIndex(96).Count != 0)
+            throw new Exception("Deferred physical cleanup left a deleted image visible in the gallery.");
     }
 
     private static void RenameMustReconcile()
