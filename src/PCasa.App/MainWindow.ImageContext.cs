@@ -29,7 +29,7 @@ public partial class MainWindow
         AddContextAction(menu, "Eigenschaften", () => ShowFileProperties(id));
         menu.Items.Add(new Separator());
         AddContextAction(menu, "Duplizieren", () => DuplicateImage(id));
-        AddContextAction(menu, "Löschen (Papierkorb)", () => RecycleImage(id));
+        AddContextAction(menu, "Löschen", () => RecycleImage(id));
         menu.IsOpen = true;
     }
 
@@ -85,28 +85,25 @@ public partial class MainWindow
                 target = Path.Combine(folder, stem + $" - Kopie ({suffix++})" + ext);
             StatusText.Text = "Duplikat wird erstellt …";
             await Task.Run(() => File.Copy(path, target));
-            if (_backgroundScanSettings?.Enabled == true)
-                QueueContextFolderRefresh(id, folder);
-            else if (GetContextMonitoredFolderId(id) is long folderId &&
-                     _folderRepository.GetAll().FirstOrDefault(item => item.Id == folderId) is { } monitored)
+            if (GetContextMonitoredFolderId(id) is long folderId &&
+                _folderRepository.GetAll().FirstOrDefault(item => item.Id == folderId) is { } monitored)
             {
                 StatusText.Text = "Duplikat wird in den Katalog aufgenommen …";
                 var source = _folderRepository.GetSourceState(monitored.CanonicalPath);
                 if (source is { DesiredPresent: true })
                 {
                     await _scheduler.EnqueueAsync(
-                        $"image-duplicate-scan:{monitored.Id}:{source.Value.Generation}:{folder}",
+                        $"image-duplicate-scan:{monitored.Id}:{source.Value.Generation}:{target}",
                         SchedulerPriority.UserAction,
                         token =>
                         {
-                            _folderScanner.ScanDirectory(monitored, folder,
-                                recursive: false, cancellationToken: token);
+                            _folderScanner.ScanFile(monitored, target, cancellationToken: token);
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
                             monitored.CanonicalPath, source.Value.Generation, true));
                 }
-                await EnsureBrowseCacheAndRefreshAsync();
+                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: true);
             }
             StatusText.Text = "Dupliziert: " + Path.GetFileName(target);
         }
@@ -116,39 +113,49 @@ public partial class MainWindow
     private async void RecycleImage(long id)
     {
         var path = GetImagePath(id);
-        if (path is null || !File.Exists(path)) return;
-        var answer = MessageBox.Show(this,
-            $"Datei in den Windows-Papierkorb verschieben?\n\n{path}",
-            "Bild löschen", MessageBoxButton.YesNo, MessageBoxImage.Warning,
-            MessageBoxResult.No);
-        if (answer != MessageBoxResult.Yes) return;
-        var monitoredId = GetContextMonitoredFolderId(id);
+        if (path is null) return;
         try
         {
-            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
-            StatusText.Text = "In Papierkorb verschoben · Cache bereinigen …";
+            // Network deletion is explicit and irreversible; never fall back
+            // from a failed local recycle-bin operation to permanent deletion.
+            var network = await Task.Run(() => PathClassifier.Classify(path).IsNetwork);
+            var question = network
+                ? $"Netzlaufwerk: Datei ENDGÜLTIG löschen?\\n\\n" +
+                  $"Dieser Vorgang kann nicht rückgängig gemacht werden.\\n\\n{path}"
+                : $"Datei in den Windows-Papierkorb verschieben?\\n\\n{path}";
+            if (MessageBox.Show(this, question, "Bild löschen",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                    MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
+
+            var monitoredId = GetContextMonitoredFolderId(id);
+            if (network)
+                await Task.Run(() => File.Delete(path));
+            else
+                await Task.Run(() => FileSystem.DeleteFile(
+                    path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin));
+
+            StatusText.Text = "Datei gelöscht · Katalog aktualisieren …";
             if (monitoredId is long folderId)
             {
-                var progress = new Progress<string>(message => StatusText.Text = message);
-                // The file has already been moved to the recycle bin.
-                // Serialize its catalog cleanup with other catalog operations.
+                // A one-image detach is transactional and schedules cache
+                // reclamation for idle rather than compacting every pack now.
                 await _scheduler.EnqueueAsync(
-                    $"image-delete-cleanup:{folderId}:{path}",
-                    SchedulerPriority.UserAction,
+                    $"image-delete-cleanup:{folderId}:{id}",
+                    SchedulerPriority.Interactive,
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
-                        new CatalogRemovalService(_database).RemovePath(folderId, path, progress);
+                        new CatalogRemovalService(_database).DetachImage(id, path);
                         return Task.CompletedTask;
                     });
                 await RefreshBrowseGalleryAsync(forceIndexReload: true);
             }
             else
-                StatusText.Text = "In Papierkorb verschoben: " + Path.GetFileName(path);
+                StatusText.Text = "Gelöscht: " + Path.GetFileName(path);
         }
         catch (Exception ex)
         {
-            // Never fall back to irreversible deletion on unsupported UNC shares.
             ShowFileActionError(ex);
         }
     }
