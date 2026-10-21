@@ -83,34 +83,27 @@ public partial class MainWindow
         _cacheMaintenanceRunning = true;
         using var cancellation = new CancellationTokenSource();
         _cacheMaintenanceCancellation = cancellation;
+        var started = false;
         try
         {
             var service = _catalogRemovalService;
-            bool changed = false;
             await _scheduler.EnqueueAsync(
                 "cache-maintenance",
                 SchedulerPriority.Idle,
                 token =>
                 {
-                    changed = service.RunPendingMaintenance(token);
+                    // Compaction commits each pack separately. A later cancel
+                    // can leave already committed index offsets changed.
+                    started = true;
+                    service.RunPendingMaintenance(token);
                     return Task.CompletedTask;
                 },
                 cancellationToken: cancellation.Token);
-            // Once the pack index was committed, cancellation must not skip
-            // this refresh: the existing on-screen gallery still has old
-            // pack offsets. Prioritize consistency over the next queued job.
-            if (changed && !_backgroundMonitorClosing && _browseInitialized)
-            {
-                // Compaction rewrites pack-file names and byte offsets in
-                // SQLite. Refresh the single gallery index before a subsequent
-                // scroll requests thumbnails using stale packed locations.
-                await RefreshBrowseGalleryAsync(
-                    forceIndexReload: true, warmViewport: false);
-            }
         }
         catch (OperationCanceledException)
         {
-            // Interrupted cleanup remains durable and resumes at next idle.
+            // Interrupted maintenance remains durable; even a canceled run
+            // can have committed pack-index changes before it was interrupted.
         }
         catch (Exception ex)
         {
@@ -118,6 +111,21 @@ public partial class MainWindow
         }
         finally
         {
+            // Always re-read the index after an ATTEMPTED compaction,
+            // including cancellation/failure after the first pack commit.
+            // A folder-removal action already owns its final gallery refresh.
+            if (started && !_backgroundMonitorClosing && !_folderRemovalPending &&
+                _browseInitialized && !Dispatcher.HasShutdownStarted)
+            {
+                try
+                {
+                    await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+                }
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("Cache.DeferredIndexRefresh", ex);
+                }
+            }
             if (ReferenceEquals(_cacheMaintenanceCancellation, cancellation))
                 _cacheMaintenanceCancellation = null;
             _cacheMaintenanceRunning = false;

@@ -262,8 +262,17 @@ public sealed class BrowseCacheWriteSession : IDisposable
 
         using var complete = _connection.CreateCommand();
         complete.Transaction = _transaction;
-        complete.CommandText = "DELETE FROM browse_cache_jobs WHERE image_id = $id;";
+        // The candidate may have become stale after its bytes were encoded.
+        // Never clear a repair job created for a newer source timestamp.
+        complete.CommandText = """
+            DELETE FROM browse_cache_jobs
+            WHERE image_id = $id
+              AND EXISTS (
+                  SELECT 1 FROM images
+                  WHERE id = $id AND modified_utc_ticks = $ticks);
+            """;
         complete.Parameters.AddWithValue("$id", imageId);
+        complete.Parameters.AddWithValue("$ticks", sourceModifiedUtcTicks);
         complete.ExecuteNonQuery();
     }
 

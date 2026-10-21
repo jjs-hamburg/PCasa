@@ -52,8 +52,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var existing = _pending.FirstOrDefault(x =>
-                x.Key == key && !x.CancellationToken.IsCancellationRequested &&
-                (x.IsCurrent is null || x.IsCurrent()));
+                // Keys already include the source generation for all
+                // generation-scoped jobs. Never synchronously call a SQLite
+                // validity predicate while enqueuing from the WPF dispatcher.
+                x.Key == key && !x.CancellationToken.IsCancellationRequested);
             if (existing is not null)
             {
                 if (priority < existing.Priority)
@@ -78,7 +80,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // Cancellation is cooperative. A non-interruptible SMB or decoder
             // call finishes first, but the dispatcher never waits for it.
             if (_running is { } active &&
-                active.Priority >= SchedulerPriority.Background &&
                 priority < active.Priority && !active.YieldRequested)
             {
                 active.YieldRequested = true;
@@ -233,8 +234,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             if (_disposed) return;
             _disposed = true;
-            _shutdown.Cancel();
         }
+        // Never execute cancellation registrations while holding _gate.
+        _shutdown.Cancel();
         await _worker;
         _shutdown.Dispose();
         _signal.Dispose();

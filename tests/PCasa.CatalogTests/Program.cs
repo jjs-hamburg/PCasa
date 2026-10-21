@@ -20,6 +20,8 @@ internal static class Program
         Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
+        Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
+        Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -31,6 +33,7 @@ internal static class Program
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
         Run("Stale watcher delete cannot overwrite newer folder decision", StaleWatcherDeleteIsRejected, failures);
         Run("Stale cache writer cannot overwrite a newer image version", StaleCacheWriteDoesNotReplaceCurrent, failures);
+        Run("Stale cache completion cannot clear a newer repair job", StaleCacheCompletionPreservesRepairJob, failures);
         Run("Source change in final scan progress rejects stale pruning", StaleScanFinalProgressRejectsPruning, failures);
 
         Run("Missing thumbnail tier is scheduled for repair", MissingThumbnailIsRepaired, failures);
@@ -74,7 +77,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {60 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {63 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -132,6 +135,61 @@ internal static class Program
             if (scheduler.Snapshot().Single(x => x.Key == "long-background").State
                 != SchedulerJobState.Completed)
                 throw new Exception("Resumed operation was not recorded as completed.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerInteractivePreemptsUserWork()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var firstRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var user = scheduler.EnqueueAsync("bulk-tag-write", SchedulerPriority.UserAction,
+                async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        firstRun.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                });
+            await firstRun.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var interactiveRan = false;
+            var interactive = scheduler.EnqueueAsync("delete-photo", SchedulerPriority.Interactive,
+                _ => { interactiveRan = true; return Task.CompletedTask; });
+            await Task.WhenAll(user, interactive).WaitAsync(TimeSpan.FromSeconds(5));
+            if (!interactiveRan || attempts != 2)
+                throw new Exception("Interactive work failed to preempt user bulk work.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerEnqueueDoesNotProbeSource()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blocker = scheduler.EnqueueAsync("block", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var probes = 0;
+            var first = scheduler.EnqueueAsync("same-generation", SchedulerPriority.Background,
+                _ => Task.CompletedTask, () => { Interlocked.Increment(ref probes); return true; });
+            var duplicate = scheduler.EnqueueAsync("same-generation", SchedulerPriority.Background,
+                _ => throw new Exception("Coalesced work ran twice."));
+            if (probes != 0 || !ReferenceEquals(first, duplicate))
+                throw new Exception("Enqueue performed a synchronous source probe.");
+            release.TrySetResult();
+            await Task.WhenAll(blocker, first).WaitAsync(TimeSpan.FromSeconds(5));
+            if (probes == 0) throw new Exception("Execution did not validate the source.");
         }
         Check().GetAwaiter().GetResult();
     }
@@ -741,6 +799,45 @@ internal static class Program
         catch (OperationCanceledException) { rejected = true; }
         if (!rejected) throw new Exception("Old scan was allowed to prune.");
         Require(db, 1);
+    }
+
+    private static void StaleCacheCompletionPreservesRepairJob()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "new-version.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        var repo = new BrowseCacheRepository(db);
+        var profile = new BrowseThumbnailProfileRepository(db).Get();
+        long imageId, oldTicks;
+        using (var connection = db.OpenConnection())
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT id, modified_utc_ticks FROM images LIMIT 1;";
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read()) throw new Exception("Test image missing.");
+            imageId = reader.GetInt64(0);
+            oldTicks = reader.GetInt64(1);
+        }
+        using (var connection = db.OpenConnection())
+        using (var changed = connection.CreateCommand())
+        {
+            changed.CommandText = "UPDATE images SET modified_utc_ticks = $ticks WHERE id = $id;";
+            changed.Parameters.AddWithValue("$ticks", oldTicks + 1);
+            changed.Parameters.AddWithValue("$id", imageId);
+            changed.ExecuteNonQuery();
+        }
+        using (var session = repo.CreateWriteSession())
+        {
+            session.MarkComplete(imageId, oldTicks, profile);
+            session.Commit();
+        }
+        using var verify = db.OpenConnection();
+        using var read = verify.CreateCommand();
+        read.CommandText = "SELECT COUNT(*) FROM browse_cache_jobs WHERE image_id = $id;";
+        read.Parameters.AddWithValue("$id", imageId);
+        if (Convert.ToInt64(read.ExecuteScalar()) != 1)
+            throw new Exception("Old cache job cleared the new image's repair request.");
     }
 
     private static void StaleCacheWriteDoesNotReplaceCurrent()
