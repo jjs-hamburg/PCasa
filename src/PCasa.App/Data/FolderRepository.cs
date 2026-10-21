@@ -110,7 +110,7 @@ public sealed class FolderRepository
         return result;
     }
 
-    public void SetExcluded(long monitoredFolderId, string subfolderPath, bool excluded)
+    public long SetExcluded(long monitoredFolderId, string subfolderPath, bool excluded)
     {
         var monitored = GetAll().FirstOrDefault(item => item.Id == monitoredFolderId)
             ?? throw new InvalidOperationException("Der überwachte Ordner existiert nicht mehr.");
@@ -194,7 +194,20 @@ public sealed class FolderRepository
             if (source.ExecuteNonQuery() != 1)
                 throw new OperationCanceledException("Source removed during exclusion.");
         }
+        // Capture the generation inside the decision's own write transaction.
+        // A later lookup can observe a different request for this same path.
+        using var readGeneration = connection.CreateCommand();
+        readGeneration.Transaction = transaction;
+        readGeneration.CommandText = """
+            SELECT generation FROM scheduler_sources
+            WHERE canonical_path = $path AND desired_present = 1;
+            """;
+        readGeneration.Parameters.AddWithValue("$path", monitored.CanonicalPath);
+        var generation = readGeneration.ExecuteScalar();
+        if (generation is null)
+            throw new OperationCanceledException("Monitored source was removed.");
         transaction.Commit();
+        return Convert.ToInt64(generation);
     }
 
     // Every asynchronous operation captures this token before starting work.

@@ -23,12 +23,13 @@ public sealed class CatalogRemovalService
 
     public int RemovePath(long monitoredFolderId, string localPath,
         IProgress<string>? progress = null, CancellationToken cancellationToken = default,
-        string? sourceCanonicalPath = null, long? expectedGeneration = null)
+        string? sourceCanonicalPath = null, long? expectedGeneration = null,
+        bool deferCleanup = false)
     {
         var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
         return Remove(monitoredFolderId, normalized, prefix, removeRoot: false, progress,
-            cancellationToken: cancellationToken,
+            cancellationToken: cancellationToken, deferCleanup: deferCleanup,
             sourceCanonicalPath: sourceCanonicalPath, expectedGeneration: expectedGeneration);
     }
 
@@ -85,13 +86,15 @@ public sealed class CatalogRemovalService
     // The same transactional pruning as RemovePath, but physical cache
     // maintenance is deferred. Used when a user excludes a subtree.
     public int DetachSubtree(long monitoredFolderId, string localPath,
-        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default,
+        string? sourceCanonicalPath = null, long? expectedGeneration = null)
     {
         var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
         return Remove(monitoredFolderId, normalized, prefix,
             removeRoot: false, progress, deferCleanup: true,
-            requireExcludedPath: normalized, cancellationToken: cancellationToken);
+            requireExcludedPath: normalized, cancellationToken: cancellationToken,
+            sourceCanonicalPath: sourceCanonicalPath, expectedGeneration: expectedGeneration);
     }
 
     // Removing a monitored root is a user-facing catalog operation. Do not

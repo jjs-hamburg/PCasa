@@ -25,6 +25,8 @@ internal static class Program
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
+        Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
+        Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
         Run("Stale watcher delete cannot overwrite newer folder decision", StaleWatcherDeleteIsRejected, failures);
@@ -71,7 +73,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {57 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {59 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -290,6 +292,53 @@ internal static class Program
             failures.Add(name);
             Console.Error.WriteLine($"FAIL: {name}: {error}");
         }
+    }
+
+    private static void OldExclusionGenerationDoesNotPrune()
+    {
+        using var sandbox = new Sandbox();
+        var child = Path.Combine(sandbox.Images, "sub");
+        Directory.CreateDirectory(child);
+        WriteJpeg(Path.Combine(child, "photo.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+        var folders = new FolderRepository(db);
+        var previous = folders.SetExcluded(root.Id, child, true);
+        folders.SetExcluded(root.Id, child, false);
+        var current = folders.SetExcluded(root.Id, child, true);
+        if (previous == current)
+            throw new Exception("A repeated exclusion reused its earlier generation.");
+        var rejected = false;
+        try
+        {
+            new CatalogRemovalService(db).DetachSubtree(root.Id, child,
+                sourceCanonicalPath: root.CanonicalPath, expectedGeneration: previous);
+        }
+        catch (OperationCanceledException) { rejected = true; }
+        if (!rejected) throw new Exception("Stale exclusion cleanup was accepted.");
+        Require(db, 1);
+        new CatalogRemovalService(db).DetachSubtree(root.Id, child,
+            sourceCanonicalPath: root.CanonicalPath, expectedGeneration: current);
+        Require(db, 0);
+    }
+
+    private static void WatcherDeletionDefersCacheMaintenance()
+    {
+        using var sandbox = new Sandbox();
+        var photo = Path.Combine(sandbox.Images, "photo.jpg");
+        WriteJpeg(photo);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+        var generation = new FolderRepository(db)
+            .GetSourceState(root.CanonicalPath)!.Value.Generation;
+        var removal = new CatalogRemovalService(db);
+        removal.RemovePath(root.Id, photo, sourceCanonicalPath: root.CanonicalPath,
+            expectedGeneration: generation, deferCleanup: true);
+        Require(db, 0);
+        if (!removal.HasPendingMaintenance())
+            throw new Exception("Watcher delete did not persist deferred cache cleanup.");
     }
 
     private static void RenameMustReconcile()

@@ -500,7 +500,8 @@ public partial class MainWindow
                                 removed = _catalogRemovalService.RemovePath(
                                     folder.Id, request.Path, cancellationToken: token,
                                     sourceCanonicalPath: folder.CanonicalPath,
-                                    expectedGeneration: deletionSource.Value.Generation);
+                                    expectedGeneration: deletionSource.Value.Generation,
+                                    deferCleanup: true);
                             }
                             return Task.CompletedTask;
                         },
