@@ -8,6 +8,9 @@ public sealed class CatalogRemovalService
 {
     // Prevent compaction from racing the append-only browse-cache writer.
     internal static readonly object CacheLock = new();
+    // Only maintenance jobs serialize for their whole lifetime; interactive
+    // writers acquire CacheLock for individual, bounded index commits.
+    private static readonly object MaintenanceLock = new();
     private readonly LocalDatabase _database;
     private readonly string _cacheBaseDirectory;
 
@@ -75,7 +78,7 @@ public sealed class CatalogRemovalService
             {
                 maintenance.Transaction = transaction;
                 maintenance.CommandText =
-                    "UPDATE cache_maintenance SET cleanup_pending = 1 WHERE id = 1;";
+                    "UPDATE cache_maintenance SET cleanup_pending = 1, request_generation = request_generation + 1 WHERE id = 1;";
                 maintenance.ExecuteNonQuery();
             }
             transaction.Commit();
@@ -137,7 +140,7 @@ public sealed class CatalogRemovalService
             {
                 schedule.Transaction = transaction;
                 schedule.CommandText =
-                    "UPDATE cache_maintenance SET cleanup_pending = 1 WHERE id = 1;";
+                    "UPDATE cache_maintenance SET cleanup_pending = 1, request_generation = request_generation + 1 WHERE id = 1;";
                 schedule.ExecuteNonQuery();
             }
             transaction.Commit();
@@ -155,52 +158,95 @@ public sealed class CatalogRemovalService
 
     public bool RunPendingMaintenance(CancellationToken cancellationToken = default)
     {
-        lock (CacheLock)
+        // Slow disk traversal, pack copying and JPEG cleanup must never
+        // monopolize the append/index lock or postpone a manual folder action.
+        lock (MaintenanceLock)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!HasPendingMaintenance()) return false;
-
-            // A thumbnail can be referenced by another catalog image; enumerate
-            // the live set instead of deleting images by the removed folder path.
-            var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (var connection = _database.OpenConnection())
-            using (var select = connection.CreateCommand())
+            using var connection = _database.OpenConnection();
+            long requestedGeneration;
+            using (var state = connection.CreateCommand())
             {
-                select.CommandText = "SELECT thumbnail_path FROM images;";
-                using var reader = select.ExecuteReader();
-                while (reader.Read())
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!reader.IsDBNull(0))
-                        referenced.Add(reader.GetString(0));
-                }
+                state.CommandText =
+                    "SELECT request_generation FROM cache_maintenance WHERE id = 1 AND cleanup_pending = 1;";
+                var pending = state.ExecuteScalar();
+                if (pending is null) return false;
+                requestedGeneration = Convert.ToInt64(pending);
             }
 
-            var thumbnailRoot = Path.Combine(_cacheBaseDirectory, "thumbnails");
-            if (Directory.Exists(thumbnailRoot))
-            {
-                foreach (var thumb in Directory.EnumerateFiles(
-                             thumbnailRoot, "*.jpg", SearchOption.AllDirectories))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!referenced.Contains(thumb))
-                        TryDelete(thumb);
-                }
-            }
+            var complete = ReclaimUnusedLegacyThumbnails(cancellationToken);
+            if (!CompactBrowsePacks(null, cancellationToken))
+                complete = false;
 
-            // Pack compaction is restart-safe: each pack swap commits its new
-            // offsets before the old file is removed. Cancellation leaves the
-            // marker set so the next idle pass completes remaining packs.
-            CompactBrowsePacks(null, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-
-            using var done = _database.OpenConnection();
-            using var update = done.CreateCommand();
-            update.CommandText =
-                "UPDATE cache_maintenance SET cleanup_pending = 0 WHERE id = 1;";
-            update.ExecuteNonQuery();
+            if (complete)
+            {
+                // A delete/add occurring during cleanup sets a newer request.
+                // Never acknowledge work belonging to that newer generation.
+                using var done = connection.CreateCommand();
+                done.CommandText = """
+                    UPDATE cache_maintenance SET cleanup_pending = 0
+                    WHERE id = 1 AND request_generation = $generation;
+                    """;
+                done.Parameters.AddWithValue("$generation", requestedGeneration);
+                done.ExecuteNonQuery();
+            }
             return true;
         }
+    }
+
+    private bool ReclaimUnusedLegacyThumbnails(CancellationToken cancellationToken)
+    {
+        var root = Path.Combine(_cacheBaseDirectory, "thumbnails");
+        if (!Directory.Exists(root)) return true;
+
+        // Snapshot is only a fast rejection filter, not authority to delete.
+        // The final DB reference check is made under the same short lock as
+        // scanner catalog commits. Skip fresh/uncommitted thumbnail files.
+        var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var connection = _database.OpenConnection())
+        using (var select = connection.CreateCommand())
+        {
+            select.CommandText = "SELECT thumbnail_path FROM images;";
+            using var reader = select.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!reader.IsDBNull(0))
+                    referenced.Add(reader.GetString(0));
+            }
+        }
+
+        var complete = true;
+        var safeBefore = DateTime.UtcNow - TimeSpan.FromMinutes(30);
+        foreach (var thumb in Directory.EnumerateFiles(root, "*.jpg", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (referenced.Contains(thumb)) continue;
+            // .tmp.jpg is owned by a concurrent image encoder.
+            if (thumb.EndsWith(".tmp.jpg", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (File.GetLastWriteTimeUtc(thumb) > safeBefore)
+            {
+                complete = false;
+                continue;
+            }
+
+            lock (CacheLock)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var db = _database.OpenConnection();
+                using var count = db.CreateCommand();
+                count.CommandText = "SELECT EXISTS(SELECT 1 FROM images WHERE thumbnail_path = $path);";
+                count.Parameters.AddWithValue("$path", thumb);
+                if (Convert.ToInt32(count.ExecuteScalar()) == 0)
+                {
+                    TryDelete(thumb);
+                    if (File.Exists(thumb)) complete = false;
+                }
+            }
+        }
+        return complete;
     }
 
     // Called only after a complete and error-free directory enumeration.
@@ -356,7 +402,7 @@ public sealed class CatalogRemovalService
                     using var schedule = connection.CreateCommand();
                     schedule.Transaction = transaction;
                     schedule.CommandText =
-                        "UPDATE cache_maintenance SET cleanup_pending = 1 WHERE id = 1;";
+                        "UPDATE cache_maintenance SET cleanup_pending = 1, request_generation = request_generation + 1 WHERE id = 1;";
                     schedule.ExecuteNonQuery();
                 }
 
@@ -393,9 +439,18 @@ public sealed class CatalogRemovalService
                 }
             }
 
-            progress?.Report("Browse-Cache bereinigen …");
-            CompactBrowsePacks(progress);
-            progress?.Report($"Bereinigung abgeschlossen · {removed:N0} Bilder entfernt");
+            // Never compact multi-megabyte pack files while holding CacheLock.
+            using (var db = _database.OpenConnection())
+            using (var schedule = db.CreateCommand())
+            {
+                schedule.CommandText = """
+                    UPDATE cache_maintenance
+                    SET cleanup_pending = 1, request_generation = request_generation + 1
+                    WHERE id = 1;
+                    """;
+                schedule.ExecuteNonQuery();
+            }
+            progress?.Report($"Katalog bereinigt · {removed:N0} Bilder entfernt; physische Bereinigung im Leerlauf");
             return removed;
         }
     }
@@ -408,38 +463,55 @@ public sealed class CatalogRemovalService
         command.Parameters.AddWithValue("$prefix", prefix);
     }
 
-    private void CompactBrowsePacks(IProgress<string>? progress,
+    private bool CompactBrowsePacks(IProgress<string>? progress,
         CancellationToken cancellationToken = default)
     {
         var root = Path.Combine(_cacheBaseDirectory, "browse-cache");
-        if (!Directory.Exists(root)) return;
+        if (!Directory.Exists(root)) return true;
 
-        using var connection = _database.OpenConnection();
+        // Pack bytes are append-only. Readers may hold old pack handles, and
+        // every new writer uses a non-recycled filename. Build the replacement
+        // OUTSIDE CacheLock. Move index entries in bounded SQLite commits.
+        var complete = true;
         var packs = Directory.EnumerateFiles(root, "*.pack").ToArray();
         var packNumber = 0;
         foreach (var original in packs)
         {
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report($"Cache-Packdateien bereinigen: {++packNumber:N0} / {packs.Length:N0}");
+            if (!File.Exists(original)) continue;
             var fileName = Path.GetFileName(original);
+            using var connection = _database.OpenConnection();
             using var query = connection.CreateCommand();
-            query.CommandText = @"SELECT image_id, tier, byte_offset, byte_length
+            query.CommandText = """
+                SELECT image_id, tier, byte_offset, byte_length
                 FROM thumbnail_entries WHERE pack_file = $pack
-                ORDER BY byte_offset;";
+                ORDER BY byte_offset;
+                """;
             query.Parameters.AddWithValue("$pack", fileName);
             var rows = new List<(long ImageId, int Tier, long Offset, int Length)>();
             using (var reader = query.ExecuteReader())
                 while (reader.Read())
                     rows.Add((reader.GetInt64(0), reader.GetInt32(1),
-                              reader.GetInt64(2), reader.GetInt32(3)));
+                        reader.GetInt64(2), reader.GetInt32(3)));
 
             if (rows.Count == 0)
             {
-                TryDelete(original);
+                // An append might have committed after our SELECT. Recheck
+                // under CacheLock before reclaiming any unreferenced pack.
+                lock (CacheLock)
+                {
+                    if (PackReferenceCount(connection, fileName) == 0)
+                        TryDelete(original);
+                    if (File.Exists(original)) complete = false;
+                }
                 continue;
             }
 
-            var length = new FileInfo(original).Length;
+            long length;
+            try { length = new FileInfo(original).Length; }
+            catch (FileNotFoundException) { complete = false; continue; }
+
             long expected = 0;
             var compact = false;
             foreach (var row in rows)
@@ -453,9 +525,11 @@ public sealed class CatalogRemovalService
 
             var newName = "compact-" + Guid.NewGuid().ToString("N") + ".pack";
             var newPath = Path.Combine(root, newName);
-            var updated = new List<(long ImageId, int Tier, long Offset)>(rows.Count);
+            var updated = new List<(long ImageId, int Tier, long OldOffset, int Length, long NewOffset)>(rows.Count);
             try
             {
+                // A concurrent writer may append to original, never modify
+                // existing bytes. The replacement holds only snapshot rows.
                 using (var input = new FileStream(original, FileMode.Open, FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete))
                 using (var output = new FileStream(newPath, FileMode.CreateNew,
@@ -476,48 +550,87 @@ public sealed class CatalogRemovalService
                             output.Write(buffer, 0, read);
                             remaining -= read;
                         }
-                        updated.Add((row.ImageId, row.Tier, offset));
+                        updated.Add((row.ImageId, row.Tier, row.Offset, row.Length, offset));
                     }
                     output.Flush(flushToDisk: true);
                 }
 
-                using (var transaction = connection.BeginTransaction())
-                using (var update = connection.CreateCommand())
+                // Each batch has a separate, short transaction. If canceled or
+                // crashed between batches, both packs remain valid; the durable
+                // maintenance request causes a later reconciliation to finish.
+                const int commitBatchSize = 128;
+                for (var start = 0; start < updated.Count; start += commitBatchSize)
                 {
-                    update.Transaction = transaction;
-                    update.CommandText = @"UPDATE thumbnail_entries
-                        SET pack_file = $newPack, byte_offset = $offset
-                        WHERE image_id = $id AND tier = $tier AND pack_file = $oldPack;";
-                    update.Parameters.AddWithValue("$newPack", newName);
-                    update.Parameters.AddWithValue("$oldPack", fileName);
-                    var offsetParam = update.Parameters.Add("$offset", SqliteType.Integer);
-                    var idParam = update.Parameters.Add("$id", SqliteType.Integer);
-                    var tierParam = update.Parameters.Add("$tier", SqliteType.Integer);
-                    foreach (var row in updated)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        offsetParam.Value = row.Offset;
-                        idParam.Value = row.ImageId;
-                        tierParam.Value = row.Tier;
-                        if (update.ExecuteNonQuery() != 1)
-                            throw new InvalidOperationException("Cache-Index hat sich während der Bereinigung geändert.");
-                    }
                     cancellationToken.ThrowIfCancellationRequested();
-                    transaction.Commit();
+                    lock (CacheLock)
+                    {
+                        using var transaction = connection.BeginTransaction();
+                        using var update = connection.CreateCommand();
+                        update.Transaction = transaction;
+                        update.CommandText = """
+                            UPDATE thumbnail_entries
+                            SET pack_file = $newPack, byte_offset = $newOffset
+                            WHERE image_id = $id AND tier = $tier
+                              AND pack_file = $oldPack
+                              AND byte_offset = $oldOffset AND byte_length = $length;
+                            """;
+                        update.Parameters.AddWithValue("$newPack", newName);
+                        update.Parameters.AddWithValue("$oldPack", fileName);
+                        var newOffset = update.Parameters.Add("$newOffset", SqliteType.Integer);
+                        var oldOffset = update.Parameters.Add("$oldOffset", SqliteType.Integer);
+                        var id = update.Parameters.Add("$id", SqliteType.Integer);
+                        var tier = update.Parameters.Add("$tier", SqliteType.Integer);
+                        var byteLength = update.Parameters.Add("$length", SqliteType.Integer);
+                        foreach (var row in updated.Skip(start).Take(commitBatchSize))
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            newOffset.Value = row.NewOffset;
+                            oldOffset.Value = row.OldOffset;
+                            id.Value = row.ImageId;
+                            tier.Value = row.Tier;
+                            byteLength.Value = row.Length;
+                            // A deleted/rebuilt row is intentionally skipped.
+                            // Its old bytes may become unreferenced but a newer
+                            // version must not be overwritten by compaction.
+                            update.ExecuteNonQuery();
+                        }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        transaction.Commit();
+                    }
                 }
-                TryDelete(original);
+
+                lock (CacheLock)
+                {
+                    // A writer may have appended new references while copying.
+                    // Leave the old pack intact until no index row references it.
+                    if (PackReferenceCount(connection, fileName) == 0)
+                        TryDelete(original);
+                    if (File.Exists(original)) complete = false;
+                    if (PackReferenceCount(connection, newName) == 0)
+                        TryDelete(newPath);
+                }
             }
             catch
             {
-                // If the transaction did not commit, the old pack is still valid.
-                // If it did commit, the new pack is referenced and must be kept.
-                using var check = connection.CreateCommand();
-                check.CommandText = "SELECT COUNT(*) FROM thumbnail_entries WHERE pack_file = $pack;";
-                check.Parameters.AddWithValue("$pack", newName);
-                if (Convert.ToInt64(check.ExecuteScalar()) == 0) TryDelete(newPath);
+                // Partially committed replacement rows remain readable.
+                // Delete the new pack ONLY if it is not referenced.
+                lock (CacheLock)
+                {
+                    if (PackReferenceCount(connection, newName) == 0)
+                        TryDelete(newPath);
+                }
                 throw;
             }
         }
+        return complete;
+    }
+
+    private static long PackReferenceCount(SqliteConnection connection, string packFile)
+    {
+        using var query = connection.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM thumbnail_entries WHERE pack_file = $pack;";
+        query.Parameters.AddWithValue("$pack", packFile);
+        return Convert.ToInt64(query.ExecuteScalar());
     }
 
     private static bool IsInside(string path, string root)
