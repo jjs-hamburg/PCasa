@@ -1,15 +1,9 @@
 name: Scheduler Consistency Tests
 
-# Run automatically on scheduler branch changes; never package or release.
+# Explicit acceptance tests only: no automatic CI costs after commits.
+# A manual dispatch runs regression and WPF smoke tests; only that dispatch
+# can also produce the requested acceptance package.
 on:
-  push:
-    branches:
-      - scheduler-consistency
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'Directory.Packages.props'
-      - 'PCasa.sln'
   workflow_dispatch:
 
 permissions:
