@@ -477,8 +477,32 @@ public partial class MainWindow
                     if (!verifiedGone)
                         continue;
 
-                    var removed = await Task.Run(
-                        () => _catalogRemovalService.RemovePath(folder.Id, request.Path),
+                    // Deletion and scanning must share the same scheduler lane.
+                    // Recheck the path at execution time: a delayed watcher
+                    // event must not delete a file that has since returned.
+                    var deletionSource = _folderRepository.GetSourceState(folder.CanonicalPath);
+                    if (deletionSource is not { DesiredPresent: true })
+                        continue;
+                    var removed = 0;
+                    await _scheduler.EnqueueAsync(
+                        $"background-delete:{folder.Id}:{deletionSource.Value.Generation}:{request.Path}",
+                        SchedulerPriority.Background,
+                        token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var parent = Path.GetDirectoryName(request.Path);
+                            if (!string.IsNullOrWhiteSpace(parent) &&
+                                Directory.Exists(folder.LocalPath) &&
+                                Directory.Exists(parent) &&
+                                !File.Exists(request.Path) &&
+                                !Directory.Exists(request.Path))
+                            {
+                                removed = _catalogRemovalService.RemovePath(folder.Id, request.Path);
+                            }
+                            return Task.CompletedTask;
+                        },
+                        () => _folderRepository.IsCurrentSourceGeneration(
+                            folder.CanonicalPath, deletionSource.Value.Generation, true),
                         _backgroundLifetime.Token);
                     catalogChanged |= removed > 0;
                     if (removed > 0)
