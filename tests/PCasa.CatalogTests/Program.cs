@@ -22,6 +22,7 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
+        Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
@@ -80,7 +81,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {66 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {67 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -248,6 +249,63 @@ internal static class Program
             {
                 release.TrySetResult();
                 await catalog.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void CanceledQueuedThumbnailPageCanBeReloaded()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var a = scheduler.EnqueueAsync("occupy-thumbnail-a", SchedulerPriority.UserAction,
+                async token =>
+                {
+                    startedA.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.ThumbnailRead);
+            var b = scheduler.EnqueueAsync("occupy-thumbnail-b", SchedulerPriority.UserAction,
+                async token =>
+                {
+                    startedB.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.ThumbnailRead);
+            try
+            {
+                await Task.WhenAll(startedA.Task, startedB.Task).WaitAsync(TimeSpan.FromSeconds(5));
+                using var pages = new BrowseThumbnailPageCache(scheduler);
+                pages.SetIndex(Enumerable.Range(0, 4096)
+                    .Select(i => new BrowseThumbnailIndexEntry(
+                        10000 + i, 1, 96, "__pcasa_missing_pack__.pack", 0, 1, 100, 100))
+                    .ToArray());
+                var old = pages.WarmRangeAsync(0, 31);
+                pages.UpdateViewport(3200, 3231, 1); // cancel page 0 while still queued
+                release.TrySetResult();
+                await Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(5));
+                await old.WaitAsync(TimeSpan.FromSeconds(10));
+
+                // A canceled pre-start job must remove its placeholder from
+                // the same page cache; otherwise a revisit never retries.
+                var field = typeof(BrowseThumbnailPageCache).GetField("_pages",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new Exception("Expected thumbnail page cache field missing.");
+                var entries = field.GetValue(pages) as System.Collections.IDictionary
+                    ?? throw new Exception("Thumbnail page storage missing.");
+                if (entries.Contains(0))
+                    throw new Exception("Canceled pending thumbnail page remained in cache.");
+                await pages.WarmRangeAsync(0, 31).WaitAsync(TimeSpan.FromSeconds(10));
+                if (!entries.Contains(0))
+                    throw new Exception("Canceled thumbnail page cannot be requested again.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();

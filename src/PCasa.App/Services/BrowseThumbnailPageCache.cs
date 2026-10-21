@@ -240,6 +240,24 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         }
         catch (OperationCanceledException) { /* Viewport or index changed. */ }
         catch (ObjectDisposedException) { /* Window is closing. */ }
+        finally
+        {
+            // A scheduler job can be canceled BEFORE LoadPageAsync ever ran.
+            // In that case its own cancellation handler never removes the
+            // placeholder. Without this cleanup a later revisit sees a
+            // completed LoadTask and permanently skips the missing page.
+            lock (_sync)
+            {
+                if (!_disposed && state.Token.IsCancellationRequested &&
+                    state.Bitmaps is null &&
+                    _pages.TryGetValue(state.PageNumber, out var current) &&
+                    ReferenceEquals(current, state))
+                {
+                    _pages.Remove(state.PageNumber);
+                    state.Cancellation.Dispose();
+                }
+            }
+        }
     }
 
     private async Task LoadPageAsync(
