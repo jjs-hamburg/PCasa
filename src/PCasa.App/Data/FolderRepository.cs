@@ -210,6 +210,32 @@ public sealed class FolderRepository
         return Convert.ToInt64(generation);
     }
 
+    // A manual scan supersedes older enumerations of this source, even when
+    // the monitored-folder selection itself has not changed. Otherwise a
+    // background enumeration finished later could prune new files already
+    // committed by a user's newer, complete scan.
+    public long BeginManualScan(string canonicalPath)
+    {
+        using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = """
+            UPDATE scheduler_sources
+            SET generation = generation + 1, updated_utc = $now
+            WHERE canonical_path = $path AND desired_present = 1
+            RETURNING generation;
+            """;
+        update.Parameters.AddWithValue("$path", canonicalPath);
+        update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        var generation = update.ExecuteScalar();
+        if (generation is null)
+            throw new OperationCanceledException(
+                "Der überwachte Ordner wurde inzwischen entfernt.");
+        transaction.Commit();
+        return Convert.ToInt64(generation);
+    }
+
     // Every asynchronous operation captures this token before starting work.
     // A token is valid only while the same source is still desired at the
     // same generation. No old scan or cleanup may commit after re-inclusion.

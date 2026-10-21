@@ -353,11 +353,10 @@ public partial class MainWindow
 
                 try
                 {
-                    var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
-                    if (sourceState is not { DesiredPresent: true })
-                        continue;
+                    var scanGeneration = await Task.Run(
+                        () => _folderRepository.BeginManualScan(folder.CanonicalPath));
                     await _scheduler.EnqueueAsync(
-                        $"scan-all:{folder.Id}:{sourceState.Value.Generation}",
+                        $"scan-all:{folder.Id}:{scanGeneration}",
                         SchedulerPriority.UserAction,
                         token =>
                         {
@@ -365,7 +364,7 @@ public partial class MainWindow
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
-                            folder.CanonicalPath, sourceState.Value.Generation, true),
+                            folder.CanonicalPath, scanGeneration, true),
                         cancellation.Token);
                 }
                 catch (OperationCanceledException)

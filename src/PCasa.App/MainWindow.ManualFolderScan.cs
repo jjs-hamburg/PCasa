@@ -117,12 +117,11 @@ public partial class MainWindow
             // Manual scans enter the shared scheduler rather than starting
             // an independent Task.Run worker. The source generation fences
             // work that was queued before removal/re-inclusion.
-            var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
-            if (sourceState is not { DesiredPresent: true })
-                throw new OperationCanceledException("Source is no longer monitored.");
+            var scanGeneration = await Task.Run(
+                () => _folderRepository.BeginManualScan(folder.CanonicalPath));
             ScanResult? scanResult = null;
             await _scheduler.EnqueueAsync(
-                $"manual-scan:{folder.Id}:{sourceState.Value.Generation}:{directory}",
+                $"manual-scan:{folder.Id}:{scanGeneration}:{directory}",
                 SchedulerPriority.UserAction,
                 token =>
                 {
@@ -131,7 +130,7 @@ public partial class MainWindow
                     return Task.CompletedTask;
                 },
                 () => _folderRepository.IsCurrentSourceGeneration(
-                    folder.CanonicalPath, sourceState.Value.Generation, true),
+                    folder.CanonicalPath, scanGeneration, true),
                 cancellation.Token);
             var result = scanResult ?? throw new OperationCanceledException();
             TrackFolderActivity(directory, result.Failed > 0 ? "Failed" : "Ready", recursive: true);

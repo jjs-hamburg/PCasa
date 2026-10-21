@@ -37,6 +37,7 @@ internal static class Program
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
+        Run("Older background scan cannot prune a newer manual scan", OldBackgroundScanDoesNotPruneManualResults, failures);
         Run("Stale watcher delete cannot overwrite newer folder decision", StaleWatcherDeleteIsRejected, failures);
         Run("Stale cache writer cannot overwrite a newer image version", StaleCacheWriteDoesNotReplaceCurrent, failures);
         Run("Stale cache completion cannot clear a newer repair job", StaleCacheCompletionPreservesRepairJob, failures);
@@ -83,7 +84,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {69 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {70 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -1111,6 +1112,58 @@ internal static class Program
                     StringComparison.Ordinal))
                 throw new Exception("Old image source overwrote a newer cache entry.");
         }
+    }
+
+    private static void OldBackgroundScanDoesNotPruneManualResults()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var first = Path.Combine(sandbox.Images, "first.jpg");
+            var second = Path.Combine(sandbox.Images, "second.jpg");
+            WriteJpeg(first);
+            var (db, root, backgroundScanner) = sandbox.Prepare();
+            backgroundScanner.Scan(root);
+            Require(db, 1);
+
+            var pausedAtReconciliation = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var finalProgress = new InlineProgress<ScanProgress>(scan =>
+            {
+                if (scan.CurrentFile is not null) return;
+                pausedAtReconciliation.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            });
+            var old = Task.Run(() => backgroundScanner.Scan(root, finalProgress));
+            try
+            {
+                await pausedAtReconciliation.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                WriteJpeg(second);
+                var folders = new FolderRepository(db);
+                var previousGeneration = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+                var newerGeneration = folders.BeginManualScan(root.CanonicalPath);
+                if (newerGeneration != previousGeneration + 1)
+                    throw new Exception("Manual scan did not advance source generation.");
+                var manualScanner = new FolderScanner(
+                    new ImageCatalogRepository(db), new ThumbnailCache(),
+                    folders, new BrowseThumbnailProfileRepository(db));
+                manualScanner.Scan(root);
+                Require(db, 2);
+            }
+            finally
+            {
+                release.TrySetResult();
+            }
+
+            var rejected = false;
+            try { await old.WaitAsync(TimeSpan.FromSeconds(15)); }
+            catch (OperationCanceledException) { rejected = true; }
+            if (!rejected) throw new Exception("Older background scan was allowed to reconcile.");
+            Require(db, 2);
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void StaleWatcherDeleteIsRejected()
