@@ -86,7 +86,8 @@ public sealed class CatalogRemovalService
         var normalized = Path.GetFullPath(localPath).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
         return Remove(monitoredFolderId, normalized, prefix,
-            removeRoot: false, progress, deferCleanup: true);
+            removeRoot: false, progress, deferCleanup: true,
+            requireExcludedPath: normalized);
     }
 
     // Removing a monitored root is a user-facing catalog operation. Do not
@@ -192,7 +193,7 @@ public sealed class CatalogRemovalService
     private int Remove(long folderId, string path, string prefix, bool removeRoot,
         IProgress<string>? progress, IReadOnlySet<string>? currentPaths = null,
         bool recursive = true, CancellationToken cancellationToken = default,
-        bool deferCleanup = false)
+        bool deferCleanup = false, string? requireExcludedPath = null)
     {
         lock (CacheLock)
         {
@@ -205,6 +206,25 @@ public sealed class CatalogRemovalService
             using (var connection = _database.OpenConnection())
             using (var transaction = connection.BeginTransaction())
             {
+                // Re-inclusion can overtake an already queued exclusion cleanup.
+                // Check the current desired state inside the same SQLite write
+                // transaction as the DELETE, not before acquiring CacheLock.
+                if (requireExcludedPath is not null)
+                {
+                    using var guard = connection.CreateCommand();
+                    guard.Transaction = transaction;
+                    guard.CommandText = """
+                        SELECT EXISTS(
+                            SELECT 1 FROM excluded_folders
+                            WHERE monitored_folder_id = $folderId
+                              AND local_path = $path COLLATE NOCASE);
+                        """;
+                    guard.Parameters.AddWithValue("$folderId", folderId);
+                    guard.Parameters.AddWithValue("$path", requireExcludedPath);
+                    if (Convert.ToInt64(guard.ExecuteScalar()) == 0)
+                        return 0;
+                }
+
                 if (currentPaths is not null)
                 {
                     using var table = connection.CreateCommand();

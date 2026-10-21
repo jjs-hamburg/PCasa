@@ -15,6 +15,8 @@ internal static class Program
         var failures = new List<string>();
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
+        Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
+
         Run("Missing thumbnail tier is scheduled for repair", MissingThumbnailIsRepaired, failures);
         Run("Externally deleted image is pruned", DeletedFileIsPruned, failures);
         Run("Deletion-only scan signals gallery refresh", DeletionOnlyScanMarksCatalogChanged, failures);
@@ -56,7 +58,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {43 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {44 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -340,6 +342,40 @@ internal static class Program
         Require(db, 1);
         if (!observed.SequenceEqual(new[] { true, false }))
             throw new Exception("Notifications must follow the actual persisted change.");
+    }
+
+    // G02: The exclusion callback is a deterministic synchronization point:
+    // the old removal has not started yet, but the newer desired state is
+    // already persisted. No sleeps or scheduler timing assumptions.
+    private static void ReincludeDuringExclusionDoesNotPrune()
+    {
+        using var sandbox = new Sandbox();
+        var child = Path.Combine(sandbox.Images, "child");
+        Directory.CreateDirectory(child);
+        var original = Path.Combine(child, "keep.jpg");
+        WriteJpeg(original);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+
+        var service = new FolderExclusionService(new FolderRepository(db), db);
+        var reincluded = false;
+        service.ChangeAsync(root.Id, child, true,
+            (_, _, excluded) =>
+            {
+                if (!excluded) return;
+                service.ChangeAsync(root.Id, child, false)
+                    .GetAwaiter().GetResult();
+                reincluded = true;
+            }).GetAwaiter().GetResult();
+
+        if (!reincluded)
+            throw new Exception("The controlled re-inclusion point was not reached.");
+        if (new FolderRepository(db).GetExcludedPaths(root.Id).Count != 0)
+            throw new Exception("The newer inclusion decision was not persisted.");
+        Require(db, 1);
+        if (!File.Exists(original))
+            throw new Exception("The original file was unexpectedly removed.");
     }
 
     private static void CanceledScanPreservesCatalog()
