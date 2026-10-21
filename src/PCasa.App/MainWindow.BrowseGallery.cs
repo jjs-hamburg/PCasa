@@ -237,6 +237,10 @@ public partial class MainWindow
                 return;
             }
 
+            // The visual folder tree determines Picasa gallery order.
+            // Database canonical/UNC names are storage identity, not order.
+            index = GalleryFolderOrdering.Order(index, CaptureGalleryFolderOrder());
+
             // The database may have been checked without any change to this
             // tier. Reusing the old index keeps decoded thumbnail pages alive.
             var indexChanged = _activeBrowseTier != tier ||
@@ -638,9 +642,10 @@ public partial class MainWindow
         }
 
         _activePhotoFolderId = folderId;
-        // Do not BringIntoView here. Picasa's folder pane must not shift horizontally
-        // or chase the gallery while the user is rapidly browsing.
-        UpdateActiveFolderDisplay(folderId.Value, updateTreeSelection: true);
+        // Scrolling changes only which gallery section is visible. It must
+        // NEVER select, expand or scroll the independent folder tree. Only a
+        // deliberate thumbnail/folder click may change tree selection.
+        UpdateActiveFolderDisplay(folderId.Value, updateTreeSelection: false);
     }
 
     private async void BrowseThumbnailSizeSlider_ValueChanged(
