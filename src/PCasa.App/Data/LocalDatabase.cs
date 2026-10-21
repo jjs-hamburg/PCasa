@@ -199,6 +199,10 @@ public sealed class LocalDatabase
             sources.ExecuteNonQuery();
         }
 
+        // Existing monitored roots retain their current catalog state. Only
+        // explicitly re-added/new roots carry an outstanding first scan.
+        EnsureColumn(connection, "monitored_folders", "initial_scan_pending",
+            "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");
