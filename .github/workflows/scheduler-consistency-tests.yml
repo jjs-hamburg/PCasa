@@ -37,6 +37,10 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-removal
+      - name: Exercise real WPF tag search and folder-anchor round trip
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --tag-flow
 
       - name: Publish self-contained Windows x64 acceptance package
         shell: pwsh
