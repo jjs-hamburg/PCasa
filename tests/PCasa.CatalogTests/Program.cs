@@ -19,6 +19,7 @@ internal static class Program
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
         Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
+        Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -68,7 +69,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {54 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {55 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -95,6 +96,37 @@ internal static class Program
             await Task.WhenAll(first, background, user).WaitAsync(TimeSpan.FromSeconds(5));
             if (!order.SequenceEqual(new[] { "user", "background" }))
                 throw new Exception("Queued user action did not outrank background work.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerYieldsToUserAndResumes()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var background = scheduler.EnqueueAsync("long-background",
+                SchedulerPriority.Background, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        started.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var userRan = false;
+            var user = scheduler.EnqueueAsync("user", SchedulerPriority.Interactive,
+                _ => { userRan = true; return Task.CompletedTask; });
+            await user.WaitAsync(TimeSpan.FromSeconds(5));
+            await background.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!userRan || attempts != 2 || background.IsCanceled)
+                throw new Exception("Background job did not yield and resume.");
+            if (scheduler.Snapshot().Single(x => x.Key == "long-background").State
+                != SchedulerJobState.Completed)
+                throw new Exception("Resumed operation was not recorded as completed.");
         }
         Check().GetAwaiter().GetResult();
     }
