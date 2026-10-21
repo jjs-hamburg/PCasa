@@ -35,6 +35,7 @@ internal static class Program
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
+        Run("Compacted pack file names are never reused", CompactedPackNamesAreNeverReused, failures);
         Run("Scan reconciliation defers physical cache compaction", ScanReconciliationDefersCacheMaintenance, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
@@ -85,7 +86,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {71 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {72 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -622,6 +623,38 @@ internal static class Program
         Require(db, 0);
         if (!removal.HasPendingMaintenance())
             throw new Exception("Watcher delete did not persist deferred cache cleanup.");
+    }
+
+    private static void CompactedPackNamesAreNeverReused()
+    {
+        // A packed thumbnail reader may hold an open handle to a deleted pack.
+        // A new pack must never use that old path for different image bytes.
+        var cacheRoot = Path.Combine(Path.GetTempPath(),
+            "PCasa-PackIdentity-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var tiers = new[]
+            {
+                new PackedThumbnailStore.PreparedThumbnailTier(96,
+                    new byte[] { 1, 2, 3 }, 1, 1)
+            };
+            string original;
+            using (var store = new PackedThumbnailStore(cacheRoot))
+                original = store.AppendPrepared(tiers).Single().PackFile;
+            File.Delete(Path.Combine(cacheRoot, original));
+            string replacement;
+            using (var store = new PackedThumbnailStore(cacheRoot))
+                replacement = store.AppendPrepared(tiers).Single().PackFile;
+            if (string.Equals(original, replacement, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Compacted pack file name was recycled while readers could retain its old handle.");
+            if (!File.Exists(Path.Combine(cacheRoot, replacement)))
+                throw new Exception("New pack data was not created after reclamation.");
+        }
+        finally
+        {
+            if (Directory.Exists(cacheRoot))
+                Directory.Delete(cacheRoot, recursive: true);
+        }
     }
 
     private static void ScanReconciliationDefersCacheMaintenance()
