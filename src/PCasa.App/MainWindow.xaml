@@ -179,6 +179,8 @@
                                   Click="BrowseScanAll_Click" />
                     </MenuItem>
                     <MenuItem Header="Optionen" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem Header="Scheduler-Monitor..." Click="SchedulerMonitor_Click" />
+                        <Separator />
                         <MenuItem Header="Darstellung">
                             <MenuItem Header="Design">
                                 <MenuItem x:Name="ThemeLightMenu" Header="Hell" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />
