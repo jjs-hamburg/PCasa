@@ -15,6 +15,7 @@ internal static class Program
         var failures = new List<string>();
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
+        Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -61,7 +62,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {47 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {48 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -118,6 +119,39 @@ internal static class Program
             if (executed || !stale.IsCanceled ||
                 scheduler.Snapshot().Last().State != SchedulerJobState.Canceled)
                 throw new Exception("Stale queued work was not canceled.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerCoalescesPendingWork()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blocker = scheduler.EnqueueAsync("block", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var executions = 0;
+            var first = scheduler.EnqueueAsync("same-key", SchedulerPriority.Background,
+                _ => { executions++; return Task.CompletedTask; });
+            var duplicate = scheduler.EnqueueAsync("same-key", SchedulerPriority.UserAction,
+                _ => { executions++; return Task.CompletedTask; });
+            if (!ReferenceEquals(first, duplicate))
+                throw new Exception("Duplicate pending work did not share completion.");
+            release.TrySetResult();
+            await Task.WhenAll(blocker, first, duplicate).WaitAsync(TimeSpan.FromSeconds(5));
+            if (executions != 1)
+                throw new Exception("Duplicate pending work executed more than once.");
+            var record = scheduler.Snapshot().Single(x => x.Key == "same-key");
+            if (record.State != SchedulerJobState.Completed ||
+                record.Priority != SchedulerPriority.UserAction)
+                throw new Exception("Coalesced work did not retain promoted priority.");
         }
         Check().GetAwaiter().GetResult();
     }
