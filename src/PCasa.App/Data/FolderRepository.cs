@@ -47,7 +47,9 @@ public sealed class FolderRepository
         var classification = PathClassifier.Classify(path);
 
         using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText =
             """
             INSERT OR IGNORE INTO monitored_folders
@@ -59,7 +61,27 @@ public sealed class FolderRepository
         command.Parameters.AddWithValue("$canonicalPath", classification.CanonicalPath);
         command.Parameters.AddWithValue("$isNetwork", classification.IsNetwork ? 1 : 0);
         command.Parameters.AddWithValue("$createdUtc", DateTime.UtcNow.ToString("O"));
-        command.ExecuteNonQuery();
+        var inserted = command.ExecuteNonQuery();
+        if (inserted > 0)
+        {
+            // Source identity is independent of the replaceable monitored-folder ID.
+            // Only an actual new inclusion advances the durable generation.
+            using var source = connection.CreateCommand();
+            source.Transaction = transaction;
+            source.CommandText = """
+                INSERT INTO scheduler_sources
+                    (canonical_path, generation, desired_present, updated_utc)
+                VALUES ($path, 1, 1, $now)
+                ON CONFLICT(canonical_path) DO UPDATE SET
+                    generation = generation + 1,
+                    desired_present = 1,
+                    updated_utc = excluded.updated_utc;
+                """;
+            source.Parameters.AddWithValue("$path", classification.CanonicalPath);
+            source.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            source.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
     public void Remove(long id, IProgress<string>? progress = null)
