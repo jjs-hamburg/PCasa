@@ -171,6 +171,8 @@ public partial class MainWindow
             _manualScanRunning = false;
             _manualFolderScanWaiting = false;
             _isScanning = _backgroundWorkerRunning;
+            // Any root added during this scan keeps its durable user request.
+            QueuePendingInitialScans();
             ScanAllMenuItem.IsEnabled = !_isScanning;
 
             // Cache repair preempted by the manual action is resumed silently,
