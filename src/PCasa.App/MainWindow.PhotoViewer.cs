@@ -111,7 +111,7 @@ public partial class MainWindow
         _ = UpdateSidebarContentAsync();
     }
 
-    private void ShowViewerImage(bool keepCurrentAsPlaceholder = false)
+    private async void ShowViewerImage(bool keepCurrentAsPlaceholder = false)
     {
         if (!_viewerOpen || _viewerCurrentIndex < 0 ||
             _viewerCurrentIndex >= _browseIndex.Count)
@@ -137,14 +137,26 @@ public partial class MainWindow
             _viewerFullscreenNavigator?.ShowForNewImage();
         }
 
+        // A blocked SQLite reader must not freeze navigation/zoom on WPF.
+        // The request version fences asynchronous metadata from an older photo.
+        PhotoViewerImageInfo? resolvedInfo = null;
         try
         {
-            _viewerImageInfo = new PhotoViewerImageRepository(_database).Get(entry.ImageId);
+            await _scheduler.EnqueueAsync(
+                $"catalog:viewer-info:{entry.ImageId}:{version}",
+                SchedulerPriority.Interactive,
+                readToken =>
+                {
+                    readToken.ThrowIfCancellationRequested();
+                    resolvedInfo = new PhotoViewerImageRepository(_database).Get(entry.ImageId);
+                    return Task.CompletedTask;
+                }, cancellationToken: token,
+                workKind: SchedulerWorkKind.CatalogRead);
         }
-        catch (Exception)
-        {
-            _viewerImageInfo = null;
-        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception) { /* The prepared preview remains usable. */ }
+        if (!IsCurrentViewerRequest(version, token)) return;
+        _viewerImageInfo = resolvedInfo;
 
         if (_viewerImageInfo is { } infoForTitle)
         {
