@@ -33,6 +33,8 @@ internal static class Program
             return TagFlow.Run();
         if (args.Contains("--folder-removal", StringComparer.OrdinalIgnoreCase))
             return FolderRemovalFlow.Run();
+        if (args.Contains("--folder-add", StringComparer.OrdinalIgnoreCase))
+            return FolderAddFlow.Run();
 
         PCasa.App.MainWindow? window = null;
         try
