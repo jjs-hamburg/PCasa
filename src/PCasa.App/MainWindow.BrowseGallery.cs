@@ -357,7 +357,7 @@ public partial class MainWindow
                     if (sourceState is not { DesiredPresent: true })
                         continue;
                     await _scheduler.EnqueueAsync(
-                        $"scan-all:{folder.Id}",
+                        $"scan-all:{folder.Id}:{sourceState.Value.Generation}",
                         SchedulerPriority.UserAction,
                         token =>
                         {
