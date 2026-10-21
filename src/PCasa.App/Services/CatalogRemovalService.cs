@@ -13,10 +13,14 @@ public sealed class CatalogRemovalService
     private static readonly object MaintenanceLock = new();
     private readonly LocalDatabase _database;
     private readonly string _cacheBaseDirectory;
+    private readonly Action? _beforePackCopy;
 
-    public CatalogRemovalService(LocalDatabase database, string? cacheBaseDirectory = null)
+    public CatalogRemovalService(LocalDatabase database, string? cacheBaseDirectory = null,
+        Action? beforePackCopy = null)
     {
         _database = database;
+        // Optional synchronization gate for deterministic cache-race tests.
+        _beforePackCopy = beforePackCopy;
         // Explicit root allows tests to prove cleanup without touching any
         // user's PCasa image/cache folders.
         _cacheBaseDirectory = cacheBaseDirectory ?? Path.Combine(
@@ -530,6 +534,8 @@ public sealed class CatalogRemovalService
             {
                 // A concurrent writer may append to original, never modify
                 // existing bytes. The replacement holds only snapshot rows.
+                _beforePackCopy?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
                 using (var input = new FileStream(original, FileMode.Open, FileAccess.Read,
                     FileShare.ReadWrite | FileShare.Delete))
                 using (var output = new FileStream(newPath, FileMode.CreateNew,
@@ -603,9 +609,11 @@ public sealed class CatalogRemovalService
                 {
                     // A writer may have appended new references while copying.
                     // Leave the old pack intact until no index row references it.
-                    if (PackReferenceCount(connection, fileName) == 0)
-                        TryDelete(original);
-                    if (File.Exists(original)) complete = false;
+                    // Retire old, formerly indexed packs on the NEXT idle
+                    // pass, after the UI has refreshed its loaded index. A
+                    // page queued with the old index may still open the file.
+                    // The next pass sees zero references and reclaims it.
+                    complete = false;
                     if (PackReferenceCount(connection, newName) == 0)
                         TryDelete(newPath);
                 }
