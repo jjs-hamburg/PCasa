@@ -175,6 +175,25 @@ public sealed class LocalDatabase
             recent.ExecuteNonQuery();
         }
 
+        // Scheduler source identity survives removal of a monitored_folders row.
+        // This additive migration does not change or delete existing catalog data.
+        using (var sources = connection.CreateCommand())
+        {
+            sources.CommandText = """
+                CREATE TABLE IF NOT EXISTS scheduler_sources (
+                    canonical_path TEXT PRIMARY KEY COLLATE NOCASE,
+                    generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0),
+                    desired_present INTEGER NOT NULL CHECK (desired_present IN (0, 1)),
+                    updated_utc TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO scheduler_sources
+                    (canonical_path, generation, desired_present, updated_utc)
+                SELECT canonical_path, 1, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                FROM monitored_folders;
+                """;
+            sources.ExecuteNonQuery();
+        }
+
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");
