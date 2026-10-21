@@ -22,6 +22,7 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
+        Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
@@ -89,7 +90,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {75 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {76 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -229,6 +230,41 @@ internal static class Program
             {
                 release.TrySetResult();
                 await worker.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerCatalogReadIsIndependent()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var scanner = scheduler.EnqueueAsync("offline-network-scan", SchedulerPriority.Background,
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                });
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var readCompleted = false;
+                await scheduler.EnqueueAsync("gallery-catalog-read", SchedulerPriority.Interactive,
+                    _ =>
+                    {
+                        readCompleted = true;
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.CatalogRead).WaitAsync(TimeSpan.FromSeconds(5));
+                if (!readCompleted || scanner.IsCompleted)
+                    throw new Exception("UI catalog read waited behind a network scan.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await scanner.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();
