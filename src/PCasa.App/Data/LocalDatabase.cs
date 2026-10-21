@@ -18,7 +18,7 @@ public sealed class LocalDatabase
 
     public SqliteConnection OpenConnection()
     {
-        var connection = new SqliteConnection($"Data Source={DatabasePath};Mode=ReadWriteCreate;Cache=Shared");
+        var connection = new SqliteConnection($"Data Source={DatabasePath};Mode=ReadWriteCreate;Cache=Private");
         connection.Open();
 
         using var pragma = connection.CreateCommand();
