@@ -154,13 +154,18 @@ public sealed class LocalDatabase
                 CREATE TABLE IF NOT EXISTS cache_maintenance (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     cleanup_pending INTEGER NOT NULL DEFAULT 0
-                        CHECK (cleanup_pending IN (0, 1))
+                        CHECK (cleanup_pending IN (0, 1)),
+                    request_generation INTEGER NOT NULL DEFAULT 0
                 );
                 INSERT INTO cache_maintenance(id, cleanup_pending)
                 VALUES (1, 0) ON CONFLICT(id) DO NOTHING;
                 """;
             maintenance.ExecuteNonQuery();
         }
+        // Additive migration for catalogs created before maintenance requests
+        // carried a generation. No existing thumbnail/catalog rows are touched.
+        EnsureColumn(connection, "cache_maintenance", "request_generation",
+            "INTEGER NOT NULL DEFAULT 0");
 
         // The last used tags are shared by every sidebar opening in this local
         // catalogue, rather than being lost with the window's in-memory state.
