@@ -37,6 +37,7 @@ internal static class Program
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
         Run("Compacted pack file names are never reused", CompactedPackNamesAreNeverReused, failures);
         Run("Cache compaction yields to manual deletion and retains later requests", MaintenanceCompactionDoesNotBlockManualDeletion, failures);
+        Run("Pack append during compaction retains newly indexed bytes", ConcurrentAppendDuringCompactionKeepsBothImages, failures);
         Run("Scan reconciliation defers physical cache compaction", ScanReconciliationDefersCacheMaintenance, failures);
         Run("Manual removal passes slow scan preparation without stale commit", ManualRemovalOvertakesScanReconciliationPreparation, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
@@ -88,7 +89,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {74 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {75 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -657,6 +658,98 @@ internal static class Program
             if (Directory.Exists(cacheRoot))
                 Directory.Delete(cacheRoot, recursive: true);
         }
+    }
+
+    private static void ConcurrentAppendDuringCompactionKeepsBothImages()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "first.jpg"));
+        WriteJpeg(Path.Combine(sandbox.Images, "second.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 2);
+
+        var rootDir = Path.Combine(Path.GetDirectoryName(sandbox.Images)!, "ConcurrentPack");
+        var packDir = Path.Combine(rootDir, "browse-cache");
+        Directory.CreateDirectory(packDir);
+        var oldPack = Path.Combine(packDir, "old-pack.pack");
+        File.WriteAllBytes(oldPack, new byte[] { 1, 2, 3, 0, 4, 5, 6, 0, 0, 0 });
+
+        long first, second;
+        using (var dbConnection = db.OpenConnection())
+        using (var cmd = dbConnection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id FROM images ORDER BY file_name;";
+            using (var reader = cmd.ExecuteReader())
+            {
+                if (!reader.Read()) throw new Exception("Missing first image.");
+                first = reader.GetInt64(0);
+                if (!reader.Read()) throw new Exception("Missing second image.");
+                second = reader.GetInt64(0);
+            }
+            cmd.CommandText = """
+                UPDATE thumbnail_entries SET pack_file = 'old-pack.pack',
+                    byte_offset = 0, byte_length = 3
+                WHERE image_id = $id AND tier = 96;
+                UPDATE cache_maintenance
+                SET cleanup_pending = 1, request_generation = request_generation + 1
+                WHERE id = 1;
+                """;
+            cmd.Parameters.AddWithValue("$id", first);
+            cmd.ExecuteNonQuery();
+        }
+
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var maintenance = new CatalogRemovalService(db, rootDir, () =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("Pack append gate timed out.");
+        });
+        var job = Task.Run(() => maintenance.RunPendingMaintenance());
+        try
+        {
+            if (!entered.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Compaction did not observe its first image.");
+            // Simulate the second writer appending and committing a valid row
+            // to the same original pack while its earlier rows are copied.
+            using var dbConnection = db.OpenConnection();
+            using var write = dbConnection.CreateCommand();
+            write.CommandText = """
+                UPDATE thumbnail_entries SET pack_file = 'old-pack.pack',
+                    byte_offset = 4, byte_length = 3
+                WHERE image_id = $id AND tier = 96;
+                """;
+            write.Parameters.AddWithValue("$id", second);
+            if (write.ExecuteNonQuery() != 1)
+                throw new Exception("Concurrent appended image was not indexed.");
+        }
+        finally { release.Set(); }
+
+        if (!job.GetAwaiter().GetResult())
+            throw new Exception("Compaction did not finish.");
+        if (!File.Exists(oldPack))
+            throw new Exception("Pack containing a concurrent append was deleted.");
+        var index = new BrowseCacheRepository(db).GetIndex(96);
+        if (index.Count != 2 ||
+            !index.Any(entry => entry.ImageId == first &&
+                 entry.PackFile.StartsWith("compact-", StringComparison.Ordinal)) ||
+            !index.Any(entry => entry.ImageId == second &&
+                 entry.PackFile == "old-pack.pack"))
+            throw new Exception("Compaction lost or overwrote a concurrently appended entry.");
+        if (!maintenance.HasPendingMaintenance())
+            throw new Exception("Compaction lost its pending retry marker.");
+
+        // First retry migrates the remaining old entry; the next reclaims
+        // the retired pack after the catalog index has been refreshed.
+        var retry = new CatalogRemovalService(db, rootDir);
+        for (var attempt = 0; attempt < 3 && retry.HasPendingMaintenance(); attempt++)
+            retry.RunPendingMaintenance();
+        if (retry.HasPendingMaintenance() || File.Exists(oldPack))
+            throw new Exception("Compaction failed to converge after a concurrent append.");
+        if (new BrowseCacheRepository(db).GetIndex(96).Count != 2)
+            throw new Exception("Pack compaction retry changed the valid gallery image count.");
     }
 
     private static void MaintenanceCompactionDoesNotBlockManualDeletion()
