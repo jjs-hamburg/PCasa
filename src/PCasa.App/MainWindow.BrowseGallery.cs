@@ -103,11 +103,15 @@ public partial class MainWindow
 
             try
             {
-                result = await Task.Run(
-                    () => _browseCacheBuilder.BuildMissing(
-                        progress,
-                        _browseCacheCancellation.Token),
-                    _browseCacheCancellation.Token);
+                await _scheduler.EnqueueAsync(
+                    "browse-cache:foreground",
+                    SchedulerPriority.UserAction,
+                    token =>
+                    {
+                        result = _browseCacheBuilder.BuildMissing(progress, token);
+                        return Task.CompletedTask;
+                    },
+                    cancellationToken: _browseCacheCancellation.Token);
             }
             catch (OperationCanceledException)
             {
