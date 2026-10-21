@@ -552,7 +552,7 @@ public partial class MainWindow
                         continue;
                     ScanResult? scanResult = null;
                     await _scheduler.EnqueueAsync(
-                        $"background-scan:{folder.Id}:{scanPath}",
+                        $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}",
                         SchedulerPriority.Background,
                         token =>
                         {
