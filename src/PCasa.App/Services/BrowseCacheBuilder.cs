@@ -38,13 +38,6 @@ public sealed class BrowseCacheBuilder
         IProgress<BrowseCacheBuildProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        return BuildMissingLocked(progress, cancellationToken);
-    }
-
-    private BrowseCacheBuildResult BuildMissingLocked(
-        IProgress<BrowseCacheBuildProgress>? progress,
-        CancellationToken cancellationToken)
-    {
         var profile = _profileRepository.Get();
         var total = _repository.CountMissing(profile);
         var processed = 0;
@@ -54,152 +47,119 @@ public sealed class BrowseCacheBuilder
         Exception? firstFailure = null;
         string? firstFailurePath = null;
 
-        // A previous first-run failure may have written pack bytes before any index
-        // entry was committed. If there is no usable index at all, those bytes are
-        // unreachable and can be safely discarded before retrying.
+        // A first-run reset is protected by the same lock as pack append and
+        // SQLite index commit. Never reset a pack that has live index rows.
         lock (CatalogRemovalService.CacheLock)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (_repository.CountEntries() == 0)
                 PackedThumbnailStore.ResetPackFiles();
         }
 
-        using var store = new PackedThumbnailStore();
-        using var writeSession = _repository.CreateWriteSession();
-
-        try
+        while (true)
         {
-            while (true)
+            cancellationToken.ThrowIfCancellationRequested();
+            var candidates = _repository.GetMissingCandidates(
+                profile, afterImageId, CandidateBatchSize);
+            if (candidates.Count == 0) break;
+
+            foreach (var candidate in candidates)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-
-                var candidates = _repository.GetMissingCandidates(
-                    profile,
-                    afterImageId,
-                    CandidateBatchSize);
-                if (candidates.Count == 0)
+                afterImageId = candidate.ImageId;
+                try
                 {
-                    break;
+                    BuildCandidate(candidate, profile, cancellationToken);
                 }
-
-                foreach (var candidate in candidates)
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    afterImageId = candidate.ImageId;
-
-                    try
-                    {
-                        BuildCandidate(
-                            candidate,
-                            profile,
-                            store,
-                            writeSession,
-                            cancellationToken);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        failed++;
-                        firstFailure ??= ex;
-                        firstFailurePath ??= candidate.LocalPath;
-                    }
-
-                    processed++;
-                    if (progressClock.ElapsedMilliseconds >= 250)
-                    {
-                        progressClock.Restart();
-                        progress?.Report(new BrowseCacheBuildProgress(
-                            total,
-                            processed,
-                            failed,
-                            candidate.LocalPath,
-                            candidate.ThumbnailPath));
-                    }
-
-                    if (processed >= SystemicFailureThreshold && failed == processed)
-                    {
-                        throw new InvalidOperationException(
-                            $"Die ersten {processed:N0} Bilder konnten sämtlich nicht in den Browse-Cache konvertiert werden.\n\n" +
-                            $"Erste fehlerhafte Datei:\n{firstFailurePath}\n\n" +
-                            $"Ursache:\n{firstFailure?.Message}",
-                            firstFailure);
-                    }
+                    failed++;
+                    firstFailure ??= ex;
+                    firstFailurePath ??= candidate.LocalPath;
                 }
-
-                writeSession.Commit();
+                processed++;
+                if (progressClock.ElapsedMilliseconds >= 250)
+                {
+                    progressClock.Restart();
+                    progress?.Report(new BrowseCacheBuildProgress(
+                        total, processed, failed, candidate.LocalPath,
+                        candidate.ThumbnailPath));
+                }
+                if (processed >= SystemicFailureThreshold && failed == processed)
+                    throw new InvalidOperationException(
+                        $"Die ersten {processed:N0} Bilder konnten sämtlich nicht in den Browse-Cache konvertiert werden.\n\n" +
+                        $"Erste fehlerhafte Datei:\n{firstFailurePath}\n\n" +
+                        $"Ursache:\n{firstFailure?.Message}", firstFailure);
             }
-
-            writeSession.Commit();
-        }
-        catch
-        {
-            // Dispose must not commit an interrupted, unfinished SQLite batch.
-            writeSession.RollbackPending();
-            throw;
         }
         progress?.Report(new BrowseCacheBuildProgress(
-            total,
-            processed,
-            failed,
-            null,
-            null));
-
+            total, processed, failed, null, null));
         return new BrowseCacheBuildResult(total, processed, failed);
     }
 
-    private static void BuildCandidate(
+    private void BuildCandidate(
         BrowseCacheCandidate candidate,
         BrowseThumbnailProfile profile,
-        PackedThumbnailStore store,
-        BrowseCacheWriteSession writeSession,
         CancellationToken cancellationToken)
     {
         var missing = profile.Tiers
             .Where(tier => !candidate.ExistingTiers.Contains(tier)).ToArray();
-        if (missing.Length == 0)
+
+        // Open and close a pack writer for THIS candidate only. Holding one
+        // handle across hundreds of images would allow a compactor to replace
+        // a pack while its old stream is still being appended to.
+        using var store = new PackedThumbnailStore();
+        var preparedLegacy = Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>()
+            .AsEnumerable();
+        var preparedOriginal = Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>()
+            .AsEnumerable();
+
+        if (missing.Length > 0)
         {
-            lock (CatalogRemovalService.CacheLock)
+            var available = File.Exists(candidate.ThumbnailPath);
+            var legacyTiers = available
+                ? missing.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()
+                : Array.Empty<int>();
+            var originalTiers = missing
+                .Where(tier => !legacyTiers.Contains(tier)).ToArray();
+            if (legacyTiers.Length > 0)
+                preparedLegacy = store.PrepareTiers(candidate.ThumbnailPath,
+                    new BrowseThumbnailProfile(legacyTiers), cancellationToken);
+            if (originalTiers.Length > 0)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
-                writeSession.Commit();
+                if (!File.Exists(candidate.LocalPath))
+                    throw new FileNotFoundException(
+                        "Original für die benötigte Browse-Thumbnail-Größe ist nicht verfügbar.",
+                        candidate.LocalPath);
+                preparedOriginal = store.PrepareTiers(candidate.LocalPath,
+                    new BrowseThumbnailProfile(originalTiers), cancellationToken);
             }
-            return;
         }
 
-        // Encode outside the pack lock, including potentially blocking SMB IO.
-        var available = File.Exists(candidate.ThumbnailPath);
-        var legacyTiers = available
-            ? missing.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()
-            : Array.Empty<int>();
-        var originalTiers = missing
-            .Where(tier => !legacyTiers.Contains(tier)).ToArray();
-        var preparedLegacy = legacyTiers.Length > 0
-            ? store.PrepareTiers(candidate.ThumbnailPath,
-                new BrowseThumbnailProfile(legacyTiers), cancellationToken)
-            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
-        if (originalTiers.Length > 0 && !File.Exists(candidate.LocalPath))
-            throw new FileNotFoundException(
-                "Original für die benötigte Browse-Thumbnail-Größe ist nicht verfügbar.",
-                candidate.LocalPath);
-        var preparedOriginal = originalTiers.Length > 0
-            ? store.PrepareTiers(candidate.LocalPath,
-                new BrowseThumbnailProfile(originalTiers), cancellationToken)
-            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
-
+        cancellationToken.ThrowIfCancellationRequested();
         lock (CatalogRemovalService.CacheLock)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            foreach (var location in store.AppendPrepared(preparedLegacy, cancellationToken))
-                writeSession.Save(candidate.ImageId, candidate.ModifiedUtcTicks, location);
-            foreach (var location in store.AppendPrepared(preparedOriginal, cancellationToken))
-                writeSession.Save(candidate.ImageId, candidate.ModifiedUtcTicks, location);
-            writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
-            // A pack cannot be considered disposable until its index rows
-            // have committed; keep these two short operations in one lock.
-            writeSession.Commit();
+            // The connection has no open write transaction during slow
+            // decoding; every candidate is one short, atomic index commit.
+            using var writeSession = _repository.CreateWriteSession();
+            try
+            {
+                foreach (var loc in store.AppendPrepared(preparedLegacy.ToArray(), cancellationToken))
+                    writeSession.Save(candidate.ImageId, candidate.ModifiedUtcTicks, loc);
+                foreach (var loc in store.AppendPrepared(preparedOriginal.ToArray(), cancellationToken))
+                    writeSession.Save(candidate.ImageId, candidate.ModifiedUtcTicks, loc);
+                writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
+                cancellationToken.ThrowIfCancellationRequested();
+                writeSession.Commit();
+                store.Dispose();
+            }
+            catch
+            {
+                writeSession.RollbackPending();
+                throw;
+            }
         }
     }
 }

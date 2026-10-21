@@ -22,6 +22,7 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
+        Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
@@ -79,7 +80,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {65 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {66 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -247,6 +248,46 @@ internal static class Program
             {
                 release.TrySetResult();
                 await catalog.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void FolderRemovalBypassesBlockedBackground()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var imagePath = Path.Combine(sandbox.Images, "original.jpg");
+            WriteJpeg(imagePath);
+            var (db, root, scanner) = sandbox.Prepare();
+            scanner.Scan(root);
+            Require(db, 1);
+
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var background = scheduler.EnqueueAsync("network-scan", SchedulerPriority.Background,
+                async _ => { started.TrySetResult(); await release.Task; });
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await scheduler.EnqueueAsync("remove-root", SchedulerPriority.Interactive,
+                    _ =>
+                    {
+                        new FolderRepository(db).Remove(root.Id);
+                        return Task.CompletedTask;
+                    }).WaitAsync(TimeSpan.FromSeconds(5));
+                Require(db, 0);
+                if (!File.Exists(imagePath))
+                    throw new Exception("Removing monitored folder touched original file.");
+                if (background.IsCompleted)
+                    throw new Exception("Test background operation was not actually blocked.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await background.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();

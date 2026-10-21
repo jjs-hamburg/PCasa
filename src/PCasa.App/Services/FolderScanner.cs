@@ -136,7 +136,6 @@ public sealed class FolderScanner
         }
 
         var profile = _browseProfile.Get();
-        using var packStore = new PackedThumbnailStore();
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
         try
@@ -159,8 +158,12 @@ public sealed class FolderScanner
                 {
                     observedPaths?.Add(localPath);
                     var file = new FileInfo(localPath);
-                    var canonicalPath = ResolveCanonicalFullPath(folder, localPath);
+                    // Read ALL network metadata before opening a SQLite write
+                    // transaction. An offline SMB path must not hold the writer
+                    // while a manual removal is waiting for the database.
+                    var fileLength = file.Length;
                     var modifiedUtcTicks = file.LastWriteTimeUtc.Ticks;
+                    var canonicalPath = ResolveCanonicalFullPath(folder, localPath);
 
                     var photoFolderLocalPath = Path.GetDirectoryName(localPath)
                         ?? scanRoot;
@@ -183,11 +186,14 @@ public sealed class FolderScanner
                             photoFolderCanonicalPath,
                             displayName);
                         photoFolderIds.Add(photoFolderCanonicalPath, photoFolderId);
+                        // A newly discovered directory must not retain the
+                        // SQLite writer across subsequent file IO or decoding.
+                        scanSession.FlushPending();
                     }
 
                     var existing = scanSession.GetState(canonicalPath);
                     if (existing is not null &&
-                        existing.FileSize == file.Length &&
+                        existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
                         File.Exists(existing.ThumbnailPath))
                     {
@@ -199,6 +205,7 @@ public sealed class FolderScanner
                                 folder.Id,
                                 photoFolderId,
                                 localPath);
+                            scanSession.FlushPending();
                         }
 
                         unchanged++;
@@ -211,7 +218,7 @@ public sealed class FolderScanner
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             localPath,
                             canonicalPath,
-                            file.Length,
+                            fileLength,
                             modifiedUtcTicks);
 
                         cancellationToken.ThrowIfCancellationRequested();
@@ -219,6 +226,10 @@ public sealed class FolderScanner
                         // Decode/encode outside the cache lock. Keep the
                         // append and its catalog commit together so pack
                         // compaction cannot delete an unreferenced new pack.
+                        // Each image owns exactly one pack writer lifetime.
+                        // A later cache compaction must never race a cached,
+                        // still-open handle to a previous pack file.
+                        using var packStore = new PackedThumbnailStore();
                         var smallTiers = profile.Tiers.Where(tier => tier <= 512).ToArray();
                         var largeTiers = profile.Tiers.Where(tier => tier > 512).ToArray();
                         var preparedSmall = smallTiers.Length > 0
@@ -242,7 +253,7 @@ public sealed class FolderScanner
                             locations.AddRange(packStore.AppendPrepared(preparedLarge, cancellationToken));
                             scanSession.Upsert(new CatalogImageData(
                                 folder.Id, photoFolderId, localPath, canonicalPath,
-                                file.Name, extension.ToLowerInvariant(), file.Length,
+                                file.Name, extension.ToLowerInvariant(), fileLength,
                                 modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
                                 thumbnail.Path));
                             if (keywords is not null)
@@ -253,12 +264,13 @@ public sealed class FolderScanner
                             // append; a cancel after appending rolls back index
                             // writes and idle cleanup later reclaims orphan bytes.
                             scanSession.FlushPending();
+                            packStore.Dispose();
                         }
 
                         updated++;
                         if (existing is null)
                             added++;
-                        else if (existing.FileSize != file.Length ||
+                        else if (existing.FileSize != fileLength ||
                                  existing.ModifiedUtcTicks != modifiedUtcTicks)
                             changed++;
                         else
@@ -272,7 +284,7 @@ public sealed class FolderScanner
                 catch (Exception ex)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-
+                    scanSession.RollbackPending();
                     failed++;
                     if (firstFailure is null)
                     {
@@ -320,7 +332,6 @@ public sealed class FolderScanner
                     $"Ordner nach Einlesen nicht mehr erreichbar: {scanRoot}");
             cancellationToken.ThrowIfCancellationRequested();
 
-            packStore.Dispose();
             var cleanup = new CatalogRemovalService(_catalog.Database);
             // Only directories that were actually enumerated can authorize
             // deleting missing catalog entries. A shallow scan must not prune

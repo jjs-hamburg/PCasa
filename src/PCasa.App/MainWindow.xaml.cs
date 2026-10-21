@@ -49,9 +49,9 @@ public partial class MainWindow : Window
         if (_folderRemovalPending)
             throw new InvalidOperationException("Eine Ordnerentfernung läuft bereits.");
 
-        // User-requested removal has the same priority as a manual scan:
-        // stop ALL scans and cache builds, not only work on the removed root.
-        // Otherwise an import on another root holds CacheLock indefinitely.
+        // Invalidate ongoing work immediately, without waiting for unrelated
+        // slow SMB enumeration or decoding. Commit fences prevent obsolete
+        // scanner results from becoming visible after the removal decision.
         _folderRemovalPending = true;
         _backgroundDebounceTimer?.Stop();
         try
@@ -61,12 +61,10 @@ public partial class MainWindow : Window
             _browseCacheCancellation?.Cancel();
             _cacheMaintenanceCancellation?.Cancel();
 
-            while ((_isScanning || _backgroundWorkerRunning || _browseCacheBuilding ||
-                    _cacheMaintenanceRunning) &&
-                   !Dispatcher.HasShutdownStarted)
-            {
-                await Task.Delay(40);
-            }
+            // Do not wait here: a cancelled SMB call is not guaranteed to
+            // return promptly. The interactive scheduler lane performs the
+            // actual catalog mutation and the source-generation fence protects
+            // against still-running obsolete background work.
 
             if (dropQueuedRequests)
             {
