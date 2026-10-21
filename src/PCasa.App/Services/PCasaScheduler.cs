@@ -43,10 +43,20 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var existing = _pending.FirstOrDefault(x => x.Key == key);
+            // A canceled request must never absorb a fresh request for the
+            // same key (for example after a folder is removed and re-added).
+            // Keep the canceled entry queued so the worker records its final
+            // state, but do not coalesce new work into it.
+            var existing = _pending.FirstOrDefault(x =>
+                x.Key == key && !x.CancellationToken.IsCancellationRequested &&
+                (x.IsCurrent is null || x.IsCurrent()));
             if (existing is not null)
             {
-                if (priority < existing.Priority) existing.Priority = priority;
+                if (priority < existing.Priority)
+                {
+                    existing.Priority = priority;
+                    SetStateUnsafe(existing, SchedulerJobState.Queued);
+                }
                 return existing.Completion.Task;
             }
 
