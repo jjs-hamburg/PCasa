@@ -1,4 +1,7 @@
+using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using PCasa.App.Services;
 
@@ -11,6 +14,25 @@ public partial class App : Application
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
+    }
+
+    // The folder tree has no hover highlighting. A full-path tooltip is
+    // allowed ONLY when the displayed name is actually clipped.
+    private void FolderNameText_ToolTipOpening(object sender, ToolTipEventArgs e)
+    {
+        if (sender is not TextBlock label || label.ActualWidth <= 0)
+        {
+            e.Handled = true;
+            return;
+        }
+        var typeface = new Typeface(label.FontFamily, label.FontStyle,
+            label.FontWeight, label.FontStretch);
+        var measured = new FormattedText(label.Text ?? string.Empty,
+            CultureInfo.CurrentUICulture, label.FlowDirection, typeface,
+            label.FontSize, Brushes.Black,
+            VisualTreeHelper.GetDpi(label).PixelsPerDip);
+        if (measured.WidthIncludingTrailingWhitespace <= label.ActualWidth + 1)
+            e.Handled = true;
     }
 
     private static void App_DispatcherUnhandledException(
