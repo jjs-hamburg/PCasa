@@ -280,14 +280,18 @@ public partial class MainWindow
 
             try
             {
-                var bitmap = await Task.Run(() =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    var info = new PhotoViewerImageRepository(_database).Get(id);
-                    return info is null || IsPathKnownOffline(info.LocalPath)
-                        ? null
-                        : PhotoViewerImageLoader.Load(info, requiredSize, token);
-                }, token);
+                BitmapSource? bitmap = null;
+                await _scheduler.EnqueueAsync(
+                    $"viewer-prefetch:{origin}:{id}:{requiredSize}",
+                    SchedulerPriority.Background,
+                    schedulerToken =>
+                    {
+                        schedulerToken.ThrowIfCancellationRequested();
+                        var info = new PhotoViewerImageRepository(_database).Get(id);
+                        bitmap = info is null || IsPathKnownOffline(info.LocalPath)
+                            ? null : PhotoViewerImageLoader.Load(info, requiredSize, schedulerToken);
+                        return Task.CompletedTask;
+                    }, cancellationToken: token, workKind: SchedulerWorkKind.ViewerRead);
 
                 if (bitmap is not null && !token.IsCancellationRequested &&
                     _viewerOpen && _viewerCurrentIndex == origin)
@@ -328,11 +332,16 @@ public partial class MainWindow
     {
         try
         {
-            var preview = await Task.Run(() =>
-            {
-                using var reader = new PackedThumbnailReader();
-                return reader.Load(entry, token);
-            }, token);
+            BitmapSource? preview = null;
+            await _scheduler.EnqueueAsync(
+                $"viewer-preview:{entry.ImageId}:{version}",
+                SchedulerPriority.UserAction,
+                schedulerToken =>
+                {
+                    using var reader = new PackedThumbnailReader();
+                    preview = reader.Load(entry, schedulerToken);
+                    return Task.CompletedTask;
+                }, cancellationToken: token, workKind: SchedulerWorkKind.ViewerRead);
 
             if (IsCurrentViewerRequest(version, token) && !_viewerHasOriginal &&
                 preview is not null)
@@ -357,18 +366,21 @@ public partial class MainWindow
     {
         try
         {
-            var bitmap = await Task.Run(() =>
-            {
-                token.ThrowIfCancellationRequested();
-                var info = new PhotoViewerImageRepository(_database).Get(imageId);
-                if (info is null)
+            BitmapSource? bitmap = null;
+            await _scheduler.EnqueueAsync(
+                $"viewer-original:{imageId}:{version}:{requiredSize}",
+                SchedulerPriority.Interactive,
+                schedulerToken =>
                 {
-                    throw new System.IO.FileNotFoundException(
-                        "Bild ist nicht mehr im Katalog.");
-                }
-
-                return PhotoViewerImageLoader.Load(info, requiredSize, token);
-            }, token);
+                    schedulerToken.ThrowIfCancellationRequested();
+                    var info = new PhotoViewerImageRepository(_database).Get(imageId);
+                    if (info is null)
+                        throw new System.IO.FileNotFoundException(
+                            "Bild ist nicht mehr im Katalog.");
+                    bitmap = PhotoViewerImageLoader.Load(info, requiredSize, schedulerToken);
+                    return Task.CompletedTask;
+                }, cancellationToken: token, workKind: SchedulerWorkKind.ViewerRead);
+            if (bitmap is null) throw new System.IO.IOException("Bild konnte nicht geladen werden.");
 
             if (IsCurrentViewerRequest(version, token))
             {

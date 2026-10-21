@@ -11,6 +11,8 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
 
     private readonly object _sync = new();
+    private readonly PCasaScheduler? _scheduler;
+    public BrowseThumbnailPageCache(PCasaScheduler? scheduler = null) => _scheduler = scheduler;
     private readonly PackedThumbnailReader _reader = new();
     private readonly SemaphoreSlim _pageLoadGate =
         new(PageLoadConcurrency, PageLoadConcurrency);
@@ -218,10 +220,26 @@ public sealed class BrowseThumbnailPageCache : IDisposable
 
         var generation = _generation;
         var index = _index;
-        state.LoadTask = Task.Run(
-            () => LoadPageAsync(state, index, generation),
-            CancellationToken.None);
+        state.LoadTask = _scheduler is null
+            ? Task.Run(() => LoadPageAsync(state, index, generation), CancellationToken.None)
+            : LoadScheduledPageAsync(state, index, generation);
         return state.LoadTask;
+    }
+
+    private async Task LoadScheduledPageAsync(
+        PageState state, IReadOnlyList<BrowseThumbnailIndexEntry> index, int generation)
+    {
+        try
+        {
+            await _scheduler!.EnqueueAsync(
+                $"thumbnail-page:{generation}:{state.PageNumber}",
+                SchedulerPriority.UserAction,
+                _ => LoadPageAsync(state, index, generation),
+                cancellationToken: state.Token,
+                workKind: SchedulerWorkKind.ThumbnailRead);
+        }
+        catch (OperationCanceledException) { /* Viewport or index changed. */ }
+        catch (ObjectDisposedException) { /* Window is closing. */ }
     }
 
     private async Task LoadPageAsync(

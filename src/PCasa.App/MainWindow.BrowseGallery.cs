@@ -39,7 +39,7 @@ public partial class MainWindow
         _browseCacheBuilder = new BrowseCacheBuilder(
             _browseCacheRepository,
             _browseProfileRepository);
-        _browsePageCache = new BrowseThumbnailPageCache();
+        _browsePageCache = new BrowseThumbnailPageCache(_scheduler);
         BrowseSurface.ImageClicked += BrowseSurface_ImageClicked;
         BrowseSurface.ImageOpened += BrowseSurface_ImageOpened;
         BrowseSurface.ImageContextRequested += BrowseSurface_ImageContextRequested;

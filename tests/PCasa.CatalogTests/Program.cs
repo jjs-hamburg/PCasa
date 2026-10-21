@@ -20,6 +20,8 @@ internal static class Program
         Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
+        Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
+        Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
@@ -77,7 +79,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {63 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {65 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -194,6 +196,62 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
+    private static void SchedulerInteractiveDoesNotWaitForBlockedBackground()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var worker = scheduler.EnqueueAsync("blocked-smb", SchedulerPriority.Background,
+                async _ => { started.TrySetResult(); await release.Task; });
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var ran = false;
+                await scheduler.EnqueueAsync("remove-folder", SchedulerPriority.Interactive,
+                    _ => { ran = true; return Task.CompletedTask; })
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran || worker.IsCompleted)
+                    throw new Exception("Interactive catalog lane was blocked by background work.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await worker.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerViewerReadIsIndependent()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var catalog = scheduler.EnqueueAsync("catalog-blocker", SchedulerPriority.Interactive,
+                async _ => { started.TrySetResult(); await release.Task; });
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var loaded = false;
+                await scheduler.EnqueueAsync("viewer-original", SchedulerPriority.Interactive,
+                    _ => { loaded = true; return Task.CompletedTask; },
+                    workKind: SchedulerWorkKind.ViewerRead).WaitAsync(TimeSpan.FromSeconds(5));
+                if (!loaded || catalog.IsCompleted)
+                    throw new Exception("Viewer read waited behind unrelated catalog work.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await catalog.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
     private static void SchedulerRejectsStaleGeneration()
     {
         static async Task Check()
@@ -271,7 +329,7 @@ internal static class Program
                     await Task.Delay(Timeout.InfiniteTimeSpan, token);
                 });
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var pending = scheduler.EnqueueAsync("pending", SchedulerPriority.UserAction,
+            var pending = scheduler.EnqueueAsync("pending", SchedulerPriority.Background,
                 _ => { executed = true; return Task.CompletedTask; });
             await scheduler.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
             if (executed || !running.IsCanceled || !pending.IsCanceled ||
