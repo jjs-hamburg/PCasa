@@ -138,12 +138,26 @@ public partial class MainWindow
         try
         {
             StatusText.Text = $"Einlesen: {directory}";
-            var result = await Task.Run(() => _folderScanner.ScanDirectory(
-                folder,
-                directory,
-                recursive: true,
-                progress,
-                cancellation.Token));
+            // Manual scans enter the shared scheduler rather than starting
+            // an independent Task.Run worker. The source generation fences
+            // work that was queued before removal/re-inclusion.
+            var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
+            if (sourceState is not { DesiredPresent: true })
+                throw new OperationCanceledException("Source is no longer monitored.");
+            ScanResult? scanResult = null;
+            await _scheduler.EnqueueAsync(
+                $"manual-scan:{folder.Id}:{directory}",
+                SchedulerPriority.UserAction,
+                token =>
+                {
+                    scanResult = _folderScanner.ScanDirectory(
+                        folder, directory, recursive: true, progress, token);
+                    return Task.CompletedTask;
+                },
+                () => _folderRepository.IsCurrentSourceGeneration(
+                    folder.CanonicalPath, sourceState.Value.Generation, true),
+                cancellation.Token);
+            var result = scanResult ?? throw new OperationCanceledException();
             TrackFolderActivity(directory, result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
 
