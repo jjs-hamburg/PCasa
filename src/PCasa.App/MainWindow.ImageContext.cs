@@ -91,7 +91,21 @@ public partial class MainWindow
                      _folderRepository.GetAll().FirstOrDefault(item => item.Id == folderId) is { } monitored)
             {
                 StatusText.Text = "Duplikat wird in den Katalog aufgenommen …";
-                await Task.Run(() => _folderScanner.ScanDirectory(monitored, folder, recursive: false));
+                var source = _folderRepository.GetSourceState(monitored.CanonicalPath);
+                if (source is { DesiredPresent: true })
+                {
+                    await _scheduler.EnqueueAsync(
+                        $"image-duplicate-scan:{monitored.Id}:{source.Value.Generation}:{folder}",
+                        SchedulerPriority.UserAction,
+                        token =>
+                        {
+                            _folderScanner.ScanDirectory(monitored, folder,
+                                recursive: false, cancellationToken: token);
+                            return Task.CompletedTask;
+                        },
+                        () => _folderRepository.IsCurrentSourceGeneration(
+                            monitored.CanonicalPath, source.Value.Generation, true));
+                }
                 await EnsureBrowseCacheAndRefreshAsync();
             }
             StatusText.Text = "Dupliziert: " + Path.GetFileName(target);
