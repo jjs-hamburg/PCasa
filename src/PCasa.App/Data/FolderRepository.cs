@@ -182,6 +182,42 @@ public sealed class FolderRepository
         transaction.Commit();
     }
 
+    // Every asynchronous operation captures this token before starting work.
+    // A token is valid only while the same source is still desired at the
+    // same generation. No old scan or cleanup may commit after re-inclusion.
+    public (long Generation, bool DesiredPresent)? GetSourceState(string canonicalPath)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT generation, desired_present
+            FROM scheduler_sources
+            WHERE canonical_path = $path;
+            """;
+        command.Parameters.AddWithValue("$path", canonicalPath);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        return (reader.GetInt64(0), reader.GetInt64(1) != 0);
+    }
+
+    public bool IsCurrentSourceGeneration(string canonicalPath, long generation, bool desiredPresent)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM scheduler_sources
+                WHERE canonical_path = $path
+                  AND generation = $generation
+                  AND desired_present = $desired
+            );
+            """;
+        command.Parameters.AddWithValue("$path", canonicalPath);
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$desired", desiredPresent ? 1 : 0);
+        return Convert.ToInt32(command.ExecuteScalar()) != 0;
+    }
+
     public void SetServerSync(long id, bool enabled)
     {
         using var connection = _database.OpenConnection();
