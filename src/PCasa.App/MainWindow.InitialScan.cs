@@ -67,12 +67,9 @@ public partial class MainWindow
         var ownsWindow = false;
         try
         {
-            // No network probe is run on Dispatcher, and a failed/offline
-            // first import never clears the durable request or its tree node.
-            if (!await Task.Run(() => Directory.Exists(folder.LocalPath), cancellation.Token))
-                throw new DirectoryNotFoundException(
-                    $"Überwachter Ordner momentan nicht erreichbar: {folder.LocalPath}");
-
+            // The pending node remains visible even if its NAS is offline.
+            // Network availability is checked inside the scheduler job, never
+            // by a second unscheduled probe or on the WPF dispatcher.
             TrackFolderActivity(folder.LocalPath, "Working", recursive: true);
             RefreshFolderStatusVisuals();
             ownsWindow = _browseProgressWindow is null;
@@ -97,20 +94,30 @@ public partial class MainWindow
             // A user add overrides old watcher work for exactly this source.
             // The scanner itself owns cache writes and generation-safe commits;
             // this is NOT a second implementation of the import pipeline.
-            var generation = await Task.Run(
-                () => _folderRepository.BeginManualScan(folder.CanonicalPath),
-                cancellation.Token);
             ScanResult? result = null;
             await _scheduler.EnqueueAsync(
-                $"initial-scan:{folder.Id}:{generation}",
+                $"initial-scan:{folder.Id}:{folder.CanonicalPath}",
                 SchedulerPriority.UserAction,
                 token =>
                 {
+                    token.ThrowIfCancellationRequested();
+                    // The same source path may have been removed and re-added.
+                    // Its persisted folder ID must still belong to this job.
+                    if (!_folderRepository.GetAll().Any(root => root.Id == folder.Id &&
+                        string.Equals(root.CanonicalPath, folder.CanonicalPath,
+                            StringComparison.OrdinalIgnoreCase)))
+                        throw new OperationCanceledException("Outdated first import.");
+                    if (!Directory.Exists(folder.LocalPath))
+                        throw new DirectoryNotFoundException(
+                            $"Überwachter Ordner momentan nicht erreichbar: {folder.LocalPath}");
+
+                    // Source-generation advance, enumeration, decoding and
+                    // guarded commits form ONE scheduler-owned operation.
+                    _folderRepository.BeginManualScan(folder.CanonicalPath);
                     result = _folderScanner.Scan(folder, progress, token);
                     return Task.CompletedTask;
                 },
-                () => _folderRepository.IsCurrentSourceGeneration(
-                    folder.CanonicalPath, generation, true),
+                () => _folderRepository.GetAll().Any(root => root.Id == folder.Id),
                 cancellation.Token);
             if (result is null) throw new OperationCanceledException();
 
