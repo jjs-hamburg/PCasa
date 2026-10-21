@@ -12,9 +12,10 @@ public sealed class PackedThumbnailStore : IDisposable
     private readonly Dictionary<int, PackWriter> _writers = new();
     private bool _disposed;
 
-    public PackedThumbnailStore()
+    public PackedThumbnailStore(string? cacheRoot = null)
     {
-        _cacheRoot = Path.Combine(
+        // An explicit root keeps pack-format/race tests isolated from user data.
+        _cacheRoot = cacheRoot ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PCasa",
             "browse-cache");
