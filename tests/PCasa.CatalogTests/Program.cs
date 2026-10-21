@@ -17,6 +17,7 @@ internal static class Program
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
+        Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
@@ -63,7 +64,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {49 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {50 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -177,6 +178,41 @@ internal static class Program
             if (executed || !running.IsCanceled || !pending.IsCanceled ||
                 scheduler.Snapshot().Any(x => x.State is SchedulerJobState.Running or SchedulerJobState.Queued))
                 throw new Exception("Scheduler shutdown did not cancel active and pending jobs.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerReplacesCanceledPendingWork()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blocker = scheduler.EnqueueAsync("block", SchedulerPriority.Background,
+                async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using var cancellation = new CancellationTokenSource();
+            var oldExecuted = false;
+            var newExecuted = false;
+            var old = scheduler.EnqueueAsync("folder", SchedulerPriority.Background,
+                _ => { oldExecuted = true; return Task.CompletedTask; },
+                cancellationToken: cancellation.Token);
+            cancellation.Cancel();
+            var fresh = scheduler.EnqueueAsync("folder", SchedulerPriority.UserAction,
+                _ => { newExecuted = true; return Task.CompletedTask; });
+            if (ReferenceEquals(old, fresh))
+                throw new Exception("Fresh request was merged into canceled request.");
+            release.TrySetResult();
+            await Task.WhenAll(blocker, fresh).WaitAsync(TimeSpan.FromSeconds(5));
+            try { await old.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (TaskCanceledException) { }
+            if (oldExecuted || !newExecuted || !old.IsCanceled)
+                throw new Exception("Canceled work ran or fresh work was lost.");
         }
         Check().GetAwaiter().GetResult();
     }
