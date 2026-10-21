@@ -76,10 +76,9 @@ public sealed class ImageTagRepository
     /// </summary>
     public void ChangeKeywords(long imageId, string tag, bool remove)
     {
-        // A source-file mutation must not race with the scanner, cached
-        // thumbnails or explicit catalog removal.
-        lock (CatalogRemovalService.CacheLock)
-            ChangeKeywordsLocked(imageId, tag, remove);
+        // The scanner and viewer share the source-file gate. A slow
+        // ExifTool call on NAS must not stall unrelated catalog mutations.
+        ChangeKeywordsLocked(imageId, tag, remove);
     }
 
     private void ChangeKeywordsLocked(long imageId, string tag, bool remove)
@@ -91,6 +90,8 @@ public sealed class ImageTagRepository
         pathCommand.Parameters.AddWithValue("$id", imageId);
         var path = pathCommand.ExecuteScalar() as string
             ?? throw new IOException("Bild ist nicht mehr im Katalog.");
+        lock (SourceFileLocks.ForPath(path))
+        {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
@@ -126,6 +127,7 @@ public sealed class ImageTagRepository
         update.Parameters.AddWithValue("$id", imageId);
         update.Parameters.AddWithValue("$words", confirmed);
         update.ExecuteNonQuery();
+        }
     }
 
     public HashSet<long> SearchImageIds(string text)
@@ -152,6 +154,12 @@ public sealed class ImageTagRepository
     // Null means the source was unavailable or could not be decoded.
     // Empty string means it was inspected successfully and has no keywords.
     public static string? ReadKeywords(string path)
+    {
+        lock (SourceFileLocks.ForPath(path))
+            return ReadKeywordsLocked(path);
+    }
+
+    private static string? ReadKeywordsLocked(string path)
     {
         try
         {

@@ -156,6 +156,10 @@ public sealed class FolderScanner
 
                 try
                 {
+                    // Metadata edits and original-image decoding share one
+                    // file-specific lock, not the global pack/index lock.
+                    lock (SourceFileLocks.ForPath(localPath))
+                    {
                     observedPaths?.Add(localPath);
                     var file = new FileInfo(localPath);
                     // Read ALL network metadata before opening a SQLite write
@@ -275,6 +279,7 @@ public sealed class FolderScanner
                             changed++;
                         else
                             cacheRepaired++;
+                    }
                     }
                 }
                 catch (OperationCanceledException)

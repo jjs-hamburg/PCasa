@@ -40,6 +40,15 @@ public static class PhotoViewerImageLoader
         int requiredSize,
         CancellationToken cancellationToken)
     {
+        lock (SourceFileLocks.ForPath(info.LocalPath))
+            return LoadLocked(info, requiredSize, cancellationToken);
+    }
+
+    private static BitmapSource LoadLocked(
+        PhotoViewerImageInfo info,
+        int requiredSize,
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         var size = Math.Clamp(requiredSize, 1, 32768);
 

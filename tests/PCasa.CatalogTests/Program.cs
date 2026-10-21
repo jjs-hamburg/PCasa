@@ -24,6 +24,7 @@ internal static class Program
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
+        Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
@@ -81,7 +82,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {67 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {68 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -349,6 +350,39 @@ internal static class Program
             }
         }
         Check().GetAwaiter().GetResult();
+    }
+
+    private static void SourceFileLocksAreScoped()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "pcasa-source-lock-regression");
+        var gateA = SourceFileLocks.ForPath(Path.Combine(root, "A.jpg"));
+        object? gateB = null;
+        for (var index = 0; index < 4096; index++)
+        {
+            var candidate = SourceFileLocks.ForPath(Path.Combine(root, $"B-{index}.jpg"));
+            if (!ReferenceEquals(candidate, gateA)) { gateB = candidate; break; }
+        }
+        if (gateB is null) throw new Exception("Every source shares one global gate.");
+
+        lock (gateA)
+        {
+            // Other file paths must remain accessible on another thread.
+            var unrelated = Task.Run(() =>
+            {
+                lock (gateB) { return true; }
+            });
+            if (!unrelated.Wait(TimeSpan.FromSeconds(5)) || !unrelated.Result)
+                throw new Exception("Unrelated image IO blocked behind a source gate.");
+
+            var sameFileEntered = Task.Run(() =>
+            {
+                var entered = Monitor.TryEnter(gateA);
+                if (entered) Monitor.Exit(gateA);
+                return entered;
+            }).GetAwaiter().GetResult();
+            if (sameFileEntered)
+                throw new Exception("Concurrent readers/writers of the same image were not serialized.");
+        }
     }
 
     private static void SchedulerRejectsStaleGeneration()

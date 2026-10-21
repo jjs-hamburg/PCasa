@@ -103,7 +103,11 @@ public partial class MainWindow
                     var suffix = 2;
                     while (File.Exists(copy))
                         copy = Path.Combine(directory, stem + $" - Kopie ({suffix++})" + ext);
-                    File.Copy(path, copy);
+                    lock (SourceFileLocks.ForPath(path))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        File.Copy(path, copy);
+                    }
                     target = copy;
                     if (monitored is not null)
                         _folderScanner.ScanFile(monitored, copy, cancellationToken: token);
@@ -141,13 +145,16 @@ public partial class MainWindow
                     token.ThrowIfCancellationRequested();
                     // Physical file operation and catalog detachment occupy one
                     // scheduler job. A canceled queued request cannot delete.
-                    if (network)
-                        File.Delete(path);
-                    else
-                        FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
-                            RecycleOption.SendToRecycleBin);
-                    if (monitoredId is long folderId)
-                        new CatalogRemovalService(_database).DetachImage(id, path);
+                    lock (SourceFileLocks.ForPath(path))
+                    {
+                        if (network)
+                            File.Delete(path);
+                        else
+                            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
+                                RecycleOption.SendToRecycleBin);
+                        if (monitoredId is long folderId)
+                            new CatalogRemovalService(_database).DetachImage(id, path);
+                    }
                     // No cancel between physical deletion and catalog update:
                     // if the file moved, always finish the short DB cleanup.
                     return Task.CompletedTask;
