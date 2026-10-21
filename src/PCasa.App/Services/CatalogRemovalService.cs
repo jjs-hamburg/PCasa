@@ -227,17 +227,41 @@ public sealed class CatalogRemovalService
         bool deferCleanup = false, string? requireExcludedPath = null,
         string? sourceCanonicalPath = null, long? expectedGeneration = null)
     {
+        // A complete scan may have observed hundreds of thousands of paths.
+        // Filling this connection-local TEMP table is preparation, not a
+        // shared pack/index mutation. Do it outside CacheLock, leaving the
+        // generation check and DELETE inside one short SQLite commit boundary.
+        using var reconciliationConnection = _database.OpenConnection();
+        if (currentPaths is not null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using (var table = reconciliationConnection.CreateCommand())
+            {
+                table.CommandText = "CREATE TEMP TABLE IF NOT EXISTS scan_seen_paths(path TEXT PRIMARY KEY COLLATE NOCASE) WITHOUT ROWID; DELETE FROM scan_seen_paths;";
+                table.ExecuteNonQuery();
+            }
+            using var insert = reconciliationConnection.CreateCommand();
+            insert.CommandText = "INSERT OR IGNORE INTO scan_seen_paths(path) VALUES ($path);";
+            var seenParameter = insert.Parameters.Add("$path", SqliteType.Text);
+            foreach (var seen in currentPaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                seenParameter.Value = seen;
+                insert.ExecuteNonQuery();
+            }
+        }
+
         lock (CacheLock)
         {
-            // The scan may have been cancelled while waiting for the shared
-            // catalog lock. No deletion is authorized in that case.
+            // Source generation is checked in the same transaction as the
+            // catalog deletion even if user actions ran during preparation.
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report("Bildkatalog bereinigen …");
             var legacyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int removed;
-            using (var connection = _database.OpenConnection())
-            using (var transaction = connection.BeginTransaction())
+            using (var transaction = reconciliationConnection.BeginTransaction())
             {
+                var connection = reconciliationConnection;
                 // Re-inclusion can overtake an already queued exclusion cleanup.
                 // Check the current desired state inside the same SQLite write
                 // transaction as the DELETE, not before acquiring CacheLock.
@@ -274,24 +298,6 @@ public sealed class CatalogRemovalService
                     guard.Parameters.AddWithValue("$path", requireExcludedPath);
                     if (Convert.ToInt64(guard.ExecuteScalar()) == 0)
                         return 0;
-                }
-
-                if (currentPaths is not null)
-                {
-                    using var table = connection.CreateCommand();
-                    table.Transaction = transaction;
-                    table.CommandText = "CREATE TEMP TABLE IF NOT EXISTS scan_seen_paths(path TEXT PRIMARY KEY COLLATE NOCASE) WITHOUT ROWID; DELETE FROM scan_seen_paths;";
-                    table.ExecuteNonQuery();
-                    using var insert = connection.CreateCommand();
-                    insert.Transaction = transaction;
-                    insert.CommandText = "INSERT OR IGNORE INTO scan_seen_paths(path) VALUES ($path);";
-                    var seenParameter = insert.Parameters.Add("$path", SqliteType.Text);
-                    foreach (var seen in currentPaths)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        seenParameter.Value = seen;
-                        insert.ExecuteNonQuery();
-                    }
                 }
 
                 var predicate = removeRoot
