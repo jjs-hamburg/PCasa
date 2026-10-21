@@ -16,6 +16,7 @@ internal static class Program
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
+        Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
 
         Run("Missing thumbnail tier is scheduled for repair", MissingThumbnailIsRepaired, failures);
         Run("Externally deleted image is pruned", DeletedFileIsPruned, failures);
@@ -58,7 +59,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {44 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {45 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -347,6 +348,37 @@ internal static class Program
     // G02: The exclusion callback is a deterministic synchronization point:
     // the old removal has not started yet, but the newer desired state is
     // already persisted. No sleeps or scheduler timing assumptions.
+    private static void SourceGenerationSurvivesReAdd()
+    {
+        using var sandbox = new Sandbox();
+        var (db, root, _) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+        (long generation, long present) State()
+        {
+            using var connection = db.OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT generation, desired_present
+                FROM scheduler_sources WHERE canonical_path = $path;
+                """;
+            command.Parameters.AddWithValue("$path", root.CanonicalPath);
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) throw new Exception("Durable source identity missing.");
+            return (reader.GetInt64(0), reader.GetInt64(1));
+        }
+
+        var initial = State();
+        if (initial != (1L, 1L)) throw new Exception("Unexpected initial source generation.");
+        folders.Add(sandbox.Images);
+        if (State() != initial) throw new Exception("Duplicate add changed source generation.");
+        folders.Remove(root.Id);
+        if (State() != (2L, 0L)) throw new Exception("Removal did not fence old work.");
+        folders.Add(sandbox.Images);
+        if (State() != (3L, 1L)) throw new Exception("Re-add did not advance source generation.");
+        db.Initialize();
+        if (State() != (3L, 1L)) throw new Exception("Migration reset existing source generation.");
+    }
+
     private static void ReincludeDuringExclusionDoesNotPrune()
     {
         using var sandbox = new Sandbox();
