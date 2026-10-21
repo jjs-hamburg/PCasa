@@ -146,7 +146,7 @@ public partial class MainWindow
                 throw new OperationCanceledException("Source is no longer monitored.");
             ScanResult? scanResult = null;
             await _scheduler.EnqueueAsync(
-                $"manual-scan:{folder.Id}:{directory}",
+                $"manual-scan:{folder.Id}:{sourceState.Value.Generation}:{directory}",
                 SchedulerPriority.UserAction,
                 token =>
                 {
