@@ -134,6 +134,21 @@ internal static class FolderAddFlow
             releaseLock.Set();
             try { blocked?.GetAwaiter().GetResult(); } catch { }
             try { window?.Close(); } catch { }
+            // The Windows workflow executes several independent WPF processes
+            // against the runner's local test catalog. Never leave synthetic
+            // monitored roots/images for the following tag-search test.
+            try
+            {
+                var cleanup = new FolderRepository(new LocalDatabase());
+                foreach (var folder in cleanup.GetAll().Where(folder =>
+                    folder.LocalPath.StartsWith(rootPath + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase)))
+                    cleanup.Remove(folder.Id);
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine("Synthetic folder cleanup: " + error);
+            }
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(rootPath, recursive: true); } catch { }
         }
