@@ -708,11 +708,16 @@ public partial class MainWindow
                 var cacheProgress = currentWindow is null ? null
                     : new Progress<BrowseCacheBuildProgress>(value =>
                         currentWindow.Update(value));
-                await Task.Run(
-                    () => _browseCacheBuilder.BuildMissing(
-                        progress: cacheProgress,
-                        cancellationToken),
-                    cancellationToken);
+                await _scheduler.EnqueueAsync(
+                    "browse-cache:background",
+                    SchedulerPriority.Background,
+                    token =>
+                    {
+                        _browseCacheBuilder.BuildMissing(
+                            progress: cacheProgress, token);
+                        return Task.CompletedTask;
+                    },
+                    cancellationToken: cancellationToken);
             }
             finally
             {
