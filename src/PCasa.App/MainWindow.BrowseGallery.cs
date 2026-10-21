@@ -353,10 +353,20 @@ public partial class MainWindow
 
                 try
                 {
-                    await Task.Run(() => _folderScanner.Scan(
-                        folder,
-                        progress,
-                        cancellation.Token));
+                    var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
+                    if (sourceState is not { DesiredPresent: true })
+                        continue;
+                    await _scheduler.EnqueueAsync(
+                        $"scan-all:{folder.Id}",
+                        SchedulerPriority.UserAction,
+                        token =>
+                        {
+                            _folderScanner.Scan(folder, progress, token);
+                            return Task.CompletedTask;
+                        },
+                        () => _folderRepository.IsCurrentSourceGeneration(
+                            folder.CanonicalPath, sourceState.Value.Generation, true),
+                        cancellation.Token);
                 }
                 catch (OperationCanceledException)
                     when (_folderRemovalPending ||
