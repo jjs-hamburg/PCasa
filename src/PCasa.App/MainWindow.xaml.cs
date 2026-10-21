@@ -9,6 +9,7 @@ namespace PCasa.App;
 
 public partial class MainWindow : Window
 {
+    private readonly PCasaScheduler _scheduler = new();
     private readonly LocalDatabase _database;
     private readonly FolderRepository _folderRepository;
     private readonly ImageCatalogRepository _imageCatalog;
@@ -30,6 +31,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Closed += async (_, _) => await _scheduler.DisposeAsync();
 
         _database = new LocalDatabase();
         _database.Initialize();
