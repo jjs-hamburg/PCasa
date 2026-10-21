@@ -268,13 +268,15 @@
                                        VerticalAlignment="Center"
                                        Foreground="{DynamicResource PcasaTextBrush}"
                                        TextTrimming="CharacterEllipsis"
-                                       TextWrapping="NoWrap" />
+                                       TextWrapping="NoWrap"
+                                       ToolTip="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.FullPath}"
+                                       ToolTipOpening="FolderNameText_ToolTipOpening" />
                             <TextBlock x:Name="FolderStatusIcon" Grid.Column="2"
                                        FontFamily="Segoe UI Symbol"
                                        FontSize="13" FontWeight="SemiBold"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
                                        Visibility="Collapsed"
-                                       ToolTip="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.StatusDescription}" />
+ />
                         </Grid>
 
                         <DataTemplate.Triggers>
@@ -365,13 +367,6 @@
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="HeaderBorder" Property="Background" Value="{DynamicResource PcasaSelectionBrush}" />
                             </Trigger>
-                            <MultiTrigger>
-                                <MultiTrigger.Conditions>
-                                    <Condition Property="IsSelected" Value="False" />
-                                    <Condition Property="IsMouseOver" Value="True" />
-                                </MultiTrigger.Conditions>
-                                <Setter TargetName="HeaderBorder" Property="Background" Value="{DynamicResource PcasaHoverBrush}" />
-                            </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
