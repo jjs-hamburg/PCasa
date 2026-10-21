@@ -73,8 +73,7 @@ public sealed class FolderScanner
         IProgress<ScanProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        lock (CatalogRemovalService.CacheLock)
-            return ScanDirectoryLocked(folder, localDirectory, recursive, progress, cancellationToken);
+        return ScanDirectoryLocked(folder, localDirectory, recursive, progress, cancellationToken);
     }
 
     public ScanResult ScanFile(
@@ -85,10 +84,9 @@ public sealed class FolderScanner
     {
         if (!IsSupportedImagePath(localFile) || !File.Exists(localFile))
             return new ScanResult(0, 0, 0, 0);
-        lock (CatalogRemovalService.CacheLock)
-            return ScanDirectoryLocked(
-                folder, Path.GetDirectoryName(localFile)!, false,
-                progress, cancellationToken, localFile);
+        return ScanDirectoryLocked(
+            folder, Path.GetDirectoryName(localFile)!, false,
+            progress, cancellationToken, localFile);
     }
 
     private ScanResult ScanDirectoryLocked(
@@ -218,38 +216,44 @@ public sealed class FolderScanner
 
                         cancellationToken.ThrowIfCancellationRequested();
 
-                        // Produce all browse tiers while this image is being imported.
-                        // The 512px legacy thumbnail remains available for the viewer.
+                        // Decode/encode outside the cache lock. Keep the
+                        // append and its catalog commit together so pack
+                        // compaction cannot delete an unreferenced new pack.
                         var smallTiers = profile.Tiers.Where(tier => tier <= 512).ToArray();
                         var largeTiers = profile.Tiers.Where(tier => tier > 512).ToArray();
-                        var locations = new List<PackedThumbnailLocation>();
-                        if (smallTiers.Length > 0)
-                            locations.AddRange(packStore.CreateTiers(
+                        var preparedSmall = smallTiers.Length > 0
+                            ? packStore.PrepareTiers(
                                 thumbnail.Path, new BrowseThumbnailProfile(smallTiers),
-                                cancellationToken));
-                        if (largeTiers.Length > 0)
-                            locations.AddRange(packStore.CreateTiers(
+                                cancellationToken)
+                            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
+                        var preparedLarge = largeTiers.Length > 0
+                            ? packStore.PrepareTiers(
                                 localPath, new BrowseThumbnailProfile(largeTiers),
-                                cancellationToken));
+                                cancellationToken)
+                            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
                         var keywords = ImageTagRepository.ReadKeywords(localPath);
-                        scanSession.Upsert(new CatalogImageData(
-                            folder.Id,
-                            photoFolderId,
-                            localPath,
-                            canonicalPath,
-                            file.Name,
-                            extension.ToLowerInvariant(),
-                            file.Length,
-                            modifiedUtcTicks,
-                            thumbnail.Width,
-                            thumbnail.Height,
-                            thumbnail.Path));
-                        // Read metadata once on import/change. A failed metadata read
-                        // is retried by the separate resumable tag backfill.
-                        if (keywords is not null)
-                            scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
-                        scanSession.SaveBrowseLocations(
-                            canonicalPath, modifiedUtcTicks, locations, profile.Tiers.Count);
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        lock (CatalogRemovalService.CacheLock)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var locations = new List<PackedThumbnailLocation>();
+                            locations.AddRange(packStore.AppendPrepared(preparedSmall, cancellationToken));
+                            locations.AddRange(packStore.AppendPrepared(preparedLarge, cancellationToken));
+                            scanSession.Upsert(new CatalogImageData(
+                                folder.Id, photoFolderId, localPath, canonicalPath,
+                                file.Name, extension.ToLowerInvariant(), file.Length,
+                                modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
+                                thumbnail.Path));
+                            if (keywords is not null)
+                                scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
+                            scanSession.SaveBrowseLocations(
+                                canonicalPath, modifiedUtcTicks, locations, profile.Tiers.Count);
+                            // The lock covers durable SQLite commit as well as
+                            // append; a cancel after appending rolls back index
+                            // writes and idle cleanup later reclaims orphan bytes.
+                            scanSession.FlushPending();
+                        }
 
                         updated++;
                         if (existing is null)

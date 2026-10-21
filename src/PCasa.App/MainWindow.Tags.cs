@@ -23,16 +23,23 @@ public partial class MainWindow
         _tagBackfillCancellation = new CancellationTokenSource();
         var cancellation = _tagBackfillCancellation.Token;
         var repository = new ImageTagRepository(_database);
-        _ = Task.Run(() =>
+        _ = RunTagBackfillAsync(repository, cancellation);
+
+        async Task RunTagBackfillAsync(ImageTagRepository tagRepository, CancellationToken token)
         {
             try
             {
-                repository.IndexMissing(cancellation, count =>
+                await _scheduler.EnqueueAsync("tags:backfill", SchedulerPriority.Background,
+                    schedulerToken =>
+                    {
+                        tagRepository.IndexMissing(schedulerToken, count =>
                 {
-                    if (count % 512 != 0 || Dispatcher.HasShutdownStarted) return;
-                    _ = Dispatcher.BeginInvoke(() =>
-                        TagSearchBox.ToolTip = $"Tags suchen – {count:N0} bestehende Bilder geprüft");
-                });
+                        if (count % 512 != 0 || Dispatcher.HasShutdownStarted) return;
+                        _ = Dispatcher.BeginInvoke(() =>
+                            TagSearchBox.ToolTip = $"Tags suchen – {count:N0} bestehende Bilder geprüft");
+                    });
+                        return Task.CompletedTask;
+                    }, cancellationToken: token);
                 if (!Dispatcher.HasShutdownStarted)
                     _ = Dispatcher.BeginInvoke(new Action(async () =>
                     {
@@ -47,7 +54,7 @@ public partial class MainWindow
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { PCasaDiagnostics.Write("Tags.Backfill", ex); }
-        }, cancellation);
+        }
     }
 
     private async void TagSearchScope_Changed(object sender, RoutedEventArgs e)
@@ -311,18 +318,22 @@ public partial class MainWindow
         _tagWriteActive = true;
         try
         {
-            var result = await Task.Run(() =>
-            {
-                var repo = new ImageTagRepository(_database);
-                var errors = new List<string>();
-                var succeeded = 0;
-                foreach (var id in ids)
+            var succeeded = 0;
+            var errors = new List<string>();
+            await _scheduler.EnqueueAsync(
+                $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.UserAction,
+                token =>
                 {
-                    try { repo.ChangeKeywords(id, tag, remove); succeeded++; }
-                    catch (Exception ex) { errors.Add($"Bild {id}: {ex.Message}"); }
-                }
-                return (succeeded, errors);
-            });
+                    var repo = new ImageTagRepository(_database);
+                    foreach (var id in ids)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        try { repo.ChangeKeywords(id, tag, remove); succeeded++; }
+                        catch (Exception ex) { errors.Add($"Bild {id}: {ex.Message}"); }
+                    }
+                    return Task.CompletedTask;
+                });
+            var result = (succeeded, errors);
             if (!remove && result.succeeded > 0)
             {
                 new ImageTagRepository(_database).RememberTag(tag);

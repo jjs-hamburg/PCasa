@@ -213,7 +213,22 @@ public sealed class ImageTagRepository
                     found.Add((image.Id, image.Path, words, image.Ticks));
             }
 
-            if (found.Count > 0)
+            // Any network file verification belongs outside the mutation
+            // lock: an unavailable share must not block catalog operations.
+            var verified = new List<(long Id, string Path, string Keywords, long Ticks)>();
+            foreach (var image in found)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (File.Exists(image.Path) &&
+                        File.GetLastWriteTimeUtc(image.Path).Ticks == image.Ticks)
+                        verified.Add(image);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            if (verified.Count > 0)
             {
                 // Always acquire the catalogue mutation lock BEFORE starting
                 // a SQLite write transaction. A tag write may have replaced
@@ -235,11 +250,9 @@ public sealed class ImageTagRepository
                 cmd.Parameters.Add("$id", SqliteType.Integer);
                 cmd.Parameters.Add("$words", SqliteType.Text);
                 cmd.Parameters.Add("$ticks", SqliteType.Integer);
-                foreach (var image in found)
+                foreach (var image in verified)
                 {
-                    if (!File.Exists(image.Path) ||
-                        File.GetLastWriteTimeUtc(image.Path).Ticks != image.Ticks)
-                        continue;
+                    cancellationToken.ThrowIfCancellationRequested();
                     cmd.Parameters["$id"].Value = image.Id;
                     cmd.Parameters["$words"].Value = image.Keywords;
                     cmd.Parameters["$ticks"].Value = image.Ticks;
@@ -250,9 +263,8 @@ public sealed class ImageTagRepository
             }
             processed += batch.Count;
             onProgress?.Invoke(processed);
-            // Backfill stays lower priority than the interactive gallery.
-            if (cancellationToken.WaitHandle.WaitOne(120))
-                cancellationToken.ThrowIfCancellationRequested();
+            // Priority preemption is handled by PCasaScheduler: no artificial
+            // per-batch sleep delays for a large photo library.
         }
     }
 }

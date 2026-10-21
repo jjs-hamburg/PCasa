@@ -45,9 +45,10 @@ public sealed class PackedThumbnailStore : IDisposable
         }
     }
 
-    public IReadOnlyList<PackedThumbnailLocation> CreateTiers(
-        string sourcePath,
-        BrowseThumbnailProfile profile,
+    // Source decoding and JPEG encoding must not hold the global cache lock.
+    // Only durable pack append + SQLite index commit require that lock.
+    public IReadOnlyList<PreparedThumbnailTier> PrepareTiers(
+        string sourcePath, BrowseThumbnailProfile profile,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -92,7 +93,7 @@ public sealed class PackedThumbnailStore : IDisposable
         // Encode every requested tier first. Only after all tiers succeeded are bytes
         // appended to pack files. A conversion failure can therefore no longer leave
         // a half-created image entry in the pack store.
-        var prepared = new List<PreparedTier>(tiers.Length);
+        var prepared = new List<PreparedThumbnailTier>(tiers.Length);
         foreach (var tier in tiers)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -103,7 +104,7 @@ public sealed class PackedThumbnailStore : IDisposable
                 optimizeCoding: true,
                 keep: Enums.ForeignKeep.None);
 
-            prepared.Add(new PreparedTier(
+            prepared.Add(new PreparedThumbnailTier(
                 tier,
                 bytes,
                 tierImage.Width,
@@ -112,18 +113,34 @@ public sealed class PackedThumbnailStore : IDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        return prepared;
+    }
+
+    // Call while holding CatalogRemovalService.CacheLock when the resulting
+    // offsets are being persisted; pack append and index commit are one unit.
+    public IReadOnlyList<PackedThumbnailLocation> AppendPrepared(
+        IReadOnlyList<PreparedThumbnailTier> prepared,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
         var result = new List<PackedThumbnailLocation>(prepared.Count);
         foreach (var tier in prepared)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            result.Add(Append(
-                tier.Tier,
-                tier.Bytes,
-                tier.Width,
-                tier.Height));
+            result.Add(Append(tier.Tier, tier.Bytes, tier.Width, tier.Height));
         }
-
         return result;
+    }
+
+    // Compatibility entry point for callers that do not manage a catalog
+    // transaction themselves; packs remain protected during append.
+    public IReadOnlyList<PackedThumbnailLocation> CreateTiers(
+        string sourcePath, BrowseThumbnailProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        var prepared = PrepareTiers(sourcePath, profile, cancellationToken);
+        lock (CatalogRemovalService.CacheLock)
+            return AppendPrepared(prepared, cancellationToken);
     }
 
     public PackedThumbnailLocation CreateTier(
@@ -261,11 +278,8 @@ public sealed class PackedThumbnailStore : IDisposable
         _writers.Clear();
     }
 
-    private sealed record PreparedTier(
-        int Tier,
-        byte[] Bytes,
-        int Width,
-        int Height);
+    public sealed record PreparedThumbnailTier(
+        int Tier, byte[] Bytes, int Width, int Height);
 
     private sealed class PackWriter : IDisposable
     {

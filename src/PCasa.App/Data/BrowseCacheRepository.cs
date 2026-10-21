@@ -193,16 +193,10 @@ public sealed class BrowseCacheWriteSession : IDisposable
                 pixel_height,
                 source_modified_utc_ticks
             )
-            VALUES (
-                $imageId,
-                $tier,
-                $packFile,
-                $byteOffset,
-                $byteLength,
-                $pixelWidth,
-                $pixelHeight,
-                $sourceModifiedUtcTicks
-            )
+            SELECT $imageId, $tier, $packFile, $byteOffset, $byteLength,
+                   $pixelWidth, $pixelHeight, $sourceModifiedUtcTicks
+            FROM images
+            WHERE id = $imageId AND modified_utc_ticks = $sourceModifiedUtcTicks
             ON CONFLICT(image_id, tier) DO UPDATE SET
                 pack_file = excluded.pack_file,
                 byte_offset = excluded.byte_offset,

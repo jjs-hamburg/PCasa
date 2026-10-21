@@ -38,8 +38,7 @@ public sealed class BrowseCacheBuilder
         IProgress<BrowseCacheBuildProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        lock (CatalogRemovalService.CacheLock)
-            return BuildMissingLocked(progress, cancellationToken);
+        return BuildMissingLocked(progress, cancellationToken);
     }
 
     private BrowseCacheBuildResult BuildMissingLocked(
@@ -58,9 +57,10 @@ public sealed class BrowseCacheBuilder
         // A previous first-run failure may have written pack bytes before any index
         // entry was committed. If there is no usable index at all, those bytes are
         // unreachable and can be safely discarded before retrying.
-        if (_repository.CountEntries() == 0)
+        lock (CatalogRemovalService.CacheLock)
         {
-            PackedThumbnailStore.ResetPackFiles();
+            if (_repository.CountEntries() == 0)
+                PackedThumbnailStore.ResetPackFiles();
         }
 
         using var store = new PackedThumbnailStore();
@@ -156,63 +156,50 @@ public sealed class BrowseCacheBuilder
         BrowseCacheWriteSession writeSession,
         CancellationToken cancellationToken)
     {
-        var missingTiers = profile.Tiers
-            .Where(tier => !candidate.ExistingTiers.Contains(tier))
-            .ToArray();
-        if (missingTiers.Length == 0)
+        var missing = profile.Tiers
+            .Where(tier => !candidate.ExistingTiers.Contains(tier)).ToArray();
+        if (missing.Length == 0)
         {
-            writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
+            lock (CatalogRemovalService.CacheLock)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
+                writeSession.Commit();
+            }
             return;
         }
 
-        var legacyThumbnailAvailable = File.Exists(candidate.ThumbnailPath);
-
-        var legacyTiers = legacyThumbnailAvailable
-            ? missingTiers.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()
+        // Encode outside the pack lock, including potentially blocking SMB IO.
+        var available = File.Exists(candidate.ThumbnailPath);
+        var legacyTiers = available
+            ? missing.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()
             : Array.Empty<int>();
+        var originalTiers = missing
+            .Where(tier => !legacyTiers.Contains(tier)).ToArray();
+        var preparedLegacy = legacyTiers.Length > 0
+            ? store.PrepareTiers(candidate.ThumbnailPath,
+                new BrowseThumbnailProfile(legacyTiers), cancellationToken)
+            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
+        if (originalTiers.Length > 0 && !File.Exists(candidate.LocalPath))
+            throw new FileNotFoundException(
+                "Original für die benötigte Browse-Thumbnail-Größe ist nicht verfügbar.",
+                candidate.LocalPath);
+        var preparedOriginal = originalTiers.Length > 0
+            ? store.PrepareTiers(candidate.LocalPath,
+                new BrowseThumbnailProfile(originalTiers), cancellationToken)
+            : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
 
-        if (legacyTiers.Length > 0)
+        lock (CatalogRemovalService.CacheLock)
         {
-            SaveLocations(
-                store.CreateTiers(
-                    candidate.ThumbnailPath,
-                    new BrowseThumbnailProfile(legacyTiers),
-                    cancellationToken));
-        }
-
-        var originalTiers = missingTiers
-            .Where(tier => !legacyTiers.Contains(tier))
-            .ToArray();
-
-        if (originalTiers.Length > 0)
-        {
-            if (!File.Exists(candidate.LocalPath))
-            {
-                throw new FileNotFoundException(
-                    "Original für die benötigte Browse-Thumbnail-Größe ist nicht verfügbar.",
-                    candidate.LocalPath);
-            }
-
-            SaveLocations(
-                store.CreateTiers(
-                    candidate.LocalPath,
-                    new BrowseThumbnailProfile(originalTiers),
-                    cancellationToken));
-        }
-
-        // The persisted job is cleared only if every configured tier now
-        // exists for this exact source version, in the same SQLite transaction.
-        writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
-
-        void SaveLocations(IReadOnlyList<PackedThumbnailLocation> locations)
-        {
-            foreach (var location in locations)
-            {
-                writeSession.Save(
-                    candidate.ImageId,
-                    candidate.ModifiedUtcTicks,
-                    location);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var location in store.AppendPrepared(preparedLegacy, cancellationToken))
+                writeSession.Save(candidate.ImageId, candidate.ModifiedUtcTicks, location);
+            foreach (var location in store.AppendPrepared(preparedOriginal, cancellationToken))
+                writeSession.Save(candidate.ImageId, candidate.ModifiedUtcTicks, location);
+            writeSession.MarkComplete(candidate.ImageId, candidate.ModifiedUtcTicks, profile);
+            // A pack cannot be considered disposable until its index rows
+            // have committed; keep these two short operations in one lock.
+            writeSession.Commit();
         }
     }
 }
