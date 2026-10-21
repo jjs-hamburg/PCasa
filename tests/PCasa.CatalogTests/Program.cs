@@ -36,6 +36,7 @@ internal static class Program
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
         Run("Compacted pack file names are never reused", CompactedPackNamesAreNeverReused, failures);
+        Run("Cache compaction yields to manual deletion and retains later requests", MaintenanceCompactionDoesNotBlockManualDeletion, failures);
         Run("Scan reconciliation defers physical cache compaction", ScanReconciliationDefersCacheMaintenance, failures);
         Run("Manual removal passes slow scan preparation without stale commit", ManualRemovalOvertakesScanReconciliationPreparation, failures);
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
@@ -87,7 +88,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {73 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {74 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -656,6 +657,77 @@ internal static class Program
             if (Directory.Exists(cacheRoot))
                 Directory.Delete(cacheRoot, recursive: true);
         }
+    }
+
+    private static void MaintenanceCompactionDoesNotBlockManualDeletion()
+    {
+        using var sandbox = new Sandbox();
+        var imagePath = Path.Combine(sandbox.Images, "compacting.jpg");
+        WriteJpeg(imagePath);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+
+        var cacheBase = Path.Combine(Path.GetDirectoryName(sandbox.Images)!, "PrivatePack");
+        var packDir = Path.Combine(cacheBase, "browse-cache");
+        Directory.CreateDirectory(packDir);
+        var oldPack = Path.Combine(packDir, "test-old.pack");
+        File.WriteAllBytes(oldPack, new byte[] { 1, 2, 3, 4, 5, 6 });
+        long id;
+        using (var connection = db.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT id FROM images LIMIT 1;
+                """;
+            id = Convert.ToInt64(command.ExecuteScalar());
+            command.CommandText = """
+                UPDATE thumbnail_entries
+                SET pack_file = 'test-old.pack', byte_offset = 0, byte_length = 3
+                WHERE image_id = $id AND tier = 96;
+                UPDATE cache_maintenance
+                SET cleanup_pending = 1, request_generation = request_generation + 1
+                WHERE id = 1;
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var maintenance = new CatalogRemovalService(db, cacheBase, () =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("Compaction copy gate timed out.");
+        });
+        var maintenanceTask = Task.Run(() => maintenance.RunPendingMaintenance());
+        try
+        {
+            if (!entered.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Pack copy was not reached.");
+            var removal = Task.Run(() =>
+                new CatalogRemovalService(db).DetachImage(id, imagePath));
+            if (!removal.Wait(TimeSpan.FromSeconds(5)) || !removal.Result)
+                throw new Exception("Manual image deletion blocked behind pack copying.");
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        if (!maintenanceTask.GetAwaiter().GetResult())
+            throw new Exception("Maintenance stopped without processing its request.");
+        if (!maintenance.HasPendingMaintenance())
+            throw new Exception("A newer deletion request was wrongly acknowledged by old maintenance.");
+        Require(db, 0);
+        // A second pass removes now-orphaned packs and acknowledges the
+        // request only after the catalog has reached its new desired state.
+        var retry = new CatalogRemovalService(db, cacheBase);
+        if (!retry.RunPendingMaintenance() || retry.HasPendingMaintenance())
+            throw new Exception("Durable maintenance was not completed on retry.");
+        if (File.Exists(oldPack))
+            throw new Exception("Orphaned original pack was not reclaimed.");
     }
 
     private static void ManualRemovalOvertakesScanReconciliationPreparation()
@@ -2322,6 +2394,8 @@ internal static class Program
         var orphanPack = Path.Combine(privatePacks, "orphan.pack");
         File.WriteAllBytes(liveThumb, new byte[] { 1, 2, 3 });
         File.WriteAllBytes(orphanThumb, new byte[] { 4, 5 });
+        // Fresh orphan files can still belong to an in-flight encoder.
+        File.SetLastWriteTimeUtc(orphanThumb, DateTime.UtcNow.AddHours(-1));
         File.WriteAllBytes(orphanPack, new byte[] { 6, 7, 8 });
 
         using (var connection = db.OpenConnection())
