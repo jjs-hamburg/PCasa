@@ -61,7 +61,7 @@ public sealed class PackedThumbnailStore : IDisposable
             .ToArray();
         if (tiers.Length == 0)
         {
-            return Array.Empty<PackedThumbnailLocation>();
+            return Array.Empty<PreparedThumbnailTier>();
         }
 
         foreach (var tier in tiers)

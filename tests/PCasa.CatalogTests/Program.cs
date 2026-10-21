@@ -30,6 +30,7 @@ internal static class Program
         Run("Stale scan batch rolls back", StaleScanBatchRollsBack, failures);
         Run("Stale scan cleanup preserves images", StaleScanCleanupPreservesImages, failures);
         Run("Stale watcher delete cannot overwrite newer folder decision", StaleWatcherDeleteIsRejected, failures);
+        Run("Stale cache writer cannot overwrite a newer image version", StaleCacheWriteDoesNotReplaceCurrent, failures);
         Run("Source change in final scan progress rejects stale pruning", StaleScanFinalProgressRejectsPruning, failures);
 
         Run("Missing thumbnail tier is scheduled for repair", MissingThumbnailIsRepaired, failures);
@@ -73,7 +74,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {59 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {60 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -740,6 +741,57 @@ internal static class Program
         catch (OperationCanceledException) { rejected = true; }
         if (!rejected) throw new Exception("Old scan was allowed to prune.");
         Require(db, 1);
+    }
+
+    private static void StaleCacheWriteDoesNotReplaceCurrent()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "versioned.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        var profile = new BrowseThumbnailProfileRepository(db).Get();
+        var tier = profile.Tiers[0];
+        long imageId, oldTicks;
+        string oldPack;
+        using (var connection = db.OpenConnection())
+        {
+            using var image = connection.CreateCommand();
+            image.CommandText = "SELECT id, modified_utc_ticks FROM images LIMIT 1;";
+            using var reader = image.ExecuteReader();
+            if (!reader.Read()) throw new Exception("Test image missing.");
+            imageId = reader.GetInt64(0);
+            oldTicks = reader.GetInt64(1);
+        }
+        using (var connection = db.OpenConnection())
+        {
+            using var indexed = connection.CreateCommand();
+            indexed.CommandText = "SELECT pack_file FROM thumbnail_entries WHERE image_id = $id AND tier = $tier;";
+            indexed.Parameters.AddWithValue("$id", imageId);
+            indexed.Parameters.AddWithValue("$tier", tier);
+            oldPack = indexed.ExecuteScalar() as string
+                ?? throw new Exception("Test thumbnail entry missing.");
+            using var changed = connection.CreateCommand();
+            changed.CommandText = "UPDATE images SET modified_utc_ticks = $ticks WHERE id = $id;";
+            changed.Parameters.AddWithValue("$ticks", oldTicks + 1);
+            changed.Parameters.AddWithValue("$id", imageId);
+            changed.ExecuteNonQuery();
+        }
+        using (var session = new BrowseCacheRepository(db).CreateWriteSession())
+        {
+            session.Save(imageId, oldTicks, new PackedThumbnailLocation(
+                tier, "stale-pack.pack", 0, 100, 100, 100));
+            session.Commit();
+        }
+        using (var connection = db.OpenConnection())
+        using (var indexed = connection.CreateCommand())
+        {
+            indexed.CommandText = "SELECT pack_file FROM thumbnail_entries WHERE image_id = $id AND tier = $tier;";
+            indexed.Parameters.AddWithValue("$id", imageId);
+            indexed.Parameters.AddWithValue("$tier", tier);
+            if (!string.Equals(indexed.ExecuteScalar() as string, oldPack,
+                    StringComparison.Ordinal))
+                throw new Exception("Old image source overwrote a newer cache entry.");
+        }
     }
 
     private static void StaleWatcherDeleteIsRejected()
