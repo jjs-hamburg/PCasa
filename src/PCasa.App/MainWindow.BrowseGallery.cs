@@ -63,10 +63,20 @@ public partial class MainWindow
             return;
         }
 
-        _photoFolders = _imageCatalog.GetPhotoFolders();
+        IReadOnlyList<PhotoFolderSummary> initialFolders = Array.Empty<PhotoFolderSummary>();
+        var imageCount = 0;
+        await _scheduler.EnqueueAsync(
+            $"catalog:initial-summary:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                initialFolders = _imageCatalog.GetPhotoFolders();
+                imageCount = _imageCatalog.CountAll();
+                return Task.CompletedTask;
+            }, workKind: SchedulerWorkKind.CatalogRead);
+        if (!_browseInitialized || _folderRemovalPending) return;
+        _photoFolders = initialFolders;
         RefreshFolderTree(preserveGalleryAnchor: false);
-
-        var imageCount = _imageCatalog.CountAll();
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (imageCount == 0)
@@ -163,8 +173,24 @@ public partial class MainWindow
         // are applied. A tree reflow during the database await must not
         // consume this pending anchor.
         QueueGalleryAnchorRestore();
-        _photoFolders = _imageCatalog.GetPhotoFolders();
-        var imageCount = _imageCatalog.CountAll();
+        IReadOnlyList<PhotoFolderSummary> freshFolders = Array.Empty<PhotoFolderSummary>();
+        var imageCount = 0;
+        try
+        {
+            await _scheduler.EnqueueAsync(
+                $"catalog:gallery-summary:{refresh}", SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    freshFolders = _imageCatalog.GetPhotoFolders();
+                    imageCount = _imageCatalog.CountAll();
+                    return Task.CompletedTask;
+                }, () => _browseRefreshRequests.IsCurrent(refresh),
+                workKind: SchedulerWorkKind.CatalogRead);
+        }
+        catch (OperationCanceledException) { return; }
+        if (!_browseRefreshRequests.IsCurrent(refresh)) return;
+        _photoFolders = freshFolders;
         _lastCatalogImageCount = imageCount;
         RefreshFolderTree(preserveGalleryAnchor: false);
 
@@ -192,7 +218,20 @@ public partial class MainWindow
         if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
         {
             StatusText.Text = $"Galerieindex {tier}px laden...";
-            var index = await Task.Run(() => _browseCacheRepository.GetIndex(tier));
+            IReadOnlyList<BrowseThumbnailIndexEntry> index = Array.Empty<BrowseThumbnailIndexEntry>();
+            try
+            {
+                await _scheduler.EnqueueAsync(
+                    $"catalog:gallery-index:{refresh}:{tier}", SchedulerPriority.Interactive,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        index = _browseCacheRepository.GetIndex(tier);
+                        return Task.CompletedTask;
+                    }, () => _browseRefreshRequests.IsCurrent(refresh),
+                    workKind: SchedulerWorkKind.CatalogRead);
+            }
+            catch (OperationCanceledException) { return; }
             if (!_browseRefreshRequests.IsCurrent(refresh))
             {
                 return;
@@ -216,8 +255,20 @@ public partial class MainWindow
             // The catalog, not the currently available thumbnail tier, decides
             // whether a selection is still valid.
             var checkedSelection = _selectedImageIds.ToHashSet();
-            var existing = await Task.Run(
-                () => _imageCatalog.GetExistingImageIds(checkedSelection));
+            HashSet<long> existing = new();
+            try
+            {
+                await _scheduler.EnqueueAsync(
+                    $"catalog:selection:{refresh}", SchedulerPriority.Interactive,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        existing = _imageCatalog.GetExistingImageIds(checkedSelection);
+                        return Task.CompletedTask;
+                    }, () => _browseRefreshRequests.IsCurrent(refresh),
+                    workKind: SchedulerWorkKind.CatalogRead);
+            }
+            catch (OperationCanceledException) { return; }
             if (!_browseRefreshRequests.IsCurrent(refresh))
                 return;
             if (_selectedImageIds.RemoveWhere(id =>
