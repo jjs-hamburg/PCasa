@@ -22,6 +22,7 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
+        Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
@@ -82,7 +83,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {68 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {69 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -307,6 +308,36 @@ internal static class Program
             {
                 release.TrySetResult();
                 await Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerManualScanDoesNotWaitForBlockedBackground()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var background = scheduler.EnqueueAsync("blocked-network-enumeration",
+                SchedulerPriority.Background,
+                async _ => { started.TrySetResult(); await release.Task; });
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var manualRan = false;
+                await scheduler.EnqueueAsync("manual-folder-scan",
+                    SchedulerPriority.UserAction,
+                    _ => { manualRan = true; return Task.CompletedTask; })
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!manualRan || background.IsCompleted)
+                    throw new Exception("Manual scan waited behind non-cancelable background IO.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await background.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();

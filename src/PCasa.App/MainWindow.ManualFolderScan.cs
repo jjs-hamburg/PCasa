@@ -10,6 +10,8 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    private bool _manualScanRunning;
+
     private void FoldersTree_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         var current = e.OriginalSource as DependencyObject;
@@ -27,7 +29,7 @@ public partial class MainWindow
 
     private async void BrowseScanCurrentFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (_isScanning && !_backgroundWorkerRunning)
+        if (_manualScanRunning || (_isScanning && !_backgroundWorkerRunning))
         {
             return;
         }
@@ -76,41 +78,15 @@ public partial class MainWindow
 
         if (_folderRemovalPending) return;
 
-        // Physical pack compaction is low priority. An explicit folder
-        // refresh must preempt it rather than block on the shared cache lock.
-        if (_cacheMaintenanceRunning)
-        {
-            _cacheMaintenanceCancellation?.Cancel();
-            while (_cacheMaintenanceRunning && !Dispatcher.HasShutdownStarted)
-                await Task.Delay(40);
-        }
-        if (_folderRemovalPending) return;
-
-        // Explicit user work takes precedence over automatic SMB checks.
-        if (_backgroundWorkerRunning)
-        {
-            _manualFolderScanWaiting = true;
-            try
-            {
-                _backgroundCurrentScanCancellation?.Cancel();
-                while (_backgroundWorkerRunning && !Dispatcher.HasShutdownStarted)
-                    await Task.Delay(40);
-            }
-            finally
-            {
-                _manualFolderScanWaiting = false;
-            }
-        }
-        // Interrupted cache jobs remain durable and resume later. An explicit
-        // manual folder update must not wait for the global recovery pass.
-        if (_browseCacheBuilding && !_backgroundWorkerRunning)
-        {
-            _browseCacheCancellation?.Cancel();
-            while (_browseCacheBuilding && !Dispatcher.HasShutdownStarted)
-                await Task.Delay(40);
-        }
-        if (_isScanning || _browseCacheBuilding) return;
-
+        // The catalog now has separate priority lanes and short transactional
+        // pack locks. A manual scan can start without waiting for a blocked
+        // background SMB probe, pack build or maintenance call to return.
+        // The previous polling loops defeated scheduler preemption.
+        _manualFolderScanWaiting = true;
+        _backgroundCurrentScanCancellation?.Cancel();
+        _cacheMaintenanceCancellation?.Cancel();
+        _browseCacheCancellation?.Cancel();
+        _manualScanRunning = true;
         _isScanning = true;
         ScanAllMenuItem.IsEnabled = false;
         using var cancellation = new CancellationTokenSource();
@@ -193,8 +169,10 @@ public partial class MainWindow
                 _activeScanFolderId = null;
             }
 
-            _isScanning = false;
-            ScanAllMenuItem.IsEnabled = true;
+            _manualScanRunning = false;
+            _manualFolderScanWaiting = false;
+            _isScanning = _backgroundWorkerRunning;
+            ScanAllMenuItem.IsEnabled = !_isScanning;
 
             // Cache repair preempted by the manual action is resumed silently,
             // without forcing another directory scan.

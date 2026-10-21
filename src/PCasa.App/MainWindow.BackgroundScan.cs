@@ -547,6 +547,11 @@ public partial class MainWindow
                 {
                     continue;
                 }
+                // Directory.Exists can outlive cancellation on a dead NAS.
+                // A manual request that arrived during the probe must still
+                // supersede this background request before it gets scheduled.
+                if (_manualFolderScanWaiting || _folderRemovalPending)
+                    throw new OperationCanceledException("Manual folder action has priority.");
 
                 TrackFolderActivity(
                     request.Kind == BackgroundFolderChangeKind.ScanFile
@@ -683,12 +688,17 @@ public partial class MainWindow
                 if (ReferenceEquals(_browseProgressWindow, activityWindow))
                     _browseProgressWindow = null;
             }
-            _activeScanCancellation = null;
-            _activeScanFolderId = null;
+            // Do not clear a manual scan's token or progress state if the
+            // background worker finishes after manual work has already started.
+            if (!_manualScanRunning)
+            {
+                _activeScanCancellation = null;
+                _activeScanFolderId = null;
+            }
             _backgroundCurrentScanCancellation = null;
-            _isScanning = false;
             _backgroundWorkerRunning = false;
-            ScanAllMenuItem.IsEnabled = true;
+            _isScanning = _manualScanRunning;
+            ScanAllMenuItem.IsEnabled = !_isScanning;
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
