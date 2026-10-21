@@ -100,6 +100,24 @@ public sealed class CatalogRemovalService
         {
             using var connection = _database.OpenConnection();
             using var transaction = connection.BeginTransaction();
+            // Advance the persistent source generation in the same transaction
+            // that detaches the monitored root and cascades its catalog rows.
+            using (var source = connection.CreateCommand())
+            {
+                source.Transaction = transaction;
+                source.CommandText = """
+                    UPDATE scheduler_sources
+                    SET generation = generation + 1,
+                        desired_present = 0,
+                        updated_utc = $now
+                    WHERE canonical_path = (
+                        SELECT canonical_path FROM monitored_folders WHERE id = $id
+                    );
+                    """;
+                source.Parameters.AddWithValue("$id", monitoredFolderId);
+                source.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                source.ExecuteNonQuery();
+            }
             using (var remove = connection.CreateCommand())
             {
                 remove.Transaction = transaction;
