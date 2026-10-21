@@ -435,6 +435,27 @@ public partial class MainWindow : Window
         return null;
     }
 
+    // The physical order of nodes in the visible tree is the one source of
+    // truth for gallery sections. Traverse even collapsed children so a
+    // later expansion cannot change an unrelated folder's sort position.
+    private IReadOnlyDictionary<long, int> CaptureGalleryFolderOrder()
+    {
+        var positions = new Dictionary<long, int>();
+        foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
+            CaptureGalleryFolderOrder(root, positions);
+        return positions;
+    }
+
+    private static void CaptureGalleryFolderOrder(TreeViewItem item,
+        IDictionary<long, int> positions)
+    {
+        if (item.Tag is FolderTreeTag { PhotoFolderId: long id } &&
+            !positions.ContainsKey(id))
+            positions.Add(id, positions.Count);
+        foreach (var child in item.Items.OfType<TreeViewItem>())
+            CaptureGalleryFolderOrder(child, positions);
+    }
+
     private void UpdateActiveFolderDisplay(long photoFolderId, bool updateTreeSelection)
     {
         var folder = _photoFolders.FirstOrDefault(candidate => candidate.Id == photoFolderId);
