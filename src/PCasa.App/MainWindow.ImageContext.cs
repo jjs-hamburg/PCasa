@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.ComponentModel;
+using System.Windows.Interop;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -56,16 +59,27 @@ public partial class MainWindow
         catch (Exception ex) { ShowFileActionError(ex); }
     }
 
+    // Unlike launching the image with verb "properties", this Windows shell
+    // API opens file properties even when no app is associated with .jpg/.raw.
+    private const uint ShopFilePath = 0x00000002;
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SHObjectProperties(
+        IntPtr owner, uint objectType, string filePath, string? propertyPage);
+
     private void ShowFileProperties(long id)
     {
         var path = GetImagePath(id);
         if (path is null) return;
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = path, Verb = "properties", UseShellExecute = true
-            });
+            if (!File.Exists(path))
+                throw new FileNotFoundException("Die Datei ist nicht mehr erreichbar.", path);
+            if (!SHObjectProperties(new WindowInteropHelper(this).Handle,
+                    ShopFilePath, path, null))
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Der Windows-Eigenschaftendialog konnte nicht geöffnet werden.");
         }
         catch (Exception ex) { ShowFileActionError(ex); }
     }

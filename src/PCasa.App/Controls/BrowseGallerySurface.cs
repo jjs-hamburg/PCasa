@@ -69,6 +69,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     }
 
     public event EventHandler<BrowseImageClickedEventArgs>? ImageClicked;
+    public event EventHandler? EmptyAreaClicked;
     public event EventHandler<BrowseImageClickedEventArgs>? ImageOpened;
     public event EventHandler<BrowseImageClickedEventArgs>? ImageContextRequested;
     public event EventHandler<BrowseImageClickedEventArgs>? ImagesDragRequested;
@@ -383,6 +384,14 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var imageIndex = HitTestImageIndex(e.GetPosition(this));
         if (imageIndex is null || imageIndex.Value < 0 || imageIndex.Value >= _index.Count)
         {
+            _dragStartingPoint = null;
+            _dragStartingImageId = null;
+            if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0)
+            {
+                Focus();
+                EmptyAreaClicked?.Invoke(this, EventArgs.Empty);
+                e.Handled = true;
+            }
             return;
         }
 

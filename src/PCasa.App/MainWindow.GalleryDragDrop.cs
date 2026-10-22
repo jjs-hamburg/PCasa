@@ -178,14 +178,26 @@ public partial class MainWindow
             effect.HasFlag(DragDropEffects.Move));
     }
 
+    private string? TreeDropTargetFromElement(DependencyObject? element)
+    {
+        // The nearest TreeViewItem identifies the actual nested folder.
+        // ContainerFromElement(FoldersTree, ...) instead returns a top-level
+        // container, which may not be an eligible monitored destination.
+        var item = FindAncestor<TreeViewItem>(element);
+        if (item?.Tag is not FolderTreeTag tag ||
+            !ReferenceEquals(FindAncestor<TreeView>(item), FoldersTree))
+            return null;
+        return ValidDragTarget(tag.FullPath) ? tag.FullPath : null;
+    }
+
     private string? TreeDropTarget(DragEventArgs e)
     {
-        var start = e.OriginalSource as DependencyObject;
-        var item = ItemsControl.ContainerFromElement(FoldersTree, start)
-            as TreeViewItem;
-        if (item?.Tag is not FolderTreeTag tag) return null;
-        return ValidDragTarget(tag.FullPath)
-                ? tag.FullPath : null;
+        // In PreviewDragOver OriginalSource can be a parent presenter.
+        // Resolve the element actually under the mouse before falling back.
+        var hit = FoldersTree.InputHitTest(e.GetPosition(FoldersTree))
+            as DependencyObject;
+        return TreeDropTargetFromElement(hit)
+            ?? TreeDropTargetFromElement(e.OriginalSource as DependencyObject);
     }
 
     private void FolderTreeFiles_DragOver(object sender, DragEventArgs e)

@@ -41,6 +41,7 @@ public partial class MainWindow
             _browseProfileRepository);
         _browsePageCache = new BrowseThumbnailPageCache(_scheduler);
         BrowseSurface.ImageClicked += BrowseSurface_ImageClicked;
+        BrowseSurface.EmptyAreaClicked += BrowseSurface_EmptyAreaClicked;
         BrowseSurface.ImageOpened += BrowseSurface_ImageOpened;
         BrowseSurface.ImageContextRequested += BrowseSurface_ImageContextRequested;
         BrowseSurface.ImagesDragRequested += BrowseSurface_ImagesDragRequested;
@@ -789,6 +790,14 @@ public partial class MainWindow
     }
 
     private readonly GallerySelection _gallerySelection = new();
+
+    private void BrowseSurface_EmptyAreaClicked(object? sender, EventArgs e)
+    {
+        if (_viewerOpen || _selectedImageIds.Count == 0) return;
+        _selectedImageIds.Clear();
+        _gallerySelection.Reset();
+        ApplyGallerySelection();
+    }
 
     private void BrowseSurface_ImageClicked(
         object? sender,

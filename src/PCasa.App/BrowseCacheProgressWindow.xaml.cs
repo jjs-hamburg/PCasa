@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -45,13 +46,19 @@ public partial class BrowseCacheProgressWindow : Window
     private bool _finished;
     private bool _rightAnchorUpdating;
     private bool _placingWindow;
-    private bool _manuallyPositioned;
+    private bool _anchorScheduled;
 
     public BrowseCacheProgressWindow()
     {
         InitializeComponent();
-        Loaded += (_, _) => PositionOnOwnerMonitor();
-        LocationChanged += (_, _) => AnchorRightEdge();
+        Loaded += (_, _) =>
+        {
+            PositionOnOwnerMonitor();
+            if (Owner is null) return;
+            Owner.LocationChanged += Owner_LocationChanged;
+            Owner.SizeChanged += Owner_SizeChanged;
+            Owner.StateChanged += Owner_StateChanged;
+        };
     }
 
     private void PositionOnOwnerMonitor()
@@ -84,37 +91,32 @@ public partial class BrowseCacheProgressWindow : Window
         }
 
         AnchorRightEdge();
-        Owner.LocationChanged += Owner_LocationChanged;
-        Owner.SizeChanged += Owner_SizeChanged;
     }
 
     private void Owner_LocationChanged(object? sender, EventArgs e)
-    {
-        // Re-anchor on the owner's current monitor if PCasa changes screens.
-        if (!_placingWindow)
-        {
-            RepositionOnOwnerMonitor();
-        }
-    }
+        => ScheduleOwnerReanchor();
 
     private void Owner_SizeChanged(object sender, SizeChangedEventArgs e)
-        => AnchorRightEdge();
+        => ScheduleOwnerReanchor();
 
-    private void RepositionOnOwnerMonitor()
+    private void Owner_StateChanged(object? sender, EventArgs e)
+        => ScheduleOwnerReanchor();
+
+    private void ScheduleOwnerReanchor()
     {
-        if (Owner is null) return;
-        try
+        if (_anchorScheduled || _placingWindow || _finished || Owner is null)
+            return;
+        _anchorScheduled = true;
+        // WPF SizeChanged can precede final maximized-window layout. Re-anchor
+        // at Loaded priority after the owner's new bounds become available.
+        _ = Dispatcher.BeginInvoke(new Action(() =>
         {
+            _anchorScheduled = false;
+            if (_finished || Owner is null || !IsLoaded) return;
             _placingWindow = true;
-            // Keep event handlers single-registered across monitor changes.
-            Owner.LocationChanged -= Owner_LocationChanged;
-            Owner.SizeChanged -= Owner_SizeChanged;
-            PositionOnOwnerMonitor();
-        }
-        finally
-        {
-            _placingWindow = false;
-        }
+            try { PositionOnOwnerMonitor(); }
+            finally { _placingWindow = false; }
+        }), DispatcherPriority.Loaded);
     }
 
     private void AnchorRightEdge()
@@ -214,7 +216,6 @@ public partial class BrowseCacheProgressWindow : Window
         if (e.ChangedButton != MouseButton.Left ||
             e.OriginalSource is System.Windows.Controls.Primitives.ButtonBase)
             return;
-        _manuallyPositioned = true;
         try { DragMove(); }
         catch (InvalidOperationException) { }
     }
@@ -240,6 +241,7 @@ public partial class BrowseCacheProgressWindow : Window
         {
             Owner.LocationChanged -= Owner_LocationChanged;
             Owner.SizeChanged -= Owner_SizeChanged;
+            Owner.StateChanged -= Owner_StateChanged;
         }
 
         _finished = true;

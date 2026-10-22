@@ -374,6 +374,7 @@ public partial class MainWindow : Window
             Header = header,
             ToolTip = tooltip,
             Tag = CreateFolderTreeTag(node.FullPath, node.PhotoFolderId),
+            AllowDrop = true,
             IsExpanded = expandedPaths.Contains(node.FullPath)
         };
 

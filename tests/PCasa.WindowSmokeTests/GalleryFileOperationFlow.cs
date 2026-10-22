@@ -1,6 +1,7 @@
 using System.IO;
 using System.Reflection;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -100,6 +101,58 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("External move treats unavailable parents as deleted photos.");
             Console.WriteLine("PASS: External move reconciles only confirmed missing files.");
 
+            // Verify that an ordinary empty-gallery click clears Ctrl+A's
+            // selection through the actual MainWindow selection handler.
+            var surface = (PCasa.App.Controls.BrowseGallerySurface)window.FindName("BrowseSurface");
+            var selectedField = typeof(PCasa.App.MainWindow).GetField(
+                "_selectedImageIds", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Gallery selection state missing.");
+            var selectedIds = (HashSet<long>)selectedField.GetValue(window)!;
+            selectedIds.Add(987654321L);
+            var clear = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseSurface_EmptyAreaClicked", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Empty gallery click handler missing.");
+            clear.Invoke(window, [surface, EventArgs.Empty]);
+            if (selectedIds.Count != 0)
+                throw new Exception("Clicking empty gallery failed to clear selection.");
+            Console.WriteLine("PASS: Clicking gallery background clears multi-selection.");
+
+            // The actual tree has nested WPF TreeViewItem containers. An
+            // eligible folder must resolve as the destination itself, not as
+            // its top-level drive or monitoring ancestor.
+            var tree = (TreeView)window.FindName("FoldersTree");
+            var getDropTarget = typeof(PCasa.App.MainWindow).GetMethod(
+                "TreeDropTargetFromElement", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Folder-tree hit-test resolver missing.");
+            var nested = FindFolderItems(tree)
+                .FirstOrDefault(item => string.Equals(
+                    getDropTarget.Invoke(window, [item]) as string,
+                    first, StringComparison.OrdinalIgnoreCase));
+            if (nested is null)
+                throw new Exception("Nested folder is not an eligible drop target.");
+            if (!nested.AllowDrop)
+                throw new Exception("Nested folder does not accept WPF drops.");
+            Console.WriteLine("PASS: Nested folder resolves to its own drop destination.");
+
+            // Window resizing must re-anchor the progress window after
+            // layout rather than leave its coordinates at the old size.
+            var progressWindow = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
+            progressWindow.Show();
+            Until(window, () => Math.Abs(progressWindow.Left -
+                    (window.Left + window.ActualWidth - progressWindow.Width - 12)) < 3,
+                "Progress window did not align to initial owner right edge.");
+            window.Width += 110;
+            Until(window, () => Math.Abs(progressWindow.Left -
+                    (window.Left + window.ActualWidth - progressWindow.Width - 12)) < 3,
+                "Progress window did not follow resized owner.");
+            progressWindow.Finish();
+            Console.WriteLine("PASS: Progress dialog follows owner window resizing.");
+
+            if (typeof(PCasa.App.MainWindow).GetMethod("SHObjectProperties",
+                    BindingFlags.NonPublic | BindingFlags.Static) is null)
+                throw new Exception("Native Windows properties invocation is missing.");
+            Console.WriteLine("PASS: File properties use native Windows shell API.");
+
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF gallery copy/move/catalog tests passed.");
@@ -124,6 +177,16 @@ internal static class GalleryFileOperationFlow
             catch { }
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    private static IEnumerable<TreeViewItem> FindFolderItems(ItemsControl parent)
+    {
+        foreach (var item in parent.Items.OfType<TreeViewItem>())
+        {
+            yield return item;
+            foreach (var nested in FindFolderItems(item))
+                yield return nested;
         }
     }
 
