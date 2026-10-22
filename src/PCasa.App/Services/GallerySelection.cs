@@ -13,9 +13,8 @@ public sealed class GallerySelection
 
     public static bool PreserveGroupUntilDragDecision(long clickedImageId,
         System.Windows.Input.ModifierKeys modifiers, IReadOnlySet<long> selected)
-        => (modifiers & (System.Windows.Input.ModifierKeys.Control |
-             System.Windows.Input.ModifierKeys.Shift)) == 0 &&
-           selected.Count > 1 && selected.Contains(clickedImageId);
+        => (modifiers & System.Windows.Input.ModifierKeys.Shift) == 0 &&
+           selected.Contains(clickedImageId);
     public long? FocusedId { get; private set; }
 
     public void SetFocus(long imageId) => FocusedId = imageId;

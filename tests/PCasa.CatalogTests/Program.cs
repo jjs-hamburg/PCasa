@@ -2377,11 +2377,11 @@ internal static class Program
         model.Click(4, System.Windows.Input.ModifierKeys.Control, visible, selected);
         if (!GallerySelection.PreserveGroupUntilDragDecision(2,
                 System.Windows.Input.ModifierKeys.None, selected) ||
-            GallerySelection.PreserveGroupUntilDragDecision(2,
+            !GallerySelection.PreserveGroupUntilDragDecision(2,
                 System.Windows.Input.ModifierKeys.Control, selected) ||
             GallerySelection.PreserveGroupUntilDragDecision(3,
                 System.Windows.Input.ModifierKeys.None, selected))
-            throw new Exception("Multi-file drag click collapsed selection before drag threshold.");
+            throw new Exception("Selected-photo CTRL drag collapsed selection before drag threshold.");
         if (!selected.SetEquals(new long[] { 2, 4 }))
             throw new Exception("Ctrl-click did not toggle the clicked image.");
         model.Click(5, System.Windows.Input.ModifierKeys.Shift, visible, selected);

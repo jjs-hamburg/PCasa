@@ -55,6 +55,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private Point? _dragStartingPoint;
     private long? _dragStartingImageId;
     private long? _pendingSimpleClickImageId;
+    private ModifierKeys _pendingSimpleClickModifiers;
     private double _lastViewportTop;
     private int _scrollDirection = 1;
     private bool _showShadows;
@@ -399,10 +400,12 @@ public sealed class BrowseGallerySurface : FrameworkElement
         else if (GallerySelection.PreserveGroupUntilDragDecision(
                      args.ImageId, Keyboard.Modifiers, _selectedImageIds))
         {
-            // Explorer semantics: pressing an already selected photo must
-            // preserve the ENTIRE selection until we know whether this is a
-            // click or a drag. Reduce it to one only on MouseUp.
+            // Clicking a selected photo (also CTRL+click) must not change
+            // the selection before we know whether the gesture is a drag.
+            // On mouse-up apply the original click modifiers only if no
+            // drag took place.
             _pendingSimpleClickImageId = args.ImageId;
+            _pendingSimpleClickModifiers = args.Modifiers;
         }
         else
         {
@@ -421,7 +424,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         {
             _pendingSimpleClickImageId = null;
             ImageClicked?.Invoke(this,
-                new BrowseImageClickedEventArgs(clicked, ModifierKeys.None));
+                new BrowseImageClickedEventArgs(clicked, _pendingSimpleClickModifiers));
             e.Handled = true;
         }
         base.OnMouseLeftButtonUp(e);
