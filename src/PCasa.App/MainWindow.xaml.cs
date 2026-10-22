@@ -94,12 +94,17 @@ public partial class MainWindow : Window
 
     private void FolderTreeToggle_Click(object sender, RoutedEventArgs e)
     {
-        _folderTreeSettings.Compressed = !_folderTreeSettings.Compressed;
+        var expanding = _folderTreeSettings.Compressed;
+        _folderTreeSettings.Compressed = !expanding;
         _folderTreeSettings.Save();
+        // Expand must also expose the intermediate ancestors omitted by Compress.
+        _expandingCompressedTree = expanding;
         RefreshFolderTree();
+        SaveFolderTreeState();
     }
 
     private bool _rebuildingFolderTree;
+    private bool _expandingCompressedTree;
 
     private void RefreshFolderTree(bool preserveGalleryAnchor = true)
     {
@@ -170,7 +175,8 @@ public partial class MainWindow : Window
         // On returning to Expand, those ancestors did not exist in the
         // previous expansion snapshot. Explicitly reopen all monitored
         // root ancestors so exactly the same photo directories are visible.
-        if (!_folderTreeSettings.Compressed && !_appearance.FolderExpansionsSaved)
+        if (!_folderTreeSettings.Compressed &&
+            (!_appearance.FolderExpansionsSaved || _expandingCompressedTree))
         {
             pathsToExpand = new HashSet<string>(
                 pathsToExpand.Concat(defaultExpandedPaths),
@@ -261,7 +267,11 @@ public partial class MainWindow : Window
         ApplyFolderAvailabilityToTree();
         UpdateGalleryFolderVisibility(preserveGalleryAnchor);
         }
-        finally { _rebuildingFolderTree = false; }
+        finally
+        {
+            _rebuildingFolderTree = false;
+            _expandingCompressedTree = false;
+        }
     }
 
     private static TreeViewItem? FirstPhotoFolderTreeItem(ItemsControl parent)
