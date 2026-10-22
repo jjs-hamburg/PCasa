@@ -384,6 +384,7 @@ public partial class MainWindow
 
                 var progress = new Progress<ScanProgress>(scan =>
                 {
+                    ShowScannedPhotoFolder(scan);
                     StatusText.Text =
                         $"Einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} Bilder · {scan.Failed:N0} Fehler";
                 });
