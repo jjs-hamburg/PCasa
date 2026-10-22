@@ -54,6 +54,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double _viewportHeight;
     private Point? _dragStartingPoint;
     private long? _dragStartingImageId;
+    private long? _pendingSimpleClickImageId;
     private double _lastViewportTop;
     private int _scrollDirection = 1;
     private bool _showShadows;
@@ -392,8 +393,18 @@ public sealed class BrowseGallerySurface : FrameworkElement
         {
             ImageOpened?.Invoke(this, args);
         }
+        else if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0 &&
+                 _selectedImageIds.Count > 1 &&
+                 _selectedImageIds.Contains(args.ImageId))
+        {
+            // Explorer semantics: pressing an already selected photo must
+            // preserve the ENTIRE selection until we know whether this is a
+            // click or a drag. Reduce it to one only on MouseUp.
+            _pendingSimpleClickImageId = args.ImageId;
+        }
         else
         {
+            _pendingSimpleClickImageId = null;
             ImageClicked?.Invoke(this, args);
         }
 
@@ -404,6 +415,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
     {
         _dragStartingPoint = null;
         _dragStartingImageId = null;
+        if (_pendingSimpleClickImageId is long clicked)
+        {
+            _pendingSimpleClickImageId = null;
+            ImageClicked?.Invoke(this,
+                new BrowseImageClickedEventArgs(clicked, ModifierKeys.None));
+            e.Handled = true;
+        }
         base.OnMouseLeftButtonUp(e);
     }
 
@@ -419,6 +437,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
             return;
         _dragStartingPoint = null;
         _dragStartingImageId = null;
+        _pendingSimpleClickImageId = null;
         ImagesDragRequested?.Invoke(this,
             new BrowseImageClickedEventArgs(imageId, Keyboard.Modifiers));
     }
