@@ -33,6 +33,12 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private bool _showStatusIcons = true;
     private static readonly Brush GpsIconBrush = new SolidColorBrush(Color.FromRgb(225, 68, 76));
     private static readonly Brush RawIconBrush = new SolidColorBrush(Color.FromArgb(215, 33, 37, 42));
+    private static readonly Geometry GpsPinGeometry = Geometry.Parse(
+        "M 4.5,0 C 2,0 0,2 0,4.5 C 0,7 4.5,12 4.5,12 C 4.5,12 9,7 9,4.5 C 9,2 7,0 4.5,0 Z");
+    private static readonly Geometry TagIconGeometry = Geometry.Parse(
+        "M 0,0 L 6,0 L 10,4 L 5,9 L 0,4 Z");
+    private static readonly Pen GpsOutlinePen = new(Brushes.White, 0.5);
+    private static readonly Pen TagOutlinePen = new(Brushes.DimGray, 0.8);
 
     private Brush _headerBrush =
         new SolidColorBrush(Color.FromRgb(231, 231, 231));
@@ -607,8 +613,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         if (entry.HasGps)
         {
             context.PushTransform(new TranslateTransform(x, y));
-            var pin = Geometry.Parse("M 4.5,0 C 2,0 0,2 0,4.5 C 0,7 4.5,12 4.5,12 C 4.5,12 9,7 9,4.5 C 9,2 7,0 4.5,0 Z");
-            context.DrawGeometry(GpsIconBrush, new Pen(Brushes.White, 0.5), pin);
+            context.DrawGeometry(GpsIconBrush, GpsOutlinePen, GpsPinGeometry);
             context.DrawEllipse(Brushes.White, null, new Point(4.5,4.3), 1.6,1.6);
             context.Pop();
             x -= 15;
@@ -616,8 +621,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         if (entry.HasTags)
         {
             context.PushTransform(new TranslateTransform(x, y + 2));
-            var tag = Geometry.Parse("M 0,0 L 6,0 L 10,4 L 5,9 L 0,4 Z");
-            context.DrawGeometry(Brushes.White, new Pen(Brushes.DimGray, 0.8), tag);
+            context.DrawGeometry(Brushes.White, TagOutlinePen, TagIconGeometry);
             context.DrawEllipse(Brushes.DimGray, null, new Point(2.5,2.2), 0.8,0.8);
             context.Pop();
             x -= 19;
