@@ -589,7 +589,6 @@ public partial class MainWindow
                         }
                         activityWindow?.UpdateScan(value);
                         ShowScannedPhotoFolder(value);
-                        RevealFirstScannedImage(value);
                         StatusText.Text =
                             $"Hintergrund: {value.Added:N0} neu · {value.Changed:N0} geändert · " +
                             $"{value.CacheRepaired:N0} Cache-Reparaturen · {value.Unchanged:N0} unverändert" +
