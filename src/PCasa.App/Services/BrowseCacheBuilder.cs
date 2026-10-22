@@ -135,7 +135,8 @@ public sealed class BrowseCacheBuilder
                 var displayPath = RawImageSource.Resolve(candidate.LocalPath,
                     cancellationToken);
                 preparedOriginal = store.PrepareTiers(displayPath,
-                    new BrowseThumbnailProfile(originalTiers), cancellationToken);
+                    new BrowseThumbnailProfile(originalTiers), cancellationToken,
+                    originalSourcePath: candidate.LocalPath);
             }
         }
 
