@@ -38,7 +38,7 @@ public sealed class ImageExifReader : IDisposable
         // names disambiguate duplicate EXIF fields from distinct IFDs.
         foreach (var arg in new[] { "-j", "-G1", "-n", "-EXIF:All",
             "-GPS:All", "-XMP:GPSLatitude", "-XMP:GPSLongitude",
-            "-XMP:Make", "-XMP:Model", "--", path, "-execute" })
+            "-XMP:Make", "-XMP:Model", path, "-execute" })
             process.StandardInput.WriteLine(arg);
         process.StandardInput.Flush();
 
@@ -47,7 +47,7 @@ public sealed class ImageExifReader : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var line = process.StandardOutput.ReadLineAsync(cancellationToken)
-                .AsTask().WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
+                .AsTask().WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
                 .GetAwaiter().GetResult();
             if (line is null)
                 throw new IOException("ExifTool: Der Metadatenprozess wurde beendet.");
