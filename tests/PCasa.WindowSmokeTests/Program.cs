@@ -236,14 +236,40 @@ internal static class Program
                         $"Progress dialog bounds: height={progressWindow.ActualHeight:F1}, " +
                         $"right gap={rightGap:F1}.");
                 var originalLeft = progressWindow.Left;
+                var originalTop = progressWindow.Top;
+                // Exercise the actual vertical-drag positioning method with
+                // a synthetic pointer delta. Horizontal position must remain
+                // locked, and moving PCasa may not reset the chosen height.
+                var progressType = typeof(PCasa.App.BrowseCacheProgressWindow);
+                var dragTop = progressType.GetField("_dragStartTop",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Vertical drag start position missing.");
+                var dragY = progressType.GetField("_dragStartPointerY",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Vertical drag pointer position missing.");
+                var applyDrag = progressType.GetMethod("ApplyVerticalDrag",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Vertical-only drag implementation missing.");
+                dragTop.SetValue(progressWindow, originalTop);
+                dragY.SetValue(progressWindow, 100.0);
+                applyDrag.Invoke(progressWindow, [124.0]);
+                Flush(progressWindow);
+                if (Math.Abs(progressWindow.Top - (originalTop + 24)) > 1 ||
+                    Math.Abs(progressWindow.Left - originalLeft) > 1)
+                    throw new Exception("Progress drag did not move strictly vertically.");
+
                 var ownerLeft = window.Left;
                 try
                 {
                     window.Left = ownerLeft + 28;
                     Flush(window);
                     Flush(progressWindow);
-                    if (Math.Abs(progressWindow.Left - originalLeft) > 1)
-                        throw new Exception("Progress dialog followed PCasa's window edge.");
+                    if (Math.Abs(progressWindow.Left - originalLeft) > 1 ||
+                        Math.Abs(progressWindow.Top - (originalTop + 24)) > 1)
+                        throw new Exception("PCasa movement reset screen-anchored progress position.");
                 }
                 finally
                 {
@@ -251,7 +277,7 @@ internal static class Program
                     Flush(window);
                 }
                 Console.WriteLine(
-                    $"PASS: Compact progress window anchored to monitor edge (gap {rightGap:F1} px).");
+                    $"PASS: Compact progress stays right-anchored and moves vertically only (gap {rightGap:F1} px).");
             }
             finally
             {

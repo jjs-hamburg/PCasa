@@ -14,7 +14,10 @@
         </Style>
     </Window.Resources>
     <Grid Margin="7,4" Background="Transparent"
-          MouseLeftButtonDown="DialogDrag_MouseLeftButtonDown">
+          MouseLeftButtonDown="DialogDrag_MouseLeftButtonDown"
+          MouseMove="DialogDrag_MouseMove"
+          MouseLeftButtonUp="DialogDrag_MouseLeftButtonUp"
+          LostMouseCapture="DialogDrag_LostMouseCapture">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="46" />
             <ColumnDefinition Width="*" />

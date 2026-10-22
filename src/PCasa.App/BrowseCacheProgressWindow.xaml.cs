@@ -48,6 +48,13 @@ public partial class BrowseCacheProgressWindow : Window
     private bool _hasScreenPlacement;
     private bool _placingWindow;
     private bool _anchorScheduled;
+    private bool _verticalDragActive;
+    private bool _verticalPositionAdjusted;
+    private double _dragStartPointerY;
+    private double _dragStartTop;
+    private double _monitorTop;
+    private double _workTop;
+    private double _workBottom;
 
     public BrowseCacheProgressWindow()
     {
@@ -72,6 +79,11 @@ public partial class BrowseCacheProgressWindow : Window
         var monitor = MonitorFromWindow(handle, 2); // MONITOR_DEFAULTTONEAREST
         if (_hasScreenPlacement && monitor == _anchoredMonitor) return;
 
+        // Preserve a manually selected vertical position on monitor changes.
+        // X is ALWAYS computed from the monitor's work-area right edge.
+        var previousVerticalOffset = Top - _monitorTop;
+        var retainManualTop = _hasScreenPlacement && _verticalPositionAdjusted;
+
         var info = new MonitorInfo { Size = (uint)Marshal.SizeOf<MonitorInfo>() };
         if (monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info))
         {
@@ -84,17 +96,26 @@ public partial class BrowseCacheProgressWindow : Window
 
             // Retain the agreed bottom-quarter height; respect the taskbar
             // and leave 12 DIP to the right work-area boundary.
-            var targetTop = monitorTop.Y + (monitorBottom.Y - monitorTop.Y) * 0.75;
-            Top = Math.Clamp(targetTop, workTopLeft.Y,
-                Math.Max(workTopLeft.Y, workBottomRight.Y - Height));
+            _monitorTop = monitorTop.Y;
+            _workTop = workTopLeft.Y;
+            _workBottom = workBottomRight.Y;
+            var targetTop = retainManualTop
+                ? _monitorTop + previousVerticalOffset
+                : monitorTop.Y + (monitorBottom.Y - monitorTop.Y) * 0.75;
+            Top = Math.Clamp(targetTop, _workTop,
+                Math.Max(_workTop, _workBottom - Height));
             Left = Math.Clamp(workBottomRight.X - Width - 12,
                 workTopLeft.X, Math.Max(workTopLeft.X, workBottomRight.X - Width));
         }
         else
         {
             var work = SystemParameters.WorkArea;
-            Top = Math.Clamp(work.Top + 0.75 * work.Height, work.Top,
-                Math.Max(work.Top, work.Bottom - Height));
+            _monitorTop = work.Top;
+            _workTop = work.Top;
+            _workBottom = work.Bottom;
+            Top = Math.Clamp(retainManualTop ? work.Top + previousVerticalOffset
+                    : work.Top + 0.75 * work.Height,
+                work.Top, Math.Max(work.Top, work.Bottom - Height));
             Left = Math.Clamp(work.Right - Width - 12, work.Left,
                 Math.Max(work.Left, work.Right - Width));
         }
@@ -114,7 +135,8 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void ScheduleOwnerReanchor()
     {
-        if (_anchorScheduled || _placingWindow || _finished || Owner is null)
+        if (_anchorScheduled || _placingWindow || _verticalDragActive ||
+            _finished || Owner is null)
             return;
         _anchorScheduled = true;
         // WPF SizeChanged can precede final maximized-window layout. Re-anchor
@@ -205,13 +227,72 @@ public partial class BrowseCacheProgressWindow : Window
         }
     }
 
+    // Pointer capture moves only Top; Left never follows pointer X.
+    // Buttons retain their normal click behavior, including child content.
     private void DialogDrag_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Left ||
-            e.OriginalSource is System.Windows.Controls.Primitives.ButtonBase)
+        if (e.ChangedButton != MouseButton.Left || sender is not UIElement surface)
             return;
-        try { DragMove(); }
-        catch (InvalidOperationException) { }
+
+        var source = e.OriginalSource as DependencyObject;
+        while (source is not null)
+        {
+            if (source is System.Windows.Controls.Primitives.ButtonBase)
+                return;
+            if (ReferenceEquals(source, surface))
+                break;
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        _dragStartTop = Top;
+        _dragStartPointerY = ScreenPointerY(e);
+        _verticalDragActive = surface.CaptureMouse();
+        if (_verticalDragActive) e.Handled = true;
+    }
+
+    private void DialogDrag_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_verticalDragActive) return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            EndVerticalDrag(sender);
+            return;
+        }
+
+        ApplyVerticalDrag(ScreenPointerY(e));
+        e.Handled = true;
+    }
+
+    private void DialogDrag_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_verticalDragActive) return;
+        EndVerticalDrag(sender);
+        e.Handled = true;
+    }
+
+    private void DialogDrag_LostMouseCapture(object sender, MouseEventArgs e)
+        => _verticalDragActive = false;
+
+    private void EndVerticalDrag(object sender)
+    {
+        _verticalDragActive = false;
+        if (sender is UIElement element && element.IsMouseCaptured)
+            element.ReleaseMouseCapture();
+    }
+
+    private double ScreenPointerY(MouseEventArgs e)
+    {
+        var screenPixels = PointToScreen(e.GetPosition(this));
+        var toDip = PresentationSource.FromVisual(this)?
+            .CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        return toDip.Transform(screenPixels).Y;
+    }
+
+    private void ApplyVerticalDrag(double pointerY)
+    {
+        Top = Math.Clamp(_dragStartTop + pointerY - _dragStartPointerY,
+            _workTop, Math.Max(_workTop, _workBottom - Height));
+        _verticalPositionAdjusted = true;
     }
 
     private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
