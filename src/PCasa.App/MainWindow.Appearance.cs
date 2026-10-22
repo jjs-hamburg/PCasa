@@ -27,6 +27,8 @@ public partial class MainWindow
         public string? SelectedTreePath { get; set; }
         public bool FolderExpansionsSaved { get; set; }
         public string[] ExpandedTreePaths { get; set; } = [];
+        public bool ShowThumbnailFileNames { get; set; } = true;
+        public bool ShowThumbnailIcons { get; set; } = true;
     }
 
     private readonly string _appearanceFile = Path.Combine(
@@ -118,6 +120,18 @@ public partial class MainWindow
         SaveAppearance();
     }
 
+    private void AppearanceThumbnailOptions_Click(object sender, RoutedEventArgs e)
+    {
+        QueueGalleryAnchorRestore();
+        _appearance.ShowThumbnailFileNames = ThumbnailFileNamesMenu.IsChecked;
+        _appearance.ShowThumbnailIcons = ThumbnailIconsMenu.IsChecked;
+        BrowseSurface.SetThumbnailAnnotations(
+            _appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
+        SaveAppearance();
+        BrowseScrollViewer.UpdateLayout();
+        RestorePendingGalleryAnchor();
+    }
+
     private void AppearanceRestorePosition_Click(object sender, RoutedEventArgs e)
     {
         _appearance.RestoreGalleryPosition = RestoreGalleryPositionMenu.IsChecked;
@@ -151,6 +165,9 @@ public partial class MainWindow
         GalleryBackgroundCanvasDarkMenu.IsChecked = _appearance.Background == "CanvasDark";
         RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
+        ThumbnailFileNamesMenu.IsChecked = _appearance.ShowThumbnailFileNames;
+        ThumbnailIconsMenu.IsChecked = _appearance.ShowThumbnailIcons;
+        BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
         ApplyFolderStatusMode();
         BrowseSurface.SetThumbnailSpacing(_appearance.ThumbnailSpacing);
         var background = actualBackground switch
