@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using PCasa.App.Controls;
+using PCasa.App.Models;
 using PCasa.App.Services;
 
 namespace PCasa.App;
