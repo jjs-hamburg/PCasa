@@ -16,8 +16,24 @@ public partial class MainWindow
         bool Move, bool Replace, long? CatalogImageId);
 
     private string[] SelectedGalleryPaths()
-        => _selectedImageIds.Select(GetImagePath).OfType<string>()
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    {
+        // Ctrl+A can select tens of thousands of images: one bounded IN query
+        // per 400 IDs rather than one SQLite connection per selected file.
+        var paths = new List<string>(_selectedImageIds.Count);
+        using var db = _database.OpenConnection();
+        foreach (var group in _selectedImageIds.Chunk(400))
+        {
+            using var command = db.CreateCommand();
+            var placeholders = group.Select((_, i) => "$id" + i).ToArray();
+            for (var i = 0; i < group.Length; i++)
+                command.Parameters.AddWithValue(placeholders[i], group[i]);
+            command.CommandText = "SELECT local_path FROM images WHERE id IN (" +
+                string.Join(",", placeholders) + ");";
+            using var reader = command.ExecuteReader();
+            while (reader.Read()) paths.Add(reader.GetString(0));
+        }
+        return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 
     private void CopyGalleryFilesToClipboard(bool cut)
     {
