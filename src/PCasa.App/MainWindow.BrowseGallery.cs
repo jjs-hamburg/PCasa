@@ -44,6 +44,7 @@ public partial class MainWindow
         BrowseSurface.ImageOpened += BrowseSurface_ImageOpened;
         BrowseSurface.ImageContextRequested += BrowseSurface_ImageContextRequested;
         BrowseSurface.LayoutReflowed += BrowseSurface_LayoutReflowed;
+        CatalogChanges.ImageCommitted += OnCatalogImageCommitted;
         Closed += BrowseWindow_Closed;
 
         // A persistent user Add must outrank all startup cache preparation.
@@ -199,10 +200,14 @@ public partial class MainWindow
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
         _photoFolders = freshFolders;
         _lastCatalogImageCount = imageCount;
-        RefreshFolderTree(preserveGalleryAnchor: false);
+        // Gallery catalog reloads are independent of the folder TreeView.
+        // The tree has its own targeted additions and explicit refreshes;
+        // rebuilding it here also invalidates the gallery's scroll geometry.
+        UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
 
         if (imageCount == 0)
         {
+            System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 0);
             _browseIndex = Array.Empty<BrowseThumbnailIndexEntry>();
             _displayedBrowseIndex = _browseIndex;
             _browsePageCache.SetIndex(_browseIndex);
@@ -259,6 +264,8 @@ public partial class MainWindow
                 _browseIndex = index;
             }
             _activeBrowseTier = tier;
+            if (_browseIndex.Count > 0)
+                System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 1);
         }
 
         if (_selectedImageIds.Count > 0)
@@ -332,42 +339,41 @@ public partial class MainWindow
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
     }
 
-    // On an empty first-run gallery, a successfully committed first image
-    // must become visible BEFORE a potentially many-hour NAS scan finishes.
-    // This is an event-driven ONE-TIME reveal, not periodic gallery rebuilding.
-    // Later scan progress continues to update ONLY the independent folder tree;
-    // the final scan completion reconciles the full gallery index once.
-    private bool _firstGalleryRevealInFlight;
+    // The gallery listens to committed catalog data, NOT to any scanner,
+    // progress window or folder-tree callback. The first stored picture
+    // wakes an empty gallery immediately, without recurring reflows during
+    // a long scan. The existing gallery stays fully interactive throughout.
+    private int _galleryFirstImageSignalPending;
+    private int _galleryHasIndexedImages;
 
-    private void RevealFirstScannedImage(ScanProgress scan)
+    private void OnCatalogImageCommitted()
     {
-        if (!_browseInitialized || _folderManagerOpen || _folderRemovalPending ||
-            _firstGalleryRevealInFlight || _browseIndex.Count > 0 ||
-            scan.Updated <= 0)
+        if (System.Threading.Volatile.Read(ref _galleryHasIndexedImages) != 0 ||
+            System.Threading.Interlocked.Exchange(
+                ref _galleryFirstImageSignalPending, 1) != 0)
             return;
 
-        _firstGalleryRevealInFlight = true;
-        _ = RevealFirstScannedImageAsync();
+        // The catalog publication can originate from a scheduler worker.
+        // Only our own Gallery view is updated on WPF's dispatcher.
+        _ = Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            try
+            {
+                if (_browseInitialized && !_folderManagerOpen &&
+                    !_folderRemovalPending && _browseIndex.Count == 0)
+                    await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                        warmViewport: false);
+            }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Gallery.CatalogPublication", ex);
+            }
+            finally
+            {
+                System.Threading.Volatile.Write(ref _galleryFirstImageSignalPending, 0);
+            }
+        }), DispatcherPriority.Background);
     }
-
-    private async Task RevealFirstScannedImageAsync()
-    {
-        try
-        {
-            // This is a catalog READ through the existing scheduler. Scanner
-            // commits use short transactions and need not yield or restart.
-            await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
-        }
-        catch (Exception ex)
-        {
-            PCasaDiagnostics.Write("Gallery.FirstScanImage", ex);
-        }
-        finally
-        {
-            _firstGalleryRevealInFlight = false;
-        }
-    }
-
 
     private async void BrowseScanAll_Click(object sender, RoutedEventArgs e)
     {
@@ -418,7 +424,6 @@ public partial class MainWindow
                 var progress = new Progress<ScanProgress>(scan =>
                 {
                     ShowScannedPhotoFolder(scan);
-                    RevealFirstScannedImage(scan);
                     StatusText.Text =
                         $"Einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} Bilder · {scan.Failed:N0} Fehler";
                 });
@@ -788,6 +793,7 @@ public partial class MainWindow
     private void BrowseWindow_Closed(object? sender, EventArgs e)
     {
         SaveGalleryPosition();
+        CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
         _browseProgressWindow?.Finish();
         _browseProgressWindow = null;
         _thumbnailSizeCancellation?.Cancel();
