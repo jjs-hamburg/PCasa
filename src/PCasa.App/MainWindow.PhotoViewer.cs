@@ -1199,6 +1199,10 @@ public partial class MainWindow
         {
             HandleViewerKey(e, fullscreen: false);
         }
+        else if (!_viewerOpen)
+        {
+            GalleryWindow_PreviewKeyDown(sender, e);
+        }
     }
 
     private void ViewerFullscreen_PreviewKeyDown(object sender, KeyEventArgs e)
