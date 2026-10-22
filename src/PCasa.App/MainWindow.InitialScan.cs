@@ -85,6 +85,7 @@ public partial class MainWindow
             {
                 shownWindow.UpdateScan(scan);
                 ShowScannedPhotoFolder(scan);
+                RevealFirstScannedImage(scan);
                 StatusText.Text =
                     $"Ordner einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} geprüft · " +
                     $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · {scan.Failed:N0} Fehler";
