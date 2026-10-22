@@ -76,6 +76,8 @@ internal static class Program
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
+        Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
+        Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
@@ -95,7 +97,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {81 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {83 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -2170,6 +2172,63 @@ internal static class Program
         if (new ImageCatalogRepository(db).CountAll() != 2 ||
             !subsequent.Contains(second, StringComparer.OrdinalIgnoreCase))
             throw new Exception("Subsequent scan did not publish newly discovered sibling.");
+    }
+
+    private static void ViewerDecodedGeometry()
+    {
+        // The Samsung original is stored 4032 x 3024 but EXIF 6 yields a
+        // 3024 x 4032 portrait. The bitmap and viewer surface must have the
+        // same aspect; Fit, 100% and the navigator use corrected dimensions.
+        if (!ViewerImageGeometry.NeedsAxisSwap(4032, 3024, 3024, 4032))
+            throw new Exception("EXIF 90-degree axes were not recognized.");
+        if (ViewerImageGeometry.NeedsAxisSwap(4032, 3024, 4032, 3024))
+            throw new Exception("Normal landscape was accidentally rotated.");
+        if (ViewerImageGeometry.NeedsAxisSwap(4032, 3024, 1024, 768))
+            throw new Exception("Downsampled landscape was accidentally rotated.");
+        if (!ViewerImageGeometry.NeedsAxisSwap(4032, 3024, 384, 512))
+            throw new Exception("Packed portrait preview was not recognized.");
+        if (ViewerImageGeometry.NeedsAxisSwap(1000, 1000, 64, 64))
+            throw new Exception("Square image must not swap axes.");
+    }
+
+    private static void RawPreviewOrientation()
+    {
+        using var sandbox = new Sandbox();
+        // A RAW filename with an actual JPEG signature is intentionally used
+        // to exercise the RAW orientation branch and ExifTool's container tag
+        // without depending on camera-maker binary test fixtures.
+        var original = Path.Combine(sandbox.Images, "simulated-sensor.arw");
+        var width = 96;
+        var height = 48;
+        var pixels = new byte[width * height * 4];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = 50;
+            pixels[i + 1] = 100;
+            pixels[i + 2] = 180;
+            pixels[i + 3] = 255;
+        }
+        var bitmap = BitmapSource.Create(width, height, 96, 96,
+            PixelFormats.Bgr32, null, pixels, width * 4);
+        var encoder = new JpegBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var output = File.Create(original)) encoder.Save(output);
+        foreach (var orientation in new[] { 1, 3, 6, 8 })
+        {
+            RunExifTool("-overwrite_original", $"-Orientation#={orientation}", original);
+            var sha = SHA256.HashData(File.ReadAllBytes(original));
+            if (RawImageSource.GetRawOrientation(original) != orientation)
+                throw new Exception($"RAW container EXIF={orientation} not read.");
+            using var preview = RawImageSource.LoadDisplayThumbnail(original,
+                original, 256, 256);
+            var rotated = orientation is 6 or 8;
+            if (preview.Width != (rotated ? height : width) ||
+                preview.Height != (rotated ? width : height))
+                throw new Exception(
+                    $"RAW EXIF {orientation}: preview {preview.Width}x{preview.Height}, expected rotated={rotated}.");
+            if (!sha.SequenceEqual(SHA256.HashData(File.ReadAllBytes(original))))
+                throw new Exception("RAW preview generation changed the original.");
+        }
     }
 
     private static void JpegExifOrientationViewer()
