@@ -18,11 +18,8 @@ public sealed class ImageViewerLoader
         var height = Math.Max(1, maxPixelHeight);
 
         var displayPath = RawImageSource.Resolve(sourcePath, cancellationToken);
-        using var thumbnail = Image.Thumbnail(
-            displayPath,
-            width,
-            height: height,
-            size: Enums.Size.Down);
+        using var thumbnail = RawImageSource.LoadDisplayThumbnail(
+            displayPath, sourcePath, width, height, cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
 
