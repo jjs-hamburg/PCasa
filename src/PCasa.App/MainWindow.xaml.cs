@@ -401,7 +401,16 @@ public partial class MainWindow : Window
 
         var item = new TreeViewItem
         {
-            Header = header,
+            Header = new Border
+            {
+                // A real border, not just selection color, makes the live
+                // drop destination visible independently of tree selection.
+                Child = new TextBlock { Text = header },
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(2, 0, 2, 0),
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderBrush = System.Windows.Media.Brushes.Transparent
+            },
             ToolTip = tooltip,
             Tag = CreateFolderTreeTag(node.FullPath, node.PhotoFolderId),
             AllowDrop = true,

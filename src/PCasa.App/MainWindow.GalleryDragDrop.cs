@@ -13,6 +13,24 @@ public partial class MainWindow
 {
     private readonly Dictionary<string, bool> _dragTargetValidity =
         new(StringComparer.OrdinalIgnoreCase);
+    private TreeViewItem? _highlightedDropFolder;
+
+    private void HighlightDropFolder(TreeViewItem? target)
+    {
+        if (ReferenceEquals(_highlightedDropFolder, target)) return;
+        if (_highlightedDropFolder?.Header is Border oldHeader)
+        {
+            oldHeader.Background = System.Windows.Media.Brushes.Transparent;
+            oldHeader.BorderBrush = System.Windows.Media.Brushes.Transparent;
+        }
+        _highlightedDropFolder = target;
+        if (target?.Header is Border header)
+        {
+            header.SetResourceReference(Border.BackgroundProperty, "PcasaHoverBrush");
+            header.BorderBrush = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(57, 164, 218));
+        }
+    }
 
     private bool ValidDragTarget(string path)
     {
@@ -23,7 +41,11 @@ public partial class MainWindow
     }
 
     private void DragTarget_Leave(object sender, DragEventArgs e)
-        => _dragTargetValidity.Clear();
+    {
+        _dragTargetValidity.Clear();
+        if (ReferenceEquals(sender, FoldersTree))
+            HighlightDropFolder(null);
+    }
 
     private void BrowseSurface_ImagesDragRequested(object? sender,
         BrowseImageClickedEventArgs e)
@@ -34,8 +56,13 @@ public partial class MainWindow
         var data = new DataObject(DataFormats.FileDrop, files);
         // FileDrop is the native shell protocol, not a proprietary PCasa blob.
         // Therefore the same drag works inside PCasa and into Windows Explorer.
-        var effect = DragDrop.DoDragDrop(BrowseSurface, data,
-            DragDropEffects.Copy | DragDropEffects.Move);
+        DragDropEffects effect;
+        try
+        {
+            effect = DragDrop.DoDragDrop(BrowseSurface, data,
+                DragDropEffects.Copy | DragDropEffects.Move);
+        }
+        finally { HighlightDropFolder(null); }
         if (effect.HasFlag(DragDropEffects.Move))
             _ = ReconcileMovedExternalFilesAsync(files);
     }
@@ -178,27 +205,21 @@ public partial class MainWindow
             effect.HasFlag(DragDropEffects.Move));
     }
 
-    private string? TreeDropTargetFromElement(DependencyObject? element)
+    private TreeViewItem? TreeDropItem(DragEventArgs e)
     {
-        // The nearest TreeViewItem identifies the actual nested folder.
-        // ContainerFromElement(FoldersTree, ...) instead returns a top-level
-        // container, which may not be an eligible monitored destination.
-        var item = FindAncestor<TreeViewItem>(element);
+        // Use the innermost tree item directly under the pointer.
+        var hit = FoldersTree.InputHitTest(e.GetPosition(FoldersTree))
+            as DependencyObject;
+        var item = FindAncestor<TreeViewItem>(hit);
         if (item?.Tag is not FolderTreeTag tag ||
-            !ReferenceEquals(FindAncestor<TreeView>(item), FoldersTree))
+            !ReferenceEquals(FindAncestor<TreeView>(item), FoldersTree) ||
+            !ValidDragTarget(tag.FullPath))
             return null;
-        return ValidDragTarget(tag.FullPath) ? tag.FullPath : null;
+        return item;
     }
 
     private string? TreeDropTarget(DragEventArgs e)
-    {
-        // In PreviewDragOver OriginalSource can be a parent presenter.
-        // Resolve the element actually under the mouse before falling back.
-        var hit = FoldersTree.InputHitTest(e.GetPosition(FoldersTree))
-            as DependencyObject;
-        return TreeDropTargetFromElement(hit)
-            ?? TreeDropTargetFromElement(e.OriginalSource as DependencyObject);
-    }
+        => (TreeDropItem(e)?.Tag as FolderTreeTag)?.FullPath;
 
     private void FolderTreeFiles_DragOver(object sender, DragEventArgs e)
     {
@@ -207,14 +228,20 @@ public partial class MainWindow
             AutoScrollOnDrag(scroller, e.GetPosition(scroller));
         e.Effects = DragDropEffects.None;
         var files = DropFiles(e);
-        if (TreeDropTarget(e) is string target &&
-            TryResolveDropEffect(e, files, target, out var effect))
+        var item = TreeDropItem(e);
+        if (item?.Tag is FolderTreeTag tag &&
+            TryResolveDropEffect(e, files, tag.FullPath, out var effect))
+        {
             e.Effects = effect;
+            HighlightDropFolder(item);
+        }
+        else HighlightDropFolder(null);
         e.Handled = true;
     }
 
     private void FolderTreeFiles_Drop(object sender, DragEventArgs e)
     {
+        HighlightDropFolder(null);
         var files = DropFiles(e);
         if (TreeDropTarget(e) is not string target ||
             !TryResolveDropEffect(e, files, target, out var effect))
