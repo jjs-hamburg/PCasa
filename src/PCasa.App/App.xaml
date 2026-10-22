@@ -230,7 +230,7 @@
             <Setter Property="HeaderTemplate">
                 <Setter.Value>
                     <DataTemplate>
-                        <Grid Height="20" ClipToBounds="True" Margin="0,0,22,0">
+                        <Grid Height="20" ClipToBounds="True">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="19" />
                                 <ColumnDefinition Width="*" />

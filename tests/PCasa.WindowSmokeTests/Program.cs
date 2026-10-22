@@ -186,6 +186,40 @@ internal static class Program
                 throw new Exception("Closing sidebar changed active image.");
             Console.WriteLine("PASS: Closing sidebar preserves WPF gallery position.");
 
+            // Real TreeView geometry: status symbols must use the space right
+            // next to its vertical scrollbar. A second reserved margin in
+            // the header or in FoldersTree must not steal width from names.
+            var folderTree = (TreeView?)window.FindName("FoldersTree")
+                ?? throw new Exception("Folder tree not found.");
+            folderTree.Items.Clear();
+            for (var i = 0; i < 45; i++)
+                folderTree.Items.Add(new TreeViewItem
+                {
+                    Header = "Very long folder name for regression test " + i,
+                    Tag = new FolderLayoutSmokeTag
+                    {
+                        FullPath = @"C:\Pictures\Example" + i,
+                        StatusCode = "Unknown"
+                    }
+                });
+            Flush(window);
+            var folderBar = Descendants<ScrollBar>(folderTree).FirstOrDefault(bar =>
+                bar.Orientation == Orientation.Vertical && bar.IsVisible)
+                ?? throw new Exception("Folder tree vertical scrollbar missing.");
+            var folderStatus = Descendants<TextBlock>(folderTree).FirstOrDefault(block =>
+                block.Name == "FolderStatusIcon" && block.IsVisible)
+                ?? throw new Exception("Folder status symbol missing.");
+            var statusBounds = folderStatus.TransformToAncestor(folderTree)
+                .TransformBounds(new Rect(new Point(0, 0), folderStatus.RenderSize));
+            var barBounds = folderBar.TransformToAncestor(folderTree)
+                .TransformBounds(new Rect(new Point(0, 0), folderBar.RenderSize));
+            var unusedWidth = barBounds.Left - statusBounds.Right;
+            if (unusedWidth < 0 || unusedWidth > 23)
+                throw new Exception(
+                    $"Folder status/icon gutter wastes {unusedWidth:F1} WPF pixels before scrollbar.");
+            Console.WriteLine(
+                $"PASS: Folder tree status sits next to scrollbar (gap {unusedWidth:F1} px).");
+
             // The folder manager must never enumerate a potentially offline
             // NAS root via its own Task.Run. Expanding a real TreeViewItem
             // must submit its source probe through the shared scheduler.
@@ -266,4 +300,11 @@ internal static class Program
                 yield return descendant;
         }
     }
+}
+
+public sealed class FolderLayoutSmokeTag
+{
+    public string FullPath { get; init; } = "";
+    public long? PhotoFolderId { get; init; }
+    public string StatusCode { get; init; } = "Unknown";
 }
