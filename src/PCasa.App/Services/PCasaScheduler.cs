@@ -257,7 +257,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     {
                         lock (_gate)
                         {
-                            if (lane <= LaneUserAction &&
+                            if (lane <= LaneManual &&
                                 ReferenceEquals(_runningPriorityJobs[lane], item))
                             {
                                 _runningPriorityJobs[lane] = null;
