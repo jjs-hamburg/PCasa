@@ -88,6 +88,7 @@ public partial class MainWindow
         try
         {
             ScanResult? scanResult = null;
+            MonitoredFolder? scannedMonitored = null;
             await _scheduler.EnqueueAsync(
                 $"manual-scan:{Guid.NewGuid():N}:{directory}",
                 SchedulerPriority.ManualAction,
@@ -107,6 +108,7 @@ public partial class MainWindow
                     if (!Directory.Exists(directory))
                         throw new DirectoryNotFoundException(
                             $"Der Ordner ist nicht erreichbar: {directory}");
+                    scannedMonitored = folder;
                     _folderRepository.BeginManualScan(folder.CanonicalPath);
                     scanResult = _folderScanner.ScanDirectory(
                         folder, directory, recursive: true, progress, token);
@@ -160,14 +162,13 @@ public partial class MainWindow
             ScanAllMenuItem.IsEnabled = !_isScanning;
             QueuePendingInitialScans();
 
-            if (_backgroundScanSettings?.Enabled == true)
+            if (_backgroundScanSettings?.Enabled == true &&
+                scannedMonitored is not null)
             {
                 // Scheduler-controlled cache recovery, not a second scan.
-                var monitored = ResolveMonitoredFolder(directory);
-                if (monitored is not null)
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        monitored.Id, monitored.LocalPath,
-                        BackgroundFolderChangeKind.RecoverCache, false));
+                QueueBackgroundChange(new BackgroundFolderChange(
+                    scannedMonitored.Id, scannedMonitored.LocalPath,
+                    BackgroundFolderChangeKind.RecoverCache, false));
             }
         }
     }
