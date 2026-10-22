@@ -548,26 +548,25 @@ public partial class MainWindow
     private void BrowseCleanupStatusChanged(string message)
         => StatusText.Text = message;
 
-    private void BrowseFolderManager_ExclusionChanged(
-        object? sender, FolderExclusionChangedEventArgs e)
+    private void OnFolderExclusionCommitted(long folderId, string path, bool excluded)
     {
         // Stop any running scan of this monitored root before modifying its
         // stored index; without cancellation it could re-add excluded photos.
-        if (_isScanning && _activeScanFolderId == e.FolderId)
+        if (_isScanning && _activeScanFolderId == folderId)
         {
             _activeScanCancellation?.Cancel();
         }
 
-        _backgroundExcludedPaths[e.FolderId] =
-            _folderRepository.GetExcludedPaths(e.FolderId);
-        if (e.Excluded)
+        _backgroundExcludedPaths[folderId] =
+            _folderRepository.GetExcludedPaths(folderId);
+        if (excluded)
         {
-            ForgetFolderActivity(e.Path);
+            ForgetFolderActivity(path);
             // Drop any stale watcher events queued while the path was included.
             foreach (var key in _backgroundPending.Keys.ToArray())
             {
                 if (FolderExclusionRules.IsAtOrBelow(
-                    _backgroundPending[key].Path, e.Path))
+                    _backgroundPending[key].Path, path))
                 {
                     _backgroundPending.Remove(key);
                 }
@@ -578,22 +577,10 @@ public partial class MainWindow
             // Re-inclusion must actively repopulate the folder, even if the
             // parent has already been monitored for months.
             QueueBackgroundChange(new BackgroundFolderChange(
-                e.FolderId, e.Path,
+                folderId, path,
                 BackgroundFolderChangeKind.ScanDirectory,
                 Recursive: true));
         }
-    }
-
-    private async void BrowseFolderManager_FoldersChanged(object? sender, EventArgs e)
-    {
-        // Folder removal already updated the owner's live view through the
-        // common coordinator. Other manager edits are accumulated while the
-        // modal dialog is open; one refresh on close is enough.
-        if (_folderManagerOpen)
-            return;
-
-        if (_browseInitialized && !_browseCacheBuilding)
-            await RefreshBrowseGalleryAsync(forceIndexReload: true);
     }
 
     private void BrowseFoldersTree_SelectedItemChanged(
