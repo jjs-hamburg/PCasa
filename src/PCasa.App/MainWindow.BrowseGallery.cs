@@ -157,6 +157,7 @@ public partial class MainWindow
         }
         else
         {
+            if (!_isScanning && !_manualScanRunning)
             StatusText.Text = $"{imageCount:N0} Bilder";
         }
     }
@@ -326,39 +327,15 @@ public partial class MainWindow
         }
 
         if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
+            if (!_isScanning && !_manualScanRunning)
             StatusText.Text = $"{imageCount:N0} Bilder";
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
     }
 
     private DateTime _lastImportPreviewUtc = DateTime.MinValue;
-    private bool _importPreviewLoading;
-
-    private async Task RefreshImportedPreviewAsync()
-    {
-        if (_importPreviewLoading || !_browseInitialized) return;
-        _importPreviewLoading = true;
-        try
-        {
-            await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
-        }
-        catch (Exception ex)
-        {
-            PCasaDiagnostics.Write("Browse.ImportPreview", ex);
-        }
-        finally
-        {
-            _importPreviewLoading = false;
-        }
-    }
-
-    private void QueueImportedPreview(ScanProgress scan)
-    {
-        if (scan.Added <= 0 || _importPreviewLoading ||
-            DateTime.UtcNow - _lastImportPreviewUtc < TimeSpan.FromSeconds(3))
-            return;
-        _lastImportPreviewUtc = DateTime.UtcNow;
-        _ = RefreshImportedPreviewAsync();
-    }
+    // No timer-based gallery reflows during scanning. The scanner reports
+    // status/progress without replacing the current thumbnail layout. The
+    // gallery/index is refreshed once when a scan operation completes.
 
     private async void BrowseScanAll_Click(object sender, RoutedEventArgs e)
     {
@@ -410,7 +387,6 @@ public partial class MainWindow
                 {
                     StatusText.Text =
                         $"Einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} Bilder · {scan.Failed:N0} Fehler";
-                    QueueImportedPreview(scan);
                 });
 
                 try
@@ -478,8 +454,7 @@ public partial class MainWindow
         if (_folderManagerOpen) return;
         var window = new FolderManagerWindow(
             _folderRepository,
-            serverDatabaseConfigured: false,
-            scheduler: _scheduler)
+            serverDatabaseConfigured: false)
         {
             Owner = this
         };
