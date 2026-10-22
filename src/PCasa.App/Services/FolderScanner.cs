@@ -207,7 +207,10 @@ public sealed class FolderScanner
                     if (existing is not null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
-                        File.Exists(existing.ThumbnailPath))
+                        File.Exists(existing.ThumbnailPath) &&
+                        (!RawImageSource.IsRawPath(localPath) ||
+                         Path.GetFileName(existing.ThumbnailPath).StartsWith(
+                             "raw2-", StringComparison.OrdinalIgnoreCase)))
                     {
                         if (existing.PhotoFolderId != photoFolderId ||
                             !string.Equals(existing.LocalPath, localPath, StringComparison.OrdinalIgnoreCase))
@@ -238,7 +241,8 @@ public sealed class FolderScanner
                             renderPath,
                             canonicalPath,
                             fileLength,
-                            modifiedUtcTicks);
+                            modifiedUtcTicks,
+                            originalSourcePath: localPath);
 
                         cancellationToken.ThrowIfCancellationRequested();
 
@@ -259,7 +263,7 @@ public sealed class FolderScanner
                         var preparedLarge = largeTiers.Length > 0
                             ? packStore.PrepareTiers(
                                 renderPath, new BrowseThumbnailProfile(largeTiers),
-                                cancellationToken)
+                                cancellationToken, originalSourcePath: localPath)
                             : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
                         var keywords = ImageTagRepository.ReadKeywords(localPath);
                         cancellationToken.ThrowIfCancellationRequested();
