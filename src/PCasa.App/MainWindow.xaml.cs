@@ -99,15 +99,23 @@ public partial class MainWindow : Window
         RefreshFolderTree();
     }
 
+    private bool _rebuildingFolderTree;
+
     private void RefreshFolderTree(bool preserveGalleryAnchor = true)
     {
+        if (_rebuildingFolderTree) return;
+        _rebuildingFolderTree = true;
+        try
+        {
         var expandedPaths = CaptureExpandedFolderPaths();
         // An explicit tree selection can be a parent with no photo-folder ID.
         // Reconstruct that selection by path instead of forcing the active
         // scroll folder whenever a scan rebuilds the tree.
         var selectedPath = (FoldersTree.SelectedItem as TreeViewItem)?.Tag
-            is FolderTreeTag selectedTag ? selectedTag.FullPath : null;
+            is FolderTreeTag selectedTag ? selectedTag.FullPath : _appearance.SelectedTreePath;
         var useDefaultExpansion = !_folderTreeInitialized || FoldersTree.Items.Count == 0;
+        if (useDefaultExpansion && _appearance.FolderExpansionsSaved)
+            expandedPaths = new HashSet<string>(_appearance.ExpandedTreePaths ?? [], StringComparer.OrdinalIgnoreCase);
 
         FoldersTree.Items.Clear();
         _folderTreeItems.Clear();
@@ -154,7 +162,7 @@ public partial class MainWindow : Window
             CalculateFolderTreeTotal(root);
         }
 
-        var pathsToExpand = useDefaultExpansion
+        var pathsToExpand = useDefaultExpansion && !_appearance.FolderExpansionsSaved
             ? defaultExpandedPaths
             : expandedPaths;
 
@@ -240,6 +248,8 @@ public partial class MainWindow : Window
             ? FindFolderTreeItemByPath(FoldersTree, path) : null;
         if (selectedItem is null && _activePhotoFolderId is long activeId)
             _folderTreeItems.TryGetValue(activeId, out selectedItem);
+        if (selectedItem is null)
+            selectedItem = FirstPhotoFolderTreeItem(FoldersTree);
         if (selectedItem is not null)
         {
             _syncingFolderSelection = true;
@@ -249,6 +259,26 @@ public partial class MainWindow : Window
 
         ApplyFolderAvailabilityToTree();
         UpdateGalleryFolderVisibility(preserveGalleryAnchor);
+        }
+        finally { _rebuildingFolderTree = false; }
+    }
+
+    private static TreeViewItem? FirstPhotoFolderTreeItem(ItemsControl parent)
+    {
+        foreach (var item in parent.Items.OfType<TreeViewItem>())
+        {
+            if (item.Tag is FolderTreeTag { PhotoFolderId: not null }) return item;
+            if (FirstPhotoFolderTreeItem(item) is { } nested) return nested;
+        }
+        return null;
+    }
+
+    private void SaveFolderTreeState()
+    {
+        if (_rebuildingFolderTree) return;
+        _appearance.FolderExpansionsSaved = true;
+        _appearance.ExpandedTreePaths = CaptureExpandedFolderPaths().ToArray();
+        SaveAppearance();
     }
 
     private static void AddFolderTreePath(

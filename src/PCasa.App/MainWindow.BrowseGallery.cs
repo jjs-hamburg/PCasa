@@ -628,8 +628,26 @@ public partial class MainWindow
             return;
         }
 
+        _appearance.SelectedTreePath = tag.FullPath;
+        SaveAppearance();
         if (tag.PhotoFolderId is long photoFolderId)
-        {
+            await NavigateToPhotoFolderAsync(item, photoFolderId);
+    }
+
+    private void FoldersTree_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_syncingFolderSelection || _rebuildingFolderTree) return;
+        var source = e.OriginalSource as DependencyObject;
+        if (source is null ||
+            FindAncestor<System.Windows.Controls.Primitives.ToggleButton>(source) is not null)
+            return;
+        var item = FindAncestor<TreeViewItem>(source);
+        if (item?.IsSelected == true && item.Tag is FolderTreeTag { PhotoFolderId: long folderId })
+            _ = NavigateToPhotoFolderAsync(item, folderId);
+    }
+
+    private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
+    {
             _activePhotoFolderId = photoFolderId;
             var offset = BrowseSurface.GetFolderOffset(photoFolderId);
             if (offset is null && _browseInitialized && !_folderRemovalPending)
@@ -666,8 +684,6 @@ public partial class MainWindow
                 BrowseScrollViewer.ScrollToVerticalOffset(offset.Value);
                 UpdateActiveFolderDisplay(photoFolderId, updateTreeSelection: false);
             }
-        }
-
     }
 
     // One wheel event moves the gallery exactly once. No acceleration,

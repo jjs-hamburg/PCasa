@@ -24,6 +24,9 @@ public partial class MainWindow
         public double LastScrollOffset { get; set; }
         public string? LastFolderCanonicalPath { get; set; }
         public double LastFolderRelativeOffset { get; set; }
+        public string? SelectedTreePath { get; set; }
+        public bool FolderExpansionsSaved { get; set; }
+        public string[] ExpandedTreePaths { get; set; } = [];
     }
 
     private readonly string _appearanceFile = Path.Combine(
@@ -147,6 +150,7 @@ public partial class MainWindow
         GalleryBackgroundCanvasMenu.IsChecked = _appearance.Background == "Canvas";
         GalleryBackgroundCanvasDarkMenu.IsChecked = _appearance.Background == "CanvasDark";
         RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
+        HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
         ApplyFolderStatusMode();
         BrowseSurface.SetThumbnailSpacing(_appearance.ThumbnailSpacing);
         var background = actualBackground switch

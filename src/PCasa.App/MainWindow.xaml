@@ -325,6 +325,7 @@
                               Padding="0,0,20,0"
                               PreviewMouseRightButtonDown="FoldersTree_PreviewMouseRightButtonDown"
                               SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
+                              PreviewMouseLeftButtonDown="FoldersTree_PreviewMouseLeftButtonDown"
                               AllowDrop="True"
                               PreviewDragOver="FolderTreeFiles_DragOver"
                               PreviewDragLeave="DragTarget_Leave"

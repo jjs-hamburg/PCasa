@@ -92,9 +92,11 @@ public partial class MainWindow
 
     private void FoldersTree_ExpansionChanged(object sender, RoutedEventArgs e)
     {
-        if (_bulkFolderExpansion || !_folderTreeInitialized || !_appearance.HideCollapsedFolders)
+        if (_bulkFolderExpansion || _rebuildingFolderTree || !_folderTreeInitialized)
             return;
-        UpdateGalleryFolderVisibility();
+        SaveFolderTreeState();
+        if (_appearance.HideCollapsedFolders)
+            UpdateGalleryFolderVisibility();
     }
 
     private void FolderExpandAll_Click(object sender, RoutedEventArgs e)
@@ -115,6 +117,7 @@ public partial class MainWindow
                     SetFolderExpansion(root, expanded);
         }
         finally { _bulkFolderExpansion = false; }
+        SaveFolderTreeState();
         UpdateGalleryFolderVisibility();
     }
 
