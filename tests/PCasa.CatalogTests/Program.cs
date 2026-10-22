@@ -30,6 +30,7 @@ internal static class Program
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
+        Run("Manual action bypasses blocked background source probe", SchedulerManualBypassesBlockedSourceProbe, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
@@ -426,6 +427,39 @@ internal static class Program
             {
                 release.TrySetResult();
                 await initial.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerManualBypassesBlockedSourceProbe()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var blocked = scheduler.RunAsync("blocked-smb-probe", SchedulerPriority.Background,
+                _ =>
+                {
+                    started.TrySetResult();
+                    release.Task.GetAwaiter().GetResult();
+                    return true;
+                }, workKind: SchedulerWorkKind.SourceProbe);
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var ran = false;
+                await scheduler.EnqueueAsync("manual-scan-during-probe", SchedulerPriority.ManualAction,
+                    _ => { ran = true; return Task.CompletedTask; })
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran || blocked.IsCompleted)
+                    throw new Exception("Manual scan was blocked by a slow SMB probe.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await blocked.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();

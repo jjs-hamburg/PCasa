@@ -2,7 +2,7 @@ namespace PCasa.App.Services;
 
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
-public enum SchedulerWorkKind { Catalog, CatalogRead, ViewerRead, ThumbnailRead }
+public enum SchedulerWorkKind { Catalog, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe }
 
 public sealed record SchedulerJobSnapshot(
     long Id, string Key, SchedulerPriority Priority, SchedulerJobState State,
@@ -29,11 +29,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneViewer = 4;
     private const int LaneThumbnail = 5;
     private const int LaneCatalogRead = 6;
+    private const int LaneSourceProbe = 7;
     private readonly object _gate = new();
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, 7).Select(_ => new SemaphoreSlim(0)).ToArray();
+        Enumerable.Range(0, 8).Select(_ => new SemaphoreSlim(0)).ToArray();
     private readonly WorkItem?[] _runningPriorityJobs = new WorkItem?[3];
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
@@ -59,7 +60,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
             Task.Run(() => RunAsync(LaneThumbnail)),
             Task.Run(() => RunAsync(LaneThumbnail)),
             Task.Run(() => RunAsync(LaneCatalogRead)),
-            Task.Run(() => RunAsync(LaneCatalogRead))
+            Task.Run(() => RunAsync(LaneCatalogRead)),
+            Task.Run(() => RunAsync(LaneSourceProbe)),
+            Task.Run(() => RunAsync(LaneSourceProbe))
         };
     }
 
@@ -69,6 +72,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             SchedulerWorkKind.ViewerRead => LaneViewer,
             SchedulerWorkKind.CatalogRead => LaneCatalogRead,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
+            SchedulerWorkKind.SourceProbe => LaneSourceProbe,
             _ => priority switch
             {
                 SchedulerPriority.ManualAction => LaneManual,
@@ -77,6 +81,26 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _ => LaneBackground
             }
         };
+
+    // Typed scheduler results use exactly the same queue, priority,
+    // cancellation and lifetime bookkeeping as catalog mutations.
+    public async Task<TResult> RunAsync<TResult>(
+        string key, SchedulerPriority priority,
+        Func<CancellationToken, TResult> operation,
+        Func<bool>? isCurrent = null,
+        CancellationToken cancellationToken = default,
+        SchedulerWorkKind workKind = SchedulerWorkKind.CatalogRead)
+    {
+        TResult? result = default;
+        await EnqueueAsync(key, priority,
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                result = operation(token);
+                return Task.CompletedTask;
+            }, isCurrent, cancellationToken, workKind);
+        return result!;
+    }
 
     public IReadOnlyList<SchedulerJobSnapshot> Snapshot()
     {

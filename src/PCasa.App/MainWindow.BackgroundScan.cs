@@ -175,15 +175,20 @@ public partial class MainWindow
         {
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
-            var (folders, availability, exclusions) = await Task.Run(() =>
-            {
-                var roots = _folderRepository.GetAll();
-                var rules = roots.ToDictionary(
-                    folder => folder.Id,
-                    folder => _folderRepository.GetExcludedPaths(folder.Id));
-                var states = monitor.Refresh(roots, enabled);
-                return (roots, states, rules);
-            });
+            var (folders, availability, exclusions) = await _scheduler.RunAsync(
+                $"background:monitor-probe:{Guid.NewGuid():N}",
+                SchedulerPriority.Background,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    var roots = _folderRepository.GetAll();
+                    var rules = roots.ToDictionary(
+                        folder => folder.Id,
+                        folder => _folderRepository.GetExcludedPaths(folder.Id));
+                    var states = monitor.Refresh(roots, enabled);
+                    return (roots, states, rules);
+                }, cancellationToken: _backgroundLifetime?.Token ?? default,
+                workKind: SchedulerWorkKind.SourceProbe);
 
             if (_backgroundMonitorClosing || Dispatcher.HasShutdownStarted)
             {
@@ -468,9 +473,12 @@ public partial class MainWindow
                         continue;
                     }
 
-                    var rootReachable = await Task.Run(
-                        () => Directory.Exists(folder.LocalPath),
-                        _backgroundLifetime.Token);
+                    var rootReachable = await _scheduler.RunAsync(
+                        $"background:root-reachable:{folder.Id}:{Guid.NewGuid():N}",
+                        SchedulerPriority.Background,
+                        token => { token.ThrowIfCancellationRequested(); return Directory.Exists(folder.LocalPath); },
+                        cancellationToken: _backgroundLifetime.Token,
+                        workKind: SchedulerWorkKind.SourceProbe);
                     if (!rootReachable)
                     {
                         continue;
@@ -479,14 +487,19 @@ public partial class MainWindow
                     // SMB watcher notifications can arrive late. Never prune
                     // an image that has reappeared, or when the parent cannot
                     // be reached reliably enough to verify the deletion.
-                    var verifiedGone = await Task.Run(() =>
-                    {
-                        var parent = Path.GetDirectoryName(request.Path);
-                        return !string.IsNullOrWhiteSpace(parent) &&
-                               Directory.Exists(parent) &&
-                               !File.Exists(request.Path) &&
-                               !Directory.Exists(request.Path);
-                    }, _backgroundLifetime.Token);
+                    var verifiedGone = await _scheduler.RunAsync(
+                        $"background:confirm-missing:{Guid.NewGuid():N}",
+                        SchedulerPriority.Background,
+                        token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var parent = Path.GetDirectoryName(request.Path);
+                            return !string.IsNullOrWhiteSpace(parent) &&
+                                   Directory.Exists(parent) &&
+                                   !File.Exists(request.Path) &&
+                                   !Directory.Exists(request.Path);
+                        }, cancellationToken: _backgroundLifetime.Token,
+                        workKind: SchedulerWorkKind.SourceProbe);
                     if (!verifiedGone)
                         continue;
 
@@ -543,11 +556,17 @@ public partial class MainWindow
 
                 // A network path can stall the OS for a long time. The
                 // existence check must run on a worker, never on Dispatcher.
-                var scanPathExists = await Task.Run(
-                    () => request.Kind == BackgroundFolderChangeKind.ScanFile
-                        ? File.Exists(scanPath)
-                        : Directory.Exists(scanPath),
-                    _backgroundLifetime.Token);
+                var scanPathExists = await _scheduler.RunAsync(
+                    $"background:scan-path-probe:{Guid.NewGuid():N}",
+                    SchedulerPriority.Background,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return request.Kind == BackgroundFolderChangeKind.ScanFile
+                            ? File.Exists(scanPath)
+                            : Directory.Exists(scanPath);
+                    }, cancellationToken: _backgroundLifetime.Token,
+                    workKind: SchedulerWorkKind.SourceProbe);
                 if (!scanPathExists)
                 {
                     continue;

@@ -118,9 +118,15 @@ public partial class MainWindow
         HashSet<long>? imageIds = null;
         if (query.Length > 0)
         {
-            imageIds = await Task.Run(() =>
-                new ImageTagRepository(_database).SearchImageIds(query),
-                cancellationToken);
+            imageIds = await _scheduler.RunAsync(
+                $"catalog:tag-search:{version}", SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return new ImageTagRepository(_database).SearchImageIds(query);
+                }, () => version == _tagSearchVersion,
+                cancellationToken: cancellationToken,
+                workKind: SchedulerWorkKind.CatalogRead);
         }
         cancellationToken.ThrowIfCancellationRequested();
         if (version != _tagSearchVersion ||
@@ -225,8 +231,11 @@ public partial class MainWindow
         }
         try
         {
-            var counts = await Task.Run(() =>
+            var counts = await _scheduler.RunAsync(
+                $"catalog:tag-sidebar:{revision}", SchedulerPriority.Interactive,
+                token =>
             {
+                token.ThrowIfCancellationRequested();
                 var repository = new ImageTagRepository(_database);
                 var dictionary = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 foreach (var id in selected)
@@ -238,7 +247,8 @@ public partial class MainWindow
                         dictionary[tag] = dictionary.GetValueOrDefault(tag) + 1;
                 }
                 return dictionary.OrderBy(pair => pair.Key, StringComparer.CurrentCultureIgnoreCase).ToArray();
-            });
+            }, () => revision == _tagSidebarRefreshVersion,
+                workKind: SchedulerWorkKind.CatalogRead);
             if (revision != _tagSidebarRefreshVersion || _sidebarMode != "Tags") return;
             var allOnly = TagLogicAnd.IsChecked == true;
             var filtered = counts.Where(pair => !allOnly || pair.Value == selected.Length).ToArray();
@@ -290,10 +300,28 @@ public partial class MainWindow
 
     private bool _tagWriteActive;
 
-    private void RefreshQuickTags()
+    private int _quickTagRefreshVersion;
+
+    private async void RefreshQuickTags()
     {
+        var revision = ++_quickTagRefreshVersion;
+        IReadOnlyList<string> tags;
+        try
+        {
+            tags = await _scheduler.RunAsync(
+                $"catalog:quick-tags:{revision}", SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return new ImageTagRepository(_database).GetRecentTags();
+                }, () => revision == _quickTagRefreshVersion,
+                workKind: SchedulerWorkKind.CatalogRead);
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex) { PCasaDiagnostics.Write("Tags.Quick", ex); return; }
+        if (revision != _quickTagRefreshVersion || _sidebarMode != "Tags") return;
         TagQuickPanel.Children.Clear();
-        foreach (var tag in new ImageTagRepository(_database).GetRecentTags())
+        foreach (var tag in tags)
         {
             var button = new Button {
                 Content = tag, ToolTip = $"Tag '{tag}' allen ausgewählten Bildern hinzufügen",
@@ -321,7 +349,7 @@ public partial class MainWindow
             var succeeded = 0;
             var errors = new List<string>();
             await _scheduler.EnqueueAsync(
-                $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.UserAction,
+                $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
                 token =>
                 {
                     var repo = new ImageTagRepository(_database);
@@ -331,12 +359,13 @@ public partial class MainWindow
                         try { repo.ChangeKeywords(id, tag, remove); succeeded++; }
                         catch (Exception ex) { errors.Add($"Bild {id}: {ex.Message}"); }
                     }
+                    if (!remove && succeeded > 0)
+                        repo.RememberTag(tag);
                     return Task.CompletedTask;
                 });
             var result = (succeeded, errors);
             if (!remove && result.succeeded > 0)
             {
-                new ImageTagRepository(_database).RememberTag(tag);
                 TagEntryBox.Clear();
             }
             RefreshQuickTags();

@@ -381,7 +381,12 @@ public partial class MainWindow
         SidePanelText.Text = "Bildinformationen laden …";
         try
         {
-            var content = await Task.Run(() => ReadImageInfo(imageId, mode));
+            var content = await _scheduler.RunAsync(
+                $"catalog:sidebar-info:{imageId}:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token => { token.ThrowIfCancellationRequested(); return ReadImageInfo(imageId, mode); },
+                () => _sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds),
+                workKind: SchedulerWorkKind.CatalogRead);
             if (_sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds))
                 SidePanelText.Text = content;
         }

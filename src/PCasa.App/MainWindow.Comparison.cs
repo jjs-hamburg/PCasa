@@ -75,12 +75,23 @@ public partial class MainWindow
             BitmapSource?[] bitmaps;
             if (ids[0] == ids[1])
             {
-                var original = await Task.Run(() => LoadComparisonBitmap(ids[0]));
+                var original = await _scheduler.RunAsync(
+                    $"viewer:compare:{request}:{ids[0]}",
+                    SchedulerPriority.Interactive,
+                    token => LoadComparisonBitmap(ids[0], token),
+                    () => request == _comparisonRequest && _viewerOpen,
+                    workKind: SchedulerWorkKind.ViewerRead);
                 bitmaps = new[] { original, original };
             }
             else
             {
-                bitmaps = await Task.WhenAll(ids.Select(id => Task.Run(() => LoadComparisonBitmap(id))));
+                bitmaps = await Task.WhenAll(ids.Select(id =>
+                    _scheduler.RunAsync(
+                        $"viewer:compare:{request}:{id}",
+                        SchedulerPriority.Interactive,
+                        token => LoadComparisonBitmap(id, token),
+                        () => request == _comparisonRequest && _viewerOpen,
+                        workKind: SchedulerWorkKind.ViewerRead)));
             }
             if (request != _comparisonRequest || !_viewerOpen || !_comparisonActive) return;
             ComparisonImageA.Source = bitmaps[0];
@@ -95,11 +106,11 @@ public partial class MainWindow
         }
     }
 
-    private BitmapSource? LoadComparisonBitmap(long imageId)
+    private BitmapSource? LoadComparisonBitmap(long imageId, CancellationToken token)
     {
         var info = new PhotoViewerImageRepository(_database).Get(imageId);
         if (info is null) return null;
-        return PhotoViewerImageLoader.Load(info, 2000, CancellationToken.None);
+        return PhotoViewerImageLoader.Load(info, 2000, token);
     }
 
     private void HideComparison()
