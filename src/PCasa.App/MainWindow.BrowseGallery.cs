@@ -43,6 +43,7 @@ public partial class MainWindow
         BrowseSurface.ImageClicked += BrowseSurface_ImageClicked;
         BrowseSurface.ImageOpened += BrowseSurface_ImageOpened;
         BrowseSurface.ImageContextRequested += BrowseSurface_ImageContextRequested;
+        BrowseSurface.ImagesDragRequested += BrowseSurface_ImagesDragRequested;
         BrowseSurface.LayoutReflowed += BrowseSurface_LayoutReflowed;
         CatalogChanges.ImageCommitted += OnCatalogImageCommitted;
         Closed += BrowseWindow_Closed;
