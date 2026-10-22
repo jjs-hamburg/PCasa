@@ -28,6 +28,11 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double _rowGap = 8;
     private int? _spacingPreviewColumns;
     private const double ShadowDepth = 2;
+    private const double FileLabelHeight = 18;
+    private bool _showFileNames = true;
+    private bool _showStatusIcons = true;
+    private static readonly Brush GpsIconBrush = new SolidColorBrush(Color.FromRgb(225, 68, 76));
+    private static readonly Brush RawIconBrush = new SolidColorBrush(Color.FromArgb(215, 33, 37, 42));
 
     private Brush _headerBrush =
         new SolidColorBrush(Color.FromRgb(231, 231, 231));
@@ -82,7 +87,23 @@ public sealed class BrowseGallerySurface : FrameworkElement
         get { EnsureLayout(); return _sections.FirstOrDefault()?.ColumnCount ?? 1; }
     }
 
-    public double ThumbnailRowHeight => _thumbnailHeight + _rowGap;
+    public double ThumbnailRowHeight => _thumbnailHeight +
+        (_showFileNames ? FileLabelHeight : 0) + _rowGap;
+
+    public void SetThumbnailAnnotations(bool fileNames, bool statusIcons)
+    {
+        if (_showFileNames != fileNames)
+        {
+            _showFileNames = fileNames;
+            _showStatusIcons = statusIcons;
+            InvalidateLayout();
+        }
+        else if (_showStatusIcons != statusIcons)
+        {
+            _showStatusIcons = statusIcons;
+            InvalidateVisual();
+        }
+    }
 
     public void SetGalleryBackground(Brush background)
     {
@@ -515,6 +536,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
             section.RowCount - 1,
             (int)Math.Ceiling((viewportBottom - section.ImagesTop) / section.RowHeight));
 
+        var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         for (var row = firstRow; row <= lastRow; row++)
         {
             for (var column = 0; column < section.ColumnCount; column++)
@@ -547,6 +569,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
                     }
 
                     drawingContext.DrawImage(bitmap, imageRect);
+                    if (_showStatusIcons)
+                        DrawThumbnailStatusIcons(drawingContext, imageRect, entry, pixelsPerDip);
 
                     if (_selectedImageIds.Contains(entry.ImageId))
                     {
@@ -558,7 +582,55 @@ public sealed class BrowseGallerySurface : FrameworkElement
                         drawingContext.DrawRectangle(null, SelectionPen, selection);
                     }
                 }
+                if (_showFileNames && !string.IsNullOrEmpty(entry.FileName))
+                {
+                    var caption = new FormattedText(entry.FileName,
+                        CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                        new Typeface("Segoe UI"), 10, _mutedBrush, pixelsPerDip)
+                    {
+                        MaxTextWidth = Math.Max(1, _thumbnailWidth),
+                        MaxTextHeight = FileLabelHeight,
+                        Trimming = TextTrimming.CharacterEllipsis
+                    };
+                    drawingContext.DrawText(caption,
+                        new Point(cellX, cellY + _thumbnailHeight + 2));
+                }
             }
+        }
+    }
+
+    private static void DrawThumbnailStatusIcons(DrawingContext context,
+        Rect imageRect, BrowseThumbnailIndexEntry entry, double dpi)
+    {
+        var x = imageRect.Right - 11;
+        var y = imageRect.Bottom - 14;
+        if (entry.HasGps)
+        {
+            context.PushTransform(new TranslateTransform(x, y));
+            var pin = Geometry.Parse("M 4.5,0 C 2,0 0,2 0,4.5 C 0,7 4.5,12 4.5,12 C 4.5,12 9,7 9,4.5 C 9,2 7,0 4.5,0 Z");
+            context.DrawGeometry(GpsIconBrush, new Pen(Brushes.White, 0.5), pin);
+            context.DrawEllipse(Brushes.White, null, new Point(4.5,4.3), 1.6,1.6);
+            context.Pop();
+            x -= 15;
+        }
+        if (entry.HasTags)
+        {
+            context.PushTransform(new TranslateTransform(x, y + 2));
+            var tag = Geometry.Parse("M 0,0 L 6,0 L 10,4 L 5,9 L 0,4 Z");
+            context.DrawGeometry(Brushes.White, new Pen(Brushes.DimGray, 0.8), tag);
+            context.DrawEllipse(Brushes.DimGray, null, new Point(2.5,2.2), 0.8,0.8);
+            context.Pop();
+            x -= 19;
+        }
+        if (entry.IsRaw)
+        {
+            var label = new FormattedText("RAW", CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight, new Typeface("Segoe UI Semibold"),
+                8, Brushes.White, dpi);
+            var width = label.Width + 4;
+            context.DrawRoundedRectangle(RawIconBrush, null,
+                new Rect(x - width + 9, y + 1, width, 11), 2, 2);
+            context.DrawText(label, new Point(x - width + 11, y + 1));
         }
     }
 
@@ -770,7 +842,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var columnCount = _spacingPreviewColumns is int previewColumns
             ? Math.Min(previewColumns, fittingColumns) : fittingColumns;
         var cellWidth = Math.Max(_thumbnailWidth, availableWidth / columnCount);
-        var rowHeight = _thumbnailHeight + _rowGap;
+        var rowHeight = ThumbnailRowHeight;
         var y = 0d;
         var indexPosition = 0;
 
