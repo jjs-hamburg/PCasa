@@ -74,6 +74,20 @@ internal static class GalleryFileOperationFlow
                 "Same-directory copy did not automatically create distinct name.");
             Console.WriteLine("PASS: Same-folder copy never silently overwrites source.");
 
+            // Two monitored source folders contain 'test.jpg'. Moving both
+            // into one empty destination must keep BOTH photos. The second
+            // planned name must not offer to overwrite the first planned file.
+            var batch = Path.Combine(root, "Batch");
+            Directory.CreateDirectory(batch);
+            Transfer(window, [original, moved], batch, move: true);
+            Until(window, () =>
+                !File.Exists(original) && !File.Exists(moved) &&
+                File.Exists(Path.Combine(batch, "test.jpg")) &&
+                File.Exists(Path.Combine(batch, "test - Kopie.jpg")) &&
+                CountInRoot(db, root) == 3,
+                "Two same-name sources did not survive a single batch move.");
+            Console.WriteLine("PASS: Batch move preserves both same-name source photos.");
+
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF gallery copy/move/catalog tests passed.");

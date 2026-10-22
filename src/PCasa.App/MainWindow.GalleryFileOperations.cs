@@ -197,15 +197,23 @@ public partial class MainWindow
                 StringComparison.OrdinalIgnoreCase);
             if (samePath && move) continue;
             var replace = false;
-            if (samePath || File.Exists(destination) || !reserved.Add(destination))
+            if (reserved.Contains(destination))
+            {
+                // Two selected source folders may contain the same filename.
+                // This destination is already promised to an earlier plan,
+                // even when it does not exist on disk yet. Never allow the
+                // second file to replace the first one during batch moves.
+                destination = UniqueCopyPath(destination, reserved);
+            }
+            else if (samePath || File.Exists(destination))
             {
                 var choice = samePath ? NameConflict.KeepBoth : ResolveFileConflict(destination);
                 if (choice == NameConflict.Cancel) return;
                 if (choice == NameConflict.Skip) continue;
                 if (choice == NameConflict.Replace && !samePath) replace = true;
                 else destination = UniqueCopyPath(destination, reserved);
-                reserved.Add(destination);
             }
+            reserved.Add(destination);
             plans.Add(new GalleryFileOperation(source, destination, move, replace,
                 CatalogImageIdAtPath(source),
                 replace ? CatalogImageIdAtPath(destination) : null));
