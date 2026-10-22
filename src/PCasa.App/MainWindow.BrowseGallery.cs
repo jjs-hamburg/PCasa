@@ -83,9 +83,16 @@ public partial class MainWindow
         RefreshFolderTree(preserveGalleryAnchor: false);
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
-        // The foreground initial import owns the status/progress display.
-        // Never launch a competing startup cache build that can hide it.
-        if (_manualScanRunning) return;
+        // A foreground scan must NOT suppress the independent gallery.
+        // Display everything already committed even if a newly added NAS root
+        // is still being scanned (or is blocked/offline). Defer expensive
+        // missing-cache repair, but never defer showing existing thumbnails.
+        if (_manualScanRunning)
+        {
+            await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                warmViewport: false);
+            return;
+        }
         if (imageCount == 0)
         {
             StatusText.Text = "0 Bilder";
