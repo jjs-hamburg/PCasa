@@ -57,7 +57,11 @@ public sealed record BrowseThumbnailIndexEntry(
     long ByteOffset,
     int ByteLength,
     int PixelWidth,
-    int PixelHeight);
+    int PixelHeight,
+    string FileName = "",
+    bool HasGps = false,
+    bool HasTags = false,
+    bool IsRaw = false);
 
 public sealed record BrowseCacheCandidate(
     long ImageId,
