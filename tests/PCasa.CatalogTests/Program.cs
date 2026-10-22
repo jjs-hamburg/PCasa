@@ -2359,7 +2359,7 @@ internal static class Program
             Math.Abs((before.Lon ?? 0) - 10.25) > 0.001 ||
             before.Json is null || !before.Json.Contains("Test Photographer") ||
             !before.Json.Contains("DateTimeOriginal"))
-            throw new Exception("Camera/GPS/full EXIF tags were not preserved.");
+            throw new Exception($"Camera/GPS/full EXIF tags were not preserved: make={before.Make}, model={before.Model}, lat={before.Lat}, lon={before.Lon}, raw={before.Json}");
         // Simulate upgrading an old catalog: strip ONLY metadata, never cache.
         using (var remove = conn.CreateCommand())
         {
