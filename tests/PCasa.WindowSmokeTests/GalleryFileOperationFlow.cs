@@ -32,6 +32,15 @@ internal static class GalleryFileOperationFlow
             db.Initialize();
             var folderRepo = new FolderRepository(db);
             folderRepo.Add(root);
+            // Establish a known, completed catalog before exercising file
+            // transfers. Startup scanning has its own separate real-WPF test.
+            var sourceRoot = folderRepo.GetAll().Single(item =>
+                string.Equals(item.LocalPath, root,
+                    StringComparison.OrdinalIgnoreCase));
+            var initial = new FolderScanner(new ImageCatalogRepository(db),
+                new ThumbnailCache(), folderRepo).Scan(sourceRoot);
+            if (initial.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 1)
+                throw new Exception("Synthetic JPEG could not seed the catalog.");
             var app = new PCasa.App.App();
             app.InitializeComponent();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
