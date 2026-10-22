@@ -132,7 +132,9 @@ public sealed class BrowseCacheBuilder
                     throw new FileNotFoundException(
                         "Original für die benötigte Browse-Thumbnail-Größe ist nicht verfügbar.",
                         candidate.LocalPath);
-                preparedOriginal = store.PrepareTiers(candidate.LocalPath,
+                var displayPath = RawImageSource.Resolve(candidate.LocalPath,
+                    cancellationToken);
+                preparedOriginal = store.PrepareTiers(displayPath,
                     new BrowseThumbnailProfile(originalTiers), cancellationToken);
             }
         }
