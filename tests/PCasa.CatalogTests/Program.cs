@@ -81,6 +81,7 @@ internal static class Program
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
+        Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
@@ -98,7 +99,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {84 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: catalog regression suite complete, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -2309,6 +2310,71 @@ internal static class Program
             throw new Exception("Decoded pixels changed during metadata editing.");
         if ((ImageTagRepository.ReadKeywords(path) ?? "").Contains("TemporaryTag"))
             throw new Exception("Removed keyword still exists in the original JPEG.");
+    }
+
+    private static void ExifCatalogRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "gps-camera.jpg");
+        WriteJpeg(path);
+        RunExifTool("-overwrite_original",
+            "-EXIF:Make=Sony",
+            "-EXIF:Model=ILCE-7M4",
+            "-EXIF:DateTimeOriginal=2024:07:06 05:04:03",
+            "-EXIF:GPSLatitude=53.5", "-EXIF:GPSLatitudeRef=N",
+            "-EXIF:GPSLongitude=10.25", "-EXIF:GPSLongitudeRef=E",
+            "-EXIF:Artist=Test Photographer", path);
+        var (db, root, scanner) = sandbox.Prepare();
+        var result = scanner.Scan(root);
+        if (result.Failed != 0 || result.Updated != 1)
+            throw new Exception("Source with EXIF was not indexed successfully.");
+        using var conn = db.OpenConnection();
+        static (long Id, string Cache, string? Json, string? Make, string? Model,
+            double? Lat, double? Lon) Read(Microsoft.Data.Sqlite.SqliteConnection conn)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT i.id, i.thumbnail_path, x.exif_json, x.camera_make,
+                    x.camera_model, x.gps_latitude, x.gps_longitude
+                FROM images i LEFT JOIN image_exif x ON x.image_id = i.id
+                WHERE i.file_name = 'gps-camera.jpg';
+                """;
+            using var row = cmd.ExecuteReader();
+            if (!row.Read()) throw new Exception("Missing EXIF catalog image.");
+            return (row.GetInt64(0), row.GetString(1),
+                row.IsDBNull(2) ? null : row.GetString(2),
+                row.IsDBNull(3) ? null : row.GetString(3),
+                row.IsDBNull(4) ? null : row.GetString(4),
+                row.IsDBNull(5) ? null : row.GetDouble(5),
+                row.IsDBNull(6) ? null : row.GetDouble(6));
+        }
+        var before = Read(conn);
+        if (before.Make != "Sony" || before.Model != "ILCE-7M4" ||
+            Math.Abs((before.Lat ?? 0) - 53.5) > 0.001 ||
+            Math.Abs((before.Lon ?? 0) - 10.25) > 0.001 ||
+            before.Json is null || !before.Json.Contains("Test Photographer") ||
+            !before.Json.Contains("DateTimeOriginal"))
+            throw new Exception("Camera/GPS/full EXIF tags were not preserved.");
+        // Simulate upgrading an old catalog: strip ONLY metadata, never cache.
+        using (var remove = conn.CreateCommand())
+        {
+            remove.CommandText = "DELETE FROM image_exif WHERE image_id = $id;";
+            remove.Parameters.AddWithValue("$id", before.Id);
+            remove.ExecuteNonQuery();
+        }
+        result = scanner.Scan(root);
+        var after = Read(conn);
+        if (result.Updated != 0 || after.Id != before.Id ||
+            after.Cache != before.Cache || after.Json is null ||
+            after.Make != "Sony" || Math.Abs((after.Lat ?? 0) - 53.5) > 0.001)
+            throw new Exception("Legacy EXIF backfill unexpectedly rebuilt thumbnails or changed identity.");
+        using (var missing = conn.CreateCommand())
+        {
+            missing.CommandText = "SELECT COUNT(*) FROM image_exif WHERE image_id=$id;";
+            missing.Parameters.AddWithValue("$id", before.Id);
+            if (Convert.ToInt32(missing.ExecuteScalar()) != 1)
+                throw new Exception("Backfill failed to create exactly one EXIF row.");
+        }
     }
 
     private static string RunExifTool(params string[] arguments)
