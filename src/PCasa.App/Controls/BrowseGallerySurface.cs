@@ -375,6 +375,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     {
         base.OnMouseLeftButtonDown(e);
         EnsureLayout();
+        _pendingSimpleClickImageId = null;
 
         var imageIndex = HitTestImageIndex(e.GetPosition(this));
         if (imageIndex is null || imageIndex.Value < 0 || imageIndex.Value >= _index.Count)
