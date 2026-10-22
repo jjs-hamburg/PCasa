@@ -2389,18 +2389,31 @@ internal static class Program
             throw new Exception("Shift did not select anchored contiguous range.");
         model.Click(3, System.Windows.Input.ModifierKeys.Control |
             System.Windows.Input.ModifierKeys.Shift, visible, selected);
-        if (!selected.SetEquals(new long[] { 2, 3 }))
-            throw new Exception("Ctrl+Shift unexpectedly changed Shift range semantics.");
+        if (!selected.SetEquals(new long[] { 2, 3, 4, 5 }))
+            throw new Exception("Ctrl+Shift removed photos from an existing selection.");
+        model.Click(2, System.Windows.Input.ModifierKeys.None, visible, selected);
+        model.Click(7, System.Windows.Input.ModifierKeys.Control, visible, selected);
+        model.Click(4, System.Windows.Input.ModifierKeys.Control |
+            System.Windows.Input.ModifierKeys.Shift, visible, selected);
+        if (!selected.SetEquals(new long[] { 2, 3, 4, 7 }))
+            throw new Exception("Ctrl+Shift did not add its range to the selection.");
         model.SelectFolder(20, visible, selected);
         if (!selected.SetEquals(new long[] { 6, 7, 8 }) || model.FocusedId != 6)
             throw new Exception("Ctrl+A selected images from an unrelated folder.");
         model.Click(3, System.Windows.Input.ModifierKeys.Shift, visible, selected);
-        if (!selected.SetEquals(new long[] { 3 }))
-            throw new Exception("Shift range illegally crossed folder boundary.");
+        if (!selected.SetEquals(new long[] { 3, 4, 5, 6 }))
+            throw new Exception("Shift range did not span adjacent visible photo folders.");
         model.Click(4, System.Windows.Input.ModifierKeys.None, visible, selected);
         var moved = model.MoveFocus(-1, true, visible, selected);
         if (moved != 3 || !selected.SetEquals(new long[] { 3, 4 }))
             throw new Exception("Shift-arrow did not extend selection by one photo.");
+        model.Click(5, System.Windows.Input.ModifierKeys.None, visible, selected);
+        moved = model.MoveFocus(1, false, visible, selected);
+        if (moved != 6 || !selected.SetEquals(new long[] { 6 }))
+            throw new Exception("Arrow navigation stopped at the next photo folder.");
+        moved = model.MoveFocus(-1, true, visible, selected);
+        if (moved != 5 || !selected.SetEquals(new long[] { 5, 6 }))
+            throw new Exception("Shift-arrow failed across a photo folder boundary.");
     }
 
     private static void GalleryAnchorSurvivesWidthChange()

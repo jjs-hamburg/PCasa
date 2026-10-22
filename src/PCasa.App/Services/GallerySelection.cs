@@ -37,11 +37,12 @@ public sealed class GallerySelection
         if (shift)
         {
             var anchor = AnchorId is long saved ? Find(visible, saved) : -1;
-            if (anchor < 0 || visible[anchor].PhotoFolderId != visible[position].PhotoFolderId)
+            if (anchor < 0)
                 anchor = position;
-            // CTRL does not alter the range rule. Selecting a new range
-            // replaces the current selection, exactly as Shift alone does.
-            selected.Clear();
+            // SHIFT selects a continuous range through the visible gallery,
+            // including adjacent photo folders. CTRL+SHIFT adds this range
+            // without discarding other selected images.
+            if (!ctrl) selected.Clear();
             for (var i = Math.Min(anchor, position); i <= Math.Max(anchor, position); i++)
                 selected.Add(visible[i].ImageId);
             AnchorId = visible[anchor].ImageId;
@@ -78,8 +79,6 @@ public sealed class GallerySelection
         var position = FocusedId is long id ? Find(visible, id) : -1;
         var next = Math.Clamp(position < 0 ? (delta < 0 ? visible.Count - 1 : 0) :
             position + delta, 0, visible.Count - 1);
-        if (position >= 0 && visible[next].PhotoFolderId != visible[position].PhotoFolderId)
-            return null; // Arrow selection belongs to a single photo folder.
         Click(visible[next].ImageId,
             extend ? System.Windows.Input.ModifierKeys.Shift : System.Windows.Input.ModifierKeys.None,
             visible, selected);
