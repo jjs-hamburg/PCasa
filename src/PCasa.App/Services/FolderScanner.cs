@@ -34,7 +34,9 @@ public sealed class FolderScanner
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif",
-        ".webp", ".heic", ".heif", ".avif", ".jxl"
+        ".webp", ".heic", ".heif", ".avif", ".jxl",
+        ".arw", ".nef", ".nrw", ".cr2", ".cr3", ".dng",
+        ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
     };
 
     private readonly ImageCatalogRepository _catalog;
@@ -230,8 +232,10 @@ public sealed class FolderScanner
                         cancellationToken.ThrowIfCancellationRequested();
 
                         scanSession.FlushPending();
+                        var renderPath = RawImageSource.Resolve(localPath,
+                            cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
-                            localPath,
+                            renderPath,
                             canonicalPath,
                             fileLength,
                             modifiedUtcTicks);
@@ -254,7 +258,7 @@ public sealed class FolderScanner
                             : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
                         var preparedLarge = largeTiers.Length > 0
                             ? packStore.PrepareTiers(
-                                localPath, new BrowseThumbnailProfile(largeTiers),
+                                renderPath, new BrowseThumbnailProfile(largeTiers),
                                 cancellationToken)
                             : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
                         var keywords = ImageTagRepository.ReadKeywords(localPath);
