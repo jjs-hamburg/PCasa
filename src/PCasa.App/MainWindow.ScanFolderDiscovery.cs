@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows.Controls;
 using PCasa.App.Services;
+using PCasa.App.Models;
 
 namespace PCasa.App;
 
