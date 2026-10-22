@@ -42,6 +42,17 @@ public partial class FolderManagerWindow : Window
     private ManagedNode? _selected;
     private bool _updatingChecks;
     private bool _busy;
+    private long _nextTemporaryRootId = -1;
+
+    // No catalog or watcher change occurs while this dialog is open.
+    // DialogResult true exposes the selection, false drops it entirely.
+    public FolderManagerSelection SelectedConfiguration => new(
+        _monitoredRoots.Select(root => new FolderManagerRootChoice(
+            root.LocalPath,
+            _exclusions.TryGetValue(root.Id, out var excluded)
+                ? excluded.ToArray() : Array.Empty<string>(),
+            root.ServerSyncEnabled)).ToArray(),
+        BackgroundScanCheckBox.IsChecked == true);
 
     public FolderManagerWindow(FolderRepository repository, bool serverDatabaseConfigured,
         Func<long, string, bool, Task<int>>? removeFolderAsync = null,
@@ -55,6 +66,9 @@ public partial class FolderManagerWindow : Window
         _addFolderAsync = addFolderAsync;
         _catalogRemovalService = new CatalogRemovalService(new LocalDatabase());
         _backgroundScanSettings = BackgroundScanSettings.Load();
+        _monitoredRoots = _repository.GetAll();
+        foreach (var folder in _monitoredRoots)
+            _exclusions[folder.Id] = _repository.GetExcludedPaths(folder.Id);
 
         ServerSyncCheckBox.Visibility = serverDatabaseConfigured
             ? Visibility.Visible : Visibility.Collapsed;
@@ -86,13 +100,8 @@ public partial class FolderManagerWindow : Window
     {
         _selected = null;
         FolderManagerTree.Items.Clear();
-        _exclusions.Clear();
-        _monitoredRoots = _repository.GetAll();
-
-        foreach (var folder in _monitoredRoots)
-        {
-            _exclusions[folder.Id] = _repository.GetExcludedPaths(folder.Id);
-        }
+        // Rebuild only WPF nodes from the staged selection. Reloading from
+        // SQLite here would discard pending changes (or save them too early).
 
         // Picasa-style hierarchy: these are normal expandable tree entries.
         // Once included, their subfolders use exactly the same exclusion
@@ -318,176 +327,126 @@ public partial class FolderManagerWindow : Window
             UpdateItem(child);
     }
 
-    private async void InclusionCheckbox_Changed(object sender, RoutedEventArgs e)
+    private void InclusionCheckbox_Changed(object sender, RoutedEventArgs e)
     {
         if (_updatingChecks || _busy || sender is not CheckBox { Tag: TreeViewItem item } box ||
             item.Tag is not ManagedNode node || !CanToggle(node))
+            return;
+
+        item.IsSelected = true;
+        var include = box.IsChecked == true;
+        if (node.Root is null)
         {
+            if (include)
+                StageNewRoot(node.LocalPath);
+            Reload(expandSystemFolder: node.LocalPath);
             return;
         }
 
-        item.IsSelected = true;
-        var excluded = box.IsChecked != true;
-        _busy = true;
-        AddFolderButton.IsEnabled = false;
-        RemoveFolderButton.IsEnabled = false;
+        var root = node.Root;
+        if (node.IsRoot)
+        {
+            if (!include)
+            {
+                _monitoredRoots = _monitoredRoots.Where(candidate =>
+                    candidate.Id != root.Id).ToArray();
+                _exclusions.Remove(root.Id);
+                Reload(expandSystemFolder: node.IsSystemFolder ? node.LocalPath : null);
+            }
+            else
+                UpdateLoadedCheckboxes();
+            return;
+        }
 
-        var saved = false;
-        try
+        var excluded = _exclusions.TryGetValue(root.Id, out var existing)
+            ? existing.ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var normalized = FolderExclusionRules.Normalize(node.LocalPath);
+        if (include)
         {
-            if (node.IsSystemFolder && node.Root is null)
-            {
-                if (!excluded)
-                {
-                    if (_addFolderAsync is not null)
-                        await _addFolderAsync(node.LocalPath);
-                    else
-                        await Task.Run(() => _repository.Add(node.LocalPath));
-                }
-                saved = true;
-                Reload(expandSystemFolder: node.LocalPath);
-            }
-            else if (node.Root is { } monitoredRoot)
-            {
-                if (excluded && _removeFolderAsync is not null)
-                {
-                    await _removeFolderAsync(monitoredRoot.Id,
-                        node.LocalPath, false);
-                }
-                else
-                {
-                    var progress = new Progress<string>(status =>
-                        CleanupStatusChanged?.Invoke(status));
-                    await new FolderExclusionService(_repository, new LocalDatabase(), _scheduler)
-                        .ChangeAsync(monitoredRoot.Id, node.LocalPath, excluded,
-                            (id, path, isExcluded) =>
-                                FolderExclusionChanged?.Invoke(this,
-                                    new FolderExclusionChangedEventArgs(id, path, isExcluded)),
-                            progress);
-                }
-                saved = true;
-                _exclusions[monitoredRoot.Id] =
-                    _repository.GetExcludedPaths(monitoredRoot.Id);
-            }
+            // A parent must be included before one of its children.
+            excluded.RemoveWhere(path => string.Equals(
+                FolderExclusionRules.Normalize(path), normalized,
+                StringComparison.OrdinalIgnoreCase));
         }
-        catch (Exception ex)
+        else
         {
-            MessageBox.Show(this,
-                "Die Ordnerauswahl konnte nicht vollständig übernommen werden.\n\n" + ex.Message,
-                "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
+            excluded.RemoveWhere(path => FolderExclusionRules.IsAtOrBelow(path, normalized));
+            excluded.Add(normalized);
         }
-        finally
-        {
-            _busy = false;
-            AddFolderButton.IsEnabled = true;
-            if (saved)
-            {
-                if (node.Root is { } root && !node.IsSystemFolder)
-                    _exclusions[root.Id] = _repository.GetExcludedPaths(root.Id);
-                FoldersChanged?.Invoke(this, EventArgs.Empty);
-            }
-            UpdateLoadedCheckboxes();
-        }
+        _exclusions[root.Id] = excluded.OrderBy(path => path,
+            StringComparer.OrdinalIgnoreCase).ToArray();
+        UpdateLoadedCheckboxes();
     }
 
-    private async void AddFolder_Click(object sender, RoutedEventArgs e)
+    private void StageNewRoot(string path)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        if (_monitoredRoots.Any(root => PathEquals(root.LocalPath, normalized)))
+            return;
+        var classification = PathClassifier.Classify(normalized);
+        var provisional = new MonitoredFolder
+        {
+            Id = _nextTemporaryRootId--,
+            LocalPath = classification.LocalPath,
+            CanonicalPath = classification.CanonicalPath,
+            IsNetwork = classification.IsNetwork
+        };
+        _monitoredRoots = _monitoredRoots.Append(provisional).ToArray();
+        _exclusions[provisional.Id] = Array.Empty<string>();
+    }
+
+    private void AddFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
         var dialog = new OpenFolderDialog
         {
             Title = "Ordner zur dauerhaften Überwachung auswählen"
         };
-
         if (dialog.ShowDialog(this) != true) return;
-
-        _busy = true;
-        AddFolderButton.IsEnabled = false;
-        RemoveFolderButton.IsEnabled = false;
         try
         {
-            if (_addFolderAsync is not null)
-                await _addFolderAsync(dialog.FolderName);
-            else
-                await Task.Run(() => _repository.Add(dialog.FolderName));
+            StageNewRoot(dialog.FolderName);
             Reload();
-            FoldersChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this,
-                "Der Ordner konnte nicht hinzugefügt werden.\n\n" + ex.Message,
-                "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        finally
-        {
-            _busy = false;
-            AddFolderButton.IsEnabled = true;
-            UpdateSelectedDetails();
+            MessageBox.Show(this, "Ordner konnte nicht vorgemerkt werden.\n\n" +
+                ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
-    private async void RemoveFolder_Click(object sender, RoutedEventArgs e)
+    private void RemoveFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is not { IsRoot: true, Root: { } selectedRoot } || _busy) return;
-        _busy = true;
-        RemoveFolderButton.IsEnabled = false;
-        AddFolderButton.IsEnabled = false;
-        try
-        {
-            CleanupStatusChanged?.Invoke("Ordner aus PCasa entfernen …");
-            if (_removeFolderAsync is not null)
-                await _removeFolderAsync(selectedRoot.Id, selectedRoot.LocalPath, true);
-            else
-                await Task.Run(() => _repository.Remove(selectedRoot.Id));
-            Reload();
-            FoldersChanged?.Invoke(this, EventArgs.Empty);
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this,
-                "Der Ordner konnte nicht entfernt werden.\\n\\n" + ex.Message,
-                "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        finally
-        {
-            _busy = false;
-            AddFolderButton.IsEnabled = true;
-            UpdateLoadedCheckboxes();
-        }
+        if (_selected is not { IsRoot: true, Root: { } root } || _busy) return;
+        _monitoredRoots = _monitoredRoots.Where(candidate =>
+            candidate.Id != root.Id).ToArray();
+        _exclusions.Remove(root.Id);
+        Reload();
     }
 
     private void ServerSync_Click(object sender, RoutedEventArgs e)
     {
-        if (_selected is not { IsRoot: true, Root: { } selectedRoot } ||
-            !selectedRoot.CanServerSync)
+        if (_selected is not { IsRoot: true, Root: { } root } ||
+            !root.CanServerSync)
             return;
-        try
-        {
-            _repository.SetServerSync(selectedRoot.Id, ServerSyncCheckBox.IsChecked == true);
-            var path = selectedRoot.LocalPath;
-            Reload();
-            foreach (var item in FolderManagerTree.Items.OfType<TreeViewItem>())
-            {
-                if (item.Tag is ManagedNode node &&
-                    string.Equals(node.LocalPath, path, StringComparison.OrdinalIgnoreCase))
-                {
-                    item.IsSelected = true;
-                    break;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "PCasa",
-                MessageBoxButton.OK, MessageBoxImage.Error);
-        }
+        root.ServerSyncEnabled = ServerSyncCheckBox.IsChecked == true;
     }
 
     private void BackgroundScan_Click(object sender, RoutedEventArgs e)
     {
-        _backgroundScanSettings.Enabled = BackgroundScanCheckBox.IsChecked == true;
-        _backgroundScanSettings.Save();
+        // The setting is also part of the selection. Do not send a Changed
+        // event that would stop a running scanner before the user clicks OK.
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Ok_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy) return;
+        DialogResult = true;
+    }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        DialogResult = false;
+    }
 }
