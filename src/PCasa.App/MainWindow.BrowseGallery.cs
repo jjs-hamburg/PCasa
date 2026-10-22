@@ -845,7 +845,9 @@ public partial class MainWindow
 
     private void BrowseWindow_Closed(object? sender, EventArgs e)
     {
+        _appearance.ThumbnailWidth = ThumbnailSizeSlider.Value;
         SaveGalleryPosition();
+        SaveAppearance();
         CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
         _browseProgressWindow?.Finish();
         _browseProgressWindow = null;
