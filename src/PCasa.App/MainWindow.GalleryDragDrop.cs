@@ -11,6 +11,20 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    private readonly Dictionary<string, bool> _dragTargetValidity =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private bool ValidDragTarget(string path)
+    {
+        if (_dragTargetValidity.TryGetValue(path, out var valid)) return valid;
+        valid = IsMonitoredGalleryDestination(path);
+        _dragTargetValidity[path] = valid;
+        return valid;
+    }
+
+    private void DragTarget_Leave(object sender, DragEventArgs e)
+        => _dragTargetValidity.Clear();
+
     private void BrowseSurface_ImagesDragRequested(object? sender,
         BrowseImageClickedEventArgs e)
     {
@@ -66,12 +80,17 @@ public partial class MainWindow
         out DragDropEffects effect)
     {
         effect = DragDropEffects.None;
-        if (paths.Length == 0 || !Directory.Exists(target)) return false;
+        if (paths.Length == 0) return false;
         var states = e.KeyStates;
         var control = (states & DragDropKeyStates.ControlKey) != 0;
         var shift = (states & DragDropKeyStates.ShiftKey) != 0;
+        // Repeated drag-over events must not probe the same NAS for each
+        // of thousands of selected files. One identity lookup per root.
+        var sourceRoots = paths.GroupBy(path => Path.GetPathRoot(path) ?? path,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First());
         var preferMove = shift || (!control &&
-            paths.All(path => SameVolume(path, target)));
+            sourceRoots.All(path => SameVolume(path, target)));
         effect = preferMove ? DragDropEffects.Move : DragDropEffects.Copy;
         if ((e.AllowedEffects & effect) == 0)
             effect = (e.AllowedEffects & DragDropEffects.Copy) != 0
@@ -88,7 +107,7 @@ public partial class MainWindow
             e.GetPosition(BrowseSurface));
         var folder = folderId is long id
             ? _photoFolders.FirstOrDefault(f => f.Id == id) : null;
-        return folder is null || !IsMonitoredGalleryDestination(folder.LocalPath)
+        return folder is null || !ValidDragTarget(folder.LocalPath)
             ? null : folder.LocalPath;
     }
 
@@ -114,6 +133,7 @@ public partial class MainWindow
         }
         e.Effects = effect;
         e.Handled = true;
+        _dragTargetValidity.Clear();
         _ = TransferGalleryFilesAsync(files, target,
             effect.HasFlag(DragDropEffects.Move));
     }
@@ -124,8 +144,7 @@ public partial class MainWindow
         var item = ItemsControl.ContainerFromElement(FoldersTree, start)
             as TreeViewItem;
         if (item?.Tag is not FolderTreeTag tag) return null;
-        return Directory.Exists(tag.FullPath) &&
-            IsMonitoredGalleryDestination(tag.FullPath)
+        return ValidDragTarget(tag.FullPath)
                 ? tag.FullPath : null;
     }
 
@@ -151,6 +170,7 @@ public partial class MainWindow
         }
         e.Effects = effect;
         e.Handled = true;
+        _dragTargetValidity.Clear();
         _ = TransferGalleryFilesAsync(files, target,
             effect.HasFlag(DragDropEffects.Move));
     }
