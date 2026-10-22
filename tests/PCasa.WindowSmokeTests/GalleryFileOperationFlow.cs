@@ -204,19 +204,26 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Context-menu manual scan bypasses busy background state, reconciles renamed file and reloads browse index.");
 
-            // Window resizing must re-anchor the progress window after
-            // layout rather than leave its coordinates at the old size.
+            // The progress window is now screen-anchored, intentionally
+            // independent of the PCasa window's size on that monitor.
             var progressWindow = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
             progressWindow.Show();
-            Until(window, () => Math.Abs(progressWindow.Left -
-                    (window.Left + window.ActualWidth - progressWindow.Width - 12)) < 3,
-                "Progress window did not align to initial owner right edge.");
-            window.Width += 110;
-            Until(window, () => Math.Abs(progressWindow.Left -
-                    (window.Left + window.ActualWidth - progressWindow.Width - 12)) < 3,
-                "Progress window did not follow resized owner.");
-            progressWindow.Finish();
-            Console.WriteLine("PASS: Progress dialog follows owner window resizing.");
+            try
+            {
+                var right = SystemParameters.WorkArea.Right;
+                Until(window, () => Math.Abs(
+                        right - (progressWindow.Left + progressWindow.ActualWidth) - 12) < 3,
+                    "Progress window did not align to monitor work-area right edge.");
+                var anchoredLeft = progressWindow.Left;
+                window.Width += 110;
+                Until(window, () => Math.Abs(progressWindow.Left - anchoredLeft) < 3,
+                    "Progress window shifted when the owner was resized on one monitor.");
+            }
+            finally
+            {
+                progressWindow.Finish();
+            }
+            Console.WriteLine("PASS: Progress dialog stays screen-anchored when PCasa resizes.");
 
             if (typeof(PCasa.App.MainWindow).GetMethod("SHObjectProperties",
                     BindingFlags.NonPublic | BindingFlags.Static) is null)
