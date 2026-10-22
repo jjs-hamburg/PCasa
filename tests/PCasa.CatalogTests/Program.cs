@@ -81,6 +81,7 @@ internal static class Program
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
+        Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
         Run("Thumbnail spacing preview and cancel retain current image", SpacingPreviewRetainsImageAnchor, failures);
@@ -97,7 +98,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {83 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {84 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -2363,6 +2364,36 @@ internal static class Program
         var second = new ImageTagRepository(db).GetRecentTags();
         if (second.Count != 2 || second[0] != "Ein" || second[1] != "Zwei")
             throw new Exception("Recently entered tags must survive new repository instances.");
+    }
+
+    private static void GalleryExplorerSelection()
+    {
+        var model = new GallerySelection();
+        var visible = Enumerable.Range(0, 8).Select(i =>
+            new BrowseThumbnailIndexEntry(i + 1, i < 5 ? 10 : 20,
+                192, "test.pack", 0, 100, 96, 96)).ToArray();
+        var selected = new HashSet<long>();
+        model.Click(2, System.Windows.Input.ModifierKeys.None, visible, selected);
+        model.Click(4, System.Windows.Input.ModifierKeys.Control, visible, selected);
+        if (!selected.SetEquals(new long[] { 2, 4 }))
+            throw new Exception("Ctrl-click did not toggle the clicked image.");
+        model.Click(5, System.Windows.Input.ModifierKeys.Shift, visible, selected);
+        if (!selected.SetEquals(new long[] { 2, 3, 4, 5 }))
+            throw new Exception("Shift did not select anchored contiguous range.");
+        model.Click(3, System.Windows.Input.ModifierKeys.Control |
+            System.Windows.Input.ModifierKeys.Shift, visible, selected);
+        if (!selected.SetEquals(new long[] { 2, 3 }))
+            throw new Exception("Ctrl+Shift unexpectedly changed Shift range semantics.");
+        model.SelectFolder(20, visible, selected);
+        if (!selected.SetEquals(new long[] { 6, 7, 8 }) || model.FocusedId != 6)
+            throw new Exception("Ctrl+A selected images from an unrelated folder.");
+        model.Click(3, System.Windows.Input.ModifierKeys.Shift, visible, selected);
+        if (!selected.SetEquals(new long[] { 3 }))
+            throw new Exception("Shift range illegally crossed folder boundary.");
+        model.Click(4, System.Windows.Input.ModifierKeys.None, visible, selected);
+        var moved = model.MoveFocus(-1, true, visible, selected);
+        if (moved != 3 || !selected.SetEquals(new long[] { 3, 4 }))
+            throw new Exception("Shift-arrow did not extend selection by one photo.");
     }
 
     private static void GalleryAnchorSurvivesWidthChange()
