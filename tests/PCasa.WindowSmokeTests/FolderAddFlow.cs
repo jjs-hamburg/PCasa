@@ -51,6 +51,8 @@ internal static class FolderAddFlow
             var tree = (TreeView)window.FindName("FoldersTree");
             var surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
             var status = (TextBlock)window.FindName("StatusText");
+            VerifyRotatedViewerGeometry(window);
+            Console.WriteLine("PASS: WPF viewer uses portrait canvas for EXIF-rotated JPEG, without squeezing.");
 
             // Slow second image simulates a very large/NAS import. The first
             // JPEG must already appear in the gallery before this scan can
@@ -237,6 +239,46 @@ internal static class FolderAddFlow
         Until(window, () => completed, "Could not complete manager dialog.");
         if (dispatchError is not null)
             throw new Exception("Real WPF manager staging failed.", dispatchError);
+    }
+
+    private static void VerifyRotatedViewerGeometry(PCasa.App.MainWindow window)
+    {
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var viewerOpen = window.GetType().GetField("_viewerOpen", flags)
+            ?? throw new Exception("WPF viewer state not found.");
+        var info = window.GetType().GetField("_viewerImageInfo", flags)
+            ?? throw new Exception("Viewer image dimensions not found.");
+        var set = window.GetType().GetMethod("SetViewerBitmap", flags)
+            ?? throw new Exception("Viewer bitmap setter not found.");
+        var image = (System.Windows.Controls.Image)window.FindName("PhotoViewerImage");
+
+        const int decodedWidth = 48, decodedHeight = 64;
+        var pixels = new byte[decodedWidth * decodedHeight * 4];
+        var orientedBitmap = BitmapSource.Create(decodedWidth, decodedHeight,
+            96, 96, PixelFormats.Bgr32, null, pixels, decodedWidth * 4);
+        orientedBitmap.Freeze();
+        viewerOpen.SetValue(window, true);
+        info.SetValue(window,
+            new PhotoViewerImageInfo(42, "original-exif6.jpg",
+                "original-exif6.jpg", 4032, 3024));
+        try
+        {
+            set.Invoke(window, new object?[] { orientedBitmap });
+            var adjusted = (PhotoViewerImageInfo?)info.GetValue(window);
+            if (adjusted is not { Width: 3024, Height: 4032 })
+                throw new Exception("EXIF6 viewer retained unrotated catalog dimensions.");
+            var displayedRatio = image.Width / image.Height;
+            if (double.IsNaN(displayedRatio) ||
+                Math.Abs(displayedRatio - 3024d / 4032) > 0.01)
+                throw new Exception(
+                    $"EXIF portrait was squeezed into a {displayedRatio:0.###} viewer canvas.");
+        }
+        finally
+        {
+            viewerOpen.SetValue(window, false);
+            info.SetValue(window, null);
+            image.Source = null;
+        }
     }
 
     private static bool SamePath(string? a, string b) =>
