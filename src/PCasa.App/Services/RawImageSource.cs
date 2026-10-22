@@ -138,7 +138,9 @@ public static class RawImageSource
         }
         cancellationToken.ThrowIfCancellationRequested();
         var errors = stderr.GetAwaiter().GetResult();
+        // A missing optional preview tag is expected on many camera models.
+        // Try the next tag instead of failing the entire import immediately.
         if (process.ExitCode != 0 && new FileInfo(destination).Length == 0)
-            throw new IOException("ExifTool konnte keine RAW-Vorschau liefern: " + errors.Trim());
+            return;
     }
 }
