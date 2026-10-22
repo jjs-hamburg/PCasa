@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using PCasa.App.Services;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -183,9 +184,12 @@ public sealed class CatalogScanSession : IDisposable
         _selectState = connection.CreateCommand();
         _selectState.CommandText =
             """
-            SELECT file_size, modified_utc_ticks, thumbnail_path, photo_folder_id, local_path
-            FROM images
-            WHERE canonical_path = $canonicalPath;
+            SELECT i.file_size, i.modified_utc_ticks, i.thumbnail_path,
+                   i.photo_folder_id, i.local_path,
+                   EXISTS(SELECT 1 FROM image_exif x WHERE x.image_id = i.id
+                       AND x.source_modified_utc_ticks = i.modified_utc_ticks
+                       AND x.source_file_size = i.file_size)
+            FROM images i WHERE i.canonical_path = $canonicalPath;
             """;
         _selectState.Parameters.Add("$canonicalPath", SqliteType.Text);
 
@@ -316,7 +320,7 @@ public sealed class CatalogScanSession : IDisposable
             reader.GetInt64(1),
             reader.GetString(2),
             reader.IsDBNull(3) ? null : reader.GetInt64(3),
-            reader.GetString(4));
+            reader.GetString(4), reader.GetInt32(5) != 0);
     }
 
     public long GetOrCreatePhotoFolder(
@@ -385,6 +389,45 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters["$thumbnailPath"].Value = image.ThumbnailPath;
         _upsert.Parameters["$indexedUtc"].Value = DateTime.UtcNow.ToString("O");
         _upsert.ExecuteNonQuery();
+        RegisterWrite();
+    }
+
+    public void SaveExif(string canonicalPath, long ticks, long size, ImageExifData exif)
+    {
+        ThrowIfDisposed();
+        EnsureTransaction();
+        using var cmd = _connection.CreateCommand();
+        cmd.Transaction = _transaction;
+        cmd.CommandText = """
+            INSERT INTO image_exif(image_id, source_modified_utc_ticks, source_file_size,
+                exif_json, camera_make, camera_model, date_time_original,
+                gps_latitude, gps_longitude, gps_altitude)
+            SELECT id, $ticks, $size, $json, $make, $model, $date,
+                $lat, $lon, $alt FROM images
+            WHERE canonical_path = $path AND modified_utc_ticks = $ticks
+                  AND file_size = $size
+            ON CONFLICT(image_id) DO UPDATE SET
+                source_modified_utc_ticks = excluded.source_modified_utc_ticks,
+                source_file_size = excluded.source_file_size,
+                exif_json = excluded.exif_json,
+                camera_make = excluded.camera_make,
+                camera_model = excluded.camera_model,
+                date_time_original = excluded.date_time_original,
+                gps_latitude = excluded.gps_latitude,
+                gps_longitude = excluded.gps_longitude,
+                gps_altitude = excluded.gps_altitude;
+            """;
+        cmd.Parameters.AddWithValue("$path", canonicalPath);
+        cmd.Parameters.AddWithValue("$ticks", ticks);
+        cmd.Parameters.AddWithValue("$size", size);
+        cmd.Parameters.AddWithValue("$json", exif.Json);
+        cmd.Parameters.AddWithValue("$make", (object?)exif.CameraMake ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$model", (object?)exif.CameraModel ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$date", (object?)exif.DateTimeOriginal ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$lat", (object?)exif.GpsLatitude ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$lon", (object?)exif.GpsLongitude ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$alt", (object?)exif.GpsAltitude ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
         RegisterWrite();
     }
 

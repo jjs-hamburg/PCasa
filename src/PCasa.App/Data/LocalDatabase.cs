@@ -113,6 +113,32 @@ public sealed class LocalDatabase
             command.ExecuteNonQuery();
         }
 
+        // One metadata row per photo, deleted by the existing image FK.
+        // The complete EXIF JSON is kept alongside indexed camera/GPS fields.
+        using (var exif = connection.CreateCommand())
+        {
+            exif.CommandText = """
+                CREATE TABLE IF NOT EXISTS image_exif (
+                    image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                    source_modified_utc_ticks INTEGER NOT NULL,
+                    source_file_size INTEGER NOT NULL,
+                    exif_json TEXT NOT NULL,
+                    camera_make TEXT,
+                    camera_model TEXT,
+                    date_time_original TEXT,
+                    gps_latitude REAL,
+                    gps_longitude REAL,
+                    gps_altitude REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_image_exif_gps
+                    ON image_exif(gps_latitude, gps_longitude)
+                    WHERE gps_latitude IS NOT NULL AND gps_longitude IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_image_exif_camera
+                    ON image_exif(camera_make, camera_model);
+                """;
+            exif.ExecuteNonQuery();
+        }
+
         // One durable metadata index shared by scanner, sidebar and tag search.
         // FTS rows are synchronized by SQLite triggers; no second in-memory tag list.
         using (var tags = connection.CreateCommand())

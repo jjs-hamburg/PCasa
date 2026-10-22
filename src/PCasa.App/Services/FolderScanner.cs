@@ -142,6 +142,8 @@ public sealed class FolderScanner
         var profile = _browseProfile.Get();
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
+        // ExifTool is reused throughout this scan, not restarted per file.
+        using var exifReader = new ImageExifReader();
         try
         {
             foreach (var localPath in specificFile is null
@@ -223,6 +225,15 @@ public sealed class FolderScanner
                             scanSession.FlushPending();
                         }
 
+                        // Enrich old catalogs without touching their thumbnails.
+                        if (!existing.HasCurrentExif)
+                        {
+                            scanSession.FlushPending();
+                            var exif = exifReader.Read(localPath, cancellationToken);
+                            scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
+                            scanSession.FlushPending();
+                        }
+
                         unchanged++;
                         if (firstFileInThisScanFolder)
                         {
@@ -266,6 +277,7 @@ public sealed class FolderScanner
                                 cancellationToken, originalSourcePath: localPath)
                             : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
                         var keywords = ImageTagRepository.ReadKeywords(localPath);
+                        var exif = exifReader.Read(localPath, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
 
                         lock (CatalogRemovalService.CacheLock)
@@ -279,6 +291,7 @@ public sealed class FolderScanner
                                 file.Name, extension.ToLowerInvariant(), fileLength,
                                 modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
                                 thumbnail.Path));
+                            scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             if (keywords is not null)
                                 scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
                             scanSession.SaveBrowseLocations(

@@ -5,7 +5,8 @@ public sealed record CatalogImageState(
     long ModifiedUtcTicks,
     string ThumbnailPath,
     long? PhotoFolderId,
-    string LocalPath);
+    string LocalPath,
+    bool HasCurrentExif = false);
 
 public sealed record CatalogImageData(
     long FolderId,
