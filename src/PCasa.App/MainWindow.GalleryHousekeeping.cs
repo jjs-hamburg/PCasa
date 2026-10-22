@@ -8,63 +8,18 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private bool _bulkFolderExpansion;
-    private void ThumbnailSpacing_Click(object sender, RoutedEventArgs e)
+    private void ThumbnailSpacingSlider_ValueChanged(
+        object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        var original = _appearance.ThumbnailSpacing;
-        ReflowSpacingPreservingScroll(BrowseSurface.BeginSpacingPreview);
-        var accepted = false;
-        var window = new Window
-        {
-            Owner = this,
-            Title = "Thumbnail-Abstand",
-            Width = 365,
-            Height = 165,
-            ResizeMode = ResizeMode.NoResize,
-            WindowStartupLocation = WindowStartupLocation.Manual,
-            Left = Left + Math.Max(0, ActualWidth * 0.61 - 180),
-            Top = Top + Math.Max(90, ActualHeight * 0.14),
-            ShowInTaskbar = false
-        };
-        window.SetResourceReference(Window.BackgroundProperty, "PcasaPanelBrush");
-        window.SetResourceReference(Window.ForegroundProperty, "PcasaTextBrush");
+        if (ThumbnailSpacingSlider is null || !_browseInitialized) return;
+        var spacing = Math.Clamp(e.NewValue, 0, 40);
+        if (Math.Abs(_appearance.ThumbnailSpacing - spacing) < 0.01) return;
 
-        var panel = new Grid { Margin = new Thickness(18, 12, 18, 12) };
-        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        panel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var heading = new TextBlock { Text = "Abstand zwischen den Vorschaubildern", Margin = new Thickness(0, 0, 0, 8) };
-        heading.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
-        panel.Children.Add(heading);
-        var slider = new Slider { Minimum = 0, Maximum = 40, Value = original, TickFrequency = 1, IsSnapToTickEnabled = false };
-        Grid.SetRow(slider, 1);
-        panel.Children.Add(slider);
-        var controls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        var ok = new Button { Content = "Okay", Width = 84, Margin = new Thickness(0, 0, 8, 0), IsDefault = true };
-        var cancel = new Button { Content = "Cancel", Width = 84, IsCancel = true };
-        // Use the same tested template as the status toolbar. Native Windows
-        // button hover visuals ignored the theme foreground in light mode.
-        foreach (var button in new[] { ok, cancel })
-            button.Style = (Style)FindResource("PcasaStatusButtonStyle");
-        controls.Children.Add(ok);
-        controls.Children.Add(cancel);
-        Grid.SetRow(controls, 2);
-        panel.Children.Add(controls);
-        window.Content = panel;
-        slider.ValueChanged += (_, args) => ApplySpacingPreservingScroll(args.NewValue);
-        ok.Click += (_, _) => { accepted = true; window.Close(); };
-        cancel.Click += (_, _) => window.Close();
-        window.Closed += (_, _) =>
-        {
-            if (accepted)
-            {
-                _appearance.ThumbnailSpacing = slider.Value;
-                SaveAppearance();
-            }
-            else
-                ApplySpacingPreservingScroll(original);
-            ReflowSpacingPreservingScroll(BrowseSurface.EndSpacingPreview);
-        };
-        window.Show();
+        // The toolbar replaces the old modal preview. Both use the same
+        // authoritative gallery reflow and persisted appearance setting.
+        _appearance.ThumbnailSpacing = spacing;
+        ApplySpacingPreservingScroll(spacing);
+        SaveAppearance();
     }
 
     private void ApplySpacingPreservingScroll(double value)

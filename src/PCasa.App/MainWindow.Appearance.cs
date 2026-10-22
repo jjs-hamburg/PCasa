@@ -230,6 +230,9 @@ public partial class MainWindow
         ApplyFolderStatusMode();
         if (ThumbnailSizeSlider is not null)
             ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 110, 320);
+        _appearance.ThumbnailSpacing = Math.Clamp(_appearance.ThumbnailSpacing, 0, 40);
+        if (ThumbnailSpacingSlider is not null)
+            ThumbnailSpacingSlider.Value = _appearance.ThumbnailSpacing;
         BrowseSurface.SetThumbnailSpacing(_appearance.ThumbnailSpacing);
         var background = actualBackground switch
         {

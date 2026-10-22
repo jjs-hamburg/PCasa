@@ -110,6 +110,32 @@ internal static class Program
             }
             Console.WriteLine("PASS: Light, dark and system menu/theme resources.");
 
+            // Footer layout: two distinct icon-only sliders, one A/B button,
+            // and the existing sidebar handlers via icon buttons.
+            var thumbSize = (Slider?)window.FindName("ThumbnailSizeSlider")
+                ?? throw new Exception("Thumbnail-size slider missing.");
+            var thumbGap = (Slider?)window.FindName("ThumbnailSpacingSlider")
+                ?? throw new Exception("Thumbnail-spacing slider missing.");
+            if (thumbGap.Minimum != 0 || thumbGap.Maximum != 40 ||
+                thumbSize.Minimum != 110 || thumbSize.Maximum != 320)
+                throw new Exception("Thumbnail toolbar slider range changed.");
+            var compareAb = (Button?)window.FindName("CompareAbButton")
+                ?? throw new Exception("A/B comparison button missing.");
+            if (!Equals(compareAb.Content, "A/B") ||
+                window.FindName("CompareAaButton") is not null)
+                throw new Exception("The footer must contain only A/B, not A/A.");
+            foreach (var name in new[] { "TagSidebarButton", "GpsSidebarButton", "InfoSidebarButton" })
+            {
+                if (window.FindName(name) is not Button { Content: Viewbox })
+                    throw new Exception("Sidebar toolbar is not an icon-only button: " + name);
+            }
+            if (items.SelectMany(item => item.Items.OfType<MenuItem>())
+                .SelectMany(item => item.Items.OfType<MenuItem>())
+                .Any(item => (item.Header?.ToString() ?? "").Contains(
+                    "Thumbnail-Abstand einstellen", StringComparison.Ordinal)))
+                throw new Exception("Obsolete thumbnail spacing dialog menu remains.");
+            Console.WriteLine("PASS: Icon-only footer and thumbnail spacing slider replace old menu.");
+
             // Exercise the actual ScrollViewer and responsive gallery together.
             // The synthetic images deliberately do not refer to real source
             // files, so this test cannot modify a user's picture collection.
@@ -185,6 +211,20 @@ internal static class Program
             if (originalIndex < closedVisible.First || originalIndex > closedVisible.Last)
                 throw new Exception("Closing sidebar changed active image.");
             Console.WriteLine("PASS: Closing sidebar preserves WPF gallery position.");
+
+            // Live slider changes must preserve the current photo anchor and
+            // reuse the original rendering/reflow path.
+            thumbGap.Value = 19;
+            Flush(window);
+            if (Math.Abs(thumbGap.Value - 19) > 0.01)
+                throw new Exception("Thumbnail spacing slider did not accept its value.");
+            var spacingField = typeof(BrowseGallerySurface).GetField("_cellGap",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Shared gallery spacing field missing.");
+            if (Math.Abs((double)spacingField.GetValue(surface)! - 19) > 0.01)
+                throw new Exception("Toolbar spacing was not applied to the gallery.");
+            Console.WriteLine("PASS: Thumbnail spacing slider updates the shared gallery layout.");
 
             // Real TreeView geometry: status symbols must use the space right
             // next to its vertical scrollbar. A second reserved margin in

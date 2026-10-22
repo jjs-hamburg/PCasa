@@ -36,6 +36,14 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- Shared Picasa-like 29 px icon buttons; no separate interaction model. -->
+        <Style x:Key="PcasaFooterIconButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource PcasaStatusButtonStyle}">
+            <Setter Property="Width" Value="29"/>
+            <Setter Property="Height" Value="25"/>
+            <Setter Property="Margin" Value="0,0,5,0"/>
+            <Setter Property="Padding" Value="3,2"/>
+        </Style>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -207,7 +215,6 @@
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
                             <MenuItem Header="GPS-, Tag- und RAW-Symbole" x:Name="ThumbnailIconsMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="Thumbnail-Abstand einstellen …" Click="ThumbnailSpacing_Click"/>
                             <MenuItem Header="Ordnerstatus-Legende" Click="FolderStatusLegend_Click" />
                             <MenuItem Header="Thumbnail-Schatten" IsCheckable="True" IsChecked="False" Loaded="BrowseThumbnailShadowMenu_Loaded" Click="BrowseThumbnailShadowMenu_Click" x:Name="ThumbnailShadowMenuItem" />
                         </MenuItem>
@@ -578,15 +585,73 @@
                            Foreground="{DynamicResource PcasaMutedTextBrush}"
                            Text="0 Bilder" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <StackPanel x:Name="ThumbnailSizeToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,18,0">
-                        <TextBlock Text="Thumbnailgröße" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource PcasaMutedTextBrush}" />
-                        <Slider x:Name="ThumbnailSizeSlider" Width="125" Minimum="110" Maximum="320" Value="190" ValueChanged="BrowseThumbnailSizeSlider_ValueChanged" VerticalAlignment="Center" />
+                    <StackPanel x:Name="ThumbnailSizeToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,11,0">
+                        <Viewbox Width="23" Height="23" Margin="0,0,4,0" ToolTip="Thumbnailgröße">
+                            <Canvas Width="24" Height="24">
+                                <Rectangle Canvas.Left="2" Canvas.Top="2" Width="20" Height="20" RadiusX="1"
+                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
+                                <Path Data="M 11,11 L 6,6 M 6,10 L 6,6 L 10,6 M 13,13 L 18,18 M 18,14 L 18,18 L 14,18"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                            </Canvas>
+                        </Viewbox>
+                        <Slider x:Name="ThumbnailSizeSlider" Width="105" Minimum="110" Maximum="320"
+                                Value="190" ValueChanged="BrowseThumbnailSizeSlider_ValueChanged"
+                                VerticalAlignment="Center" ToolTip="Thumbnailgröße" />
                     </StackPanel>
-                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/B" Width="38" Height="25" Margin="0,0,5,0" ToolTip="Zwei ausgewählte Bilder vergleichen" x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
-                    <Button Content="A/A" Width="38" Height="25" Margin="0,0,12,0" ToolTip="Ein Bild zweimal anzeigen" x:Name="CompareAaButton" Click="CompareAa_Click" IsEnabled="False" />
-                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="Tags" Height="25" Margin="0,0,5,0" ToolTip="Tags anzeigen" Tag="Tags" Click="SidebarMode_Click" />
-                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="GPS" Height="25" Margin="0,0,5,0" ToolTip="GPS-Informationen anzeigen" Tag="GPS" Click="SidebarMode_Click" />
-                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="Info" Height="25" Margin="0,0,12,0" ToolTip="Bildinformationen anzeigen" Tag="Info" Click="SidebarMode_Click" />
+                    <StackPanel x:Name="ThumbnailSpacingToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,13,0">
+                        <Viewbox Width="30" Height="23" Margin="0,0,4,0" ToolTip="Thumbnailabstand">
+                            <Canvas Width="34" Height="24">
+                                <Rectangle Canvas.Left="1.5" Canvas.Top="5" Width="9" Height="14"
+                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
+                                <Rectangle Canvas.Left="23.5" Canvas.Top="5" Width="9" Height="14"
+                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
+                                <Path Data="M 13,12 L 21,12 M 16,9 L 13,12 L 16,15 M 18,9 L 21,12 L 18,15"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"/>
+                            </Canvas>
+                        </Viewbox>
+                        <Slider x:Name="ThumbnailSpacingSlider" Width="97" Minimum="0" Maximum="40" Value="10"
+                                ValueChanged="ThumbnailSpacingSlider_ValueChanged"
+                                VerticalAlignment="Center" ToolTip="Thumbnailabstand" />
+                    </StackPanel>
+                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/B" Width="38" Height="25"
+                            Margin="0,0,10,0" ToolTip="Zwei ausgewählte Bilder vergleichen"
+                            x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
+                    <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                            ToolTip="Tags anzeigen" Tag="Tags" Click="SidebarMode_Click">
+                        <Viewbox Width="18" Height="18">
+                            <Canvas Width="24" Height="24">
+                                <Path Data="M 2,3 L 12,3 L 22,13 L 13,22 L 2,11 Z"
+                                      Fill="#4D9EDB" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1"/>
+                                <Ellipse Canvas.Left="5" Canvas.Top="6" Width="3.2" Height="3.2"
+                                         Fill="{DynamicResource PcasaPanelBrush}" />
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
+                    <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                            ToolTip="GPS-Informationen anzeigen" Tag="GPS" Click="SidebarMode_Click">
+                        <Viewbox Width="18" Height="18">
+                            <Canvas Width="24" Height="24">
+                                <Path Data="M 12,1 C 6.5,1 3,5 3,10 C 3,16 12,23 12,23 C 12,23 21,16 21,10 C 21,5 17.5,1 12,1 Z"
+                                      Fill="#DF4A54" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="0.8"/>
+                                <Ellipse Canvas.Left="8.6" Canvas.Top="6.6" Width="6.8" Height="6.8"
+                                         Fill="{DynamicResource PcasaPanelBrush}"/>
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
+                    <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                            Margin="0,0,11,0" ToolTip="Bildinformationen anzeigen" Tag="Info" Click="SidebarMode_Click">
+                        <Viewbox Width="18" Height="18">
+                            <Canvas Width="24" Height="24">
+                                <Ellipse Canvas.Left="2" Canvas.Top="2" Width="20" Height="20"
+                                         Fill="{DynamicResource PcasaAccentBrush}"/>
+                                <Ellipse Canvas.Left="10.8" Canvas.Top="6" Width="2.4" Height="2.4" Fill="White"/>
+                                <Rectangle Canvas.Left="11" Canvas.Top="10" Width="2" Height="8" Fill="White"/>
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
                     <TextBlock x:Name="SelectionText"
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource PcasaMutedTextBrush}"

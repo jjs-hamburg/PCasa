@@ -17,7 +17,6 @@ public partial class MainWindow
     private void UpdateComparisonButtons()
     {
         CompareAbButton.IsEnabled = !_viewerOpen && _selectedImageIds.Count == 2;
-        CompareAaButton.IsEnabled = !_viewerOpen && _selectedImageIds.Count == 1;
     }
 
     private async void CompareAb_Click(object sender, RoutedEventArgs e)
@@ -26,13 +25,6 @@ public partial class MainWindow
         var ordered = _browseIndex.Select(x => x.ImageId)
             .Where(id => _selectedImageIds.Contains(id)).Take(2).ToArray();
         if (ordered.Length == 2) await OpenComparisonAsync(ordered);
-    }
-
-    private async void CompareAa_Click(object sender, RoutedEventArgs e)
-    {
-        if (_selectedImageIds.Count != 1 || _viewerOpen) return;
-        var id = _selectedImageIds.Single();
-        await OpenComparisonAsync(new[] { id, id });
     }
 
     private async void ViewerAa_Click(object sender, RoutedEventArgs e)
