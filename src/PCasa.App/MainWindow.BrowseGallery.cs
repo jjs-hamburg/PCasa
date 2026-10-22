@@ -332,9 +332,42 @@ public partial class MainWindow
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
     }
 
-    // No timer-based gallery reflows during scanning. The scanner reports
-    // status/progress without replacing the current thumbnail layout. The
-    // gallery/index is refreshed once when a scan operation completes.
+    // On an empty first-run gallery, a successfully committed first image
+    // must become visible BEFORE a potentially many-hour NAS scan finishes.
+    // This is an event-driven ONE-TIME reveal, not periodic gallery rebuilding.
+    // Later scan progress continues to update ONLY the independent folder tree;
+    // the final scan completion reconciles the full gallery index once.
+    private bool _firstGalleryRevealInFlight;
+
+    private void RevealFirstScannedImage(ScanProgress scan)
+    {
+        if (!_browseInitialized || _folderManagerOpen || _folderRemovalPending ||
+            _firstGalleryRevealInFlight || _browseIndex.Count > 0 ||
+            scan.Updated <= 0)
+            return;
+
+        _firstGalleryRevealInFlight = true;
+        _ = RevealFirstScannedImageAsync();
+    }
+
+    private async Task RevealFirstScannedImageAsync()
+    {
+        try
+        {
+            // This is a catalog READ through the existing scheduler. Scanner
+            // commits use short transactions and need not yield or restart.
+            await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.FirstScanImage", ex);
+        }
+        finally
+        {
+            _firstGalleryRevealInFlight = false;
+        }
+    }
+
 
     private async void BrowseScanAll_Click(object sender, RoutedEventArgs e)
     {
@@ -385,6 +418,7 @@ public partial class MainWindow
                 var progress = new Progress<ScanProgress>(scan =>
                 {
                     ShowScannedPhotoFolder(scan);
+                    RevealFirstScannedImage(scan);
                     StatusText.Text =
                         $"Einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} Bilder · {scan.Failed:N0} Fehler";
                 });
