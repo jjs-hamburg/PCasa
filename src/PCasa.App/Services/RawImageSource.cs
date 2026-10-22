@@ -70,7 +70,7 @@ public static class RawImageSource
         using var pixels = Image.Thumbnail(renderedPath, width, height: height,
             size: Enums.Size.Down, noRotate: true);
         token.ThrowIfCancellationRequested();
-        return Orient(pixels, orientation);
+        return ApplyOrientation(pixels, orientation);
     }
 
     public static int GetRawOrientation(string path,
@@ -134,7 +134,7 @@ public static class RawImageSource
         return orientation;
     }
 
-    private static Image Orient(Image pixels, int orientation)
+    public static Image ApplyOrientation(Image pixels, int orientation)
     {
         // Only used on a noRotate:true input. Returning a new image keeps the
         // caller's lifetime independent of the temporarily loaded source.
