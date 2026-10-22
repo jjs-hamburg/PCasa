@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -45,6 +46,116 @@ public static class RawImageSource
         }
 
         return ExtractEmbeddedPreview(path, cancellationToken);
+    }
+
+    private static readonly ConcurrentDictionary<string,
+        (long Length, long Ticks, int Orientation)> OrientationCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// RAW previews sometimes carry no EXIF orientation of their own. Read the
+    /// orientation from the RAW container, disable automatic libvips rotation
+    /// and apply it exactly once to both gallery and viewer. Normal JPEG/PNG
+    /// paths keep the stable built-in libvips rotation.
+    /// </summary>
+    public static Image LoadDisplayThumbnail(string renderedPath, string originalPath,
+        int width, int height, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!IsRawPath(originalPath))
+            return Image.Thumbnail(renderedPath, width, height: height,
+                size: Enums.Size.Down);
+
+        var orientation = GetRawOrientation(originalPath, token);
+        using var pixels = Image.Thumbnail(renderedPath, width, height: height,
+            size: Enums.Size.Down, noRotate: true);
+        token.ThrowIfCancellationRequested();
+        return Orient(pixels, orientation);
+    }
+
+    public static int GetRawOrientation(string path,
+        CancellationToken token = default)
+    {
+        if (!IsRawPath(path)) return 1;
+        var info = new FileInfo(path);
+        if (OrientationCache.TryGetValue(path, out var cached) &&
+            cached.Length == info.Length && cached.Ticks == info.LastWriteTimeUtc.Ticks)
+            return cached.Orientation;
+
+        var executable = Environment.GetEnvironmentVariable("PCASA_EXIFTOOL_PATH");
+        if (string.IsNullOrWhiteSpace(executable))
+            executable = Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe");
+        if (!File.Exists(executable))
+            throw new FileNotFoundException("ExifTool für RAW-Orientierung fehlt.", executable);
+
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = Encoding.UTF8
+        };
+        start.ArgumentList.Add("-charset");
+        start.ArgumentList.Add("filename=UTF8");
+        start.ArgumentList.Add("-@");
+        start.ArgumentList.Add("-");
+        using var process = Process.Start(start)
+            ?? throw new IOException("ExifTool für RAW-Orientierung konnte nicht starten.");
+        using var stop = token.Register(() =>
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+        });
+        var errors = process.StandardError.ReadToEndAsync();
+        var result = process.StandardOutput.ReadToEndAsync();
+        process.StandardInput.WriteLine("-s3");
+        process.StandardInput.WriteLine("-n");
+        process.StandardInput.WriteLine("-Orientation");
+        process.StandardInput.WriteLine("--");
+        process.StandardInput.WriteLine(path);
+        process.StandardInput.Close();
+        if (!process.WaitForExit(30000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("ExifTool konnte RAW-Orientierung nicht lesen.");
+        }
+        token.ThrowIfCancellationRequested();
+        var stderr = errors.GetAwaiter().GetResult();
+        var value = result.GetAwaiter().GetResult().Trim();
+        if (process.ExitCode != 0)
+            throw new IOException("RAW-Orientierung nicht lesbar: " + stderr.Trim());
+        var orientation = int.TryParse(value, out var parsed) && parsed is >= 1 and <= 8
+            ? parsed : 1;
+        if (OrientationCache.Count >= 1024) OrientationCache.Clear();
+        OrientationCache[path] = (info.Length, info.LastWriteTimeUtc.Ticks, orientation);
+        return orientation;
+    }
+
+    private static Image Orient(Image pixels, int orientation)
+    {
+        // Only used on a noRotate:true input. Returning a new image keeps the
+        // caller's lifetime independent of the temporarily loaded source.
+        return orientation switch
+        {
+            2 => pixels.Flip(Enums.Direction.Horizontal),
+            3 => pixels.Rot(Enums.Angle.D180),
+            4 => pixels.Flip(Enums.Direction.Vertical),
+            5 => RotateAndFlip(pixels, Enums.Angle.D90, Enums.Direction.Horizontal),
+            6 => pixels.Rot(Enums.Angle.D90),
+            7 => RotateAndFlip(pixels, Enums.Angle.D90, Enums.Direction.Vertical),
+            8 => pixels.Rot(Enums.Angle.D270),
+            _ => pixels.Copy()
+        };
+    }
+
+    private static Image RotateAndFlip(Image pixels, Enums.Angle angle,
+        Enums.Direction direction)
+    {
+        using var rotated = pixels.Rot(angle);
+        return rotated.Flip(direction);
     }
 
     private static string ExtractEmbeddedPreview(string path, CancellationToken token)
