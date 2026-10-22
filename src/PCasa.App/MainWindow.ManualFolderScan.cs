@@ -105,7 +105,6 @@ public partial class MainWindow
         {
             window.UpdateScan(scan);
             ShowScannedPhotoFolder(scan);
-            RevealFirstScannedImage(scan);
             StatusText.Text =
                 $"Ordner aktualisieren: {scan.ImageFilesSeen:N0} geprüft · " +
                 $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · " +
