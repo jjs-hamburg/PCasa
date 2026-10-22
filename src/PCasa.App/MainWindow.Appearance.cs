@@ -312,74 +312,53 @@ public partial class MainWindow
     {
         if (mode == "Tags")
         {
-            // Tags are served exclusively from SQLite; never reopen a JPEG
-            // just because the user selects it in the sidebar.
             var keywords = new PCasa.App.Data.ImageTagRepository(_database).GetKeywords(id);
             return keywords is null ? "Tags werden noch indiziert." :
-                keywords.Length == 0 ? "Keine Tags in den Bildmetadaten." :
-                keywords;
+                keywords.Length == 0 ? "Keine Tags in den Bildmetadaten." : keywords;
         }
-        var path = GetImagePath(id);
-        if (path is null || !File.Exists(path)) return "Datei ist nicht erreichbar.";
-        var file = new FileInfo(path);
-        try
-        {
-            using var stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation,
-                BitmapCacheOption.None);
-            var frame = decoder.Frames[0];
-            var metadata = frame.Metadata as BitmapMetadata;
-            if (mode == "GPS")
-                return FormatGps(metadata);
-            return $"Name: {file.Name}\nOrdner: {file.DirectoryName}\nGröße: {file.Length / 1024d / 1024d:N2} MB\nAbmessungen: {frame.PixelWidth} × {frame.PixelHeight}\nAufnahme: {metadata?.DateTaken ?? "–"}\nKamera: {metadata?.CameraManufacturer} {metadata?.CameraModel}\nLetzte Änderung: {file.LastWriteTime:g}";
-        }
-        catch
-        {
-            return $"Name: {file.Name}\nOrdner: {file.DirectoryName}\nGröße: {file.Length / 1024d / 1024d:N2} MB\nLetzte Änderung: {file.LastWriteTime:g}";
-        }
-    }
 
-    private static string FormatGps(BitmapMetadata? metadata)
-    {
-        if (metadata is null) return "Keine GPS-Koordinaten in den Bildmetadaten.";
-        try
-        {
-            var lat = ReadGpsCoordinate(metadata.GetQuery("/app1/ifd/gps/{ushort=2}"));
-            var lon = ReadGpsCoordinate(metadata.GetQuery("/app1/ifd/gps/{ushort=4}"));
-            if (lat is null || lon is null) return "Keine GPS-Koordinaten in den Bildmetadaten.";
-            var latitudeRef = metadata.GetQuery("/app1/ifd/gps/{ushort=1}")?.ToString();
-            var longitudeRef = metadata.GetQuery("/app1/ifd/gps/{ushort=3}")?.ToString();
-            var latitude = lat.Value * (string.Equals(latitudeRef, "S", StringComparison.OrdinalIgnoreCase) ? -1 : 1);
-            var longitude = lon.Value * (string.Equals(longitudeRef, "W", StringComparison.OrdinalIgnoreCase) ? -1 : 1);
-            return $"Breitengrad: {latitude:F6}°\nLängengrad: {longitude:F6}°";
-        }
-        catch
-        {
-            return "Keine lesbaren GPS-Koordinaten gefunden.";
-        }
-    }
+        // Read the SAME catalog imported by FolderScanner, never reopen
+        // the original photo merely to switch the Info/GPS sidebar.
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT i.file_name, i.local_path, i.file_size, i.width, i.height,
+                   i.modified_utc_ticks, x.camera_make, x.camera_model,
+                   x.date_time_original, x.gps_latitude, x.gps_longitude,
+                   x.gps_altitude
+            FROM images i
+            LEFT JOIN image_exif x ON x.image_id = i.id
+                AND x.source_modified_utc_ticks = i.modified_utc_ticks
+                AND x.source_file_size = i.file_size
+            WHERE i.id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", id);
+        using var row = command.ExecuteReader();
+        if (!row.Read()) return "Bild ist nicht mehr im Katalog.";
+        string? StringAt(int col) => row.IsDBNull(col) ? null : row.GetString(col);
+        double? NumberAt(int col) => row.IsDBNull(col) ? null : row.GetDouble(col);
 
-    private static double? ReadGpsCoordinate(object? value)
-    {
-        if (value is ulong[] u && u.Length >= 3)
-        {
-            static double Rational(ulong v)
-            {
-                var numerator = (uint)v;
-                var denominator = (uint)(v >> 32);
-                return denominator == 0 ? double.NaN : (double)numerator / denominator;
-            }
-            var result = Rational(u[0]) + Rational(u[1]) / 60 + Rational(u[2]) / 3600;
-            return double.IsFinite(result) ? result : null;
-        }
-        if (value is uint[] n && n.Length >= 6)
-        {
-            var result = n[1] == 0 || n[3] == 0 || n[5] == 0
-                ? double.NaN
-                : (double)n[0] / n[1] + (double)n[2] / n[3] / 60 + (double)n[4] / n[5] / 3600;
-            return double.IsFinite(result) ? result : null;
-        }
-        return null;
+        var lat = NumberAt(9);
+        var lon = NumberAt(10);
+        if (mode == "GPS")
+            return lat is double latitude && lon is double longitude
+                ? $"Breitengrad: {latitude:F6}°\nLängengrad: {longitude:F6}°" +
+                  (NumberAt(11) is double alt ? $"\nHöhe: {alt:F1} m" : "")
+                : StringAt(6) is null && StringAt(7) is null && StringAt(8) is null
+                    ? "Keine GPS-Daten im Katalog (ggf. Metadaten noch einlesen)."
+                    : "Keine GPS-Koordinaten in den Bildmetadaten.";
+
+        var path = row.GetString(1);
+        var modified = new DateTime(row.GetInt64(5), DateTimeKind.Utc).ToLocalTime();
+        var camera = string.Join(" ", new[] { StringAt(6), StringAt(7) }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
+        return $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
+               $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
+               $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
+               $"\nAufnahme: {StringAt(8) ?? "–"}" +
+               $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
+               $"\nGPS: {(lat.HasValue && lon.HasValue ? "vorhanden" : "–")}" +
+               $"\nLetzte Änderung: {modified:g}";
     }
 
     private string? GetImagePath(long id)
