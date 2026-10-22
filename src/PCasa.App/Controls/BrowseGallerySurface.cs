@@ -59,7 +59,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
     public BrowseGallerySurface()
     {
-        Focusable = false;
+        Focusable = true;
         SnapsToDevicePixels = true;
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.LowQuality);
     }
