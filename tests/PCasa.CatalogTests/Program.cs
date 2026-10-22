@@ -76,6 +76,7 @@ internal static class Program
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
+        Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
@@ -93,7 +94,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {79 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {80 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -2098,6 +2099,60 @@ internal static class Program
             throw new Exception("Removing one keyword damaged another keyword.");
         if (!before.SequenceEqual(PixelHash(path)))
             throw new Exception("JPEG decoded pixels changed during lossless tag editing.");
+    }
+
+    private static void ScannerPublishesFoldersIncrementally()
+    {
+        using var sandbox = new Sandbox();
+        var first = Path.Combine(sandbox.Images, "01-First");
+        var second = Path.Combine(sandbox.Images, "02-Second");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        WriteJpeg(Path.Combine(first, "photo1.jpg"));
+        WriteJpeg(Path.Combine(second, "photo2.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+
+        using var cancel = new CancellationTokenSource();
+        ScanProgress? discovered = null;
+        var callback = new InlineProgress<ScanProgress>(progress =>
+        {
+            if (progress.DiscoveredPhotoFolderId is not long folderId) return;
+            if (discovered is not null) return;
+            discovered = progress;
+
+            // The directory event is published only after the first image
+            // and its thumbnail index have committed. This is before the
+            // scan has enumerated the second directory.
+            var indexed = new ImageCatalogRepository(db).GetPhotoFolders();
+            if (!indexed.Any(folder => folder.Id == folderId &&
+                string.Equals(folder.LocalPath,
+                    progress.DiscoveredPhotoFolderPath,
+                    StringComparison.OrdinalIgnoreCase) && folder.ImageCount > 0))
+                throw new Exception("Folder progress event preceded catalog commit.");
+            if (new ImageCatalogRepository(db).CountAll() != 1)
+                throw new Exception("Folder event was not incremental.");
+            cancel.Cancel();
+        });
+        try
+        {
+            scanner.Scan(root, callback, cancel.Token);
+            throw new Exception("Scanner ignored cancellation after first directory.");
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+        if (discovered is not { DiscoveredPhotoFolderId: > 0 } ||
+            new ImageCatalogRepository(db).CountAll() != 1)
+            throw new Exception("New directory was not visible before completion.");
+
+        var subsequent = new List<string>();
+        var complete = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.DiscoveredPhotoFolderPath is string path)
+                subsequent.Add(path);
+        });
+        scanner.Scan(root, complete);
+        if (new ImageCatalogRepository(db).CountAll() != 2 ||
+            !subsequent.Contains(second, StringComparer.OrdinalIgnoreCase))
+            throw new Exception("Subsequent scan did not publish newly discovered sibling.");
     }
 
     private static void JpegExifOrientationViewer()
