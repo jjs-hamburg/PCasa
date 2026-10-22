@@ -111,8 +111,25 @@ public partial class MainWindow
             ? null : folder.LocalPath;
     }
 
+    private static void AutoScrollOnDrag(ScrollViewer scroller, Point pointer)
+    {
+        // Native Explorer behavior: hovering at the view edges scrolls the
+        // destination while the user continues holding the mouse button.
+        const double edge = 36;
+        const double step = 32;
+        var height = scroller.ViewportHeight;
+        if (height < 2 * edge) return;
+        if (pointer.Y < edge && pointer.Y >= 0)
+            scroller.ScrollToVerticalOffset(
+                Math.Max(0, scroller.VerticalOffset - step));
+        else if (pointer.Y > height - edge && pointer.Y <= height)
+            scroller.ScrollToVerticalOffset(
+                Math.Min(scroller.ScrollableHeight, scroller.VerticalOffset + step));
+    }
+
     private void GalleryFiles_DragOver(object sender, DragEventArgs e)
     {
+        AutoScrollOnDrag(BrowseScrollViewer, e.GetPosition(BrowseScrollViewer));
         e.Effects = DragDropEffects.None;
         var files = DropFiles(e);
         if (GalleryDropTarget(e) is string target &&
@@ -150,6 +167,9 @@ public partial class MainWindow
 
     private void FolderTreeFiles_DragOver(object sender, DragEventArgs e)
     {
+        if (FoldersTree.Template.FindName("PART_ScrollViewer", FoldersTree)
+            is ScrollViewer scroller)
+            AutoScrollOnDrag(scroller, e.GetPosition(scroller));
         e.Effects = DragDropEffects.None;
         var files = DropFiles(e);
         if (TreeDropTarget(e) is string target &&
