@@ -27,80 +27,54 @@ public partial class MainWindow
         }
     }
 
+    private bool _manualContextScanActive;
+
     private async void BrowseScanCurrentFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (_manualScanRunning || (_isScanning && !_backgroundWorkerRunning))
+        if (_manualContextScanActive)
         {
+            StatusText.Text = "Der angeforderte manuelle Ordnerscan läuft bereits.";
+            return;
+        }
+
+        if (_folderRemovalPending)
+        {
+            StatusText.Text = "Ordner wird gerade entfernt – Scan nicht gestartet.";
             return;
         }
 
         if (FoldersTree.SelectedItem is not TreeViewItem item ||
             item.Tag is not FolderTreeTag tag)
         {
+            StatusText.Text = "Bitte zuerst den einzulesenden Ordner auswählen.";
             return;
         }
 
-        var folder = ResolveMonitoredFolder(tag.FullPath);
-        if (folder is null)
-        {
-            MessageBox.Show(
-                this,
-                "Dieser Struktureintrag liegt oberhalb der überwachten Ordner und kann nicht direkt eingelesen werden.",
-                "PCasa",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
-
+        // No existence probe, source-generation update or scan is performed
+        // outside the scheduler. Even an unreachable SMB path is checked by
+        // the priority worker, not by the UI event handler.
         var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
-        if (FolderExclusionRules.IsExcluded(
-                directory, _folderRepository.GetExcludedPaths(folder.Id)))
-        {
-            MessageBox.Show(this,
-                "Dieser Unterordner ist im Ordnermanager ausgeschlossen.",
-                "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        // A missing VPN/SMB root can block Directory.Exists. Never probe the
-        // network synchronously from the folder-tree context menu.
-        if (IsPathKnownOffline(directory) ||
-            !await Task.Run(() => Directory.Exists(directory)))
-        {
-            MessageBox.Show(
-                this,
-                $"Der Ordner ist nicht erreichbar:\n\n{directory}",
-                "PCasa",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
-
-        if (_folderRemovalPending) return;
-
-        // The catalog now has separate priority lanes and short transactional
-        // pack locks. A manual scan can start without waiting for a blocked
-        // background SMB probe, pack build or maintenance call to return.
-        // The previous polling loops defeated scheduler preemption.
-        _manualFolderScanWaiting = true;
-        _backgroundCurrentScanCancellation?.Cancel();
-        _cacheMaintenanceCancellation?.Cancel();
-        _browseCacheCancellation?.Cancel();
+        _manualContextScanActive = true;
         _manualScanRunning = true;
         _isScanning = true;
         ScanAllMenuItem.IsEnabled = false;
+
         using var cancellation = new CancellationTokenSource();
         _activeScanCancellation = cancellation;
-        _activeScanFolderId = folder.Id;
-
+        _activeScanFolderId = null;
         TrackFolderActivity(directory, "Working", recursive: true);
         RefreshFolderStatusVisuals();
 
-        var window = new BrowseCacheProgressWindow { Owner = this };
-        _browseProgressWindow = window;
-        window.Show();
+        var ownsWindow = _browseProgressWindow is null;
+        var window = _browseProgressWindow ??
+            new BrowseCacheProgressWindow { Owner = this };
+        if (ownsWindow)
+        {
+            _browseProgressWindow = window;
+            window.Show();
+        }
         window.UpdateScan(new ScanProgress(0, 0, 0, 0, directory));
-
+        StatusText.Text = $"Manueller Scan angefordert (höchste Priorität): {directory}";
         var progress = new Progress<ScanProgress>(scan =>
         {
             window.UpdateScan(scan);
@@ -113,74 +87,88 @@ public partial class MainWindow
 
         try
         {
-            StatusText.Text = $"Einlesen: {directory}";
-            // Manual scans enter the shared scheduler rather than starting
-            // an independent Task.Run worker. The source generation fences
-            // work that was queued before removal/re-inclusion.
-            var scanGeneration = await Task.Run(
-                () => _folderRepository.BeginManualScan(folder.CanonicalPath));
             ScanResult? scanResult = null;
             await _scheduler.EnqueueAsync(
-                $"manual-scan:{folder.Id}:{scanGeneration}:{directory}",
-                SchedulerPriority.UserAction,
+                $"manual-scan:{Guid.NewGuid():N}:{directory}",
+                SchedulerPriority.ManualAction,
                 token =>
                 {
+                    // Validation, generation fencing and the complete
+                    // filesystem/database reconciliation have one scheduler
+                    // owner, with no separate Task.Run or scan code path.
+                    var folder = ResolveMonitoredFolder(directory)
+                        ?? throw new InvalidOperationException(
+                            "Dieser Struktureintrag liegt außerhalb der PCasa-Überwachung.");
+                    if (FolderExclusionRules.IsExcluded(directory,
+                        _folderRepository.GetExcludedPaths(folder.Id)))
+                        throw new InvalidOperationException(
+                            "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
+                    token.ThrowIfCancellationRequested();
+                    if (!Directory.Exists(directory))
+                        throw new DirectoryNotFoundException(
+                            $"Der Ordner ist nicht erreichbar: {directory}");
+                    _folderRepository.BeginManualScan(folder.CanonicalPath);
                     scanResult = _folderScanner.ScanDirectory(
                         folder, directory, recursive: true, progress, token);
                     return Task.CompletedTask;
                 },
-                () => _folderRepository.IsCurrentSourceGeneration(
-                    folder.CanonicalPath, scanGeneration, true),
-                cancellation.Token);
-            var result = scanResult ?? throw new OperationCanceledException();
-            TrackFolderActivity(directory, result.Failed > 0 ? "Failed" : "Ready", recursive: true);
-            RefreshFolderStatusVisuals();
+                cancellationToken: cancellation.Token);
 
-            // The scanner has already built every configured tier for changed
-            // images. Do not stall a high-priority manual refresh behind other
-            // unrelated pending cache jobs.
-            await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: true);
+            var result = scanResult ?? throw new OperationCanceledException();
+            TrackFolderActivity(directory,
+                result.Failed > 0 ? "Failed" : "Ready", recursive: true);
+            RefreshFolderStatusVisuals();
+            await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                warmViewport: true);
+            RefreshFolderTree();
+            StatusText.Text = result.Failed == 0
+                ? $"Scan abgeschlossen: {result.Updated:N0} aktualisiert · " +
+                  $"{result.Removed:N0} verwaiste Einträge entfernt"
+                : $"Scan unvollständig: {result.Failed:N0} Fehler; " +
+                  "verwaiste Einträge wurden aus Sicherheitsgründen nicht gelöscht.";
         }
         catch (OperationCanceledException)
         {
             TrackFolderActivity(directory, "Pending", recursive: true);
             RefreshFolderStatusVisuals();
+            StatusText.Text = $"Manueller Scan abgebrochen: {directory}";
         }
         catch (Exception ex)
         {
             TrackFolderActivity(directory, "Failed", recursive: true);
             RefreshFolderStatusVisuals();
-            MessageBox.Show(
-                this,
-                $"Der Ordner konnte nicht eingelesen werden.\n\n{ex.Message}",
-                "PCasa",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            PCasaDiagnostics.Write("Catalog.ManualFolderScan", ex);
+            MessageBox.Show(this, $"Der Ordner konnte nicht eingelesen werden.\\n\\n{ex.Message}",
+                "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            window.Finish();
-            if (ReferenceEquals(_browseProgressWindow, window))
-                _browseProgressWindow = null;
+            if (ownsWindow)
+            {
+                window.Finish();
+                if (ReferenceEquals(_browseProgressWindow, window))
+                    _browseProgressWindow = null;
+            }
             if (ReferenceEquals(_activeScanCancellation, cancellation))
             {
                 _activeScanCancellation = null;
                 _activeScanFolderId = null;
             }
-
-            _manualScanRunning = false;
-            _manualFolderScanWaiting = false;
-            _isScanning = _backgroundWorkerRunning;
-            // Any root added during this scan keeps its durable user request.
-            QueuePendingInitialScans();
+            _manualContextScanActive = false;
+            _manualScanRunning = _initialScanActive;
+            _isScanning = _backgroundWorkerRunning || _manualScanRunning;
             ScanAllMenuItem.IsEnabled = !_isScanning;
+            QueuePendingInitialScans();
 
-            // Cache repair preempted by the manual action is resumed silently,
-            // without forcing another directory scan.
             if (_backgroundScanSettings?.Enabled == true)
-                QueueBackgroundChange(new BackgroundFolderChange(
-                    folder.Id, folder.LocalPath,
-                    BackgroundFolderChangeKind.RecoverCache, false));
+            {
+                // Scheduler-controlled cache recovery, not a second scan.
+                var monitored = ResolveMonitoredFolder(directory);
+                if (monitored is not null)
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        monitored.Id, monitored.LocalPath,
+                        BackgroundFolderChangeKind.RecoverCache, false));
+            }
         }
     }
 
