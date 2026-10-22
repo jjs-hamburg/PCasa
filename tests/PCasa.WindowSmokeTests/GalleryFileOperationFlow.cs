@@ -186,7 +186,7 @@ internal static class GalleryFileOperationFlow
             {
                 Until(window, () => !CatalogContains(db, old) && CatalogContains(db, renamed),
                     "Manual user scan did not replace renamed catalog row.");
-                Until(window, () => new BrowseCacheRepository(db).GetIndex(96).Count == 3 &&
+                Until(window, () => CountInRoot(db, root) == 3 &&
                     new BrowseCacheRepository(db).GetIndex(96).Any(entry =>
                         string.Equals(entry.FileName, "renamed-manually.jpg", StringComparison.OrdinalIgnoreCase)),
                     "Manual scan did not reload renamed image in thumbnail index.");
