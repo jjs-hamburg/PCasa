@@ -740,56 +740,85 @@ public partial class MainWindow
         UpdateActiveFolderDisplay(folderId.Value, updateTreeSelection: false);
     }
 
-    private async void BrowseThumbnailSizeSlider_ValueChanged(
-        object sender,
-        RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (!_browseInitialized || _browseCacheBuilding)
-        {
-            return;
-        }
+    private bool _thumbnailSizePreviewActive;
+    private bool _thumbnailSizeFrameScheduled;
 
+    private void ThumbnailSizeThumb_DragStarted(object sender, System.Windows.Controls.Primitives.DragStartedEventArgs e)
+    {
+        if (!_browseInitialized || _thumbnailSizePreviewActive) return;
+        _thumbnailSizePreviewActive = true;
+        _thumbnailSizeCancellation?.Cancel();
+        ReflowSpacingPreservingScroll(BrowseSurface.BeginSizePreview);
+    }
+
+    private void ThumbnailSizeThumb_DragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+    {
+        if (_thumbnailSizePreviewActive)
+        {
+            _thumbnailSizePreviewActive = false;
+            ReflowSpacingPreservingScroll(BrowseSurface.EndSizePreview);
+        }
+        SaveFooterSettingsNow();
+        ScheduleThumbnailTierRefresh();
+    }
+
+    private void BrowseThumbnailSizeSlider_ValueChanged(
+        object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_browseInitialized) return;
+        _appearance.ThumbnailWidth = Math.Clamp(e.NewValue, 72, 600);
+        if (!_thumbnailSizePreviewActive) ScheduleFooterSettingsSave();
+
+        // Immediate reflow from already decoded pages. The cache tier is
+        // NOT reloaded during mouse dragging. Limit layout to one WPF frame.
+        if (!_thumbnailSizeFrameScheduled)
+        {
+            _thumbnailSizeFrameScheduled = true;
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _thumbnailSizeFrameScheduled = false;
+                if (!_browseInitialized || Dispatcher.HasShutdownStarted) return;
+                ReflowSpacingPreservingScroll(() =>
+                    BrowseSurface.SetThumbnailWidth(ThumbnailSizeSlider.Value));
+            }), DispatcherPriority.Render);
+        }
+        if (!_thumbnailSizePreviewActive) ScheduleThumbnailTierRefresh();
+    }
+
+    private void ScheduleThumbnailTierRefresh()
+    {
         _thumbnailSizeCancellation?.Cancel();
         _thumbnailSizeCancellation?.Dispose();
         _thumbnailSizeCancellation = new CancellationTokenSource();
-        var cancellation = _thumbnailSizeCancellation;
+        if (_thumbnailSizePreviewActive || _browseCacheBuilding) return;
+        _ = RefreshThumbnailTierAfterIdleAsync(_thumbnailSizeCancellation.Token);
+    }
 
+    private async Task RefreshThumbnailTierAfterIdleAsync(CancellationToken cancellation)
+    {
         try
         {
-            await Task.Delay(120, cancellation.Token);
-            if (cancellation.IsCancellationRequested || _browseProfileRepository is null)
-            {
+            await Task.Delay(260, cancellation);
+            if (cancellation.IsCancellationRequested || _thumbnailSizePreviewActive ||
+                !_browseInitialized || _browseCacheBuilding ||
+                _browseProfileRepository is null)
                 return;
-            }
 
-            var profile = _browseProfileRepository.Get();
-            var desiredTier = profile.ChooseForDisplayWidth(ThumbnailSizeSlider.Value);
-            // Changing the thumbnail size must preserve the actual image,
-            // not jump back to the beginning of its folder.
-            QueueGalleryAnchorRestore();
+            var profile = await _scheduler.RunAsync(
+                $"catalog:slider-profile:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token => { token.ThrowIfCancellationRequested(); return _browseProfileRepository.Get(); },
+                cancellationToken: cancellation,
+                workKind: SchedulerWorkKind.CatalogRead);
 
-            if (_activeBrowseTier != desiredTier)
-            {
-                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: true);
-            }
-            else
-            {
-                BrowseSurface.SetThumbnailWidth(ThumbnailSizeSlider.Value);
-                await Dispatcher.InvokeAsync(
-                    () => BrowseScrollViewer.UpdateLayout(),
-                    DispatcherPriority.Loaded);
-            }
-
-            BrowseScrollViewer.UpdateLayout();
-            RestorePendingGalleryAnchor();
-
-            BrowseSurface.SetViewport(
-                BrowseScrollViewer.VerticalOffset,
-                Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            if (cancellation.IsCancellationRequested || _thumbnailSizePreviewActive)
+                return;
+            var nextTier = profile.ChooseForDisplayWidth(ThumbnailSizeSlider.Value);
+            if (_activeBrowseTier != nextTier)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Gallery.ThumbnailTierAfterIdle", ex); }
     }
 
     private void BrowseGalleryViewport_SizeChanged(object sender, SizeChangedEventArgs e)

@@ -2726,6 +2726,14 @@ internal static class Program
                 throw new Exception($"Spacing {spacing} replaced the anchored photo.");
         }
 
+        gallery.SetThumbnailSpacing(160);
+        gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
+        gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));
+        if (Math.Abs((double)typeof(BrowseGallerySurface).GetField("_rowGap",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(gallery)! - 160) > 0.01)
+            throw new Exception("Large spacing setting did not change vertical spacing.");
+
         gallery.EndSpacingPreview();
         gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
         gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));

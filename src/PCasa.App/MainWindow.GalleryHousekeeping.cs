@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Threading;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -8,17 +10,100 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private bool _bulkFolderExpansion;
+    private bool _spacingPreviewActive;
+    private bool _spacingFrameScheduled;
+    private DispatcherTimer? _footerSettingsTimer;
+
+    private void CompactThumbnailSlider_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Slider slider) return;
+        slider.ApplyTemplate();
+        var track = slider.Template.FindName("PART_Track", slider) as Track;
+        if (track?.Thumb is not Thumb thumb) return;
+        thumb.Width = 12;
+        thumb.Height = 12;
+        thumb.Template = (ControlTemplate)FindResource("PcasaCompactSliderThumbTemplate");
+
+        if (ReferenceEquals(slider, ThumbnailSpacingSlider))
+        {
+            thumb.DragStarted -= ThumbnailSpacingThumb_DragStarted;
+            thumb.DragCompleted -= ThumbnailSpacingThumb_DragCompleted;
+            thumb.DragStarted += ThumbnailSpacingThumb_DragStarted;
+            thumb.DragCompleted += ThumbnailSpacingThumb_DragCompleted;
+        }
+        if (ReferenceEquals(slider, ThumbnailSizeSlider))
+        {
+            thumb.DragStarted -= ThumbnailSizeThumb_DragStarted;
+            thumb.DragCompleted -= ThumbnailSizeThumb_DragCompleted;
+            thumb.DragStarted += ThumbnailSizeThumb_DragStarted;
+            thumb.DragCompleted += ThumbnailSizeThumb_DragCompleted;
+        }
+    }
+
+    private void ThumbnailSpacingThumb_DragStarted(object sender, DragStartedEventArgs e)
+    {
+        if (!_browseInitialized || _spacingPreviewActive) return;
+        _spacingPreviewActive = true;
+        ReflowSpacingPreservingScroll(BrowseSurface.BeginSpacingPreview);
+    }
+
+    private void ThumbnailSpacingThumb_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (_spacingPreviewActive)
+        {
+            _spacingPreviewActive = false;
+            ReflowSpacingPreservingScroll(BrowseSurface.EndSpacingPreview);
+        }
+        SaveFooterSettingsNow();
+    }
+
     private void ThumbnailSpacingSlider_ValueChanged(
         object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (ThumbnailSpacingSlider is null || !_browseInitialized) return;
-        var spacing = Math.Clamp(e.NewValue, 0, 40);
+        var spacing = Math.Clamp(e.NewValue, 0, 160);
         if (Math.Abs(_appearance.ThumbnailSpacing - spacing) < 0.01) return;
-
-        // The toolbar replaces the old modal preview. Both use the same
-        // authoritative gallery reflow and persisted appearance setting.
         _appearance.ThumbnailSpacing = spacing;
-        ApplySpacingPreservingScroll(spacing);
+
+        // The original single spacing-preview layout owns BOTH axes.
+        // Coalescing input to one WPF frame prevents redundant reflows.
+        if (!_spacingFrameScheduled)
+        {
+            _spacingFrameScheduled = true;
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _spacingFrameScheduled = false;
+                if (!_browseInitialized || Dispatcher.HasShutdownStarted) return;
+                ApplySpacingPreservingScroll(ThumbnailSpacingSlider.Value);
+            }), DispatcherPriority.Render);
+        }
+        if (!_spacingPreviewActive) ScheduleFooterSettingsSave();
+    }
+
+    private void ScheduleFooterSettingsSave()
+    {
+        _footerSettingsTimer ??= CreateFooterSettingsTimer();
+        _footerSettingsTimer.Stop();
+        _footerSettingsTimer.Start();
+    }
+
+    private DispatcherTimer CreateFooterSettingsTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(450)
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            SaveAppearance();
+        };
+        return timer;
+    }
+
+    private void SaveFooterSettingsNow()
+    {
+        _footerSettingsTimer?.Stop();
         SaveAppearance();
     }
 
@@ -27,8 +112,6 @@ public partial class MainWindow
 
     private void ReflowSpacingPreservingScroll(Action update)
     {
-        // Spacing preview uses the same image identity anchor as sidebar,
-        // thumbnail-size and folder-layout changes. No parallel scroll math.
         QueueGalleryAnchorRestore();
         update();
         BrowseScrollViewer.UpdateLayout();

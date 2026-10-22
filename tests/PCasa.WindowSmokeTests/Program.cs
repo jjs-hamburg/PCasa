@@ -116,8 +116,8 @@ internal static class Program
                 ?? throw new Exception("Thumbnail-size slider missing.");
             var thumbGap = (Slider?)window.FindName("ThumbnailSpacingSlider")
                 ?? throw new Exception("Thumbnail-spacing slider missing.");
-            if (thumbGap.Minimum != 0 || thumbGap.Maximum != 40 ||
-                thumbSize.Minimum != 110 || thumbSize.Maximum != 320)
+            if (thumbGap.Minimum != 0 || thumbGap.Maximum != 160 ||
+                thumbSize.Minimum != 72 || thumbSize.Maximum != 600)
                 throw new Exception("Thumbnail toolbar slider range changed.");
             var compareAb = (Button?)window.FindName("CompareAbButton")
                 ?? throw new Exception("A/B comparison button missing.");
@@ -225,6 +225,53 @@ internal static class Program
             if (Math.Abs((double)spacingField.GetValue(surface)! - 19) > 0.01)
                 throw new Exception("Toolbar spacing was not applied to the gallery.");
             Console.WriteLine("PASS: Thumbnail spacing slider updates the shared gallery layout.");
+
+            // The actual spacing value is a shared minimum horizontal gap
+            // and an equal vertical gap. Slider changes are not a second
+            // layout algorithm and cannot affect just the vertical axis.
+            thumbGap.Value = 125;
+            Flush(window);
+            var minHorizontalGap = typeof(BrowseGallerySurface).GetField("_cellGap",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance);
+            var verticalGap = typeof(BrowseGallerySurface).GetField("_rowGap",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance);
+            if (Math.Abs((double)minHorizontalGap!.GetValue(surface)! - 125) > 0.01 ||
+                Math.Abs((double)verticalGap!.GetValue(surface)! - 125) > 0.01)
+                throw new Exception("Spacing controls did not update BOTH axes.");
+            thumbGap.Value = 19;
+            Flush(window);
+            // The old preview also applies to live footer dragging, with
+            // a shared column-count lock and a final normal layout.
+            var previewStart = typeof(BrowseGallerySurface).GetMethod("BeginSpacingPreview")!;
+            var previewEnd = typeof(BrowseGallerySurface).GetMethod("EndSpacingPreview")!;
+            previewStart.Invoke(surface, null);
+            if (typeof(BrowseGallerySurface).GetField("_spacingPreviewColumns",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)?.GetValue(surface) is not int)
+                throw new Exception("Original spacing preview column lock missing.");
+            previewEnd.Invoke(surface, null);
+            Console.WriteLine("PASS: Wide spacing range, both axes and original preview lock.");
+
+            // On size changes the visible cache tier must remain in place
+            // until the slider drag completes. Image identity stays stable.
+            var initialSize = surface.ThumbnailWidth;
+            var imageBeforeSize = surface.CaptureImageAnchor(scroller.VerticalOffset);
+            var beforeSizeIndex = typeof(PCasa.App.MainWindow).GetField("_activeBrowseTier",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)?.GetValue(window);
+            thumbSize.Value = 540;
+            Flush(window);
+            if (Math.Abs(surface.ThumbnailWidth - 540) > 0.01)
+                throw new Exception("Thumbnail size is not updated in the next WPF frame.");
+            if (!Equals(beforeSizeIndex, typeof(PCasa.App.MainWindow)
+                    .GetField("_activeBrowseTier", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)?.GetValue(window)))
+                throw new Exception("Sizing synchronously reloaded the thumbnail tier.");
+            thumbSize.Value = initialSize;
+            Flush(window);
+            Console.WriteLine("PASS: Thumbnail size changes immediately without synchronous cache reload.");
 
             // Real TreeView geometry: status symbols must use the space right
             // next to its vertical scrollbar. A second reserved margin in

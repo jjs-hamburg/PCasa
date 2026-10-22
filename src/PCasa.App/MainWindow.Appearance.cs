@@ -229,8 +229,8 @@ public partial class MainWindow
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
         ApplyFolderStatusMode();
         if (ThumbnailSizeSlider is not null)
-            ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 110, 320);
-        _appearance.ThumbnailSpacing = Math.Clamp(_appearance.ThumbnailSpacing, 0, 40);
+            ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 72, 600);
+        _appearance.ThumbnailSpacing = Math.Clamp(_appearance.ThumbnailSpacing, 0, 160);
         if (ThumbnailSpacingSlider is not null)
             ThumbnailSpacingSlider.Value = _appearance.ThumbnailSpacing;
         BrowseSurface.SetThumbnailSpacing(_appearance.ThumbnailSpacing);

@@ -27,6 +27,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double _cellGap = 10;
     private double _rowGap = 8;
     private int? _spacingPreviewColumns;
+    private bool _previewUsesLiteralSpacing;
     private const double ShadowDepth = 2;
     private const double FileLabelHeight = 18;
     private bool _showFileNames = true;
@@ -193,20 +194,34 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
     public void BeginSpacingPreview()
     {
+        BeginLayoutPreview(literalSpacing: true);
+    }
+
+    public void BeginSizePreview()
+    {
+        BeginLayoutPreview(literalSpacing: false);
+    }
+
+    private void BeginLayoutPreview(bool literalSpacing)
+    {
         EnsureLayout();
         _spacingPreviewColumns = _sections.FirstOrDefault()?.ColumnCount;
+        _previewUsesLiteralSpacing = literalSpacing;
         InvalidateLayout();
     }
 
     public void EndSpacingPreview()
     {
         _spacingPreviewColumns = null;
+        _previewUsesLiteralSpacing = false;
         InvalidateLayout();
     }
 
+    public void EndSizePreview() => EndSpacingPreview();
+
     public void SetThumbnailSpacing(double spacing)
     {
-        spacing = Math.Clamp(spacing, 0, 40);
+        spacing = Math.Clamp(spacing, 0, 160);
         if (Math.Abs(_cellGap - spacing) < 0.1) return;
         _cellGap = spacing;
         _rowGap = spacing;
@@ -660,9 +675,10 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double ImageColumnLeft(SectionLayout section, int column)
     {
         var available = Math.Max(1, _layoutWidth - 2 * HorizontalMargin);
-        if (_spacingPreviewColumns is not null)
+        if (_spacingPreviewColumns is not null && _previewUsesLiteralSpacing)
         {
-            // Preview shows the literal minimum distance without extra distribution.
+            // The original spacing-preview geometry: the real minimum
+            // distance is immediately visible while dragging.
             // Keep the same geometry for drawing and hit testing.
             var occupied = section.ColumnCount * _thumbnailWidth
                 + (section.ColumnCount - 1) * _cellGap;
@@ -670,13 +686,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 + column * (_thumbnailWidth + _cellGap);
         }
 
-        // Normal browse mode distributes the remainder into N+1 equal gaps,
-        // including the two outside margins (Picasa-style).
-        var gap = Math.Max(0,
-            (available - section.ColumnCount * _thumbnailWidth)
-            / (section.ColumnCount + 1));
-        return HorizontalMargin + (column + 1) * gap
-            + column * _thumbnailWidth;
+        // The requested spacing is a MINIMUM between actual thumbnails.
+        // Distribute only the surplus width evenly into N+1 gaps, including
+        // both outside margins; never silently reduce the requested minimum.
+        var extra = Math.Max(0,
+            available - section.ColumnCount * _thumbnailWidth
+            - (section.ColumnCount - 1) * _cellGap);
+        var surplus = extra / (section.ColumnCount + 1);
+        return HorizontalMargin + (column + 1) * surplus
+            + column * (_thumbnailWidth + _cellGap);
     }
 
     private int? HitTestImageIndex(Point point)
