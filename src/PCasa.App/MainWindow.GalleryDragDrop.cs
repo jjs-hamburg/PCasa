@@ -40,29 +40,52 @@ public partial class MainWindow
             _ = ReconcileMovedExternalFilesAsync(files);
     }
 
-    private async Task ReconcileMovedExternalFilesAsync(string[] originalPaths)
+    // File.Exists also returns false when Windows cannot reach a NAS or lacks
+    // access. Only a confirmed absent FILE inside a reachable parent folder
+    // may be detached after a shell move.
+    private static bool ConfirmedMissingExternalMove(string path)
     {
-        // Explorer moves the originals outside our scheduler. Reconcile ONLY
-        // files which are actually absent after the shell completes the drag,
-        // never assume that a requested drag effect means it succeeded.
-        var missing = originalPaths.Where(path => !File.Exists(path)).ToArray();
-        if (missing.Length == 0) return;
+        var parent = Path.GetDirectoryName(path);
+        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
+            return false;
         try
         {
+            _ = File.GetAttributes(path);
+            return false;
+        }
+        catch (FileNotFoundException) { return true; }
+        catch (DirectoryNotFoundException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (IOException) { return false; }
+    }
+
+    private async Task ReconcileMovedExternalFilesAsync(string[] originalPaths)
+    {
+        if (originalPaths.Length == 0) return;
+        // The checks can touch disconnected SMB paths; execute them off the
+        // UI thread, under the same per-source lock used by other file actions.
+        try
+        {
+            var changed = false;
             await _scheduler.EnqueueAsync(
                 $"gallery:external-move:{Guid.NewGuid():N}",
                 SchedulerPriority.Interactive, token =>
                 {
-                    foreach (var source in missing)
+                    foreach (var source in originalPaths)
                     {
                         token.ThrowIfCancellationRequested();
-                        if (File.Exists(source)) continue;
-                        if (CatalogImageIdAtPath(source) is long id)
-                            new CatalogRemovalService(_database).DetachImage(id, source);
+                        lock (SourceFileLocks.ForPath(source))
+                        {
+                            if (!ConfirmedMissingExternalMove(source)) continue;
+                            if (CatalogImageIdAtPath(source) is long id)
+                                changed |= new CatalogRemovalService(_database)
+                                    .DetachImage(id, source);
+                        }
                     }
                     return Task.CompletedTask;
                 });
-            await RefreshBrowseGalleryAsync(forceIndexReload: true);
+            if (changed)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true);
         }
         catch (Exception ex) { PCasaDiagnostics.Write("Gallery.ExternalMove", ex); }
     }

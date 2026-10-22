@@ -88,6 +88,18 @@ internal static class GalleryFileOperationFlow
                 "Two same-name sources did not survive a single batch move.");
             Console.WriteLine("PASS: Batch move preserves both same-name source photos.");
 
+            var probe = typeof(PCasa.App.MainWindow).GetMethod(
+                "ConfirmedMissingExternalMove",
+                BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new Exception("External move reachability guard is missing.");
+            bool Missing(string path) => (bool)(probe.Invoke(null, [path])
+                ?? throw new Exception("Missing-file probe returned no result."));
+            if (Missing(Path.Combine(batch, "test.jpg")) ||
+                !Missing(Path.Combine(batch, "missing.jpg")) ||
+                Missing(Path.Combine(root, "UnreachableParent", "missing.jpg")))
+                throw new Exception("External move treats unavailable parents as deleted photos.");
+            Console.WriteLine("PASS: External move reconciles only confirmed missing files.");
+
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF gallery copy/move/catalog tests passed.");
