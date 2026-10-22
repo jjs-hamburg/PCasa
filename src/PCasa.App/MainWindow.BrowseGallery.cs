@@ -515,6 +515,7 @@ public partial class MainWindow
         if (_folderManagerOpen) return;
         var window = new FolderManagerWindow(
             _folderRepository,
+            _scheduler,
             serverDatabaseConfigured: false)
         {
             Owner = this

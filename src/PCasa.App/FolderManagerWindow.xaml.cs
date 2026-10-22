@@ -16,6 +16,7 @@ public partial class FolderManagerWindow : Window
         bool IsSystemFolder = false, string? Label = null);
 
     private readonly FolderRepository _repository;
+    private readonly PCasaScheduler _scheduler;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -36,10 +37,12 @@ public partial class FolderManagerWindow : Window
             root.ServerSyncEnabled)).ToArray(),
         BackgroundScanCheckBox.IsChecked == true);
 
-    public FolderManagerWindow(FolderRepository repository, bool serverDatabaseConfigured)
+    public FolderManagerWindow(FolderRepository repository, PCasaScheduler scheduler,
+        bool serverDatabaseConfigured)
     {
         InitializeComponent();
         _repository = repository;
+        _scheduler = scheduler;
         _backgroundScanSettings = BackgroundScanSettings.Load();
         _monitoredRoots = _repository.GetAll();
         foreach (var folder in _monitoredRoots)
@@ -195,20 +198,27 @@ public partial class FolderManagerWindow : Window
         var token = _lifetime.Token;
         try
         {
-            var directories = await Task.Run(() =>
-            {
-                var options = new EnumerationOptions
+            // Folder expansion is user-driven I/O and must use the same
+            // scheduler as other source probes. Slow SMB enumeration must
+            // neither block WPF nor start an independent Task.Run pipeline.
+            var directories = await _scheduler.RunAsync(
+                $"folder-manager:expand:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                workToken =>
                 {
-                    RecurseSubdirectories = false,
-                    IgnoreInaccessible = true,
-                    ReturnSpecialDirectories = false,
-                    AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
-                };
-                token.ThrowIfCancellationRequested();
-                return Directory.GetDirectories(node.LocalPath, "*", options)
-                    .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase)
-                    .ToArray();
-            }, token);
+                    var options = new EnumerationOptions
+                    {
+                        RecurseSubdirectories = false,
+                        IgnoreInaccessible = true,
+                        ReturnSpecialDirectories = false,
+                        AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
+                    };
+                    workToken.ThrowIfCancellationRequested();
+                    return Directory.GetDirectories(node.LocalPath, "*", options)
+                        .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase)
+                        .ToArray();
+                }, cancellationToken: token,
+                workKind: SchedulerWorkKind.SourceProbe);
 
             if (token.IsCancellationRequested) return;
             item.Items.Clear();
