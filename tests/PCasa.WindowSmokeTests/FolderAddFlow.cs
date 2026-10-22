@@ -24,9 +24,6 @@ internal static class FolderAddFlow
         WriteJpeg(Path.Combine(afterRestart, "second.jpg"));
 
         PCasa.App.MainWindow? window = null;
-        using var lockTaken = new ManualResetEventSlim();
-        using var releaseLock = new ManualResetEventSlim();
-        Task? blocked = null;
         try
         {
             var db = new LocalDatabase();
@@ -45,49 +42,23 @@ internal static class FolderAddFlow
             var surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
             var status = (TextBlock)window.FindName("StatusText");
 
-            // The current scan has intentionally not started yet. A simulated
-            // long running pack writer holds its short index lock, proving
-            // the user's Add decision and tree insertion do not wait for it.
-            var cacheLock = typeof(CatalogRemovalService)
-                .GetField("CacheLock", BindingFlags.Static | BindingFlags.NonPublic)
-                ?.GetValue(null) ?? throw new Exception("Cache coordination lock missing.");
-            blocked = Task.Run(() =>
-            {
-                lock (cacheLock)
-                {
-                    lockTaken.Set();
-                    if (!releaseLock.Wait(TimeSpan.FromSeconds(25)))
-                        throw new TimeoutException("The simulated writer was not released.");
-                }
-            });
-            if (!lockTaken.Wait(TimeSpan.FromSeconds(5)))
-                throw new Exception("Blocking cache writer never started.");
+            // Clicking Abbruch must discard every staged path and must not
+            // touch the durable catalog or start a scanner.
+            ShowManagerWithStagedRoot(window, initialRoot, commit: false, roots);
+            if (roots.GetAll().Any(root => SamePath(root.LocalPath, initialRoot)) ||
+                new ImageCatalogRepository(db).CountAll() != 0)
+                throw new Exception("Cancel committed an unconfirmed folder selection.");
+            Console.WriteLine("PASS: Real manager Abbruch discards staged root and starts no import.");
 
-            var addMethod = typeof(PCasa.App.MainWindow).GetMethod(
-                "AddFolderFromManagerAsync", BindingFlags.Instance | BindingFlags.NonPublic)
-                ?? throw new Exception("Folder manager no longer shares the add coordinator.");
-            var addOperation = addMethod.Invoke(window, new object[] { initialRoot }) as Task
-                ?? throw new Exception("Shared folder add coordinator did not return a task.");
+            // Exactly the same dialog with OK must commit the entire
+            // selection, close, expose its root and THEN launch a user scan.
+            ShowManagerWithStagedRoot(window, initialRoot, commit: true, roots);
+            Until(window, () => Walk(tree).Any(item => SamePath(PathOf(item), initialRoot)),
+                "Confirmed root did not become visible in folder tree.");
+            if (roots.GetAll().All(root => !SamePath(root.LocalPath, initialRoot)))
+                throw new Exception("Confirmed folder selection was not persisted.");
+            Console.WriteLine("PASS: Actual WPF manager OK commits and immediately displays the new root.");
 
-            Until(window, () => addOperation.IsCompleted,
-                "Folder Add waited behind cache preparation.");
-            addOperation.GetAwaiter().GetResult();
-
-            if (!Walk(tree).Any(item => SamePath(PathOf(item), initialRoot)))
-                throw new Exception("Newly monitored root was not immediately visible.");
-            if (roots.GetAll().All(root => !SamePath(root.LocalPath, initialRoot)) ||
-                roots.GetPendingInitialScans().All(root => !SamePath(root.LocalPath, initialRoot)))
-                throw new Exception("Added root/first scan was not persisted before import.");
-            if (new ImageCatalogRepository(db).CountAll() != 0)
-                throw new Exception("The test failed to hold the first image scan pending.");
-            if (!status.Text.Contains("einles", StringComparison.OrdinalIgnoreCase) &&
-                !status.Text.Contains("eingelesen", StringComparison.OrdinalIgnoreCase) &&
-                !status.Text.Contains("Import", StringComparison.OrdinalIgnoreCase))
-                throw new Exception("Status did not acknowledge the user-requested import. Actual: " + status.Text);
-            Console.WriteLine("PASS: Actual manager add coordinator exposes folder immediately while scanner is blocked.");
-
-            releaseLock.Set();
-            blocked.GetAwaiter().GetResult();
             Until(window, () =>
                 new ImageCatalogRepository(db).CountAll() == 1 &&
                 roots.GetPendingInitialScans().All(root => !SamePath(root.LocalPath, initialRoot)),
@@ -131,8 +102,6 @@ internal static class FolderAddFlow
         }
         finally
         {
-            releaseLock.Set();
-            try { blocked?.GetAwaiter().GetResult(); } catch { }
             try { window?.Close(); } catch { }
             // The Windows workflow executes several independent WPF processes
             // against the runner's local test catalog. Never leave synthetic
@@ -152,6 +121,54 @@ internal static class FolderAddFlow
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(rootPath, recursive: true); } catch { }
         }
+    }
+
+    private static void ShowManagerWithStagedRoot(PCasa.App.MainWindow window,
+        string path, bool commit, FolderRepository repository)
+    {
+        var handler = typeof(PCasa.App.MainWindow).GetMethod("BrowseFolderManager_Click",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Exception("Main menu has no shared folder manager handler.");
+        var staging = typeof(PCasa.App.FolderManagerWindow).GetMethod("StageNewRoot",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Exception("The manager is not staging changes.");
+
+        Exception? dispatchError = null;
+        var completed = false;
+        window.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
+            new Action(() =>
+            {
+                try { handler.Invoke(window, new object[] { window, new RoutedEventArgs() }); }
+                catch (Exception error) { dispatchError = error; completed = true; }
+            }));
+        window.Dispatcher.BeginInvoke(DispatcherPriority.Background,
+            new Action(() =>
+            {
+                try
+                {
+                    var dialog = Application.Current.Windows.OfType<PCasa.App.FolderManagerWindow>()
+                        .SingleOrDefault(w => w.IsVisible)
+                        ?? throw new Exception("Real folder manager did not open.");
+                    staging.Invoke(dialog, new object[] { path });
+                    if (repository.GetAll().Any(root => SamePath(root.LocalPath, path)))
+                        throw new Exception("Folder was written to SQLite before OK.");
+                    var control = (Button)dialog.FindName(commit ? "OkButton" : "CancelButton");
+                    control.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, control));
+                    completed = true;
+                }
+                catch (Exception error)
+                {
+                    dispatchError = error;
+                    completed = true;
+                    foreach (var manager in Application.Current.Windows
+                                 .OfType<PCasa.App.FolderManagerWindow>().Where(w => w.IsVisible))
+                        manager.Close();
+                }
+            }));
+
+        Until(window, () => completed, "Could not complete manager dialog.");
+        if (dispatchError is not null)
+            throw new Exception("Real WPF manager staging failed.", dispatchError);
     }
 
     private static bool SamePath(string? a, string b) =>
