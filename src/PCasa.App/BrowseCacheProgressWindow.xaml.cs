@@ -44,7 +44,8 @@ public partial class BrowseCacheProgressWindow : Window
     private DateTime _lastPreviewUpdate = DateTime.MinValue;
     private bool _previewBusy;
     private bool _finished;
-    private bool _rightAnchorUpdating;
+    private IntPtr _anchoredMonitor;
+    private bool _hasScreenPlacement;
     private bool _placingWindow;
     private bool _anchorScheduled;
 
@@ -65,32 +66,41 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (Owner is null || !IsLoaded) return;
 
-        // The TOP of the dialog belongs at the beginning of the bottom
-        // quarter of the screen (75% down), not at the center of the owner.
-        // Determine the monitor containing PCasa, rather than always using
-        // Windows' primary monitor.
+        // Follow the screen containing PCasa, never PCasa's window edge.
+        // Resizing/moving PCasa within a screen leaves this position alone.
         var handle = new WindowInteropHelper(Owner).Handle;
         var monitor = MonitorFromWindow(handle, 2); // MONITOR_DEFAULTTONEAREST
+        if (_hasScreenPlacement && monitor == _anchoredMonitor) return;
+
         var info = new MonitorInfo { Size = (uint)Marshal.SizeOf<MonitorInfo>() };
         if (monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info))
         {
             var toDip = PresentationSource.FromVisual(Owner)?
                 .CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
-            var topLeft = toDip.Transform(new Point(info.Monitor.Left, info.Monitor.Top));
-            var bottomRight = toDip.Transform(new Point(
-                info.Monitor.Right, info.Monitor.Bottom));
+            var monitorTop = toDip.Transform(new Point(info.Monitor.Left, info.Monitor.Top));
+            var monitorBottom = toDip.Transform(new Point(info.Monitor.Right, info.Monitor.Bottom));
+            var workTopLeft = toDip.Transform(new Point(info.Work.Left, info.Work.Top));
+            var workBottomRight = toDip.Transform(new Point(info.Work.Right, info.Work.Bottom));
 
-            // On compact screens keep the whole window on screen.
-            var target = topLeft.Y + (bottomRight.Y - topLeft.Y) * 0.75;
-            Top = Math.Min(target, bottomRight.Y - Height);
+            // Retain the agreed bottom-quarter height; respect the taskbar
+            // and leave 12 DIP to the right work-area boundary.
+            var targetTop = monitorTop.Y + (monitorBottom.Y - monitorTop.Y) * 0.75;
+            Top = Math.Clamp(targetTop, workTopLeft.Y,
+                Math.Max(workTopLeft.Y, workBottomRight.Y - Height));
+            Left = Math.Clamp(workBottomRight.X - Width - 12,
+                workTopLeft.X, Math.Max(workTopLeft.X, workBottomRight.X - Width));
         }
         else
         {
-            var screen = SystemParameters.WorkArea;
-            Top = screen.Top + 0.75 * screen.Height;
+            var work = SystemParameters.WorkArea;
+            Top = Math.Clamp(work.Top + 0.75 * work.Height, work.Top,
+                Math.Max(work.Top, work.Bottom - Height));
+            Left = Math.Clamp(work.Right - Width - 12, work.Left,
+                Math.Max(work.Left, work.Right - Width));
         }
 
-        AnchorRightEdge();
+        _anchoredMonitor = monitor;
+        _hasScreenPlacement = true;
     }
 
     private void Owner_LocationChanged(object? sender, EventArgs e)
@@ -117,22 +127,6 @@ public partial class BrowseCacheProgressWindow : Window
             try { PositionOnOwnerMonitor(); }
             finally { _placingWindow = false; }
         }), DispatcherPriority.Loaded);
-    }
-
-    private void AnchorRightEdge()
-    {
-        if (_rightAnchorUpdating || Owner is null || !IsLoaded) return;
-        var left = Owner.Left + Owner.ActualWidth - Width - 12;
-        if (Math.Abs(Left - left) < 0.5) return;
-        try
-        {
-            _rightAnchorUpdating = true;
-            Left = left;
-        }
-        finally
-        {
-            _rightAnchorUpdating = false;
-        }
     }
 
     public void UpdateScan(ScanProgress progress)

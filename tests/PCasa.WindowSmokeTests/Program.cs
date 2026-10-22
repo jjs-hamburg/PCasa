@@ -220,6 +220,44 @@ internal static class Program
             Console.WriteLine(
                 $"PASS: Folder tree status sits next to scrollbar (gap {unusedWidth:F1} px).");
 
+            // The compact dialog belongs to the screen's right edge,
+            // independently of the owner position on that same screen.
+            var progressWindow = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
+            try
+            {
+                progressWindow.Show();
+                Flush(progressWindow);
+                var workArea = SystemParameters.WorkArea;
+                var rightGap = workArea.Right -
+                    (progressWindow.Left + progressWindow.ActualWidth);
+                if (progressWindow.ActualHeight > 78 ||
+                    rightGap < -1 || rightGap > 20)
+                    throw new Exception(
+                        $"Progress dialog bounds: height={progressWindow.ActualHeight:F1}, " +
+                        $"right gap={rightGap:F1}.");
+                var originalLeft = progressWindow.Left;
+                var ownerLeft = window.Left;
+                try
+                {
+                    window.Left = ownerLeft + 28;
+                    Flush(window);
+                    Flush(progressWindow);
+                    if (Math.Abs(progressWindow.Left - originalLeft) > 1)
+                        throw new Exception("Progress dialog followed PCasa's window edge.");
+                }
+                finally
+                {
+                    window.Left = ownerLeft;
+                    Flush(window);
+                }
+                Console.WriteLine(
+                    $"PASS: Compact progress window anchored to monitor edge (gap {rightGap:F1} px).");
+            }
+            finally
+            {
+                progressWindow.Finish();
+            }
+
             // The folder manager must never enumerate a potentially offline
             // NAS root via its own Task.Run. Expanding a real TreeViewItem
             // must submit its source probe through the shared scheduler.
