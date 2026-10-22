@@ -13,7 +13,9 @@ public sealed record ScanProgress(
     string? CurrentFile,
     int Added = 0,
     int Changed = 0,
-    int CacheRepaired = 0);
+    int CacheRepaired = 0,
+    long? DiscoveredPhotoFolderId = null,
+    string? DiscoveredPhotoFolderPath = null);
 
 public sealed record ScanResult(
     int ImageFilesSeen,
@@ -153,6 +155,8 @@ public sealed class FolderScanner
                 }
 
                 imageFilesSeen++;
+                long? discoveredFolderId = null;
+                string? discoveredFolderPath = null;
 
                 try
                 {
@@ -175,7 +179,9 @@ public sealed class FolderScanner
                         folder,
                         photoFolderLocalPath);
 
-                    if (!photoFolderIds.TryGetValue(photoFolderCanonicalPath, out var photoFolderId))
+                    var firstFileInThisScanFolder =
+                        !photoFolderIds.TryGetValue(photoFolderCanonicalPath, out var photoFolderId);
+                    if (firstFileInThisScanFolder)
                     {
                         var trimmedFolderPath = Path.TrimEndingDirectorySeparator(photoFolderLocalPath);
                         var displayName = Path.GetFileName(trimmedFolderPath);
@@ -213,6 +219,11 @@ public sealed class FolderScanner
                         }
 
                         unchanged++;
+                        if (firstFileInThisScanFolder)
+                        {
+                            discoveredFolderId = photoFolderId;
+                            discoveredFolderPath = photoFolderLocalPath;
+                        }
                     }
                     else
                     {
@@ -272,6 +283,11 @@ public sealed class FolderScanner
                         }
 
                         updated++;
+                        if (firstFileInThisScanFolder)
+                        {
+                            discoveredFolderId = photoFolderId;
+                            discoveredFolderPath = photoFolderLocalPath;
+                        }
                         if (existing is null)
                             added++;
                         else if (existing.FileSize != fileLength ||
@@ -306,7 +322,11 @@ public sealed class FolderScanner
                     catalogCommitClock.Restart();
                 }
 
-                ReportProgress(localPath);
+                // Report once for the first successfully committed image in
+                // each directory. The UI can insert its tree node without
+                // reflowing the entire gallery or interrupting the scan.
+                ReportProgress(localPath, force: discoveredFolderId is not null,
+                    discoveredFolderId, discoveredFolderPath);
             }
         }
         catch (OperationCanceledException)
@@ -370,7 +390,8 @@ public sealed class FolderScanner
 
         return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed);
 
-        void ReportProgress(string? currentFile, bool force = false)
+        void ReportProgress(string? currentFile, bool force = false,
+            long? discoveredFolderId = null, string? discoveredFolderPath = null)
         {
             if (!force && progressClock.ElapsedMilliseconds < 250)
             {
@@ -386,7 +407,9 @@ public sealed class FolderScanner
                 currentFile,
                 added,
                 changed,
-                cacheRepaired));
+                cacheRepaired,
+                discoveredFolderId,
+                discoveredFolderPath));
         }
     }
 
