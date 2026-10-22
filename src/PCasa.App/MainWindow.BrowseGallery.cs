@@ -332,7 +332,6 @@ public partial class MainWindow
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
     }
 
-    private DateTime _lastImportPreviewUtc = DateTime.MinValue;
     // No timer-based gallery reflows during scanning. The scanner reports
     // status/progress without replacing the current thumbnail layout. The
     // gallery/index is refreshed once when a scan operation completes.
