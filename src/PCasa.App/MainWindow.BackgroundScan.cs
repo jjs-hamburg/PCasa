@@ -221,6 +221,8 @@ public partial class MainWindow
             var currentIds = folders.Select(folder => folder.Id).ToHashSet();
             _backgroundKnownFolderIds.RemoveWhere(id => !currentIds.Contains(id));
 
+            var userInitialScanIds = _folderRepository.GetPendingInitialScans()
+                .Select(root => root.Id).ToHashSet();
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
@@ -230,8 +232,11 @@ public partial class MainWindow
                     continue;
                 }
 
-                if (_backgroundKnownFolderIds.Add(folder.Id))
+                if (_backgroundKnownFolderIds.Add(folder.Id) &&
+                    !userInitialScanIds.Contains(folder.Id))
                 {
+                    // User-selected roots are owned by the durable initial
+                    // scan scheduler, never queued a second time by watcher.
                     QueueBackgroundChange(new BackgroundFolderChange(
                         folder.Id,
                         folder.LocalPath,
