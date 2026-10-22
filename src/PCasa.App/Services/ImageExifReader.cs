@@ -90,14 +90,18 @@ public sealed class ImageExifReader : IDisposable
 
     private static string? TextTag(JsonElement obj, string name)
     {
-        foreach (var prefix in new[] { "[ExifIFD]", "[IFD0]", "[GPS]",
-            "[XMP-exif]", "[XMP-tiff]" })
+        // With -G1 ExifTool JSON uses e.g. "IFD0:Model" and
+        // "GPS:GPSLatitude"; bracket-prefixed names may appear in older
+        // serialized catalogs, so accept both without flattening groups.
+        foreach (var prefix in new[] { "ExifIFD:", "IFD0:", "GPS:",
+            "XMP-exif:", "XMP-tiff:", "[ExifIFD]", "[IFD0]", "[GPS]" })
         {
             if (obj.TryGetProperty(prefix + name, out var val))
                 return AsText(val);
         }
         foreach (var prop in obj.EnumerateObject())
-            if (prop.Name.EndsWith("]" + name, StringComparison.Ordinal))
+            if (prop.Name.EndsWith(":" + name, StringComparison.Ordinal) ||
+                prop.Name.EndsWith("]" + name, StringComparison.Ordinal))
                 return AsText(prop.Value);
         return null;
     }
