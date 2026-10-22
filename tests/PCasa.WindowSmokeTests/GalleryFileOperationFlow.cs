@@ -39,7 +39,7 @@ internal static class GalleryFileOperationFlow
                     StringComparison.OrdinalIgnoreCase));
             var initial = new FolderScanner(new ImageCatalogRepository(db),
                 new ThumbnailCache(), folderRepo).Scan(sourceRoot);
-            if (initial.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 1)
+            if (initial.Failed != 0 || CountInRoot(db, root) != 1)
                 throw new Exception("Synthetic JPEG catalog seed unexpected: " +
                     $"Seen={initial.ImageFilesSeen}, Updated={initial.Updated}, " +
                     $"Unchanged={initial.Unchanged}, Failed={initial.Failed}, " +
@@ -50,13 +50,13 @@ internal static class GalleryFileOperationFlow
             app.InitializeComponent();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             window.Show();
-            Until(window, () => new ImageCatalogRepository(db).CountAll() == 1 &&
+            Until(window, () => CountInRoot(db, root) == 1 &&
                 folderRepo.GetPendingInitialScans().Count == 0,
                 "Initial source image was not indexed.");
 
             Transfer(window, [original], second, move: false);
             Until(window, () => File.Exists(copied) &&
-                new ImageCatalogRepository(db).CountAll() == 2,
+                CountInRoot(db, root) == 2,
                 "Copy did not materialize/index destination.");
             if (!File.Exists(original))
                 throw new Exception("Copy deleted original source.");
@@ -64,13 +64,13 @@ internal static class GalleryFileOperationFlow
 
             Transfer(window, [copied], third, move: true);
             Until(window, () => !File.Exists(copied) && File.Exists(moved) &&
-                new ImageCatalogRepository(db).CountAll() == 2,
+                CountInRoot(db, root) == 2,
                 "Move did not detach old catalog image and index new path.");
             Console.WriteLine("PASS: Move removed source, kept original and updated catalog.");
 
             Transfer(window, [original], first, move: false);
             Until(window, () => File.Exists(duplicate) &&
-                new ImageCatalogRepository(db).CountAll() == 3,
+                CountInRoot(db, root) == 3,
                 "Same-directory copy did not automatically create distinct name.");
             Console.WriteLine("PASS: Same-folder copy never silently overwrites source.");
 
@@ -100,6 +100,11 @@ internal static class GalleryFileOperationFlow
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
+
+    private static int CountInRoot(LocalDatabase db, string path)
+        => new ImageCatalogRepository(db).GetPhotoFolders()
+            .Where(folder => FolderExclusionRules.IsAtOrBelow(folder.LocalPath, path))
+            .Sum(folder => folder.ImageCount);
 
     private static void Transfer(PCasa.App.MainWindow window,
         string[] paths, string target, bool move)
