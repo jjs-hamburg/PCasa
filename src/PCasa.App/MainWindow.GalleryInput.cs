@@ -22,6 +22,16 @@ public partial class MainWindow
 
         var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        var galleryHasFocus = ReferenceEquals(Keyboard.FocusedElement, BrowseSurface) ||
+            (Keyboard.FocusedElement is DependencyObject selectionFocus &&
+             FindAncestor<Controls.BrowseGallerySurface>(selectionFocus) is not null);
+        var treeHasFocus = Keyboard.FocusedElement is DependencyObject treeFocus &&
+            FindAncestor<TreeView>(treeFocus) is not null;
+        // Folder-tree Ctrl+A deliberately selects that folder's gallery images.
+        // Other shortcuts, especially Delete, must ONLY affect the gallery
+        // while the thumbnail canvas actually owns the keyboard focus.
+        if (!galleryHasFocus && !(ctrl && e.Key == Key.A && treeHasFocus))
+            return;
         if (ctrl && e.Key == Key.A)
         {
             // The selected TREE item is authoritative, not the current scroll
