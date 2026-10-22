@@ -205,6 +205,15 @@ public partial class MainWindow
             effect.HasFlag(DragDropEffects.Move));
     }
 
+    private string? TreeDropTargetFromElement(DependencyObject? element)
+    {
+        var item = FindAncestor<TreeViewItem>(element);
+        if (item?.Tag is not FolderTreeTag tag ||
+            !ReferenceEquals(FindAncestor<TreeView>(item), FoldersTree))
+            return null;
+        return ValidDragTarget(tag.FullPath) ? tag.FullPath : null;
+    }
+
     private TreeViewItem? TreeDropItem(DragEventArgs e)
     {
         // Use the innermost tree item directly under the pointer.
