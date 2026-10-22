@@ -222,7 +222,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
     public void SetThumbnailSpacing(double spacing)
     {
         spacing = Math.Clamp(spacing, 0, 160);
-        if (Math.Abs(_cellGap - spacing) < 0.1) return;
+        if (Math.Abs(_cellGap - spacing) < 0.1 &&
+            Math.Abs(_rowGap - spacing) < 0.1) return;
         _cellGap = spacing;
         _rowGap = spacing;
         InvalidateLayout();

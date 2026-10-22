@@ -2737,6 +2737,32 @@ internal static class Program
         gallery.EndSpacingPreview();
         gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
         gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));
+
+        // The live slider's value is BOTH the row spacing and the actual
+        // MINIMUM between consecutive image columns. Excess horizontal width
+        // is distributed; it is never subtracted from the minimum.
+        var flags = System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Instance;
+        var rows = (double)typeof(BrowseGallerySurface)
+            .GetField("_rowGap", flags)!.GetValue(gallery)!;
+        if (Math.Abs(rows - 160) > 0.01)
+            throw new Exception("Vertical spacing does not match the slider.");
+        var sections = (System.Collections.IEnumerable)typeof(BrowseGallerySurface)
+            .GetField("_sections", flags)!.GetValue(gallery)!;
+        var firstSection = sections.Cast<object>().First();
+        var columns = (int)firstSection.GetType().GetProperty("ColumnCount")!
+            .GetValue(firstSection)!;
+        if (columns < 2)
+            throw new Exception("Spacing regression cannot measure two columns.");
+        var getLeft = typeof(BrowseGallerySurface)
+            .GetMethod("ImageColumnLeft", flags)!;
+        var left0 = (double)getLeft.Invoke(gallery, [firstSection, 0])!;
+        var left1 = (double)getLeft.Invoke(gallery, [firstSection, 1])!;
+        var horizontalGap = left1 - left0 - gallery.ThumbnailWidth;
+        if (horizontalGap < 159.9)
+            throw new Exception($"Horizontal minimum spacing lost: {horizontalGap:F1}px.");
+        Console.WriteLine("PASS: Horizontal minimum and vertical spacing match slider.");
+
         var finalTop = gallery.GetImageAnchorOffset(original.ImageId, original.RelativeY)
             ?? throw new Exception("Ending preview lost the original image.");
         gallery.SetViewport(Math.Max(0, finalTop), 600);
