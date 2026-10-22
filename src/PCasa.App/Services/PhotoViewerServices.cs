@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows.Media.Imaging;
+using System.Windows.Media;
 using NetVips;
 using PCasa.App.Data;
 
@@ -96,7 +97,11 @@ public static class PhotoViewerImageLoader
                 image.EndInit();
                 image.Freeze();
                 cancellationToken.ThrowIfCancellationRequested();
-                return image;
+                // WPF's direct JPEG decoder exposes the stored pixel array;
+                // libvips thumbnail() already applies EXIF Orientation. The
+                // viewer must apply the same orientation, WITHOUT modifying
+                // or re-encoding the source or its ICC profile.
+                return ExifOrientation.Apply(image, input);
             }
             catch (NotSupportedException)
             {
