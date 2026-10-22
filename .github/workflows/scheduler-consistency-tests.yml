@@ -43,6 +43,10 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --tag-flow
+      - name: Exercise real WPF gallery copy and move on monitored folders
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
 
       - name: Publish self-contained Windows x64 acceptance package
         if: github.event_name == 'workflow_dispatch'
