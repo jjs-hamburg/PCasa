@@ -479,8 +479,14 @@ public partial class MainWindow
         }
         finally
         {
-            _activeScanCancellation = null;
-            _activeScanFolderId = null;
+            // Another overlapping scheduler job may have taken over these
+            // fields. Its cancellation must not be silently detached here.
+            if (_activeScanCancellation is null ||
+                _activeScanCancellation.IsCancellationRequested)
+            {
+                _activeScanCancellation = null;
+                _activeScanFolderId = null;
+            }
             _manualScanAllActive = false;
             _manualScanRunning = _initialScanActive || _manualContextScanActive;
             _manualFolderScanWaiting = _manualScanRunning;
