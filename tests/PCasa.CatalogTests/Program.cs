@@ -75,6 +75,7 @@ internal static class Program
         Run("Catalog cleanup has indexed pack and root lookups", CatalogCleanupIndexesExist, failures);
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
+        Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
@@ -92,7 +93,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {78 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {79 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -2097,6 +2098,53 @@ internal static class Program
             throw new Exception("Removing one keyword damaged another keyword.");
         if (!before.SequenceEqual(PixelHash(path)))
             throw new Exception("JPEG decoded pixels changed during lossless tag editing.");
+    }
+
+    private static void JpegExifOrientationViewer()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "original-exif.jpg");
+        const int originalWidth = 96, originalHeight = 48;
+        var pixels = new byte[originalWidth * originalHeight * 4];
+        for (var y = 0; y < originalHeight; y++)
+        for (var x = 0; x < originalWidth; x++)
+        {
+            var p = (y * originalWidth + x) * 4;
+            pixels[p] = x < originalWidth / 2 ? (byte)20 : (byte)200;
+            pixels[p + 1] = y < originalHeight / 2 ? (byte)50 : (byte)170;
+            pixels[p + 2] = 110;
+            pixels[p + 3] = 255;
+        }
+        var source = BitmapSource.Create(originalWidth, originalHeight, 96, 96,
+            PixelFormats.Bgr32, null, pixels, originalWidth * 4);
+        var encoder = new JpegBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(source));
+        using (var stream = File.Create(path)) encoder.Save(stream);
+
+        foreach (var orientation in new[] { 1, 3, 6, 8 })
+        {
+            RunExifTool("-overwrite_original", $"-EXIF:Orientation#={orientation}", path);
+            var shaBefore = SHA256.HashData(File.ReadAllBytes(path));
+            using (var input = File.OpenRead(path))
+            {
+                if (ExifOrientation.Read(input) != orientation)
+                    throw new Exception($"EXIF Orientation={orientation} was not read from JPEG.");
+            }
+            var info = new PhotoViewerImageInfo(1, path, Path.GetFileName(path),
+                originalWidth, originalHeight);
+            var actual = PhotoViewerImageLoader.Load(info, 4096,
+                CancellationToken.None);
+            var expectedWidth = orientation is 6 or 8
+                ? originalHeight : originalWidth;
+            var expectedHeight = orientation is 6 or 8
+                ? originalWidth : originalHeight;
+            if (actual.PixelWidth != expectedWidth ||
+                actual.PixelHeight != expectedHeight)
+                throw new Exception(
+                    $"Orientation={orientation}: Viewer {actual.PixelWidth}x{actual.PixelHeight}, expected {expectedWidth}x{expectedHeight}.");
+            if (!shaBefore.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path))))
+                throw new Exception("Viewing a JPEG unexpectedly changed source bytes.");
+        }
     }
 
     private static void JpegExifFieldsSurviveTags()
