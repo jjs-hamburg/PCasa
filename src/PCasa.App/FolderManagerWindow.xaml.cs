@@ -9,20 +9,6 @@ using PCasa.App.Services;
 
 namespace PCasa.App;
 
-public sealed class FolderExclusionChangedEventArgs : EventArgs
-{
-    public FolderExclusionChangedEventArgs(long folderId, string path, bool excluded)
-    {
-        FolderId = folderId;
-        Path = path;
-        Excluded = excluded;
-    }
-
-    public long FolderId { get; }
-    public string Path { get; }
-    public bool Excluded { get; }
-}
-
 public partial class FolderManagerWindow : Window
 {
     private sealed record ManagedNode(
@@ -30,10 +16,6 @@ public partial class FolderManagerWindow : Window
         bool IsSystemFolder = false, string? Label = null);
 
     private readonly FolderRepository _repository;
-    private readonly Func<long, string, bool, Task<int>>? _removeFolderAsync;
-    private readonly CatalogRemovalService _catalogRemovalService;
-    private readonly PCasaScheduler? _scheduler;
-    private readonly Func<string, Task>? _addFolderAsync;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -54,17 +36,10 @@ public partial class FolderManagerWindow : Window
             root.ServerSyncEnabled)).ToArray(),
         BackgroundScanCheckBox.IsChecked == true);
 
-    public FolderManagerWindow(FolderRepository repository, bool serverDatabaseConfigured,
-        Func<long, string, bool, Task<int>>? removeFolderAsync = null,
-        PCasaScheduler? scheduler = null,
-        Func<string, Task>? addFolderAsync = null)
+    public FolderManagerWindow(FolderRepository repository, bool serverDatabaseConfigured)
     {
         InitializeComponent();
         _repository = repository;
-        _removeFolderAsync = removeFolderAsync;
-        _scheduler = scheduler;
-        _addFolderAsync = addFolderAsync;
-        _catalogRemovalService = new CatalogRemovalService(new LocalDatabase());
         _backgroundScanSettings = BackgroundScanSettings.Load();
         _monitoredRoots = _repository.GetAll();
         foreach (var folder in _monitoredRoots)
@@ -92,9 +67,6 @@ public partial class FolderManagerWindow : Window
         Reload();
     }
 
-    public event EventHandler? FoldersChanged;
-    public event Action<string>? CleanupStatusChanged;
-    public event EventHandler<FolderExclusionChangedEventArgs>? FolderExclusionChanged;
 
     private void Reload(string? expandSystemFolder = null)
     {
