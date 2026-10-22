@@ -167,7 +167,12 @@ internal static class GalleryFileOperationFlow
                 item.Tag?.GetType().GetProperty("FullPath")?.GetValue(item.Tag) is string path &&
                 string.Equals(path, batch, StringComparison.OrdinalIgnoreCase))
                 ?? throw new Exception("Renamed photo's folder missing in WPF tree.");
+            FolderTreeNavigation.ExpandAncestors(batchNode);
+            batchNode.BringIntoView();
+            window.UpdateLayout();
             batchNode.IsSelected = true;
+            if (!ReferenceEquals(tree.SelectedItem, batchNode))
+                throw new Exception("WPF tree did not select the requested Batch folder.");
             var scanningFlag = typeof(PCasa.App.MainWindow).GetField("_isScanning",
                 BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new Exception("Scan state field missing.");
@@ -177,10 +182,26 @@ internal static class GalleryFileOperationFlow
                 BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new Exception("Manual scan context menu handler is missing.");
             manual.Invoke(window, [tree, new RoutedEventArgs()]);
-            Until(window, () =>
-                new BrowseCacheRepository(db).GetIndex(96).Count == 3 &&
-                !CatalogContains(db, old) && CatalogContains(db, renamed),
-                "Manual user scan did not replace renamed photo while global scan flag was busy.");
+            try
+            {
+                Until(window, () => !CatalogContains(db, old) && CatalogContains(db, renamed),
+                    "Manual user scan did not replace renamed catalog row.");
+                Until(window, () => new BrowseCacheRepository(db).GetIndex(96).Count == 3 &&
+                    new BrowseCacheRepository(db).GetIndex(96).Any(entry =>
+                        string.Equals(entry.FileName, "renamed-manually.jpg", StringComparison.OrdinalIgnoreCase)),
+                    "Manual scan did not reload renamed image in thumbnail index.");
+            }
+            catch (Exception ex)
+            {
+                var status = (window.FindName("StatusText") as TextBlock)?.Text;
+                var state = typeof(PCasa.App.MainWindow).GetField("_scheduler",
+                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(window)
+                    as PCasaScheduler;
+                var jobs = state?.Snapshot()
+                    .Where(job => job.Key.Contains("complete-scan", StringComparison.Ordinal))
+                    .Select(job => $"{job.State}/{job.Error}").ToArray();
+                throw new Exception($"Manual scan diagnostic: selected={tree.SelectedItem is TreeViewItem selected ? selected.Header : null}; status={status}; catalogOld={CatalogContains(db, old)}; catalogNew={CatalogContains(db, renamed)}; index={new BrowseCacheRepository(db).GetIndex(96).Count}; jobs={string.Join(", ", jobs ?? [])}", ex);
+            }
             Console.WriteLine("PASS: Context-menu manual scan bypasses busy background state, reconciles renamed file and reloads browse index.");
 
             // Window resizing must re-anchor the progress window after
