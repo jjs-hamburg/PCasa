@@ -119,8 +119,14 @@ public partial class MainWindow
                     result = _folderScanner.Scan(folder, progress, token);
                     return Task.CompletedTask;
                 },
-                () => _folderRepository.GetPendingInitialScans().Any(root =>
-                    root.Id == folder.Id),
+                // The scanner clears initial_scan_pending on successful commit,
+                // so it is NOT a valid post-execution currency predicate.
+                // Source-generation fences inside the scanner protect against
+                // obsolete removal/re-add work.
+                () => _folderRepository.GetAll().Any(root =>
+                    root.Id == folder.Id &&
+                    string.Equals(root.CanonicalPath, folder.CanonicalPath,
+                        StringComparison.OrdinalIgnoreCase)),
                 cancellation.Token);
             if (result is null) throw new OperationCanceledException();
 
@@ -158,8 +164,8 @@ public partial class MainWindow
                 _activeScanFolderId = null;
             }
             _initialScanActive = false;
-            _manualScanRunning = _manualContextScanActive;
-            _manualFolderScanWaiting = _manualContextScanActive;
+            _manualScanRunning = _manualContextScanActive || _manualScanAllActive;
+            _manualFolderScanWaiting = _manualScanRunning;
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
             UpdateManualScanControls();
             RefreshFolderStatusVisuals();
