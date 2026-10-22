@@ -473,41 +473,69 @@ public partial class MainWindow
         }
     }
 
-    private void BrowseFolderManager_Click(object sender, RoutedEventArgs e)
+    private async void BrowseFolderManager_Click(object sender, RoutedEventArgs e)
     {
+        if (_folderManagerOpen) return;
         var window = new FolderManagerWindow(
             _folderRepository,
             serverDatabaseConfigured: false,
-            removeFolderAsync: RemoveFolderFromPcasaAsync,
-            scheduler: _scheduler,
-            addFolderAsync: AddFolderFromManagerAsync)
+            scheduler: _scheduler)
         {
             Owner = this
         };
 
-        window.CleanupStatusChanged += BrowseCleanupStatusChanged;
-        window.FolderExclusionChanged += BrowseFolderManager_ExclusionChanged;
-        // During a modal manager session, do not rebuild the owner's very
-        // large photo tree / packed-gallery index after each checkbox edit.
-        // That UI-thread work was responsible for the white/blank dialog.
-        // A single refresh after closing reflects all completed changes.
         _folderManagerOpen = true;
+        FolderManagerSelection? selection = null;
         try
         {
-            window.ShowDialog();
+            // No UI checkbox may save to SQLite, cancel an active scan or
+            // launch an import. The user makes ONE decision on OK.
+            if (window.ShowDialog() == true)
+                selection = window.SelectedConfiguration;
         }
         finally
         {
             _folderManagerOpen = false;
-            window.CleanupStatusChanged -= BrowseCleanupStatusChanged;
-            window.FolderExclusionChanged -= BrowseFolderManager_ExclusionChanged;
         }
 
-        // The monitor may be off or an earlier cache job may still be
-        // running. Do not gate the new root's visibility on either condition.
-        RefreshFolderTree(preserveGalleryAnchor: true);
-        QueuePendingInitialScans();
-        _ = RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+        if (selection is null) return; // Abbruch / X: zero persisted changes.
+
+        try
+        {
+            var modified = false;
+            await _scheduler.EnqueueAsync(
+                "folder-manager:commit-selection",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    modified = new FolderManagerSelectionService(_database)
+                        .Apply(selection, token);
+                    return Task.CompletedTask;
+                });
+
+            // Settings are saved only after the catalog transaction commits.
+            // An unrelated menu or dialog never cancels manual scan work.
+            if (BackgroundScanSettings.Load().Enabled != selection.BackgroundScanEnabled)
+                new BackgroundScanSettings { Enabled = selection.BackgroundScanEnabled }.Save();
+
+            if (modified)
+            {
+                _initialScanAttempted.Clear();
+                RefreshFolderTree(preserveGalleryAnchor: true);
+                StatusText.Text = "Ordnerauswahl übernommen · Einlesen mit Benutzerpriorität";
+                // The scanner is a SINGLE durable user-priority scheduler
+                // operation and is launched only AFTER this dialog closes.
+                QueuePendingInitialScans();
+                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("FolderManager.Commit", ex);
+            MessageBox.Show(this,
+                "Die Ordnerauswahl konnte nicht übernommen werden.\n\n" + ex.Message,
+                "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void BrowseStatus_Click(object sender, MouseButtonEventArgs e)
