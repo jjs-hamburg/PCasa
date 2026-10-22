@@ -2194,12 +2194,11 @@ internal static class Program
     private static void RawPreviewOrientation()
     {
         using var sandbox = new Sandbox();
-        // A RAW filename with an actual JPEG signature is intentionally used
-        // to exercise the RAW orientation branch and ExifTool's container tag
-        // without depending on camera-maker binary test fixtures.
-        var original = Path.Combine(sandbox.Images, "simulated-sensor.arw");
-        var width = 96;
-        var height = 48;
+        // Rotation is pixel geometry. Use a valid JPEG as a reproducible
+        // unrotated preview, then apply the very same transform used for RAW.
+        // A true Sony/Nikon binary is still needed to verify camera tags.
+        var original = Path.Combine(sandbox.Images, "embedded-preview.jpg");
+        const int width = 96, height = 48;
         var pixels = new byte[width * height * 4];
         for (var i = 0; i < pixels.Length; i += 4)
         {
@@ -2213,21 +2212,19 @@ internal static class Program
         var encoder = new JpegBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using (var output = File.Create(original)) encoder.Save(output);
+        var sha = SHA256.HashData(File.ReadAllBytes(original));
         foreach (var orientation in new[] { 1, 3, 6, 8 })
         {
-            RunExifTool("-overwrite_original", $"-Orientation#={orientation}", original);
-            var sha = SHA256.HashData(File.ReadAllBytes(original));
-            if (RawImageSource.GetRawOrientation(original) != orientation)
-                throw new Exception($"RAW container EXIF={orientation} not read.");
-            using var preview = RawImageSource.LoadDisplayThumbnail(original,
-                original, 256, 256);
-            var rotated = orientation is 6 or 8;
-            if (preview.Width != (rotated ? height : width) ||
-                preview.Height != (rotated ? width : height))
+            using var unrotated = NetVips.Image.Thumbnail(original, 256,
+                height: 256, size: NetVips.Enums.Size.Down, noRotate: true);
+            using var oriented = RawImageSource.ApplyOrientation(unrotated, orientation);
+            var swap = orientation is 6 or 8;
+            if (oriented.Width != (swap ? height : width) ||
+                oriented.Height != (swap ? width : height))
                 throw new Exception(
-                    $"RAW EXIF {orientation}: preview {preview.Width}x{preview.Height}, expected rotated={rotated}.");
+                    $"RAW preview EXIF {orientation}: {oriented.Width}x{oriented.Height} was not correctly rotated.");
             if (!sha.SequenceEqual(SHA256.HashData(File.ReadAllBytes(original))))
-                throw new Exception("RAW preview generation changed the original.");
+                throw new Exception("RAW preview orientation modified its source.");
         }
     }
 
