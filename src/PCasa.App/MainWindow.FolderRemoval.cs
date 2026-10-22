@@ -57,8 +57,7 @@ public partial class MainWindow
                 removed = await new FolderExclusionService(_folderRepository, _database, _scheduler)
                     .ChangeAsync(folderId, normalized, excluded: true,
                         (id, changedPath, excluded) =>
-                            BrowseFolderManager_ExclusionChanged(this,
-                                new FolderExclusionChangedEventArgs(id, changedPath, excluded)));
+                            OnFolderExclusionCommitted(id, changedPath, excluded));
             }
 
             // Complete the visible view refresh BEFORE releasing background
@@ -80,41 +79,6 @@ public partial class MainWindow
         {
             CompleteFolderRemoval();
         }
-    }
-
-    // The manager's Add button is an explicit, highest-priority user decision.
-    // Persist it first, then project it to the tree IMMEDIATELY. Import is a
-    // separate queued operation: it must never delay the visual root entry.
-    private async Task AddFolderFromManagerAsync(string path)
-    {
-        _backgroundCurrentScanCancellation?.Cancel();
-        _cacheMaintenanceCancellation?.Cancel();
-        _browseCacheCancellation?.Cancel();
-        await _scheduler.EnqueueAsync(
-            $"monitor-add:{path}", SchedulerPriority.Interactive,
-            token =>
-            {
-                token.ThrowIfCancellationRequested();
-                _folderRepository.Add(path);
-                return Task.CompletedTask;
-            });
-
-        // Use the persisted catalog selection (not a temporary ghost node).
-        // Even a completely empty root is represented in RefreshFolderTree.
-        var root = _folderRepository.GetAll().FirstOrDefault(folder =>
-            string.Equals(FolderExclusionRules.Normalize(folder.LocalPath),
-                FolderExclusionRules.Normalize(path),
-                StringComparison.OrdinalIgnoreCase));
-        RefreshFolderTree(preserveGalleryAnchor: true);
-        if (root is not null &&
-            FindFolderTreeItemByPath(FoldersTree, root.LocalPath) is { } item)
-        {
-            FolderTreeNavigation.ExpandAncestors(item);
-            item.IsSelected = true;
-            item.BringIntoView(); // Only explicit Add may scroll the folder pane.
-        }
-        StatusText.Text = $"Ordner aufgenommen · Einlesen mit Benutzerpriorität: {path}";
-        QueuePendingInitialScans();
     }
 
     private void HideFolderFromCurrentGallery(string path)
