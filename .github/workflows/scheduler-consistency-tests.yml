@@ -64,7 +64,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]')
         uses: actions/upload-artifact@v4
         with:
-          name: PCasa-Scheduler-Abnahme-win-x64
+          name: PCasa-win-x64
           path: publish/PCasa/
           if-no-files-found: error
           retention-days: 14
