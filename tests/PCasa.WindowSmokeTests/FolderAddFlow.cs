@@ -149,6 +149,9 @@ internal static class FolderAddFlow
                     var dialog = Application.Current.Windows.OfType<PCasa.App.FolderManagerWindow>()
                         .SingleOrDefault(w => w.IsVisible)
                         ?? throw new Exception("Real folder manager did not open.");
+                    if (dialog.FindName("OkButton") is not Button ||
+                        dialog.FindName("CancelButton") is not Button)
+                        throw new Exception("Folder manager has no OK/Abbruch buttons.");
                     staging.Invoke(dialog, new object[] { path });
                     if (repository.GetAll().Any(root => SamePath(root.LocalPath, path)))
                         throw new Exception("Folder was written to SQLite before OK.");
