@@ -31,6 +31,9 @@ internal static class FolderAddFlow
         using var gateReady = new ManualResetEventSlim();
         using var releaseDelayedPhoto = new ManualResetEventSlim();
         Task? blockedFile = null;
+        Task? blockedRestart = null;
+        using var restartGateReady = new ManualResetEventSlim();
+        using var releaseRestartPhoto = new ManualResetEventSlim();
         try
         {
             var db = new LocalDatabase();
@@ -81,6 +84,7 @@ internal static class FolderAddFlow
             if (roots.GetAll().All(root => !SamePath(root.LocalPath, initialRoot)))
                 throw new Exception("Confirmed folder selection was not persisted.");
             Console.WriteLine("PASS: Actual WPF manager OK commits and immediately displays the new root.");
+            var initialTreeRoot = Walk(tree).Single(item => SamePath(PathOf(item), initialRoot));
 
             Until(window, () =>
                 new ImageCatalogRepository(db).CountAll() == 1,
@@ -91,7 +95,10 @@ internal static class FolderAddFlow
                     surface.GetFolderOffset(firstFolder.Id).HasValue &&
                     roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, initialRoot)),
                 "Gallery stayed empty while first JPEG was committed and the scan remained active.");
-            Console.WriteLine("PASS: First image becomes visible while next file blocks the active scan.");
+            if (!ReferenceEquals(initialTreeRoot,
+                Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))))
+                throw new Exception("Gallery catalog refresh destroyed the independent folder tree.");
+            Console.WriteLine("PASS: First image visible while scan blocks; gallery refresh did not rebuild tree.");
 
             releaseDelayedPhoto.Set();
             blockedFile.GetAwaiter().GetResult();
@@ -115,12 +122,30 @@ internal static class FolderAddFlow
             if (roots.GetPendingInitialScans().All(root => !SamePath(root.LocalPath, afterRestart)))
                 throw new Exception("Second root has no pending initial import.");
 
+            blockedRestart = Task.Run(() =>
+            {
+                lock (SourceFileLocks.ForPath(Path.Combine(afterRestart, "second.jpg")))
+                {
+                    restartGateReady.Set();
+                    if (!releaseRestartPhoto.Wait(TimeSpan.FromSeconds(25)))
+                        throw new TimeoutException("Restart source lock not released.");
+                }
+            });
+            if (!restartGateReady.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Restart source lock not acquired.");
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             window.Show();
             tree = (TreeView)window.FindName("FoldersTree");
+            surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
             Until(window, () =>
                 Walk(tree).Any(item => SamePath(PathOf(item), afterRestart)),
                 "Pending root was missing from tree after restart.");
+            Until(window, () => surface.GetFolderOffset(firstFolder.Id).HasValue &&
+                roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, afterRestart)),
+                "Existing thumbnails vanished while another folder's scan was blocked.");
+            Console.WriteLine("PASS: Existing thumbnails stay accessible while a separate pending root is blocked.");
+            releaseRestartPhoto.Set();
+            blockedRestart.GetAwaiter().GetResult();
             Until(window, () =>
                 new ImageCatalogRepository(db).CountAll() == 3 &&
                 roots.GetPendingInitialScans().Count == 0,
@@ -139,7 +164,9 @@ internal static class FolderAddFlow
         finally
         {
             releaseDelayedPhoto.Set();
+            releaseRestartPhoto.Set();
             try { blockedFile?.GetAwaiter().GetResult(); } catch { }
+            try { blockedRestart?.GetAwaiter().GetResult(); } catch { }
             try { window?.Close(); } catch { }
             // The Windows workflow executes several independent WPF processes
             // against the runner's local test catalog. Never leave synthetic
