@@ -776,35 +776,31 @@ public partial class MainWindow
         }, DispatcherPriority.Loaded);
     }
 
+    private readonly GallerySelection _gallerySelection = new();
+
     private void BrowseSurface_ImageClicked(
         object? sender,
         BrowseImageClickedEventArgs e)
     {
-        var additive = (e.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0;
-        if (!additive)
-        {
-            _selectedImageIds.Clear();
-        }
+        _gallerySelection.Click(e.ImageId, e.Modifiers,
+            _displayedBrowseIndex, _selectedImageIds);
+        ApplyGallerySelection();
 
-        if (additive && _selectedImageIds.Contains(e.ImageId))
-        {
-            _selectedImageIds.Remove(e.ImageId);
-        }
-        else
-        {
-            _selectedImageIds.Add(e.ImageId);
-        }
-
-        BrowseSurface.SetSelection(_selectedImageIds);
-
-        // Clicking a thumbnail also identifies its folder in the tree, even
-        // after scrolling far from the previously selected folder.
-        var selectedImage = _browseIndex.FirstOrDefault(entry => entry.ImageId == e.ImageId);
+        // Explicit thumbnail selection identifies its source folder. Ordinary
+        // scroll does NOT select a different folder in the independent tree.
+        var selectedImage = _displayedBrowseIndex.FirstOrDefault(entry =>
+            entry.ImageId == e.ImageId);
         if (selectedImage is not null)
         {
             _activePhotoFolderId = selectedImage.PhotoFolderId;
             UpdateActiveFolderDisplay(selectedImage.PhotoFolderId, updateTreeSelection: true);
         }
+        Keyboard.Focus(BrowseSurface);
+    }
+
+    private void ApplyGallerySelection()
+    {
+        BrowseSurface.SetSelection(_selectedImageIds);
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
         UpdateComparisonButtons();
         _ = UpdateSidebarContentAsync();
