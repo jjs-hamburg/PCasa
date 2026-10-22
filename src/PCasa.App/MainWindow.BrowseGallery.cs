@@ -208,6 +208,17 @@ public partial class MainWindow
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
         _photoFolders = freshFolders;
         _lastCatalogImageCount = imageCount;
+        // A newly imported catalog folder may not yet have been reported by
+        // incremental scan progress (notably Explorer drops). Add ONLY its
+        // tree node before calculating gallery order; existing nodes remain
+        // untouched, and gallery data is still loaded independently.
+        foreach (var discovered in freshFolders)
+        {
+            if (_folderTreeItems.ContainsKey(discovered.Id)) continue;
+            ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
+                DiscoveredPhotoFolderId: discovered.Id,
+                DiscoveredPhotoFolderPath: discovered.LocalPath));
+        }
         // Gallery catalog reloads are independent of the folder TreeView.
         // The tree has its own targeted additions and explicit refreshes;
         // rebuilding it here also invalidates the gallery's scroll geometry.
