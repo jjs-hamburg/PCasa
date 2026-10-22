@@ -22,11 +22,11 @@ public sealed record ScanResult(
     int Updated,
     int Unchanged,
     int Failed,
-    int Removed = 0)
+    int Removed = 0,
+    int MetadataUpdated = 0)
 {
-    // A pure deletion is a catalog change even when no source was imported.
-    // The background coordinator must refresh the gallery in both cases.
-    public bool CatalogChanged => Updated > 0 || Removed > 0;
+    // Re-index only when content, removal, or catalog annotations changed.
+    public bool CatalogChanged => Updated > 0 || Removed > 0 || MetadataUpdated > 0;
 }
 
 public sealed class FolderScanner
@@ -116,6 +116,7 @@ public sealed class FolderScanner
         var added = 0;
         var changed = 0;
         var cacheRepaired = 0;
+        var metadataUpdated = 0;
         var failed = 0;
         Exception? firstFailure = null;
         string? firstFailurePath = null;
@@ -232,6 +233,7 @@ public sealed class FolderScanner
                             var exif = exifReader.Read(localPath, cancellationToken);
                             scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             scanSession.FlushPending();
+                            metadataUpdated++;
                         }
 
                         unchanged++;
@@ -413,7 +415,7 @@ public sealed class FolderScanner
             _folderRepository.CompleteInitialScan(folder.Id, generation);
         }
 
-        return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed);
+        return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed, metadataUpdated);
 
         void ReportProgress(string? currentFile, bool force = false,
             long? discoveredFolderId = null, string? discoveredFolderPath = null)
