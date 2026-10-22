@@ -14,7 +14,7 @@ public partial class MainWindow
     private bool _galleryFileOperationRunning;
 
     private sealed record GalleryFileOperation(string Source, string Destination,
-        bool Move, bool Replace, long? CatalogImageId);
+        bool Move, bool Replace, long? CatalogImageId, long? ExistingTargetId);
 
     private string[] SelectedGalleryPaths()
     {
@@ -207,7 +207,8 @@ public partial class MainWindow
                 reserved.Add(destination);
             }
             plans.Add(new GalleryFileOperation(source, destination, move, replace,
-                CatalogImageIdAtPath(source)));
+                CatalogImageIdAtPath(source),
+                replace ? CatalogImageIdAtPath(destination) : null));
         }
         if (plans.Count == 0) return;
         _galleryFileOperationRunning = true;
@@ -261,6 +262,13 @@ public partial class MainWindow
                                 if (plan.Move && plan.CatalogImageId is long sourceId)
                                     new CatalogRemovalService(_database).DetachImage(
                                         sourceId, plan.Source);
+                                if (plan.Replace && plan.ExistingTargetId is long replacedId)
+                                {
+                                    // Even when file size and timestamp match,
+                                    // replacement bytes MUST regenerate thumbnails.
+                                    new CatalogRemovalService(_database).DetachImage(
+                                        replacedId, destination);
+                                }
                             }
                             // Scanner remains THE single index/cache writer for
                             // imported files, including external Explorer drops.
