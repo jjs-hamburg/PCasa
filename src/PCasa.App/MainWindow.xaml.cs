@@ -170,7 +170,7 @@ public partial class MainWindow : Window
         // On returning to Expand, those ancestors did not exist in the
         // previous expansion snapshot. Explicitly reopen all monitored
         // root ancestors so exactly the same photo directories are visible.
-        if (!_folderTreeSettings.Compressed)
+        if (!_folderTreeSettings.Compressed && !_appearance.FolderExpansionsSaved)
         {
             pathsToExpand = new HashSet<string>(
                 pathsToExpand.Concat(defaultExpandedPaths),
@@ -249,7 +249,8 @@ public partial class MainWindow : Window
         if (selectedItem is null && _activePhotoFolderId is long activeId)
             _folderTreeItems.TryGetValue(activeId, out selectedItem);
         if (selectedItem is null)
-            selectedItem = FirstPhotoFolderTreeItem(FoldersTree);
+            selectedItem = FirstPhotoFolderTreeItem(FoldersTree)
+                ?? FoldersTree.Items.OfType<TreeViewItem>().FirstOrDefault();
         if (selectedItem is not null)
         {
             _syncingFolderSelection = true;
