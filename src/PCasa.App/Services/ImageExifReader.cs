@@ -47,7 +47,7 @@ public sealed class ImageExifReader : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var line = process.StandardOutput.ReadLineAsync(cancellationToken)
-                .WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
+                .AsTask().WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
                 .GetAwaiter().GetResult();
             if (line is null)
                 throw new IOException("ExifTool: Der Metadatenprozess wurde beendet.");
