@@ -1,8 +1,11 @@
 name: Scheduler Consistency Tests
 
-# Explicit acceptance tests only: no automatic CI costs after commits.
-# A manual dispatch runs regression and WPF smoke tests and packages Windows.
+# Run regression and real-WPF smoke tests for every development push.
+# A manual dispatch additionally publishes the self-contained Windows test package.
 on:
+  push:
+    branches:
+      - scheduler-consistency
   workflow_dispatch:
 
 permissions:
