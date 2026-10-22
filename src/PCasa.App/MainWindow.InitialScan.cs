@@ -10,6 +10,7 @@ public partial class MainWindow
     // This set only avoids repeating failed attempts endlessly in one session.
     private readonly HashSet<long> _initialScanAttempted = new();
     private bool _initialScanPumpRunning;
+    private bool _initialScanActive;
 
     private void QueuePendingInitialScans()
     {
@@ -52,6 +53,7 @@ public partial class MainWindow
     {
         using var cancellation = new CancellationTokenSource();
         _manualFolderScanWaiting = true;
+        _initialScanActive = true;
         _manualScanRunning = true;
         _isScanning = true;
         _activeScanCancellation = cancellation;
@@ -117,7 +119,8 @@ public partial class MainWindow
                     result = _folderScanner.Scan(folder, progress, token);
                     return Task.CompletedTask;
                 },
-                () => _folderRepository.GetAll().Any(root => root.Id == folder.Id),
+                () => _folderRepository.GetPendingInitialScans().Any(root =>
+                    root.Id == folder.Id),
                 cancellation.Token);
             if (result is null) throw new OperationCanceledException();
 
@@ -154,9 +157,10 @@ public partial class MainWindow
                 _activeScanCancellation = null;
                 _activeScanFolderId = null;
             }
-            _manualScanRunning = false;
-            _manualFolderScanWaiting = false;
-            _isScanning = _backgroundWorkerRunning;
+            _initialScanActive = false;
+            _manualScanRunning = _manualContextScanActive;
+            _manualFolderScanWaiting = _manualContextScanActive;
+            _isScanning = _backgroundWorkerRunning || _manualScanRunning;
             ScanAllMenuItem.IsEnabled = !_isScanning;
             RefreshFolderStatusVisuals();
             if (_backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
