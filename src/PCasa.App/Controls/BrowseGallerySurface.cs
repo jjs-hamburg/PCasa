@@ -394,9 +394,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
         {
             ImageOpened?.Invoke(this, args);
         }
-        else if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0 &&
-                 _selectedImageIds.Count > 1 &&
-                 _selectedImageIds.Contains(args.ImageId))
+        else if (GallerySelection.PreserveGroupUntilDragDecision(
+                     args.ImageId, Keyboard.Modifiers, _selectedImageIds))
         {
             // Explorer semantics: pressing an already selected photo must
             // preserve the ENTIRE selection until we know whether this is a
