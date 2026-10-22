@@ -17,8 +17,36 @@ public sealed record ImageExifData(string Json, string? CameraMake,
 
 public sealed class ImageExifReader : IDisposable
 {
+    private static readonly object ActiveProcessesGate = new();
+    private static readonly HashSet<Process> ActiveProcesses = new();
     private Process? _process;
     private bool _disposed;
+
+    static ImageExifReader()
+    {
+        // Stay-open children are not guaranteed to finish their scan before
+        // WPF shuts down. A process-exit hook is the final safety net.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => StopAll();
+    }
+
+    public static void StopAll()
+    {
+        Process[] children;
+        lock (ActiveProcessesGate)
+            children = ActiveProcesses.ToArray();
+        foreach (var child in children)
+        {
+            try
+            {
+                if (child.HasExited) continue;
+                child.Kill(entireProcessTree: true);
+                child.WaitForExit(1500);
+            }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            catch (ObjectDisposedException) { }
+        }
+    }
 
     public ImageExifData Read(string path, CancellationToken cancellationToken = default)
     {
@@ -144,6 +172,8 @@ public sealed class ImageExifReader : IDisposable
             start.ArgumentList.Add(arg);
         _process = Process.Start(start)
             ?? throw new IOException("ExifTool für den Metadatenindex konnte nicht starten.");
+        lock (ActiveProcessesGate)
+            ActiveProcesses.Add(_process);
         // Drain warnings asynchronously to avoid a blocked stderr pipe.
         _ = _process.StandardError.ReadToEndAsync();
     }
@@ -166,6 +196,13 @@ public sealed class ImageExifReader : IDisposable
         }
         catch (InvalidOperationException) { }
         catch (IOException) { }
-        finally { _process.Dispose(); }
+        catch (System.ComponentModel.Win32Exception) { }
+        finally
+        {
+            lock (ActiveProcessesGate)
+                ActiveProcesses.Remove(_process);
+            _process.Dispose();
+            _process = null;
+        }
     }
 }

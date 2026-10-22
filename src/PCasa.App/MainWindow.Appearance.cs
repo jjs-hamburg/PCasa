@@ -1,4 +1,5 @@
 using System.IO;
+using System.ComponentModel;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -30,6 +31,11 @@ public partial class MainWindow
         public string[] ExpandedTreePaths { get; set; } = [];
         public bool ShowThumbnailFileNames { get; set; } = true;
         public bool ShowThumbnailIcons { get; set; } = true;
+        public double? WindowLeft { get; set; }
+        public double? WindowTop { get; set; }
+        public double? WindowWidth { get; set; }
+        public double? WindowHeight { get; set; }
+        public bool WindowMaximized { get; set; }
     }
 
     private readonly string _appearanceFile = Path.Combine(
@@ -71,8 +77,60 @@ public partial class MainWindow
             SaveAppearance();
         }
         ApplyAppearance();
+        RestoreWindowPlacement();
         SystemEvents.UserPreferenceChanged += AppearanceUserPreferenceChanged;
         Closed += AppearanceWindowClosed;
+    }
+
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        // Closing happens before background tasks and the WPF dispatcher
+        // wind down. Stop owned EXIF children even if a scan is blocked.
+        _activeScanCancellation?.Cancel();
+        _backgroundCurrentScanCancellation?.Cancel();
+        ImageExifReader.StopAll();
+
+        var bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, Width, Height) : RestoreBounds;
+        if (double.IsFinite(bounds.X) && double.IsFinite(bounds.Y) &&
+            double.IsFinite(bounds.Width) && double.IsFinite(bounds.Height) &&
+            bounds.Width >= MinWidth && bounds.Height >= MinHeight)
+        {
+            _appearance.WindowLeft = bounds.Left;
+            _appearance.WindowTop = bounds.Top;
+            _appearance.WindowWidth = bounds.Width;
+            _appearance.WindowHeight = bounds.Height;
+        }
+        _appearance.WindowMaximized = WindowState == WindowState.Maximized;
+        SaveAppearance();
+    }
+
+    private void RestoreWindowPlacement()
+    {
+        if (_appearance.WindowWidth is double width &&
+            _appearance.WindowHeight is double height &&
+            _appearance.WindowLeft is double left &&
+            _appearance.WindowTop is double top &&
+            double.IsFinite(width) && double.IsFinite(height) &&
+            double.IsFinite(left) && double.IsFinite(top) &&
+            width >= MinWidth && height >= MinHeight)
+        {
+            var desktop = new Rect(SystemParameters.VirtualScreenLeft,
+                SystemParameters.VirtualScreenTop,
+                SystemParameters.VirtualScreenWidth,
+                SystemParameters.VirtualScreenHeight);
+            var stored = new Rect(left, top, width, height);
+            if (desktop.IntersectsWith(stored))
+            {
+                Left = left;
+                Top = top;
+                Width = width;
+                Height = height;
+                WindowStartupLocation = WindowStartupLocation.Manual;
+            }
+        }
+        if (_appearance.WindowMaximized)
+            WindowState = WindowState.Maximized;
     }
 
     private void AppearanceWindowClosed(object? sender, EventArgs e)

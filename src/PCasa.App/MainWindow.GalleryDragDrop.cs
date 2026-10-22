@@ -18,17 +18,20 @@ public partial class MainWindow
     private void HighlightDropFolder(TreeViewItem? target)
     {
         if (ReferenceEquals(_highlightedDropFolder, target)) return;
-        if (_highlightedDropFolder?.Header is Border oldHeader)
+        // Apply the outline on the TreeViewItem template, not its Header.
+        // The Header must remain a string for the existing icon/name template.
+        if (_highlightedDropFolder is { } previous)
         {
-            oldHeader.Background = System.Windows.Media.Brushes.Transparent;
-            oldHeader.BorderBrush = System.Windows.Media.Brushes.Transparent;
+            previous.Background = Brushes.Transparent;
+            previous.BorderBrush = Brushes.Transparent;
+            previous.BorderThickness = new Thickness(0);
         }
         _highlightedDropFolder = target;
-        if (target?.Header is Border header)
+        if (target is not null)
         {
-            header.SetResourceReference(Border.BackgroundProperty, "PcasaHoverBrush");
-            header.BorderBrush = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(57, 164, 218));
+            target.SetResourceReference(TreeViewItem.BackgroundProperty, "PcasaHoverBrush");
+            target.BorderBrush = new SolidColorBrush(Color.FromRgb(57, 164, 218));
+            target.BorderThickness = new Thickness(1);
         }
     }
 

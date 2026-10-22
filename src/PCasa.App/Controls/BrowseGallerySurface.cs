@@ -562,6 +562,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 var cellX = ImageColumnLeft(section, column);
                 var cellY = section.ImagesTop + (row * section.RowHeight);
                 var box = new Rect(cellX, cellY, _thumbnailWidth, _thumbnailHeight);
+                // Caption belongs to the actual image bounds, not the fixed
+                // cell. Cached thumbnail dimensions are already in the index.
+                var imageBounds = FitInto(box, entry.PixelWidth, entry.PixelHeight);
 
                 if (_pageCache is not null &&
                     _pageCache.TryGet(imageIndex, out var bitmap) &&
@@ -594,12 +597,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
                         CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                         new Typeface("Segoe UI"), 10, _mutedBrush, pixelsPerDip)
                     {
-                        MaxTextWidth = Math.Max(1, _thumbnailWidth),
+                        MaxTextWidth = Math.Max(1, imageBounds.Width),
                         MaxTextHeight = FileLabelHeight,
                         Trimming = TextTrimming.CharacterEllipsis
                     };
                     drawingContext.DrawText(caption,
-                        new Point(cellX, cellY + _thumbnailHeight + 2));
+                        new Point(imageBounds.Left + (imageBounds.Width - caption.Width) / 2,
+                                  imageBounds.Bottom + 6));
                 }
             }
         }

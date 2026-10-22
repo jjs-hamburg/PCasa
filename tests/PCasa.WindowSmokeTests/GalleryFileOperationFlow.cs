@@ -136,18 +136,24 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Initial gallery has no selected folder tree item.");
             // A drop target is highlighted independently from the tree's
             // selected source item, then cleared without changing selection.
-            if (nested.Header is not Border dropHeader)
-                throw new Exception("Folder header cannot show a drop outline.");
+            if (nested.Header is not string folderName ||
+                folderName.Contains("System.Windows.Controls", StringComparison.Ordinal))
+                throw new Exception("Tree item header must remain a real folder name.");
             var oldSelection = tree.SelectedItem;
             var highlight = typeof(PCasa.App.MainWindow).GetMethod(
                 "HighlightDropFolder", BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new Exception("Tree target highlighter not installed.");
+            nested.ApplyTemplate();
+            var templateBorder = nested.Template.FindName("HeaderBorder", nested) as Border
+                ?? throw new Exception("Existing tree template is missing its header border.");
             highlight.Invoke(window, [nested]);
-            if (dropHeader.BorderBrush is not SolidColorBrush activeOutline ||
-                activeOutline.Color.B == 0)
-                throw new Exception("Drop target outline was not displayed.");
+            window.UpdateLayout();
+            if (templateBorder.BorderBrush is not SolidColorBrush activeOutline ||
+                activeOutline.Color.B == 0 || templateBorder.BorderThickness.Left < 0.5)
+                throw new Exception("The actual WPF drop target outline was not displayed.");
             highlight.Invoke(window, [null]);
-            if (!ReferenceEquals(dropHeader.BorderBrush, Brushes.Transparent) ||
+            window.UpdateLayout();
+            if (templateBorder.BorderThickness.Left > 0 ||
                 !ReferenceEquals(oldSelection, tree.SelectedItem))
                 throw new Exception("Target outline changed folder selection or survived drag.");
             Console.WriteLine("PASS: Tree target highlights during drop without losing source selection.");

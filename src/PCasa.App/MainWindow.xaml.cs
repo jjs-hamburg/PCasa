@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Closing += MainWindow_Closing;
         Closed += async (_, _) => await _scheduler.DisposeAsync();
 
         _database = new LocalDatabase();
@@ -412,16 +413,9 @@ public partial class MainWindow : Window
 
         var item = new TreeViewItem
         {
-            Header = new Border
-            {
-                // A real border, not just selection color, makes the live
-                // drop destination visible independently of tree selection.
-                Child = new TextBlock { Text = header },
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(2, 0, 2, 0),
-                Background = System.Windows.Media.Brushes.Transparent,
-                BorderBrush = System.Windows.Media.Brushes.Transparent
-            },
+            // Keep the header a string: the global TreeViewItem DataTemplate
+            // already owns icons, folder names, status and clipping.
+            Header = header,
             ToolTip = tooltip,
             Tag = CreateFolderTreeTag(node.FullPath, node.PhotoFolderId),
             AllowDrop = true,
