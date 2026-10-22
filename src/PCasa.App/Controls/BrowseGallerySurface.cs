@@ -52,6 +52,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double _totalHeight;
     private double _viewportTop;
     private double _viewportHeight;
+    private Point? _dragStartingPoint;
+    private long? _dragStartingImageId;
     private double _lastViewportTop;
     private int _scrollDirection = 1;
     private bool _showShadows;
@@ -67,6 +69,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     public event EventHandler<BrowseImageClickedEventArgs>? ImageClicked;
     public event EventHandler<BrowseImageClickedEventArgs>? ImageOpened;
     public event EventHandler<BrowseImageClickedEventArgs>? ImageContextRequested;
+    public event EventHandler<BrowseImageClickedEventArgs>? ImagesDragRequested;
     public event Action<object?, (long ImageId, double RelativeY)>? LayoutReflowed;
 
     public double ThumbnailWidth => _thumbnailWidth;
@@ -244,6 +247,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
         return null;
     }
 
+    public long? GetDropFolderId(Point point)
+    {
+        EnsureLayout();
+        if (point.Y < 0 || point.Y >= _totalHeight) return null;
+        return FindSectionAt(point.Y)?.Folder.Id;
+    }
+
     public double? GetFolderOffset(long photoFolderId)
     {
         EnsureLayout();
@@ -371,6 +381,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
             return;
         }
 
+        Focus();
+        _dragStartingPoint = e.GetPosition(this);
+        _dragStartingImageId = _index[imageIndex.Value].ImageId;
         var args = new BrowseImageClickedEventArgs(
             _index[imageIndex.Value].ImageId,
             Keyboard.Modifiers);
@@ -385,6 +398,29 @@ public sealed class BrowseGallerySurface : FrameworkElement
         }
 
         e.Handled = true;
+    }
+
+    protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
+    {
+        _dragStartingPoint = null;
+        _dragStartingImageId = null;
+        base.OnMouseLeftButtonUp(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (e.LeftButton != MouseButtonState.Pressed ||
+            _dragStartingPoint is not Point origin ||
+            _dragStartingImageId is not long imageId) return;
+        var now = e.GetPosition(this);
+        if (Math.Abs(now.X - origin.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(now.Y - origin.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+        _dragStartingPoint = null;
+        _dragStartingImageId = null;
+        ImagesDragRequested?.Invoke(this,
+            new BrowseImageClickedEventArgs(imageId, Keyboard.Modifiers));
     }
 
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
