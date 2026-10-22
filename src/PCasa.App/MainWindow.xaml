@@ -327,6 +327,7 @@
                               SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
                               AllowDrop="True"
                               PreviewDragOver="FolderTreeFiles_DragOver"
+                              PreviewDragLeave="DragTarget_Leave"
                               PreviewDrop="FolderTreeFiles_Drop"
                               TreeViewItem.Expanded="FoldersTree_ExpansionChanged"
                               TreeViewItem.Collapsed="FoldersTree_ExpansionChanged">
@@ -386,6 +387,7 @@
                                                        Loaded="BrowseSurface_Loaded"
                                                        AllowDrop="True"
                                                        DragOver="GalleryFiles_DragOver"
+                                                       DragLeave="DragTarget_Leave"
                                                        Drop="GalleryFiles_Drop"
                                                        HorizontalAlignment="Stretch"
                                                        VerticalAlignment="Top" />
