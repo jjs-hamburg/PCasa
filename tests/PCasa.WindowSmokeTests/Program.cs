@@ -185,6 +185,40 @@ internal static class Program
             if (originalIndex < closedVisible.First || originalIndex > closedVisible.Last)
                 throw new Exception("Closing sidebar changed active image.");
             Console.WriteLine("PASS: Closing sidebar preserves WPF gallery position.");
+
+            // The folder manager must never enumerate a potentially offline
+            // NAS root via its own Task.Run. Expanding a real TreeViewItem
+            // must submit its source probe through the shared scheduler.
+            var managerScheduler = new PCasaScheduler();
+            PCasa.App.FolderManagerWindow? manager = null;
+            try
+            {
+                manager = new PCasa.App.FolderManagerWindow(
+                    new PCasa.App.Data.FolderRepository(new PCasa.App.Data.LocalDatabase()),
+                    managerScheduler, serverDatabaseConfigured: false)
+                {
+                    Owner = window
+                };
+                manager.Show();
+                Flush(manager);
+                var managedTree = (TreeView?)manager.FindName("FolderManagerTree")
+                    ?? throw new Exception("Folder manager tree missing.");
+                var firstManagedNode = managedTree.Items.OfType<TreeViewItem>().FirstOrDefault()
+                    ?? throw new Exception("Folder manager has no expandable system folder.");
+                firstManagedNode.IsExpanded = true;
+                Flush(manager);
+                if (!managerScheduler.Snapshot().Any(job =>
+                        job.Key.StartsWith("folder-manager:expand:", StringComparison.Ordinal)
+                        && job.Priority == SchedulerPriority.Interactive))
+                    throw new Exception("Manager expansion bypassed the shared scheduler.");
+                Console.WriteLine("PASS: Folder manager expansion uses scheduled source probe.");
+            }
+            finally
+            {
+                manager?.Close();
+                managerScheduler.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Window smoke checks passed.");
