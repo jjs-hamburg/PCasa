@@ -72,10 +72,20 @@ public sealed class BrowseCacheRepository
                 te.byte_offset,
                 te.byte_length,
                 te.pixel_width,
-                te.pixel_height
+                te.pixel_height,
+                i.file_name,
+                CASE WHEN x.gps_latitude IS NOT NULL AND x.gps_longitude IS NOT NULL THEN 1 ELSE 0 END,
+                CASE WHEN t.keywords IS NOT NULL AND LENGTH(TRIM(t.keywords)) > 0 THEN 1 ELSE 0 END,
+                CASE WHEN LOWER(i.extension) IN ('.arw','.nef','.nrw','.cr2','.cr3','.dng',
+                   '.raf','.rw2','.orf','.pef','.srw','.crw') THEN 1 ELSE 0 END
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
             INNER JOIN thumbnail_entries te ON te.image_id = i.id
+            LEFT JOIN image_exif x ON x.image_id = i.id
+                AND x.source_modified_utc_ticks = i.modified_utc_ticks
+                AND x.source_file_size = i.file_size
+            LEFT JOIN image_tags t ON t.image_id = i.id
+                AND t.source_modified_utc_ticks = i.modified_utc_ticks
             WHERE te.tier = $tier
               AND te.source_modified_utc_ticks = i.modified_utc_ticks
             ORDER BY
@@ -97,7 +107,11 @@ public sealed class BrowseCacheRepository
                 reader.GetInt64(4),
                 reader.GetInt32(5),
                 reader.GetInt32(6),
-                reader.GetInt32(7)));
+                reader.GetInt32(7),
+                reader.GetString(8),
+                reader.GetInt32(9) != 0,
+                reader.GetInt32(10) != 0,
+                reader.GetInt32(11) != 0));
         }
 
         return result;
