@@ -50,8 +50,10 @@ public sealed class PackedThumbnailStore : IDisposable
     // Only durable pack append + SQLite index commit require that lock.
     public IReadOnlyList<PreparedThumbnailTier> PrepareTiers(
         string sourcePath, BrowseThumbnailProfile profile,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? originalSourcePath = null)
     {
+        originalSourcePath ??= sourcePath;
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(profile);
         cancellationToken.ThrowIfCancellationRequested();
@@ -78,11 +80,9 @@ public sealed class PackedThumbnailStore : IDisposable
         // source and subsequent tiers can then fail. Instead, decode the source once
         // to the largest required browse size and materialize that small image in RAM.
         var largestTier = tiers[^1];
-        using var largestPipeline = Image.Thumbnail(
-            sourcePath,
-            largestTier,
-            height: largestTier,
-            size: Enums.Size.Down);
+        using var largestPipeline = RawImageSource.LoadDisplayThumbnail(
+            sourcePath, originalSourcePath, largestTier, largestTier,
+            cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
 
