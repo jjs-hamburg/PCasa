@@ -597,7 +597,7 @@ public partial class MainWindow
         }
     }
 
-    private void BrowseFoldersTree_SelectedItemChanged(
+    private async void BrowseFoldersTree_SelectedItemChanged(
         object sender,
         RoutedPropertyChangedEventArgs<object> e)
     {
@@ -612,6 +612,19 @@ public partial class MainWindow
         {
             _activePhotoFolderId = photoFolderId;
             var offset = BrowseSurface.GetFolderOffset(photoFolderId);
+            if (offset is null && _browseInitialized && !_folderRemovalPending)
+            {
+                // A newly committed folder can be selected while its parent
+                // scan is still running. The gallery fetches its own current
+                // catalog snapshot on USER navigation; this never restarts or
+                // waits for the scanner, nor does it rebuild the folder tree.
+                await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                    warmViewport: false);
+                if ((FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
+                    FolderTreeTag { PhotoFolderId: long current } || current != photoFolderId)
+                    return;
+                offset = BrowseSurface.GetFolderOffset(photoFolderId);
+            }
             if (offset is null && _appearance.HideCollapsedFolders &&
                 string.IsNullOrWhiteSpace(TagSearchBox.Text))
             {
