@@ -326,7 +326,7 @@
                               ClipToBounds="True"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               Margin="7,0,7,8"
-                              Padding="0"
+                              Padding="0,0,12,0"
                               PreviewMouseRightButtonDown="FoldersTree_PreviewMouseRightButtonDown"
                               SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
                               PreviewMouseLeftButtonDown="FoldersTree_PreviewMouseLeftButtonDown"
