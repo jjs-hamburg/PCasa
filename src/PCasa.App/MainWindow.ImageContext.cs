@@ -16,7 +16,7 @@ public partial class MainWindow
         object? sender, BrowseImageClickedEventArgs e)
     {
         if (_viewerOpen) return;
-        if (!_selectedImageIds.Contains(e.ImageId) || _selectedImageIds.Count != 1)
+        if (!_selectedImageIds.Contains(e.ImageId))
             BrowseSurface_ImageClicked(sender, new BrowseImageClickedEventArgs(e.ImageId, ModifierKeys.None));
 
         var id = e.ImageId;
@@ -29,7 +29,7 @@ public partial class MainWindow
         AddContextAction(menu, "Eigenschaften", () => ShowFileProperties(id));
         menu.Items.Add(new Separator());
         AddContextAction(menu, "Duplizieren", () => DuplicateImage(id));
-        AddContextAction(menu, "Löschen", () => RecycleImage(id));
+        AddContextAction(menu, "Löschen", () => _ = DeleteSelectedImagesAsync());
         menu.IsOpen = true;
     }
 
@@ -118,55 +118,6 @@ public partial class MainWindow
             StatusText.Text = "Dupliziert: " + Path.GetFileName(target);
         }
         catch (Exception ex) { ShowFileActionError(ex); }
-    }
-
-    private async void RecycleImage(long id)
-    {
-        var path = GetImagePath(id);
-        if (path is null) return;
-        try
-        {
-            var network = await Task.Run(() => PathClassifier.Classify(path).IsNetwork);
-            var question = network
-                ? $"Netzlaufwerk: Datei ENDGÜLTIG löschen?\n\n" +
-                  $"Dieser Vorgang kann nicht rückgängig gemacht werden.\n\n{path}"
-                : $"Datei in den Windows-Papierkorb verschieben?\n\n{path}";
-            if (MessageBox.Show(this, question, "Bild löschen",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning,
-                    MessageBoxResult.No) != MessageBoxResult.Yes)
-                return;
-
-            var monitoredId = GetContextMonitoredFolderId(id);
-            StatusText.Text = "Bild löschen …";
-            await _scheduler.EnqueueAsync(
-                $"image-delete:{id}:{path}", SchedulerPriority.Interactive,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    // Physical file operation and catalog detachment occupy one
-                    // scheduler job. A canceled queued request cannot delete.
-                    lock (SourceFileLocks.ForPath(path))
-                    {
-                        if (network)
-                            File.Delete(path);
-                        else
-                            FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
-                                RecycleOption.SendToRecycleBin);
-                        if (monitoredId is long folderId)
-                            new CatalogRemovalService(_database).DetachImage(id, path);
-                    }
-                    // No cancel between physical deletion and catalog update:
-                    // if the file moved, always finish the short DB cleanup.
-                    return Task.CompletedTask;
-                });
-            if (monitoredId is long)
-                await RefreshBrowseGalleryAsync(forceIndexReload: true);
-            StatusText.Text = "Gelöscht: " + Path.GetFileName(path);
-        }
-        catch (Exception ex)
-        {
-            ShowFileActionError(ex);
-        }
     }
 
     private long? GetContextMonitoredFolderId(long imageId)
