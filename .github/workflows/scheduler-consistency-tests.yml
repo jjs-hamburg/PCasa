@@ -24,6 +24,12 @@ jobs:
       - name: Install verified lossless metadata tool
         shell: pwsh
         run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
+      - name: Probe EXIF reader, GPS fields and legacy backfill
+        env:
+          PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --exif-probe
       - name: Run catalog regression executable
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
