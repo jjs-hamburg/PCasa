@@ -325,6 +325,9 @@
                               Padding="0,0,20,0"
                               PreviewMouseRightButtonDown="FoldersTree_PreviewMouseRightButtonDown"
                               SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
+                              AllowDrop="True"
+                              PreviewDragOver="FolderTreeFiles_DragOver"
+                              PreviewDrop="FolderTreeFiles_Drop"
                               TreeViewItem.Expanded="FoldersTree_ExpansionChanged"
                               TreeViewItem.Collapsed="FoldersTree_ExpansionChanged">
                         <TreeView.ContextMenu>
@@ -381,6 +384,9 @@
                                   ScrollChanged="BrowseScrollViewer_ScrollChanged">
                         <controls:BrowseGallerySurface x:Name="BrowseSurface"
                                                        Loaded="BrowseSurface_Loaded"
+                                                       AllowDrop="True"
+                                                       DragOver="GalleryFiles_DragOver"
+                                                       Drop="GalleryFiles_Drop"
                                                        HorizontalAlignment="Stretch"
                                                        VerticalAlignment="Top" />
                     </ScrollViewer>
