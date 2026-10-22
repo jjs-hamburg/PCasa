@@ -324,6 +324,20 @@ public partial class MainWindow
 
     private void SetViewerBitmap(BitmapSource? bitmap)
     {
+        // The catalog may contain the physical, unrotated dimensions of a
+        // JPEG with EXIF Orientation 5-8. An oriented decoder bitmap then has
+        // the opposite aspect ratio. Correct the VIEW geometry before assigning
+        // it: Stretch.Fill must never squeeze a portrait into a landscape box.
+        // Keep the original pixel count for genuine 100% zoom; use only the
+        // decoded bitmap's aspect to identify the axis swap.
+        if (bitmap is { PixelWidth: > 0, PixelHeight: > 0 } &&
+            _viewerImageInfo is { Width: > 0, Height: > 0 } info &&
+            ViewerImageGeometry.NeedsAxisSwap(info.Width, info.Height,
+                bitmap.PixelWidth, bitmap.PixelHeight))
+        {
+            _viewerImageInfo = info with { Width = info.Height, Height = info.Width };
+            ApplyViewerImageLayout();
+        }
         PhotoViewerImage.Source = bitmap;
         if (_viewerFullscreenImage is not null)
         {
