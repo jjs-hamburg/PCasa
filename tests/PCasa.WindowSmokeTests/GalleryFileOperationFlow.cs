@@ -132,7 +132,25 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Nested folder is not an eligible drop target.");
             if (!nested.AllowDrop)
                 throw new Exception("Nested folder does not accept WPF drops.");
-            Console.WriteLine("PASS: Nested folder resolves to its own drop destination.");
+            if (tree.SelectedItem is not TreeViewItem)
+                throw new Exception("Initial gallery has no selected folder tree item.");
+            // A drop target is highlighted independently from the tree's
+            // selected source item, then cleared without changing selection.
+            if (nested.Header is not Border dropHeader)
+                throw new Exception("Folder header cannot show a drop outline.");
+            var oldSelection = tree.SelectedItem;
+            var highlight = typeof(PCasa.App.MainWindow).GetMethod(
+                "HighlightDropFolder", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Tree target highlighter not installed.");
+            highlight.Invoke(window, [nested]);
+            if (dropHeader.BorderBrush is not SolidColorBrush activeOutline ||
+                activeOutline.Color.B == 0)
+                throw new Exception("Drop target outline was not displayed.");
+            highlight.Invoke(window, [null]);
+            if (!ReferenceEquals(dropHeader.BorderBrush, Brushes.Transparent) ||
+                !ReferenceEquals(oldSelection, tree.SelectedItem))
+                throw new Exception("Target outline changed folder selection or survived drag.");
+            Console.WriteLine("PASS: Tree target highlights during drop without losing source selection.");
 
             // Window resizing must re-anchor the progress window after
             // layout rather than leave its coordinates at the old size.
