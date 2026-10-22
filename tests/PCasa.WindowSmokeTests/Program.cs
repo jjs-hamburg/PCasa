@@ -250,7 +250,15 @@ internal static class Program
             finally
             {
                 manager?.Close();
-                managerScheduler.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                // Never block the STA waiting for an async DisposeAsync which
+                // must resume on this dispatcher: pump it like other WPF tests.
+                var dispose = managerScheduler.DisposeAsync().AsTask();
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                while (!dispose.IsCompleted && DateTime.UtcNow < deadline)
+                    Flush(window);
+                if (!dispose.IsCompleted)
+                    throw new TimeoutException("Folder manager scheduler disposal stalled.");
+                dispose.GetAwaiter().GetResult();
             }
 
             window.Close();
