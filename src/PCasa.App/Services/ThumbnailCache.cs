@@ -26,13 +26,21 @@ public sealed class ThumbnailCache
         string sourcePath,
         string canonicalPath,
         long fileSize,
-        long modifiedUtcTicks)
+        long modifiedUtcTicks,
+        string? originalSourcePath = null)
     {
-        var cachePath = GetCachePath(canonicalPath, fileSize, modifiedUtcTicks);
+        originalSourcePath ??= sourcePath;
+        var rawSource = RawImageSource.IsRawPath(originalSourcePath);
+        var cachePath = GetCachePath(canonicalPath, fileSize, modifiedUtcTicks,
+            rawSource);
         if (File.Exists(cachePath))
         {
             using var header = Image.NewFromFile(sourcePath, access: Enums.Access.Sequential);
-            return new ThumbnailResult(cachePath, header.Width, header.Height);
+            var rotated = rawSource && RawImageSource.GetRawOrientation(originalSourcePath)
+                is 5 or 6 or 7 or 8;
+            return new ThumbnailResult(cachePath,
+                rotated ? header.Height : header.Width,
+                rotated ? header.Width : header.Height);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
@@ -41,14 +49,13 @@ public sealed class ThumbnailCache
         try
         {
             using var header = Image.NewFromFile(sourcePath, access: Enums.Access.Sequential);
-            var width = header.Width;
-            var height = header.Height;
+            var rotated = rawSource && RawImageSource.GetRawOrientation(originalSourcePath)
+                is 5 or 6 or 7 or 8;
+            var width = rotated ? header.Height : header.Width;
+            var height = rotated ? header.Width : header.Height;
 
-            using var thumbnail = Image.Thumbnail(
-                sourcePath,
-                ThumbnailSize,
-                height: ThumbnailSize,
-                size: Enums.Size.Down);
+            using var thumbnail = RawImageSource.LoadDisplayThumbnail(
+                sourcePath, originalSourcePath, ThumbnailSize, ThumbnailSize);
 
             if (thumbnail.HasAlpha())
             {
@@ -80,11 +87,14 @@ public sealed class ThumbnailCache
         }
     }
 
-    private string GetCachePath(string canonicalPath, long fileSize, long modifiedUtcTicks)
+    private string GetCachePath(string canonicalPath, long fileSize,
+        long modifiedUtcTicks, bool raw)
     {
-        var identity = $"{canonicalPath}\n{fileSize}\n{modifiedUtcTicks}";
+        var identity = $"{canonicalPath}\n{fileSize}\n{modifiedUtcTicks}" +
+            (raw ? "\nraw-orientation-v2" : "");
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
         var shard = hash[..2];
-        return Path.Combine(_cacheRoot, shard, hash + ".jpg");
+        return Path.Combine(_cacheRoot, shard,
+            (raw ? "raw2-" : "") + hash + ".jpg");
     }
 }
