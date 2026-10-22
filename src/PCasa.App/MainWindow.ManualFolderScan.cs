@@ -32,11 +32,6 @@ public partial class MainWindow
 
     private async void BrowseScanCurrentFolder_Click(object sender, RoutedEventArgs e)
     {
-        // A newer explicit request supersedes a previous manual scan. The
-        // scheduler owns cancellation; the old completion must not reset UI
-        // state belonging to its successor.
-        _manualContextCancellation?.Cancel();
-
         if (_folderRemovalPending)
         {
             StatusText.Text = "Ordner wird gerade entfernt – Scan nicht gestartet.";
@@ -54,6 +49,9 @@ public partial class MainWindow
         // outside the scheduler. Even an unreachable SMB path is checked by
         // the priority worker, not by the UI event handler.
         var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
+        // A new valid manual request supersedes its predecessor. Scheduler
+        // cancellation and source-generation fences own the transition.
+        _manualContextCancellation?.Cancel();
         _manualContextScanActive = true;
         _manualScanRunning = true;
         _manualFolderScanWaiting = true;
@@ -153,7 +151,8 @@ public partial class MainWindow
     private async Task<ScanResult> ScheduleCompleteFolderScanAsync(
         string directory, SchedulerPriority priority,
         IProgress<ScanProgress>? progress, CancellationToken cancellationToken,
-        long? expectedMonitoredFolderId = null)
+        long? expectedMonitoredFolderId = null,
+        bool requirePendingInitialImport = false)
     {
         ScanResult? completed = null;
         await _scheduler.EnqueueAsync(
@@ -167,6 +166,11 @@ public partial class MainWindow
                 if (expectedMonitoredFolderId is long expected && folder.Id != expected)
                     throw new OperationCanceledException(
                         "Ein inzwischen ersetzter Überwachungsordner darf nicht gescannt werden.");
+                if (requirePendingInitialImport &&
+                    !_folderRepository.GetPendingInitialScans().Any(candidate =>
+                        candidate.Id == folder.Id))
+                    throw new OperationCanceledException(
+                        "Der Erstimport wurde bereits durch einen neueren Scan erledigt.");
                 if (FolderExclusionRules.IsExcluded(directory,
                     _folderRepository.GetExcludedPaths(folder.Id)))
                     throw new InvalidOperationException(

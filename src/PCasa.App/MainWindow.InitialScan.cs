@@ -96,39 +96,12 @@ public partial class MainWindow
             // A user add overrides old watcher work for exactly this source.
             // The scanner itself owns cache writes and generation-safe commits;
             // this is NOT a second implementation of the import pipeline.
-            ScanResult? result = null;
-            await _scheduler.EnqueueAsync(
-                $"initial-scan:{folder.Id}:{folder.CanonicalPath}",
-                SchedulerPriority.UserAction,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    // The same source path may have been removed and re-added.
-                    // Its persisted folder ID must still belong to this job.
-                    if (!_folderRepository.GetAll().Any(root => root.Id == folder.Id &&
-                        string.Equals(root.CanonicalPath, folder.CanonicalPath,
-                            StringComparison.OrdinalIgnoreCase)))
-                        throw new OperationCanceledException("Outdated first import.");
-                    if (!Directory.Exists(folder.LocalPath))
-                        throw new DirectoryNotFoundException(
-                            $"Überwachter Ordner momentan nicht erreichbar: {folder.LocalPath}");
-
-                    // Source-generation advance, enumeration, decoding and
-                    // guarded commits form ONE scheduler-owned operation.
-                    _folderRepository.BeginManualScan(folder.CanonicalPath);
-                    result = _folderScanner.Scan(folder, progress, token);
-                    return Task.CompletedTask;
-                },
-                // The scanner clears initial_scan_pending on successful commit,
-                // so it is NOT a valid post-execution currency predicate.
-                // Source-generation fences inside the scanner protect against
-                // obsolete removal/re-add work.
-                () => _folderRepository.GetAll().Any(root =>
-                    root.Id == folder.Id &&
-                    string.Equals(root.CanonicalPath, folder.CanonicalPath,
-                        StringComparison.OrdinalIgnoreCase)),
-                cancellation.Token);
-            if (result is null) throw new OperationCanceledException();
+            // Initial imports and explicit scans share one scheduler-owned
+            // scan / thumbnail / reconciliation code path.
+            var result = await ScheduleCompleteFolderScanAsync(
+                folder.LocalPath, SchedulerPriority.UserAction,
+                progress, cancellation.Token, folder.Id,
+                requirePendingInitialImport: true);
 
             TrackFolderActivity(folder.LocalPath,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);

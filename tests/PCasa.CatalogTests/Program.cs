@@ -36,6 +36,7 @@ internal static class Program
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
+        Run("Failed image decoding does not block safe rename pruning", DecodeFailureStillReconcilesKnownMissingPaths, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
@@ -989,6 +990,37 @@ internal static class Program
         cmd.CommandText = "SELECT local_path FROM images";
         if (!string.Equals(cmd.ExecuteScalar() as string, second, StringComparison.OrdinalIgnoreCase))
             throw new Exception("Catalog still points to the old file name.");
+    }
+
+    private static void DecodeFailureStillReconcilesKnownMissingPaths()
+    {
+        using var sandbox = new Sandbox();
+        var removedPath = Path.Combine(sandbox.Images, "renamed-original.jpg");
+        var retained = Path.Combine(sandbox.Images, "valid.jpg");
+        WriteJpeg(removedPath);
+        WriteJpeg(retained);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 2);
+
+        // A broken supported file has an observed path; its decoding failure
+        // must not prevent removal of unrelated missing catalog rows.
+        var broken = Path.Combine(sandbox.Images, "broken.jpg");
+        File.WriteAllBytes(broken, new byte[] { 0, 1, 2, 3, 4 });
+        File.Delete(removedPath);
+        var result = scanner.Scan(root);
+        if (result.Failed != 1 || result.Removed != 1)
+            throw new Exception($"Failed-image reconciliation: failed={result.Failed}, removed={result.Removed}");
+        Require(db, 1);
+        using var conn = db.OpenConnection();
+        using var query = conn.CreateCommand();
+        query.CommandText = "SELECT local_path FROM images";
+        if (!string.Equals(query.ExecuteScalar() as string, retained,
+            StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Old name survived despite complete directory inventory.");
+        if (new BrowseCacheRepository(db).GetIndex(96).Any(entry =>
+            string.Equals(entry.FileName, "renamed-original.jpg", StringComparison.OrdinalIgnoreCase)))
+            throw new Exception("Old name survived in browse index.");
     }
 
     private static void ExcludedSubtreeIsRemoved()

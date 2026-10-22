@@ -371,10 +371,16 @@ public sealed class FolderScanner
         // enumeration is not permission to reconcile a cancelled operation.
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Complete scans converge the catalog to the filesystem; single-file
-        // events never prune. Failed or interrupted scans must never delete.
+        // Only a completely enumerated directory may authorize pruning.
+        // Individual decode/EXIF failures do NOT invalidate the filesystem
+        // inventory: every supported file path is added to observedPaths
+        // before its image/metadata processing begins. Such files are kept,
+        // while demonstrably absent catalog entries can still be removed.
+        // Enumeration, access and cancellation failures abort above, before
+        // this reconciliation. A single broken JPEG must not prevent every
+        // unrelated rename/deletion in that directory from converging.
         var removed = 0;
-        if (observedPaths is not null && failed == 0)
+        if (observedPaths is not null)
         {
             // The source may disappear AFTER successful enumeration (VPN/SMB
             // drop, drive removal, renamed root) but BEFORE reconciliation.

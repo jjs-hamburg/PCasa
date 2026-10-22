@@ -425,6 +425,7 @@ public partial class MainWindow
         UpdateManualScanControls();
         var failures = new List<string>();
         var processedFolderIds = new HashSet<long>();
+        CancellationTokenSource? ownedScanCancellation = null;
 
         try
         {
@@ -440,6 +441,7 @@ public partial class MainWindow
 
                 processedFolderIds.Add(folder.Id);
                 using var cancellation = new CancellationTokenSource();
+                ownedScanCancellation = cancellation;
                 _activeScanCancellation = cancellation;
                 _activeScanFolderId = folder.Id;
                 StatusText.Text = $"Einlesen: {folder.LocalPath}";
@@ -479,10 +481,8 @@ public partial class MainWindow
         }
         finally
         {
-            // Another overlapping scheduler job may have taken over these
-            // fields. Its cancellation must not be silently detached here.
-            if (_activeScanCancellation is null ||
-                _activeScanCancellation.IsCancellationRequested)
+            // Never clear an overlapping job's cancellation token.
+            if (ReferenceEquals(_activeScanCancellation, ownedScanCancellation))
             {
                 _activeScanCancellation = null;
                 _activeScanFolderId = null;
