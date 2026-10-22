@@ -77,6 +77,7 @@ internal static class Program
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
+        Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
@@ -94,7 +95,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {80 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {81 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -2099,6 +2100,22 @@ internal static class Program
             throw new Exception("Removing one keyword damaged another keyword.");
         if (!before.SequenceEqual(PixelHash(path)))
             throw new Exception("JPEG decoded pixels changed during lossless tag editing.");
+    }
+
+    private static void RawFormatsRecognized()
+    {
+        foreach (var extension in new[]
+            { ".ARW", ".nef", ".NRW", ".cr2", ".cr3", ".DNG", ".RAF",
+              ".RW2", ".orf", ".pef", ".srw", ".crw" })
+        {
+            var image = Path.Combine(Path.GetTempPath(), "camera" + extension);
+            if (!RawImageSource.IsRawPath(image) ||
+                !FolderScanner.IsSupportedImagePath(image))
+                throw new Exception("Camera RAW not accepted by central scanner: " + extension);
+        }
+        if (RawImageSource.IsRawPath("photo.jpg") ||
+            RawImageSource.Resolve("photo.jpg") != "photo.jpg")
+            throw new Exception("RAW source handler changed JPEG code path.");
     }
 
     private static void ScannerPublishesFoldersIncrementally()
