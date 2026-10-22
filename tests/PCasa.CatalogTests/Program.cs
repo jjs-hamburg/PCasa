@@ -2354,6 +2354,12 @@ internal static class Program
                 row.IsDBNull(6) ? null : row.GetDouble(6));
         }
         var before = Read(conn);
+        var browseIndex = new BrowseCacheRepository(db).GetIndex(192);
+        var indexed = browseIndex.FirstOrDefault(image => image.ImageId == before.Id)
+            ?? throw new Exception("Imported image not in thumbnail catalog.");
+        if (!indexed.HasGps || indexed.HasTags || indexed.IsRaw ||
+            indexed.FileName != "gps-camera.jpg")
+            throw new Exception("Thumbnail labels/GPS flags disagree with EXIF catalog.");
         if (before.Make != "Sony" || before.Model != "ILCE-7M4" ||
             Math.Abs((before.Lat ?? 0) - 53.5) > 0.001 ||
             Math.Abs((before.Lon ?? 0) - 10.25) > 0.001 ||
