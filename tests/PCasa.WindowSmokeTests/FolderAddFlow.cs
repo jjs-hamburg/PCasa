@@ -21,9 +21,16 @@ internal static class FolderAddFlow
         Directory.CreateDirectory(initialRoot);
         Directory.CreateDirectory(afterRestart);
         WriteJpeg(Path.Combine(initialRoot, "first.jpg"));
+        var laterFolder = Path.Combine(initialRoot, "Later");
+        Directory.CreateDirectory(laterFolder);
+        var delayedPhoto = Path.Combine(laterFolder, "later.jpg");
+        WriteJpeg(delayedPhoto);
         WriteJpeg(Path.Combine(afterRestart, "second.jpg"));
 
         PCasa.App.MainWindow? window = null;
+        using var gateReady = new ManualResetEventSlim();
+        using var releaseDelayedPhoto = new ManualResetEventSlim();
+        Task? blockedFile = null;
         try
         {
             var db = new LocalDatabase();
@@ -41,6 +48,22 @@ internal static class FolderAddFlow
             var tree = (TreeView)window.FindName("FoldersTree");
             var surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
             var status = (TextBlock)window.FindName("StatusText");
+
+            // Slow second image simulates a very large/NAS import. The first
+            // JPEG must already appear in the gallery before this scan can
+            // complete. The synchronization gate is confined to the second
+            // image; PCasa's per-file lock remains its single source owner.
+            blockedFile = Task.Run(() =>
+            {
+                lock (SourceFileLocks.ForPath(delayedPhoto))
+                {
+                    gateReady.Set();
+                    if (!releaseDelayedPhoto.Wait(TimeSpan.FromSeconds(25)))
+                        throw new TimeoutException("The delayed source was never released.");
+                }
+            });
+            if (!gateReady.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Slow second image did not acquire its file gate.");
 
             // Clicking Abbruch must discard every staged path and must not
             // touch the durable catalog or start a scanner.
@@ -60,14 +83,27 @@ internal static class FolderAddFlow
             Console.WriteLine("PASS: Actual WPF manager OK commits and immediately displays the new root.");
 
             Until(window, () =>
-                new ImageCatalogRepository(db).CountAll() == 1 &&
-                roots.GetPendingInitialScans().All(root => !SamePath(root.LocalPath, initialRoot)),
-                "Priority initial scan did not finish or clear its durable request.");
+                new ImageCatalogRepository(db).CountAll() == 1,
+                "The initial JPEG was not committed before the later image.");
             var firstFolder = new ImageCatalogRepository(db).GetPhotoFolders()
                 .Single(folder => SamePath(folder.LocalPath, initialRoot));
-            Until(window, () => surface.GetFolderOffset(firstFolder.Id).HasValue,
-                "Newly imported picture did not appear in gallery.");
-            Console.WriteLine("PASS: Priority scanner imports the photo and updates the gallery even with monitoring off.");
+            Until(window, () =>
+                    surface.GetFolderOffset(firstFolder.Id).HasValue &&
+                    roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, initialRoot)),
+                "Gallery stayed empty while first JPEG was committed and the scan remained active.");
+            Console.WriteLine("PASS: First image becomes visible while next file blocks the active scan.");
+
+            releaseDelayedPhoto.Set();
+            blockedFile.GetAwaiter().GetResult();
+            Until(window, () =>
+                new ImageCatalogRepository(db).CountAll() == 2 &&
+                roots.GetPendingInitialScans().All(root => !SamePath(root.LocalPath, initialRoot)),
+                "Priority initial scan did not finish or clear its durable request.");
+            var later = new ImageCatalogRepository(db).GetPhotoFolders()
+                .Single(folder => SamePath(folder.LocalPath, laterFolder));
+            Until(window, () => surface.GetFolderOffset(later.Id).HasValue,
+                "Completed scan did not expose later JPEG in gallery.");
+            Console.WriteLine("PASS: Full catalog/gallery completes without background monitoring.");
 
             window.Close();
             window = null;
@@ -86,7 +122,7 @@ internal static class FolderAddFlow
                 Walk(tree).Any(item => SamePath(PathOf(item), afterRestart)),
                 "Pending root was missing from tree after restart.");
             Until(window, () =>
-                new ImageCatalogRepository(db).CountAll() == 2 &&
+                new ImageCatalogRepository(db).CountAll() == 3 &&
                 roots.GetPendingInitialScans().Count == 0,
                 "Restart failed to execute the durable first-import request.");
             Console.WriteLine("PASS: Restart resumes persisted user import without background monitoring.");
@@ -102,6 +138,8 @@ internal static class FolderAddFlow
         }
         finally
         {
+            releaseDelayedPhoto.Set();
+            try { blockedFile?.GetAwaiter().GetResult(); } catch { }
             try { window?.Close(); } catch { }
             // The Windows workflow executes several independent WPF processes
             // against the runner's local test catalog. Never leave synthetic
