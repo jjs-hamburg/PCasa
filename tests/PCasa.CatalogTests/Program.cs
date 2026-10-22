@@ -34,6 +34,7 @@ internal static class Program
         Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
         Run("User-added empty root is immediately persisted and resumes initial import after restart", NewlyAddedFolderInitialImportSurvivesRestart, failures);
+        Run("Folder manager changes are atomic on OK with no staged side effects", FolderManagerSelectionCommitsAtomically, failures);
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
@@ -91,7 +92,7 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
-        Console.WriteLine($"RESULT: {77 - failures.Count} passed, {failures.Count} failed");
+        Console.WriteLine($"RESULT: {78 - failures.Count} passed, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
 
@@ -1200,6 +1201,88 @@ internal static class Program
     // G02: The exclusion callback is a deterministic synchronization point:
     // the old removal has not started yet, but the newer desired state is
     // already persisted. No sleeps or scheduler timing assumptions.
+    private static void FolderManagerSelectionCommitsAtomically()
+    {
+        using var sandbox = new Sandbox();
+        var a = Path.Combine(sandbox.Images, "A");
+        var b = Path.Combine(sandbox.Images, "B");
+        Directory.CreateDirectory(a);
+        Directory.CreateDirectory(b);
+        WriteJpeg(Path.Combine(a, "a.jpg"));
+        WriteJpeg(Path.Combine(b, "b.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 2);
+        var repository = new FolderRepository(db);
+        var childRoot = Path.Combine(Path.GetDirectoryName(sandbox.Images)!, "Separate");
+        Directory.CreateDirectory(childRoot);
+        WriteJpeg(Path.Combine(childRoot, "new.jpg"));
+
+        var selection = new FolderManagerSelection(
+            new[]
+            {
+                new FolderManagerRootChoice(root.LocalPath, new[] { a }, false),
+                new FolderManagerRootChoice(childRoot, Array.Empty<string>(), false)
+            }, BackgroundScanEnabled: false);
+
+        // The dialog is an in-memory view model. Constructing/changing it
+        // must not mutate SQLite; a canceled commit must be a full rollback.
+        if (repository.GetAll().Count != 1 || repository.GetExcludedPaths(root.Id).Count != 0)
+            throw new Exception("An unconfirmed folder decision changed the database.");
+
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            try
+            {
+                new FolderManagerSelectionService(db).Apply(selection, canceled.Token);
+                throw new Exception("Canceled folder manager transaction was committed.");
+            }
+            catch (OperationCanceledException) { }
+        }
+        Require(db, 2);
+        if (repository.GetAll().Count != 1 || repository.GetExcludedPaths(root.Id).Count != 0)
+            throw new Exception("Cancel left a partially changed root/exclusion.");
+
+        if (!new FolderManagerSelectionService(db).Apply(selection))
+            throw new Exception("Manager OK reported no changes.");
+        if (repository.GetAll().Count != 2 ||
+            repository.GetExcludedPaths(root.Id).Count != 1 ||
+            new ImageCatalogRepository(db).CountAll() != 1)
+            throw new Exception("Manager OK did not atomically add the root and prune exclusion.");
+        var added = repository.GetAll().Single(f => string.Equals(
+            f.LocalPath, childRoot, StringComparison.OrdinalIgnoreCase));
+        if (!repository.GetPendingInitialScans().Any(f => f.Id == added.Id))
+            throw new Exception("New root was not queued for the scheduler after OK.");
+        scanner.Scan(added);
+        Require(db, 2);
+        if (repository.GetPendingInitialScans().Any(f => f.Id == added.Id))
+            throw new Exception("The accepted initial import was not acknowledged.");
+
+        var unchanged = new FolderManagerSelection(
+            new[]
+            {
+                new FolderManagerRootChoice(root.LocalPath, new[] { a }, false),
+                new FolderManagerRootChoice(childRoot, Array.Empty<string>(), false)
+            }, BackgroundScanEnabled: false);
+        if (new FolderManagerSelectionService(db).Apply(unchanged))
+            throw new Exception("Reopening and accepting unchanged manager selection mutated the catalog.");
+        Require(db, 2);
+
+        var reincluded = new FolderManagerSelection(
+            new[]
+            {
+                new FolderManagerRootChoice(root.LocalPath, Array.Empty<string>(), false),
+                new FolderManagerRootChoice(childRoot, Array.Empty<string>(), false)
+            }, BackgroundScanEnabled: false);
+        if (!new FolderManagerSelectionService(db).Apply(reincluded))
+            throw new Exception("Subtree re-inclusion was not persisted.");
+        if (!repository.GetPendingInitialScans().Any(f => f.Id == root.Id))
+            throw new Exception("Re-included subtree did not request a prioritized root scan.");
+        scanner.Scan(root);
+        Require(db, 3);
+    }
+
     private static void NewlyAddedFolderInitialImportSurvivesRestart()
     {
         using var sandbox = new Sandbox();
