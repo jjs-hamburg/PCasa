@@ -35,6 +35,8 @@ internal static class Program
             return FolderRemovalFlow.Run();
         if (args.Contains("--folder-add", StringComparer.OrdinalIgnoreCase))
             return FolderAddFlow.Run();
+        if (args.Contains("--gallery-files", StringComparer.OrdinalIgnoreCase))
+            return GalleryFileOperationFlow.Run();
 
         PCasa.App.MainWindow? window = null;
         try
