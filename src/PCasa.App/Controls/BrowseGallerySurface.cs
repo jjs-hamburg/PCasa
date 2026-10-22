@@ -71,6 +71,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
     public double ThumbnailWidth => _thumbnailWidth;
 
+    public int VisibleColumnCount
+    {
+        get { EnsureLayout(); return _sections.FirstOrDefault()?.ColumnCount ?? 1; }
+    }
+
+    public double ThumbnailRowHeight => _thumbnailHeight + _rowGap;
+
     public void SetGalleryBackground(Brush background)
     {
         _galleryBackground = background;
