@@ -287,11 +287,9 @@ public partial class MainWindow
                     return Task.CompletedTask;
                 });
             await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
-            // A drop into an image-empty monitored folder can create a new
-            // photo-folder catalog ID. Only the tree needs a targeted rebuild;
-            // the refreshed gallery must not be reloaded a second time.
-            if (_photoFolders.Any(folder => !_folderTreeItems.ContainsKey(folder.Id)))
-                RefreshFolderTree(preserveGalleryAnchor: false);
+            // Catalog refresh registers newly populated destination folders
+            // through the existing targeted node insertion, never a full
+            // tree rebuild (which would disrupt tree focus and scroll).
             _selectedImageIds.Clear();
             using (var db = _database.OpenConnection())
             {
