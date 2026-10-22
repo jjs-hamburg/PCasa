@@ -115,8 +115,9 @@ public static class PhotoViewerImageLoader
 
         // NetVips fallback for HEIC/AVIF/JXL/WebP and WIC-incompatible variants.
         // PNG is only an in-memory, LOSSLESS transfer to WPF, not a saved cache tier.
+        var displayPath = RawImageSource.Resolve(info.LocalPath, cancellationToken);
         using var thumbnail = NetVips.Image.Thumbnail(
-            info.LocalPath,
+            displayPath,
             size,
             height: size,
             size: Enums.Size.Down);
