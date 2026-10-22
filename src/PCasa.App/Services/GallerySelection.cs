@@ -43,7 +43,7 @@ public sealed class GallerySelection
         else if (ctrl)
         {
             if (!selected.Add(imageId)) selected.Remove(imageId);
-            AnchorId = imageId;
+            AnchorId ??= imageId;
         }
         else
         {
