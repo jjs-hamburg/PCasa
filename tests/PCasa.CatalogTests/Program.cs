@@ -2414,6 +2414,23 @@ internal static class Program
         moved = model.MoveFocus(-1, true, visible, selected);
         if (moved != 5 || !selected.SetEquals(new long[] { 5, 6 }))
             throw new Exception("Shift-arrow failed across a photo folder boundary.");
+
+        var withHidden = Enumerable.Range(0, 8).Select(i =>
+            new BrowseThumbnailIndexEntry(i + 1,
+                i < 3 ? 10 : i < 5 ? 20 : 30,
+                192, "test.pack", 0, 100, 96, 96)).ToArray();
+        var hidden = new HashSet<long> { 20 };
+        model.Click(2, System.Windows.Input.ModifierKeys.None,
+            withHidden, selected, hidden);
+        model.Click(8, System.Windows.Input.ModifierKeys.Shift,
+            withHidden, selected, hidden);
+        if (!selected.SetEquals(new long[] { 2, 3, 6, 7, 8 }))
+            throw new Exception("Shift range selected photos from collapsed folders.");
+        model.Click(3, System.Windows.Input.ModifierKeys.None,
+            withHidden, selected, hidden);
+        moved = model.MoveFocus(1, false, withHidden, selected, hidden);
+        if (moved != 6 || !selected.SetEquals(new long[] { 6 }))
+            throw new Exception("Arrow navigation stopped in a collapsed photo folder.");
     }
 
     private static void GalleryAnchorSurvivesWidthChange()

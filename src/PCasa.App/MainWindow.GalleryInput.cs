@@ -109,7 +109,7 @@ public partial class MainWindow
                 _ => BrowseSurface.VisibleColumnCount
             };
             var id = _gallerySelection.MoveFocus(delta, shift,
-                _displayedBrowseIndex, _selectedImageIds);
+                _displayedBrowseIndex, _selectedImageIds, BrowseSurface.HiddenFolderIds);
             if (id is long selected)
             {
                 ApplyGallerySelection();

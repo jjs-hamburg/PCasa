@@ -148,6 +148,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
         InvalidateLayout();
     }
 
+    public IReadOnlySet<long> HiddenFolderIds => _hiddenFolderIds;
+
     public bool SetHiddenFolders(IReadOnlySet<long> hidden)
     {
         ArgumentNullException.ThrowIfNull(hidden);

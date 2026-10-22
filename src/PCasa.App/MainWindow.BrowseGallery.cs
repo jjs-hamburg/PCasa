@@ -795,7 +795,7 @@ public partial class MainWindow
         BrowseImageClickedEventArgs e)
     {
         _gallerySelection.Click(e.ImageId, e.Modifiers,
-            _displayedBrowseIndex, _selectedImageIds);
+            _displayedBrowseIndex, _selectedImageIds, BrowseSurface.HiddenFolderIds);
         ApplyGallerySelection();
 
         // Explicit thumbnail selection identifies its source folder. Ordinary
