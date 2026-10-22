@@ -44,7 +44,6 @@ public sealed class ImageExifReader : IDisposable
             }
             catch (InvalidOperationException) { }
             catch (System.ComponentModel.Win32Exception) { }
-            catch (ObjectDisposedException) { }
         }
     }
 
