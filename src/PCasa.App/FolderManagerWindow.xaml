@@ -31,7 +31,7 @@
 
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
             <TextBlock Text="Überwachte Ordner" FontSize="22" FontWeight="SemiBold" />
-            <TextBlock Text="Unterordner können einzeln ausgeschlossen werden. Dateien auf dem Datenträger werden niemals gelöscht."
+            <TextBlock Text="Änderungen werden erst mit OK übernommen. Abbruch verwirft die Auswahl. Originaldateien bleiben unverändert."
                        Margin="0,5,0,0" Opacity="0.7" TextWrapping="Wrap" />
         </StackPanel>
 
@@ -92,8 +92,13 @@
                           Content="Automatisch im Hintergrund einlesen"
                           Click="BackgroundScan_Click" />
             </StackPanel>
-            <Button DockPanel.Dock="Right" Content="Schließen"
-                    Padding="18,7" IsDefault="True" Click="Close_Click" />
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="CancelButton" Content="Abbruch"
+                        Padding="18,7" Margin="0,0,9,0"
+                        IsCancel="True" Click="Cancel_Click" />
+                <Button x:Name="OkButton" Content="OK"
+                        Padding="22,7" IsDefault="True" Click="Ok_Click" />
+            </StackPanel>
         </DockPanel>
     </Grid>
 </Window>
