@@ -19,6 +19,7 @@ public partial class MainWindow
         public string FolderStatusMode { get; set; } = "Problems";
         public bool HideCollapsedFolders { get; set; }
         public double ThumbnailSpacing { get; set; } = 10;
+        public double ThumbnailWidth { get; set; } = 190;
         public bool? ShowThumbnailShadows { get; set; }
         public bool RestoreGalleryPosition { get; set; }
         public double LastScrollOffset { get; set; }
@@ -169,6 +170,8 @@ public partial class MainWindow
         ThumbnailIconsMenu.IsChecked = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
         ApplyFolderStatusMode();
+        if (ThumbnailSizeSlider is not null)
+            ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 110, 320);
         BrowseSurface.SetThumbnailSpacing(_appearance.ThumbnailSpacing);
         var background = actualBackground switch
         {
@@ -257,6 +260,9 @@ public partial class MainWindow
             BrowseSurface.GetFolderOffset(folder.Id) is double folderTop)
             target = folderTop + _appearance.LastFolderRelativeOffset;
         BrowseScrollViewer.ScrollToVerticalOffset(Math.Max(0, target));
+        if (string.IsNullOrEmpty(_appearance.SelectedTreePath) &&
+            BrowseSurface.GetFolderIdAtOffset(target + 4) is long restoredFolderId)
+            UpdateActiveFolderDisplay(restoredFolderId, updateTreeSelection: true);
     }
 
     private void CloseSidebar_Click(object sender, RoutedEventArgs e)
