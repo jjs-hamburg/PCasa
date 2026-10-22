@@ -200,7 +200,7 @@ internal static class GalleryFileOperationFlow
                 var jobs = state?.Snapshot()
                     .Where(job => job.Key.Contains("complete-scan", StringComparison.Ordinal))
                     .Select(job => $"{job.State}/{job.Error}").ToArray();
-                throw new Exception($"Manual scan diagnostic: selected={tree.SelectedItem is TreeViewItem selected ? selected.Header : null}; status={status}; catalogOld={CatalogContains(db, old)}; catalogNew={CatalogContains(db, renamed)}; index={new BrowseCacheRepository(db).GetIndex(96).Count}; jobs={string.Join(", ", jobs ?? [])}", ex);
+                throw new Exception($"Manual scan diagnostic: selected={(tree.SelectedItem is TreeViewItem selected ? selected.Header : null)}; status={status}; catalogOld={CatalogContains(db, old)}; catalogNew={CatalogContains(db, renamed)}; index={new BrowseCacheRepository(db).GetIndex(96).Count}; jobs={string.Join(", ", jobs ?? [])}", ex);
             }
             Console.WriteLine("PASS: Context-menu manual scan bypasses busy background state, reconciles renamed file and reloads browse index.");
 
