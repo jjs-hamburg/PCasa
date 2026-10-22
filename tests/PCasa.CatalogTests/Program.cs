@@ -10,8 +10,13 @@ using PCasa.App.Services;
 internal static class Program
 {
     [STAThread]
-    private static int Main()
+    private static int Main(string[] args)
     {
+        if (args.Contains("--exif-probe"))
+        {
+            try { ExifCatalogRoundTrip(); Console.WriteLine("EXIF PROBE PASS"); return 0; }
+            catch (Exception ex) { Console.Error.WriteLine("EXIF PROBE FAIL: " + ex); return 1; }
+        }
         var failures = new List<string>();
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
