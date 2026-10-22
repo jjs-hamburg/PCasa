@@ -40,7 +40,12 @@ internal static class GalleryFileOperationFlow
             var initial = new FolderScanner(new ImageCatalogRepository(db),
                 new ThumbnailCache(), folderRepo).Scan(sourceRoot);
             if (initial.Failed != 0 || new ImageCatalogRepository(db).CountAll() != 1)
-                throw new Exception("Synthetic JPEG could not seed the catalog.");
+                throw new Exception("Synthetic JPEG catalog seed unexpected: " +
+                    $"Seen={initial.ImageFilesSeen}, Updated={initial.Updated}, " +
+                    $"Unchanged={initial.Unchanged}, Failed={initial.Failed}, " +
+                    $"Removed={initial.Removed}, CountAll={new ImageCatalogRepository(db).CountAll()}, " +
+                    $"Pending={folderRepo.GetPendingInitialScans().Count}, " +
+                    $"Root={root}, Files={string.Join(",", Directory.GetFiles(root, "*", SearchOption.AllDirectories))}");
             var app = new PCasa.App.App();
             app.InitializeComponent();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
