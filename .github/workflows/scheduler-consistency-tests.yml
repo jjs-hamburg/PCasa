@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+# Use the same verified metadata tool for catalog AND all real-WPF runs.
+env:
+  PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
+
 jobs:
   catalog-regressions:
     runs-on: windows-latest
