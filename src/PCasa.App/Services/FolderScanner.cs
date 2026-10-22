@@ -287,6 +287,10 @@ public sealed class FolderScanner
                         }
 
                         updated++;
+                        // The gallery observes catalog commits, not scanner
+                        // progress, tree state or scan completion. Publication
+                        // occurs only after the SQLite image+cache index commit.
+                        CatalogChanges.PublishImageCommitted();
                         if (firstFileInThisScanFolder)
                         {
                             discoveredFolderId = photoFolderId;
