@@ -29,6 +29,7 @@ internal static class Program
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
+        Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
@@ -394,6 +395,36 @@ internal static class Program
             {
                 release.TrySetResult();
                 await background.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerManualOvertakesBlockedInitialImport()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var initial = scheduler.EnqueueAsync("initial-import:slow-nas",
+                SchedulerPriority.UserAction,
+                async _ => { started.TrySetResult(); await release.Task; });
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var executed = false;
+                await scheduler.EnqueueAsync("manual:chosen-directory",
+                    SchedulerPriority.ManualAction,
+                    _ => { executed = true; return Task.CompletedTask; })
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!executed || initial.IsCompleted)
+                    throw new Exception("Manual scan waited for blocked initial import.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await initial.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();

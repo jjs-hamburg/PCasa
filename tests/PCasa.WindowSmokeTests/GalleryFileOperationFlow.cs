@@ -158,6 +158,31 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Target outline changed folder selection or survived drag.");
             Console.WriteLine("PASS: Tree target highlights during drop without losing source selection.");
 
+            // An explicit user scan must work even if a prior background or
+            // startup import has marked the global scanning state as busy.
+            var old = Path.Combine(batch, "test.jpg");
+            var renamed = Path.Combine(batch, "renamed-manually.jpg");
+            File.Move(old, renamed);
+            var batchNode = FindFolderItems(tree).FirstOrDefault(item =>
+                item.Tag?.GetType().GetProperty("FullPath")?.GetValue(item.Tag) is string path &&
+                string.Equals(path, batch, StringComparison.OrdinalIgnoreCase))
+                ?? throw new Exception("Renamed photo's folder missing in WPF tree.");
+            batchNode.IsSelected = true;
+            var scanningFlag = typeof(PCasa.App.MainWindow).GetField("_isScanning",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Scan state field missing.");
+            scanningFlag.SetValue(window, true);
+            var manual = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseScanCurrentFolder_Click",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Manual scan context menu handler is missing.");
+            manual.Invoke(window, [tree, new RoutedEventArgs()]);
+            Until(window, () =>
+                new BrowseCacheRepository(db).GetIndex(96).Count == 3 &&
+                !CatalogContains(db, old) && CatalogContains(db, renamed),
+                "Manual user scan did not replace renamed photo while global scan flag was busy.");
+            Console.WriteLine("PASS: Context-menu manual scan bypasses busy background state, reconciles renamed file and reloads browse index.");
+
             // Window resizing must re-anchor the progress window after
             // layout rather than leave its coordinates at the old size.
             var progressWindow = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
@@ -212,6 +237,15 @@ internal static class GalleryFileOperationFlow
             foreach (var nested in FindFolderItems(item))
                 yield return nested;
         }
+    }
+
+    private static bool CatalogContains(LocalDatabase db, string path)
+    {
+        using var connection = db.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM images WHERE local_path = $path COLLATE NOCASE)";
+        command.Parameters.AddWithValue("$path", path);
+        return Convert.ToInt32(command.ExecuteScalar()) == 1;
     }
 
     private static int CountInRoot(LocalDatabase db, string path)

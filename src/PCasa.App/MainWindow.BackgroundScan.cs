@@ -410,7 +410,7 @@ public partial class MainWindow
 
         _backgroundWorkerRunning = true;
         _isScanning = true;
-        ScanAllMenuItem.IsEnabled = false;
+        UpdateManualScanControls();
         var catalogChanged = false;
         BrowseCacheProgressWindow? activityWindow = null;
         var ownsActivityWindow = false;
@@ -704,7 +704,7 @@ public partial class MainWindow
             _backgroundCurrentScanCancellation = null;
             _backgroundWorkerRunning = false;
             _isScanning = _manualScanRunning;
-            ScanAllMenuItem.IsEnabled = !_isScanning;
+            UpdateManualScanControls();
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.

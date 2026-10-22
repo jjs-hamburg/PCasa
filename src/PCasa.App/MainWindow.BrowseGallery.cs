@@ -395,12 +395,12 @@ public partial class MainWindow
         }), DispatcherPriority.Background);
     }
 
+    private bool _manualScanAllActive;
+
     private async void BrowseScanAll_Click(object sender, RoutedEventArgs e)
     {
-        if (_isScanning || _browseCacheBuilding || _folderRemovalPending)
-        {
+        if (_manualScanAllActive || _folderRemovalPending)
             return;
-        }
 
         if (_folderRepository.GetAll().Count == 0)
         {
@@ -413,13 +413,16 @@ public partial class MainWindow
             return;
         }
 
+        // Do not await background pack maintenance before submitting a
+        // foreground operation. The scheduler preempts its idle lane.
         _cacheMaintenanceCancellation?.Cancel();
-        while (_cacheMaintenanceRunning && !Dispatcher.HasShutdownStarted)
-            await Task.Delay(40);
-        if (_folderRemovalPending) return;
-
+        _backgroundCurrentScanCancellation?.Cancel();
+        _browseCacheCancellation?.Cancel();
+        _manualScanAllActive = true;
+        _manualScanRunning = true;
+        _manualFolderScanWaiting = true;
         _isScanning = true;
-        ScanAllMenuItem.IsEnabled = false;
+        UpdateManualScanControls();
         var failures = new List<string>();
         var processedFolderIds = new HashSet<long>();
 
@@ -450,19 +453,9 @@ public partial class MainWindow
 
                 try
                 {
-                    var scanGeneration = await Task.Run(
-                        () => _folderRepository.BeginManualScan(folder.CanonicalPath));
-                    await _scheduler.EnqueueAsync(
-                        $"scan-all:{folder.Id}:{scanGeneration}",
-                        SchedulerPriority.UserAction,
-                        token =>
-                        {
-                            _folderScanner.Scan(folder, progress, token);
-                            return Task.CompletedTask;
-                        },
-                        () => _folderRepository.IsCurrentSourceGeneration(
-                            folder.CanonicalPath, scanGeneration, true),
-                        cancellation.Token);
+                    await ScheduleCompleteFolderScanAsync(
+                        folder.LocalPath, SchedulerPriority.ManualAction,
+                        progress, cancellation.Token, folder.Id);
                 }
                 catch (OperationCanceledException)
                     when (_folderRemovalPending ||
@@ -488,8 +481,11 @@ public partial class MainWindow
         {
             _activeScanCancellation = null;
             _activeScanFolderId = null;
-            _isScanning = false;
-            ScanAllMenuItem.IsEnabled = true;
+            _manualScanAllActive = false;
+            _manualScanRunning = _initialScanActive || _manualContextScanActive;
+            _manualFolderScanWaiting = _manualScanRunning;
+            _isScanning = _backgroundWorkerRunning || _manualScanRunning;
+            UpdateManualScanControls();
         }
 
         if (_folderRemovalPending)

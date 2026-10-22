@@ -61,7 +61,7 @@ public partial class MainWindow
         _backgroundCurrentScanCancellation?.Cancel();
         _browseCacheCancellation?.Cancel();
         _cacheMaintenanceCancellation?.Cancel();
-        ScanAllMenuItem.IsEnabled = false;
+        UpdateManualScanControls();
         TrackFolderActivity(folder.LocalPath, "Pending", recursive: true);
         RefreshFolderStatusVisuals();
 
@@ -161,7 +161,7 @@ public partial class MainWindow
             _manualScanRunning = _manualContextScanActive;
             _manualFolderScanWaiting = _manualContextScanActive;
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
-            ScanAllMenuItem.IsEnabled = !_isScanning;
+            UpdateManualScanControls();
             RefreshFolderStatusVisuals();
             if (_backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
                 _backgroundDebounceTimer?.Start();
