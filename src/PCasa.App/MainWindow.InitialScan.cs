@@ -13,7 +13,7 @@ public partial class MainWindow
 
     private void QueuePendingInitialScans()
     {
-        if (!_initialScanPumpRunning && !Dispatcher.HasShutdownStarted)
+        if (!_folderManagerOpen && !_initialScanPumpRunning && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
     }
 
@@ -23,7 +23,7 @@ public partial class MainWindow
         _initialScanPumpRunning = true;
         try
         {
-            while (!Dispatcher.HasShutdownStarted && !_folderRemovalPending)
+            while (!Dispatcher.HasShutdownStarted && !_folderRemovalPending && !_folderManagerOpen)
             {
                 // A manual scan already in progress owns the foreground job.
                 // Its finally block will resume pending initial imports.
@@ -84,7 +84,6 @@ public partial class MainWindow
             var progress = new Progress<ScanProgress>(scan =>
             {
                 shownWindow.UpdateScan(scan);
-                QueueImportedPreview(scan);
                 StatusText.Text =
                     $"Ordner einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} geprüft · " +
                     $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · {scan.Failed:N0} Fehler";
