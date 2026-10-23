@@ -265,10 +265,10 @@ public partial class MainWindow
 
         _galleryFileOperationRunning = true;
         _manualFileTransferActive = true;
-        _activeScanCancellation?.Cancel();
-        _backgroundCurrentScanCancellation?.Cancel();
-        _browseCacheCancellation?.Cancel();
-        _cacheMaintenanceCancellation?.Cancel();
+        // The SCHEDULER alone preempts the running scan through its yield
+        // token and resumes that same request afterward. Directly canceling
+        // _activeScanCancellation here would turn safe preemption into a
+        // permanent cancellation of a user-initiated or initial import.
         _backgroundDebounceTimer?.Stop();
         BeginVisibleTransfer(key, move, requested.Length);
         try
