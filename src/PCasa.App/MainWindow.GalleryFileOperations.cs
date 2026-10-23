@@ -12,6 +12,10 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private bool _galleryFileOperationRunning;
+    // This is a user-visible high-priority mutation, not an import operation.
+    // UI-thread state fences background pumps while the scheduler owns the
+    // filesystem actions. The scheduler still arbitrates all actual I/O.
+    private bool _manualFileTransferActive;
 
     private sealed record GalleryFileOperation(string Source, string Destination,
         bool Move, bool Replace, long? CatalogImageId, long? ExistingTargetId);
@@ -186,6 +190,9 @@ public partial class MainWindow
         if (requested.Length == 0) return;
         var targetPath = Path.GetFullPath(targetDirectory);
         _galleryFileOperationRunning = true;
+        _manualFileTransferActive = true;
+        _cacheMaintenanceCancellation?.Cancel();
+        _browseCacheCancellation?.Cancel();
         StatusText.Text = move ? "Verschieben angefordert (höchste Priorität)"
                                : "Kopieren angefordert (höchste Priorität)";
         var completed = new List<string>();
@@ -202,106 +209,124 @@ public partial class MainWindow
                         !IsMonitoredGalleryDestination(targetPath))
                         throw new IOException(
                             "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
-                    var sources = requested.Where(File.Exists).ToArray();
-                    var plans = new List<GalleryFileOperation>();
-        var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in sources)
-        {
-            var destination = Path.Combine(targetPath, Path.GetFileName(source));
-            var samePath = string.Equals(source, destination,
-                StringComparison.OrdinalIgnoreCase);
-            if (samePath && move) continue;
-            var replace = false;
-            if (reserved.Contains(destination))
-            {
-                // Two selected source folders may contain the same filename.
-                // This destination is already promised to an earlier plan,
-                // even when it does not exist on disk yet. Never allow the
-                // second file to replace the first one during batch moves.
-                destination = UniqueCopyPath(destination, reserved);
-            }
-            else if (samePath || File.Exists(destination))
-            {
-                var choice = samePath ? NameConflict.KeepBoth :
-                    await Dispatcher.InvokeAsync(() => ResolveFileConflict(destination));
-                if (choice == NameConflict.Cancel) return;
-                if (choice == NameConflict.Skip) continue;
-                if (choice == NameConflict.Replace && !samePath) replace = true;
-                else destination = UniqueCopyPath(destination, reserved);
-            }
-            reserved.Add(destination);
-            plans.Add(new GalleryFileOperation(source, destination, move, replace,
-                CatalogImageIdAtPath(source),
-                replace ? CatalogImageIdAtPath(destination) : null));
-        }
-
-                    if (plans.Count == 0) return;
-
+                    // Do not inspect EVERY source/destination before moving
+                    // the first photo. NAS existence probes are expensive.
+                    // Resolve conflicts per file and immediately move it;
+                    // defer thumbnail regeneration until all moves are done.
                     var roots = _folderRepository.GetAll();
-                    foreach (var plan in plans)
+                    var reserved = new HashSet<string>(
+                        StringComparer.OrdinalIgnoreCase);
+                    foreach (var source in requested)
                     {
                         token.ThrowIfCancellationRequested();
+                        if (!File.Exists(source)) continue;
+                        var destination = Path.Combine(targetPath,
+                            Path.GetFileName(source));
+                        var samePath = string.Equals(source, destination,
+                            StringComparison.OrdinalIgnoreCase);
+                        if (samePath && move) continue;
+
                         try
                         {
-                            var destination = plan.Destination;
-                            // Staging a replacement in the target directory
-                            // preserves the previous file if copying fails.
-                            lock (SourceFileLocks.ForPath(plan.Source))
+                            var replace = false;
+                            if (reserved.Contains(destination))
+                                destination = UniqueCopyPath(destination, reserved);
+                            else if (samePath || File.Exists(destination))
                             {
-                                if (plan.Replace)
+                                var choice = samePath ? NameConflict.KeepBoth :
+                                    await Dispatcher.InvokeAsync(() =>
+                                        ResolveFileConflict(destination));
+                                if (choice == NameConflict.Cancel)
+                                    break; // completed moves remain committed
+                                if (choice == NameConflict.Skip) continue;
+                                if (choice == NameConflict.Replace && !samePath)
+                                    replace = true;
+                                else
+                                    destination = UniqueCopyPath(destination, reserved);
+                            }
+                            reserved.Add(destination);
+
+                            var sourceId = move ? CatalogImageIdAtPath(source) : null;
+                            var replacedId = replace ? CatalogImageIdAtPath(destination) : null;
+                            // The same per-source lock as FolderScanner avoids
+                            // moving a photo while its original is decoded.
+                            lock (SourceFileLocks.ForPath(source))
+                            {
+                                token.ThrowIfCancellationRequested();
+                                if (replace)
                                 {
                                     var staged = destination + ".pcasa-" +
                                         Guid.NewGuid().ToString("N") + ".tmp";
                                     try
                                     {
-                                        File.Copy(plan.Source, staged, overwrite: false);
+                                        File.Copy(source, staged, overwrite: false);
                                         File.Move(staged, destination, overwrite: true);
-                                        if (plan.Move) File.Delete(plan.Source);
+                                        if (move) File.Delete(source);
                                     }
                                     finally
                                     {
                                         if (File.Exists(staged)) File.Delete(staged);
                                     }
                                 }
-                                else if (plan.Move)
+                                else if (move)
                                 {
-                                    // MoveFileEx can fail across different volumes;
-                                    // copy+delete is the correct EXPLORER fallback.
-                                    if (SameVolume(plan.Source, destination))
-                                        File.Move(plan.Source, destination);
+                                    if (SameVolume(source, destination))
+                                        File.Move(source, destination);
                                     else
                                     {
-                                        File.Copy(plan.Source, destination, overwrite: false);
-                                        File.Delete(plan.Source);
+                                        File.Copy(source, destination, overwrite: false);
+                                        File.Delete(source);
                                     }
                                 }
-                                else File.Copy(plan.Source, destination, overwrite: false);
-                                if (plan.Move && plan.CatalogImageId is long sourceId)
-                                    new CatalogRemovalService(_database).DetachImage(
-                                        sourceId, plan.Source);
-                                if (plan.Replace && plan.ExistingTargetId is long replacedId)
-                                {
-                                    // Even when file size and timestamp match,
-                                    // replacement bytes MUST regenerate thumbnails.
-                                    new CatalogRemovalService(_database).DetachImage(
-                                        replacedId, destination);
-                                }
+                                else File.Copy(source, destination, overwrite: false);
+
+                                if (move && sourceId is long imageId)
+                                    new CatalogRemovalService(_database)
+                                        .DetachImage(imageId, source);
+                                if (replace && replacedId is long oldId)
+                                    new CatalogRemovalService(_database)
+                                        .DetachImage(oldId, destination);
                             }
-                            // Scanner remains THE single index/cache writer for
-                            // imported files, including external Explorer drops.
-                            var root = roots.FirstOrDefault(candidate =>
-                                FolderExclusionRules.IsAtOrBelow(destination, candidate.LocalPath));
-                            if (root is not null)
-                                _folderScanner.ScanFile(root, destination, cancellationToken: token);
                             completed.Add(destination);
                         }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                            or InvalidOperationException)
+                        catch (Exception ex) when (ex is IOException or
+                            UnauthorizedAccessException or InvalidOperationException)
                         {
-                            failed.Add(Path.GetFileName(plan.Source) + ": " + ex.Message);
+                            failed.Add(Path.GetFileName(source) + ": " + ex.Message);
                         }
                     }
 
+                    // Physical file moves/copies are complete BEFORE the
+                    // first slow EXIF/RAW/thumbnail job starts. Keep the
+                    // one shared scanner responsible for indexing; never
+                    // invent a parallel cache or catalog-writing pathway.
+                    if (completed.Count > 0)
+                        await Dispatcher.InvokeAsync(() =>
+                            StatusText.Text = $"{completed.Count:N0} Dateien " +
+                                (move ? "verschoben" : "kopiert") +
+                                " · Vorschaudaten werden aktualisiert");
+
+                    foreach (var destination in completed)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        try
+                        {
+                            var root = roots.FirstOrDefault(candidate =>
+                                FolderExclusionRules.IsAtOrBelow(
+                                    destination, candidate.LocalPath));
+                            if (root is not null)
+                                _folderScanner.ScanFile(root, destination,
+                                    cancellationToken: token);
+                        }
+                        catch (Exception ex) when (ex is IOException or
+                            UnauthorizedAccessException or InvalidOperationException)
+                        {
+                            // Physical transfer succeeded. Background monitor
+                            // can repair missing cache tiers; don't falsely
+                            // report that the user's file move failed.
+                            PCasaDiagnostics.Write("Gallery.TransferIndex", ex);
+                        }
+                    }
                 });
             if (completed.Count == 0)
                 return;
@@ -345,7 +370,14 @@ public partial class MainWindow
                     MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex) { ShowFileActionError(ex); }
-        finally { _galleryFileOperationRunning = false; }
+        finally
+        {
+            _galleryFileOperationRunning = false;
+            _manualFileTransferActive = false;
+            QueuePendingInitialScans();
+            if (_backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
+                _backgroundDebounceTimer?.Start();
+        }
     }
 
     private async Task DeleteSelectedImagesAsync()

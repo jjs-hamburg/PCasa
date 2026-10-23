@@ -54,7 +54,7 @@ public partial class MainWindow
         BrowseImageClickedEventArgs e)
     {
         if (_viewerOpen || !_selectedImageIds.Contains(e.ImageId)) return;
-        var files = SelectedGalleryPaths().Where(File.Exists).ToArray();
+        var files = SelectedGalleryPaths();
         if (files.Length == 0) return;
         var data = new DataObject(DataFormats.FileDrop, files);
         // FileDrop is the native shell protocol, not a proprietary PCasa blob.

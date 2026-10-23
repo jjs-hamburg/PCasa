@@ -14,7 +14,8 @@ public partial class MainWindow
 
     private void QueuePendingInitialScans()
     {
-        if (!_folderManagerOpen && !_initialScanPumpRunning && !Dispatcher.HasShutdownStarted)
+        if (!_folderManagerOpen && !_initialScanPumpRunning &&
+            !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
     }
 
@@ -24,11 +25,13 @@ public partial class MainWindow
         _initialScanPumpRunning = true;
         try
         {
-            while (!Dispatcher.HasShutdownStarted && !_folderRemovalPending && !_folderManagerOpen)
+            while (!Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
+                   !_folderManagerOpen && !_manualFileTransferActive)
             {
                 // A manual scan already in progress owns the foreground job.
                 // Its finally block will resume pending initial imports.
-                if (_manualScanRunning || (_isScanning && !_backgroundWorkerRunning))
+                if (_manualFileTransferActive || _manualScanRunning ||
+                    (_isScanning && !_backgroundWorkerRunning))
                     return;
 
                 var next = _folderRepository.GetPendingInitialScans()
@@ -85,6 +88,7 @@ public partial class MainWindow
             var shownWindow = progressWindow;
             var progress = new Progress<ScanProgress>(scan =>
             {
+                if (_manualFileTransferActive) return;
                 shownWindow.UpdateScan(scan);
                 ShowScannedPhotoFolder(scan);
                 StatusText.Text =

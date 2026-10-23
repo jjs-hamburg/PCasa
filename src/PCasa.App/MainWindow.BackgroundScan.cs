@@ -389,6 +389,7 @@ public partial class MainWindow
             _backgroundScanSettings?.Enabled != true ||
             !_browseInitialized ||
             _browseCacheBuilding ||
+            _manualFileTransferActive ||
             _isScanning)
         {
             if (!_folderRemovalPending && _backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
@@ -427,7 +428,8 @@ public partial class MainWindow
             {
                 var request = requests[nextRequestIndex];
                 _backgroundLifetime.Token.ThrowIfCancellationRequested();
-                if (_manualFolderScanWaiting || _folderRemovalPending)
+                if (_manualFolderScanWaiting || _manualFileTransferActive ||
+                    _folderRemovalPending)
                     throw new OperationCanceledException("User-requested folder operation has priority.");
 
                 var folder = _folderRepository.GetAll()
@@ -595,6 +597,7 @@ public partial class MainWindow
                     // only when the scan actually discovers new images.
                     var scanProgress = new Progress<ScanProgress>(value =>
                     {
+                        if (_manualFileTransferActive) return;
                         if (value.Added > 0 && activityWindow is null)
                         {
                             ownsActivityWindow = _browseProgressWindow is null;
@@ -644,7 +647,8 @@ public partial class MainWindow
                 catch (OperationCanceledException)
                 {
                     if (_backgroundLifetime.IsCancellationRequested ||
-                        _manualFolderScanWaiting || _folderRemovalPending)
+                        _manualFolderScanWaiting || _manualFileTransferActive ||
+                        _folderRemovalPending)
                     {
                         throw;
                     }
@@ -675,7 +679,8 @@ public partial class MainWindow
                 }
             }
 
-            if (catalogChanged && !_manualFolderScanWaiting)
+            if (catalogChanged && !_manualFolderScanWaiting &&
+                !_manualFileTransferActive)
             {
                 using var recovery = CancellationTokenSource.CreateLinkedTokenSource(
                     _backgroundLifetime.Token);
@@ -727,7 +732,8 @@ public partial class MainWindow
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
-            if (_manualFolderScanWaiting || _folderRemovalPending)
+            if (_manualFolderScanWaiting || _manualFileTransferActive ||
+                _folderRemovalPending)
             {
                 foreach (var remaining in requests.Skip(nextRequestIndex))
                     QueueBackgroundChange(new BackgroundFolderChange(
