@@ -235,44 +235,72 @@ public partial class MainWindow
         return choice;
     }
 
-    // Only the scheduler owns status/progress. The existing progress window
-    // is merely a foreground projection and does not run an operation.
-    private string? _visibleTransferJobKey;
-    private BrowseCacheProgressWindow? _visibleTransferWindow;
-    private bool _visibleTransferOwnsWindow;
+    // A single UI projection of the scheduler owns manual progress. It is
+    // not a second job queue. If a new manual action starts before an older
+    // action ends, its status takes precedence; ending the older action must
+    // never close the newer action's window.
+    private readonly Dictionary<string, (string Title, int Total)>
+        _visibleManualOperations = new(StringComparer.Ordinal);
+    private readonly List<string> _visibleManualOrder = new();
+    private string? _visibleManualActiveKey;
+    private BrowseCacheProgressWindow? _visibleManualWindow;
+    private bool _visibleManualOwnsWindow;
 
-    private void BeginVisibleTransfer(string key, bool move, int total)
+    private void BeginVisibleManualOperation(string key, string title, int total)
     {
-        _visibleTransferJobKey = key;
-        _visibleTransferOwnsWindow = _browseProgressWindow is null;
-        _visibleTransferWindow = _browseProgressWindow ??
-            new BrowseCacheProgressWindow { Owner = this };
-        if (_visibleTransferOwnsWindow)
-            _browseProgressWindow = _visibleTransferWindow;
-        _visibleTransferWindow.BeginManualOperation(
-            move ? "Bilder verschieben" : "Bilder kopieren", total);
-        _scheduler.ProgressChanged += TransferProgressChanged;
+        if (_visibleManualOperations.ContainsKey(key)) return;
+        if (_visibleManualOperations.Count == 0)
+        {
+            _visibleManualOwnsWindow = _browseProgressWindow is null;
+            _visibleManualWindow = _browseProgressWindow ??
+                new BrowseCacheProgressWindow { Owner = this };
+            if (_visibleManualOwnsWindow)
+                _browseProgressWindow = _visibleManualWindow;
+            _scheduler.ProgressChanged += VisibleManualProgressChanged;
+        }
+        _visibleManualOperations.Add(key, (title, total));
+        _visibleManualOrder.Add(key);
+        DisplayManualOperation(key);
     }
 
-    private void TransferProgressChanged(SchedulerJobSnapshot status)
+    private void DisplayManualOperation(string key)
     {
-        if (status.Key != _visibleTransferJobKey ||
-            Dispatcher.HasShutdownStarted) return;
+        if (!_visibleManualOperations.TryGetValue(key, out var item)) return;
+        _visibleManualActiveKey = key;
+        _visibleManualWindow?.BeginManualOperation(item.Title, item.Total);
+        var latest = _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
+        if (latest is not null)
+            _visibleManualWindow?.UpdateManualOperation(latest);
+    }
+
+    private void VisibleManualProgressChanged(SchedulerJobSnapshot status)
+    {
+        if (Dispatcher.HasShutdownStarted ||
+            !_visibleManualOperations.ContainsKey(status.Key)) return;
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (status.Key == _visibleTransferJobKey)
-                _visibleTransferWindow?.UpdateManualOperation(status);
+            if (status.Key == _visibleManualActiveKey)
+                _visibleManualWindow?.UpdateManualOperation(status);
         }));
     }
 
-    private void EndVisibleTransfer()
+    private void EndVisibleManualOperation(string key)
     {
-        _scheduler.ProgressChanged -= TransferProgressChanged;
-        _visibleTransferJobKey = null;
-        var window = _visibleTransferWindow;
-        var owned = _visibleTransferOwnsWindow;
-        _visibleTransferWindow = null;
-        _visibleTransferOwnsWindow = false;
+        if (!_visibleManualOperations.Remove(key)) return;
+        _visibleManualOrder.Remove(key);
+        if (_visibleManualOrder.Count != 0)
+        {
+            if (_visibleManualActiveKey == key)
+                DisplayManualOperation(_visibleManualOrder[^1]);
+            return;
+        }
+
+        _scheduler.ProgressChanged -= VisibleManualProgressChanged;
+        _visibleManualActiveKey = null;
+        var window = _visibleManualWindow;
+        var owned = _visibleManualOwnsWindow;
+        _visibleManualWindow = null;
+        _visibleManualOwnsWindow = false;
         window?.EndManualOperation();
         if (owned)
         {
@@ -310,7 +338,7 @@ public partial class MainWindow
         // _activeScanCancellation here would turn safe preemption into a
         // permanent cancellation of a user-initiated or initial import.
         _backgroundDebounceTimer?.Stop();
-        BeginVisibleTransfer(key, move, requested.Length);
+        BeginVisibleManualOperation(key, transferPhase, requested.Length);
         try
         {
             // This ONE scheduler job owns physical operations, catalog
@@ -549,7 +577,7 @@ public partial class MainWindow
         catch (Exception ex) { ShowFileActionError(ex); }
         finally
         {
-            EndVisibleTransfer();
+            EndVisibleManualOperation(key);
             _galleryFileOperationRunning = false;
             _manualFileTransferActive = false;
             QueuePendingInitialScans();

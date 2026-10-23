@@ -98,6 +98,14 @@ internal static class FolderRemovalFlow
                 // Invoke the SAME menu item the user clicked. Native WPF
                 // confirmation is accepted by an isolated test runner.
                 ClickRemoveMenu(window, tree);
+                var manualProgress = Application.Current.Windows
+                    .OfType<PCasa.App.BrowseCacheProgressWindow>()
+                    .FirstOrDefault(dialog => dialog.IsVisible)
+                    ?? throw new Exception("Manual folder removal has no visible progress window.");
+                if ((manualProgress.FindName("PhaseText") as TextBlock)?.Text
+                    is not string phase || !phase.Contains("Ordner entfernen",
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Folder removal was not immediately shown as manual scheduler work.");
                 // A tree reflow before the database can commit must not
                 // resurrect the optimistically hidden subtree.
                 var rebuild = typeof(PCasa.App.MainWindow).GetMethod(

@@ -739,15 +739,18 @@ public partial class MainWindow
         if (selection is null) return; // Abbruch / X: zero persisted changes.
 
         var durableCommitted = false;
+        const string operationKey = "folder-manager:commit-selection";
+        BeginVisibleManualOperation(operationKey, "Ordnerauswahl übernehmen", 1);
         try
         {
             // One user operation owns the persisted decision, the updated
             // folder-tree snapshot AND publication of its catalog view.
             await _scheduler.EnqueueAsync(
-                "folder-manager:commit-selection",
-                SchedulerPriority.ManualAction,
+                operationKey, SchedulerPriority.ManualAction,
                 async token =>
                 {
+                    _scheduler.ReportProgress(operationKey,
+                        "Ordnerauswahl übernehmen", 0, 1);
                     var modified = new FolderManagerSelectionService(_database)
                         .Apply(selection, token);
                     durableCommitted = true;
@@ -782,6 +785,8 @@ public partial class MainWindow
                                 warmViewport: false);
                         }).Task.Unwrap();
                     }
+                    _scheduler.ReportProgress(operationKey,
+                        "Ordnerauswahl übernommen", 1, 1);
                 });
         }
         catch (Exception ex)
@@ -794,6 +799,10 @@ public partial class MainWindow
                     : "Die Ordnerauswahl konnte nicht übernommen werden.\n\n" +
                       ex.Message,
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            EndVisibleManualOperation(operationKey);
         }
     }
 
