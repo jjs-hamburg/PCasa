@@ -42,7 +42,7 @@ public partial class MainWindow
         };
         dialog.SetResourceReference(Window.BackgroundProperty, "PcasaPanelBrush");
         var panel = new StackPanel { Margin = new Thickness(14) };
-        var nameField = new TextBox { Text = "ORG", Margin = new Thickness(0, 0, 0, 10) };
+        var nameField = new TextBox { Text = "", Margin = new Thickness(0, 0, 0, 10) };
         var accept = new Button { Content = "Anlegen", Width = 85,
             Style = (Style)FindResource("PcasaStatusButtonStyle"),
             HorizontalAlignment = HorizontalAlignment.Right, IsDefault = true };
@@ -63,40 +63,58 @@ public partial class MainWindow
         }
 
         var destination = Path.Combine(tag.FullPath, name);
+        var key = $"folder:create:{Guid.NewGuid():N}";
+        // Publish the user's request immediately, before SMB/SQLite work.
+        // The scheduler remains the sole authority for physical creation.
+        var pendingAdded = _createdEmptyFolderPaths.Add(destination);
+        if (FindFolderTreeItemByPath(FoldersTree, destination) is null)
+        {
+            var item = new TreeViewItem
+            {
+                Header = name, Tag = CreateFolderTreeTag(destination, null),
+                ToolTip = destination, AllowDrop = true
+            };
+            selected.Items.Add(item);
+            selected.IsExpanded = true;
+        }
+        StatusText.Text = "Ordner anlegen … " + name;
+        BeginVisibleManualOperation(key, "Ordner anlegen", 1);
         try
         {
-            await CreateGallerySubfolderAsync(destination);
-            _createdEmptyFolderPaths.Add(destination);
-            if (FindFolderTreeItemByPath(FoldersTree, destination) is null)
-            {
-                var item = new TreeViewItem
-                {
-                    Header = name, Tag = CreateFolderTreeTag(destination, null),
-                    ToolTip = destination, AllowDrop = true
-                };
-                selected.Items.Add(item);
-                selected.IsExpanded = true;
-            }
+            await CreateGallerySubfolderAsync(destination, key);
             StatusText.Text = "Unterordner angelegt: " + destination;
         }
         catch (Exception ex)
         {
+            if (pendingAdded)
+            {
+                _createdEmptyFolderPaths.Remove(destination);
+                // Rebuild only the cached tree projection: no SQLite/NAS
+                // reads on the dispatcher; rollback the optimistic node.
+                RefreshFolderTree(preserveGalleryAnchor: true);
+            }
             PCasaDiagnostics.Write("FolderContext.Create", ex);
             MessageBox.Show(this, ex.Message, "Ordner anlegen",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
+        finally
+        {
+            EndVisibleManualOperation(key);
+        }
     }
 
-    private Task CreateGallerySubfolderAsync(string destination)
-        => _scheduler.EnqueueAsync($"folder:create:{Guid.NewGuid():N}",
-            SchedulerPriority.ManualAction, token =>
+    private Task CreateGallerySubfolderAsync(string destination, string key)
+        => _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction, token =>
             {
                 token.ThrowIfCancellationRequested();
+                _scheduler.ReportProgress(key, "Ordner auf Datenträger anlegen", 0, 1,
+                    destination);
                 if (!IsMonitoredGalleryDestination(destination))
                     throw new IOException("Zielordner wird nicht überwacht.");
                 if (Directory.Exists(destination) || File.Exists(destination))
                     throw new IOException("Der Ordner existiert bereits.");
                 Directory.CreateDirectory(destination);
+                _scheduler.ReportProgress(key, "Ordner angelegt", 1, 1, destination);
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.SourceProbe);
 
