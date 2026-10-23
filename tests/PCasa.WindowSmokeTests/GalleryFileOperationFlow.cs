@@ -368,6 +368,25 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Mouse gesture never awaits a catalog read; missing drag paths are prepared explicitly.");
 
+            // In-app dragging means MOVE even between different drive roots,
+            // unless Ctrl requests COPY. Explorer-origin drags still use
+            // Windows same-/cross-volume behavior.
+            var preferredEffect = typeof(PCasa.App.MainWindow).GetMethod(
+                "PreferredDropEffect", BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new Exception("Shared drag effect rule missing.");
+            static DragDropEffects Effect(System.Reflection.MethodInfo method,
+                bool own, bool ctrl, bool shift, bool sameRoot)
+                => (DragDropEffects)method.Invoke(null,
+                    [own, ctrl, shift, sameRoot,
+                     DragDropEffects.Copy | DragDropEffects.Move])!;
+            if (Effect(preferredEffect, true, false, false, false) != DragDropEffects.Move ||
+                Effect(preferredEffect, true, true, false, true) != DragDropEffects.Copy ||
+                Effect(preferredEffect, false, false, false, false) != DragDropEffects.Copy ||
+                Effect(preferredEffect, false, false, false, true) != DragDropEffects.Move)
+                throw new Exception("Internal move and Explorer drag intent diverged.");
+            Console.WriteLine("PASS: Internal drag MOVE and Ctrl COPY respect Explorer external conventions.");
+
+
             // The previous priority test only occupied a worker with Task.
             // Hold the actual FolderScanner in a source-image lock to prove
             // a MANUAL file move starts before the in-flight image scan ends.
@@ -427,6 +446,46 @@ internal static class GalleryFileOperationFlow
                 "Deferred image indexing did not complete.");
             deferredIndexing.GetAwaiter().GetResult();
             Console.WriteLine("PASS: Uncatalogued move completes before destination EXIF/thumbnail import.");
+
+            // An earlier manual file move may be stuck in a source lock.
+            // The user's next manual drop must become a QUEUED scheduler job,
+            // not vanish behind a separate _galleryFileOperationRunning gate.
+            var firstQueuedSource = Path.Combine(first, "two-transfers-a.jpg");
+            var secondQueuedSource = Path.Combine(first, "two-transfers-b.jpg");
+            var firstQueuedTarget = Path.Combine(third, "two-transfers-a.jpg");
+            var secondQueuedTarget = Path.Combine(third, "two-transfers-b.jpg");
+            WriteJpeg(firstQueuedSource);
+            WriteJpeg(secondQueuedSource);
+            Task firstQueuedTransfer;
+            Task secondQueuedTransfer;
+            lock (SourceFileLocks.ForPath(firstQueuedSource))
+            {
+                firstQueuedTransfer = StartTransfer(window,
+                    [firstQueuedSource], third, move: true);
+                Until(window, () => scheduler.Snapshot().Any(job =>
+                        job.Key.StartsWith("gallery:file-transfer:") &&
+                        job.State == SchedulerJobState.Running &&
+                        string.Equals(job.CurrentPath, firstQueuedSource,
+                            StringComparison.OrdinalIgnoreCase)),
+                    "The first manual move never reached its blocked source.");
+                secondQueuedTransfer = StartTransfer(window,
+                    [secondQueuedSource], third, move: true);
+                Until(window, () => scheduler.Snapshot().Any(job =>
+                        job.Key.StartsWith("gallery:file-transfer:") &&
+                        job.State == SchedulerJobState.Queued),
+                    "The second manual move was silently discarded before the scheduler.");
+            }
+            Until(window, () => firstQueuedTransfer.IsCompleted &&
+                secondQueuedTransfer.IsCompleted,
+                "Two manual moves did not drain the scheduler queue.");
+            firstQueuedTransfer.GetAwaiter().GetResult();
+            secondQueuedTransfer.GetAwaiter().GetResult();
+            if (File.Exists(firstQueuedSource) || File.Exists(secondQueuedSource) ||
+                !File.Exists(firstQueuedTarget) || !File.Exists(secondQueuedTarget))
+                throw new Exception(
+                    "Queued manual moves did not physically relocate both source files.");
+            Console.WriteLine(
+                "PASS: Overlapping manual drops are queued, executed and visible without losing files.");
 
             // Progress is read from the scheduler's live operation, not a
             // second UI timer. Block one file lock to observe Running before

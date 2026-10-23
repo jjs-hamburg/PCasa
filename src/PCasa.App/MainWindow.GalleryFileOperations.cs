@@ -11,11 +11,13 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
-    private bool _galleryFileOperationRunning;
-    // This is a user-visible high-priority mutation, not an import operation.
-    // UI-thread state fences background pumps while the scheduler owns the
-    // filesystem actions. The scheduler still arbitrates all actual I/O.
-    private bool _manualFileTransferActive;
+    // In-flight counts are UI-thread ownership markers, NOT a second queue.
+    // Multiple manual transfers all enter the same scheduler manual lane;
+    // none may be silently discarded by a local boolean guard.
+    private int _outstandingGalleryMutations;
+    private int _outstandingFileTransfers;
+    private bool _galleryFileOperationRunning => _outstandingGalleryMutations != 0;
+    private bool _manualFileTransferActive => _outstandingFileTransfers != 0;
 
     private sealed record GalleryFileOperation(string Source, string Destination,
         bool Move, bool Replace, long? CatalogImageId, long? ExistingTargetId);
@@ -371,8 +373,8 @@ public partial class MainWindow
     private async Task TransferGalleryFilesAsync(IEnumerable<string> input,
         string targetDirectory, bool move)
     {
-        if (_galleryFileOperationRunning) return;
-
+        // Every valid manual drop must reach the scheduler, even if an
+        // earlier manual transfer is still running or awaiting a source lock.
         var requested = input.Where(FolderScanner.IsSupportedImagePath)
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -386,8 +388,8 @@ public partial class MainWindow
         var failed = new List<string>();
         var userCanceled = false;
 
-        _galleryFileOperationRunning = true;
-        _manualFileTransferActive = true;
+        _outstandingGalleryMutations++;
+        _outstandingFileTransfers++;
         // The SCHEDULER alone preempts the running scan through its yield
         // token and resumes that same request afterward. Directly canceling
         // _activeScanCancellation here would turn safe preemption into a
@@ -633,18 +635,27 @@ public partial class MainWindow
         finally
         {
             EndVisibleManualOperation(key);
-            _galleryFileOperationRunning = false;
-            _manualFileTransferActive = false;
-            QueuePendingInitialScans();
-            if (_backgroundPending.Count > 0 &&
-                _backgroundScanSettings?.Enabled == true)
-                _backgroundDebounceTimer?.Start();
+            _outstandingGalleryMutations--;
+            _outstandingFileTransfers--;
+            if (!_manualFileTransferActive)
+            {
+                QueuePendingInitialScans();
+                if (_backgroundPending.Count > 0 &&
+                    _backgroundScanSettings?.Enabled == true)
+                    _backgroundDebounceTimer?.Start();
+            }
         }
     }
 
     private async Task DeleteSelectedImagesAsync()
     {
-        if (_galleryFileOperationRunning || _selectedImageIds.Count == 0) return;
+        if (_selectedImageIds.Count == 0) return;
+        if (_galleryFileOperationRunning)
+        {
+            StatusText.Text =
+                "Löschen erst nach Abschluss der laufenden Dateiübertragung möglich";
+            return;
+        }
         (long Id, string Path)[] selected;
         bool anyNetwork;
         try
@@ -671,7 +682,7 @@ public partial class MainWindow
         if (MessageBox.Show(this, prompt, "Bilder löschen",
                 MessageBoxButton.YesNo, MessageBoxImage.Warning,
                 MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        _galleryFileOperationRunning = true;
+        _outstandingGalleryMutations++;
         var succeeded = new List<long>();
         var errors = new List<string>();
         try
@@ -716,6 +727,6 @@ public partial class MainWindow
                     MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex) { ShowFileActionError(ex); }
-        finally { _galleryFileOperationRunning = false; }
+        finally { _outstandingGalleryMutations--; }
     }
 }

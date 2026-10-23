@@ -407,6 +407,7 @@ public partial class MainWindow
         {
             System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 0);
             _browseIndex = Array.Empty<BrowseThumbnailIndexEntry>();
+            _dragSelectionPathCache.Clear();
             _displayedBrowseIndex = _browseIndex;
             _browsePageCache.SetIndex(_browseIndex);
             BrowseSurface.SetData(_browseIndex, _photoFolders, _browsePageCache);
