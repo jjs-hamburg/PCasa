@@ -255,7 +255,8 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
             var org = Path.Combine(albumB, "ORG");
-            var task = (Task)create.Invoke(window, [org])!;
+            var task = (Task)create.Invoke(window,
+                [org, $"test:tag-flow-create:{Guid.NewGuid():N}"])!;
             Until(window, () => task.IsCompleted, "Scheduled creation of ORG never completed.");
             task.GetAwaiter().GetResult();
             if (!Directory.Exists(org))
