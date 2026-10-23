@@ -11,6 +11,9 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    // Optional origin metadata; FileDrop remains the native shell format.
+    private const string InternalGalleryDragFormat = "PCasa.InternalGalleryDrag";
+
     private readonly Dictionary<string, bool> _dragTargetValidity =
         new(StringComparer.OrdinalIgnoreCase);
     private TreeViewItem? _highlightedDropFolder;
@@ -72,6 +75,7 @@ public partial class MainWindow
                 Dispatcher.HasShutdownStarted || !_selectedImageIds.SetEquals(selected))
                 return;
             var data = new DataObject(DataFormats.FileDrop, files);
+            data.SetData(InternalGalleryDragFormat, true);
             DragDropEffects effect;
             try
             {
@@ -152,18 +156,31 @@ public partial class MainWindow
         var targetVolume = Path.GetPathRoot(target);
         var sourceVolumes = paths.Select(Path.GetPathRoot)
             .Distinct(StringComparer.OrdinalIgnoreCase);
-        var preferMove = shift || (!control &&
-            sourceVolumes.All(volume => !string.IsNullOrEmpty(volume) &&
-                string.Equals(volume, targetVolume,
-                    StringComparison.OrdinalIgnoreCase)));
-        effect = preferMove ? DragDropEffects.Move : DragDropEffects.Copy;
-        if ((e.AllowedEffects & effect) == 0)
-            effect = (e.AllowedEffects & DragDropEffects.Copy) != 0
-                ? DragDropEffects.Copy
-                : (e.AllowedEffects & DragDropEffects.Move) != 0
-                    ? DragDropEffects.Move
-                    : DragDropEffects.None;
+        var sameRoot = sourceVolumes.All(volume =>
+            !string.IsNullOrEmpty(volume) &&
+            string.Equals(volume, targetVolume,
+                StringComparison.OrdinalIgnoreCase));
+        var internalDrag = e.Data.GetDataPresent(
+            InternalGalleryDragFormat, autoConvert: false);
+        effect = PreferredDropEffect(
+            internalDrag, control, shift, sameRoot, e.AllowedEffects);
         return effect != DragDropEffects.None;
+    }
+
+    // The app's own thumbnails MOVE by default (Ctrl = Copy).
+    // External Explorer FileDrop keeps same-/cross-volume semantics.
+    private static DragDropEffects PreferredDropEffect(
+        bool internalPcasaDrag, bool control, bool shift,
+        bool sameRoot, DragDropEffects allowed)
+    {
+        var move = shift || (!control && (internalPcasaDrag || sameRoot));
+        var wanted = move ? DragDropEffects.Move : DragDropEffects.Copy;
+        if ((allowed & wanted) != 0) return wanted;
+        return (allowed & DragDropEffects.Copy) != 0
+            ? DragDropEffects.Copy
+            : (allowed & DragDropEffects.Move) != 0
+                ? DragDropEffects.Move
+                : DragDropEffects.None;
     }
 
     private string? GalleryDropTarget(DragEventArgs e)
@@ -211,12 +228,13 @@ public partial class MainWindow
         {
             e.Effects = DragDropEffects.None;
             e.Handled = true;
+            StatusText.Text = "Ablage abgewiesen: kein gültiger überwachter Zielordner";
             return;
         }
         e.Effects = effect;
         e.Handled = true;
         _dragTargetValidity.Clear();
-        _ = TransferGalleryFilesAsync(files, target,
+        _ = TransferGalleryFilesAsync(files,
             effect.HasFlag(DragDropEffects.Move));
     }
 
@@ -275,12 +293,13 @@ public partial class MainWindow
         {
             e.Effects = DragDropEffects.None;
             e.Handled = true;
+            StatusText.Text = "Ablage abgewiesen: kein gültiger überwachter Zielordner";
             return;
         }
         e.Effects = effect;
         e.Handled = true;
         _dragTargetValidity.Clear();
-        _ = TransferGalleryFilesAsync(files, target,
+        _ = TransferGalleryFilesAsync(files,
             effect.HasFlag(DragDropEffects.Move));
     }
 }
