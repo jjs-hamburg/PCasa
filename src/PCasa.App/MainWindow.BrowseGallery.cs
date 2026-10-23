@@ -467,6 +467,9 @@ public partial class MainWindow
             if (indexChanged)
             {
                 _browseIndex = index;
+                // Paths captured for an older catalog generation must not
+                // survive image moves, renames or a gallery index replacement.
+                _dragSelectionPathCache.Clear();
             }
             _activeBrowseTier = tier;
             if (_browseIndex.Count > 0)

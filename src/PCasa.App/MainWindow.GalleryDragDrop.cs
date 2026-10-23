@@ -57,18 +57,20 @@ public partial class MainWindow
             HighlightDropFolder(null);
     }
 
-    private async void BrowseSurface_ImagesDragRequested(object? sender,
+    private void BrowseSurface_ImagesDragRequested(object? sender,
         BrowseImageClickedEventArgs e)
     {
         if (_viewerOpen || !_selectedImageIds.Contains(e.ImageId)) return;
         var selected = _selectedImageIds.ToArray();
         try
         {
-            var files = await SelectedGalleryPathsAsync(selected);
-            if (files.Length == 0 || _viewerOpen || Dispatcher.HasShutdownStarted ||
-                !_selectedImageIds.SetEquals(selected))
+            // No async/await before native DoDragDrop. A missed path lookup
+            // is preloaded for the NEXT gesture instead of pretending the
+            // current mouse button is still held after an awaited DB read.
+            var files = PreparedDragFilesOrQueueLookup(selected);
+            if (files is null || files.Length == 0 || _viewerOpen ||
+                Dispatcher.HasShutdownStarted || !_selectedImageIds.SetEquals(selected))
                 return;
-            // FileDrop remains the native shell protocol for PCasa and Explorer.
             var data = new DataObject(DataFormats.FileDrop, files);
             DragDropEffects effect;
             try
@@ -144,11 +146,16 @@ public partial class MainWindow
         var shift = (states & DragDropKeyStates.ShiftKey) != 0;
         // Repeated drag-over events must not probe the same NAS for each
         // of thousands of selected files. One identity lookup per root.
-        var sourceRoots = paths.GroupBy(path => Path.GetPathRoot(path) ?? path,
-                StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First());
+        // DragOver runs on WPF's dispatcher at pointer frequency. Never
+        // classify mapped drives or query a disconnected NAS here.
+        // Physical same-volume validation still runs inside the scheduler.
+        var targetVolume = Path.GetPathRoot(target);
+        var sourceVolumes = paths.Select(Path.GetPathRoot)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
         var preferMove = shift || (!control &&
-            sourceRoots.All(path => SameVolume(path, target)));
+            sourceVolumes.All(volume => !string.IsNullOrEmpty(volume) &&
+                string.Equals(volume, targetVolume,
+                    StringComparison.OrdinalIgnoreCase)));
         effect = preferMove ? DragDropEffects.Move : DragDropEffects.Copy;
         if ((e.AllowedEffects & effect) == 0)
             effect = (e.AllowedEffects & DragDropEffects.Copy) != 0
@@ -258,9 +265,12 @@ public partial class MainWindow
 
     private void FolderTreeFiles_Drop(object sender, DragEventArgs e)
     {
+        // Capture the drop hit-test while the highlighted TreeViewItem is
+        // still laid out. Clearing its border may change the hit-test target.
+        var target = TreeDropTarget(e);
         HighlightDropFolder(null);
         var files = DropFiles(e);
-        if (TreeDropTarget(e) is not string target ||
+        if (target is null ||
             !TryResolveDropEffect(e, files, target, out var effect))
         {
             e.Effects = DragDropEffects.None;
