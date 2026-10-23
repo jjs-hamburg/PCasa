@@ -287,7 +287,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
             {
                 var withinFolder = imageIndex - section.StartImageIndex;
                 var row = withinFolder / section.ColumnCount;
-                return Math.Max(0, section.ImagesTop + row * section.RowHeight
+                return Math.Max(0, section.ImagesTop + section.RowOffsets[row]
                     - Math.Max(0, _viewportHeight - _thumbnailHeight) / 2);
             }
         }
@@ -341,12 +341,12 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var section = FindSectionAt(Math.Max(0, viewportTop + 1));
         if (section is null || section.ImageCount == 0) return null;
         var row = Math.Clamp(
-            (int)Math.Floor((viewportTop - section.ImagesTop) / section.RowHeight),
+            RowAt(section, viewportTop - section.ImagesTop),
             0, section.RowCount - 1);
         var index = section.StartImageIndex + row * section.ColumnCount;
         if (index >= _index.Count) return null;
         return (_index[index].ImageId,
-            viewportTop - (section.ImagesTop + row * section.RowHeight));
+            viewportTop - (section.ImagesTop + section.RowOffsets[row]));
     }
 
     public double? GetImageAnchorOffset(long imageId, double relativeY)
@@ -360,7 +360,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 if (i < section.StartImageIndex ||
                     i >= section.StartImageIndex + section.ImageCount) continue;
                 var row = (i - section.StartImageIndex) / section.ColumnCount;
-                return section.ImagesTop + row * section.RowHeight + relativeY;
+                return section.ImagesTop + section.RowOffsets[row] + relativeY;
             }
             return null;
         }
@@ -551,12 +551,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
             return;
         }
 
-        var firstRow = Math.Max(
-            0,
-            (int)Math.Floor((viewportTop - section.ImagesTop) / section.RowHeight));
-        var lastRow = Math.Min(
-            section.RowCount - 1,
-            (int)Math.Ceiling((viewportBottom - section.ImagesTop) / section.RowHeight));
+        var firstRow = RowAt(section, viewportTop - section.ImagesTop);
+        var lastRow = RowAt(section, viewportBottom - section.ImagesTop);
 
         var pixelsPerDip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
         for (var row = firstRow; row <= lastRow; row++)
@@ -576,8 +572,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 // This prevents the gallery collecting a large blank strip
                 // at the right edge at certain zoom settings.
                 var cellX = ImageColumnLeft(section, column);
-                var cellY = section.ImagesTop + (row * section.RowHeight);
-                var box = new Rect(cellX, cellY, _thumbnailWidth, _thumbnailHeight);
+                var cellY = section.ImagesTop + section.RowOffsets[row];
+                var box = new Rect(cellX, cellY, _thumbnailWidth, section.RowImageHeights[row]);
                 // Caption belongs to the actual image bounds, not the fixed
                 // cell. Cached thumbnail dimensions are already in the index.
                 var imageBounds = FitInto(box, entry.PixelWidth, entry.PixelHeight);
@@ -707,7 +703,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         }
 
         var relativeY = point.Y - section.ImagesTop;
-        var row = (int)(relativeY / section.RowHeight);
+        var row = RowAt(section, relativeY);
         if (row < 0 || row >= section.RowCount)
         {
             return null;
@@ -727,9 +723,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
             }
         }
         if (column < 0) return null;
-        var yInsideRow = relativeY - (row * section.RowHeight);
+        var yInsideRow = relativeY - section.RowOffsets[row];
         if (xInsideCell < 0 || xInsideCell > _thumbnailWidth ||
-            yInsideRow < 0 || yInsideRow > _thumbnailHeight)
+            yInsideRow < 0 || yInsideRow > section.RowImageHeights[row])
         {
             return null;
         }
@@ -777,10 +773,10 @@ public sealed class BrowseGallerySurface : FrameworkElement
             if (section.ImageCount <= 0) continue;
 
             var firstRow = Math.Clamp(
-                (int)Math.Floor((top - section.ImagesTop) / section.RowHeight),
+                RowAt(section, top - section.ImagesTop),
                 0, section.RowCount - 1);
             var lastRow = Math.Clamp(
-                (int)Math.Ceiling((bottom - section.ImagesTop) / section.RowHeight),
+                RowAt(section, bottom - section.ImagesTop),
                 firstRow, section.RowCount - 1);
             var first = section.StartImageIndex + firstRow * section.ColumnCount;
             var last = Math.Min(
@@ -798,6 +794,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
                         nearest.StartImageIndex + nearest.ColumnCount - 1)));
         }
         return ranges;
+    }
+
+    private static int RowAt(SectionLayout section, double offset)
+    {
+        if (section.RowCount <= 1) return 0;
+        var index = Array.BinarySearch(section.RowOffsets, offset);
+        return Math.Clamp(index >= 0 ? index : ~index - 1, 0, section.RowCount - 1);
     }
 
     private SectionLayout? FindSectionAt(double y)
@@ -869,7 +872,6 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var columnCount = _spacingPreviewColumns is int previewColumns
             ? Math.Min(previewColumns, fittingColumns) : fittingColumns;
         var cellWidth = Math.Max(_thumbnailWidth, availableWidth / columnCount);
-        var rowHeight = ThumbnailRowHeight;
         var y = 0d;
         var indexPosition = 0;
 
@@ -896,21 +898,34 @@ public sealed class BrowseGallerySurface : FrameworkElement
             }
 
             var rows = Math.Max(1, (imageCount + columnCount - 1) / columnCount);
+            // A fixed-height box leaves large blank bands below wide photos.
+            // Rows use the tallest *rendered* image; for uniform landscapes,
+            // vertical and horizontal minimum gaps are consequently equal.
+            var rowOffsets = new double[rows + 1];
+            var rowImageHeights = new double[rows];
+            for (var row = 0; row < rows; row++)
+            {
+                var visibleHeight = 1d;
+                var last = Math.Min(indexPosition, start + (row + 1) * columnCount);
+                for (var image = start + row * columnCount; image < last; image++)
+                {
+                    var entry = _index[image];
+                    var ratio = entry.PixelWidth > 0 && entry.PixelHeight > 0
+                        ? (double)entry.PixelHeight / entry.PixelWidth : 0.72;
+                    visibleHeight = Math.Max(visibleHeight,
+                        Math.Min(_thumbnailHeight, _thumbnailWidth * ratio));
+                }
+                rowImageHeights[row] = visibleHeight;
+                rowOffsets[row + 1] = rowOffsets[row] + visibleHeight +
+                    (_showFileNames ? FileLabelHeight : 0) + _rowGap;
+            }
             var top = y;
             var imagesTop = top + HeaderHeight;
-            var bottom = imagesTop + (rows * rowHeight) + HeaderTopMargin;
+            var bottom = imagesTop + rowOffsets[^1] + HeaderTopMargin;
 
             _sections.Add(new SectionLayout(
-                folder,
-                start,
-                imageCount,
-                columnCount,
-                rows,
-                cellWidth,
-                rowHeight,
-                top,
-                imagesTop,
-                bottom));
+                folder, start, imageCount, columnCount, rows, cellWidth,
+                top, imagesTop, bottom, rowOffsets, rowImageHeights));
 
             y = bottom;
         }
@@ -961,8 +976,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
         int ColumnCount,
         int RowCount,
         double CellWidth,
-        double RowHeight,
         double Top,
         double ImagesTop,
-        double Bottom);
+        double Bottom,
+        double[] RowOffsets,
+        double[] RowImageHeights);
 }
