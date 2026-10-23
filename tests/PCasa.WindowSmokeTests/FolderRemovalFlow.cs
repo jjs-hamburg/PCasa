@@ -98,6 +98,13 @@ internal static class FolderRemovalFlow
                 // Invoke the SAME menu item the user clicked. Native WPF
                 // confirmation is accepted by an isolated test runner.
                 ClickRemoveMenu(window, tree);
+                // A tree reflow before the database can commit must not
+                // resurrect the optimistically hidden subtree.
+                var rebuild = typeof(PCasa.App.MainWindow).GetMethod(
+                    "RefreshFolderTree", System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Shared folder tree renderer is missing.");
+                rebuild.Invoke(window, [true]);
                 if (surface.GetFolderOffset(aId) is not null ||
                     Walk(tree).Any(i => string.Equals(PathOf(i), aPath,
                         StringComparison.OrdinalIgnoreCase)))

@@ -382,13 +382,15 @@ public partial class MainWindow
         }
         catch (OperationCanceledException) { return; }
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
-        _photoFolders = freshFolders;
+        _photoFolders = freshFolders
+            .Where(folder => !IsPendingFolderRemovalHidden(folder.LocalPath))
+            .ToArray();
         _lastCatalogImageCount = imageCount;
         // A newly imported catalog folder may not yet have been reported by
         // incremental scan progress (notably Explorer drops). Add ONLY its
         // tree node before calculating gallery order; existing nodes remain
         // untouched, and gallery data is still loaded independently.
-        foreach (var discovered in freshFolders)
+        foreach (var discovered in _photoFolders)
         {
             if (_folderTreeItems.ContainsKey(discovered.Id)) continue;
             ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
@@ -447,6 +449,13 @@ public partial class MainWindow
 
             // The visual folder tree determines Picasa gallery order.
             // Database canonical/UNC names are storage identity, not order.
+            if (_pendingFolderRemovalPath is not null)
+            {
+                var visibleIds = _photoFolders.Select(folder => folder.Id)
+                    .ToHashSet();
+                index = index.Where(image =>
+                    visibleIds.Contains(image.PhotoFolderId)).ToArray();
+            }
             index = GalleryFolderOrdering.Order(index, CaptureGalleryFolderOrder());
 
             // The database may have been checked without any change to this

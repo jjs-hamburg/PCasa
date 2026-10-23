@@ -31,8 +31,7 @@ public partial class MainWindow
         // Establish the cancellation barrier first. It may be awaiting
         // background work, but hiding the subtree below is synchronous and
         // immediately visible on Dispatcher while cancellation completes.
-        var preparation = PrepareFolderRemovalAsync(folderId,
-            removeMonitoredRoot ? null : normalized);
+        var preparation = PrepareFolderRemovalAsync(folderId, normalized);
         try
         {
             HideFolderFromCurrentGallery(normalized);
@@ -97,9 +96,9 @@ public partial class MainWindow
         }
         catch
         {
-            // Roll back the optimistic visual removal if the domain commit
-            // failed. Neither the cache of displayed roots nor the tree may
-            // pretend that an uncommitted exclusion was accepted.
+            // Undo the optimistic projection fence BEFORE rebuilding the
+            // view from the actual committed catalog after a failure.
+            _pendingFolderRemovalPath = null;
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
             // A DB commit might have succeeded while its UI publication

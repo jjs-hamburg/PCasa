@@ -17,7 +17,8 @@ public partial class MainWindow
     {
         if (progress.DiscoveredPhotoFolderId is not long photoId ||
             progress.DiscoveredPhotoFolderPath is not string folderPath ||
-            !_browseInitialized || _folderTreeItems.ContainsKey(photoId))
+            !_browseInitialized || _folderTreeItems.ContainsKey(photoId) ||
+            IsPendingFolderRemovalHidden(folderPath))
             return;
 
         var monitored = _dropTargetProjection

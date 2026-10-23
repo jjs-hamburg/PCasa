@@ -43,6 +43,14 @@ public partial class MainWindow : Window
     }
 
     private bool _folderRemovalPending;
+    private string? _pendingFolderRemovalPath;
+
+    // Pure UI projection fence while an optimistic manual removal is in
+    // flight. It never decides the persisted catalog outcome.
+    private bool IsPendingFolderRemovalHidden(string path)
+        => _folderRemovalPending &&
+            _pendingFolderRemovalPath is string subtree &&
+            FolderExclusionRules.IsAtOrBelow(path, subtree);
 
     private async Task PrepareFolderRemovalAsync(long folderId, string? subtreePath = null,
         bool dropQueuedRequests = true)
@@ -54,6 +62,7 @@ public partial class MainWindow : Window
         // slow SMB enumeration or decoding. Commit fences prevent obsolete
         // scanner results from becoming visible after the removal decision.
         _folderRemovalPending = true;
+        _pendingFolderRemovalPath = subtreePath;
         _backgroundDebounceTimer?.Stop();
         try
         {
@@ -88,6 +97,7 @@ public partial class MainWindow : Window
 
     private void CompleteFolderRemoval()
     {
+        _pendingFolderRemovalPath = null;
         _folderRemovalPending = false;
         if (_backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
             _backgroundDebounceTimer?.Start();
@@ -153,8 +163,9 @@ public partial class MainWindow : Window
         // snapshot. The user can collapse/expand or resize this tree without
         // waiting on SQLite writes or unreachable NAS paths.
         var rootsWithExclusions = _dropTargetProjection
-            .Where(root => !FolderExclusionRules.IsExcluded(
-                root.Folder.LocalPath, root.ExcludedPaths))
+            .Where(root => !IsPendingFolderRemovalHidden(root.Folder.LocalPath) &&
+                !FolderExclusionRules.IsExcluded(
+                    root.Folder.LocalPath, root.ExcludedPaths))
             .ToArray();
         var monitoredFolders = rootsWithExclusions
             .Select(root => root.Folder).ToArray();
@@ -180,7 +191,8 @@ public partial class MainWindow : Window
         }
 
         foreach (var folder in _photoFolders.Where(
-                     folder => monitoredFolderIds.Contains(folder.MonitoredFolderId)))
+                     folder => monitoredFolderIds.Contains(folder.MonitoredFolderId) &&
+                         !IsPendingFolderRemovalHidden(folder.LocalPath)))
         {
             AddFolderTreePath(
                 roots,
@@ -193,7 +205,8 @@ public partial class MainWindow : Window
 
         // Targets created through the context menu stay in the folder tree
         // while empty. Scan work still owns their eventual photo catalog.
-        foreach (var empty in _createdEmptyFolderPaths)
+        foreach (var empty in _createdEmptyFolderPaths
+            .Where(path => !IsPendingFolderRemovalHidden(path)))
             AddFolderTreePath(roots, nodesByPath, empty, empty, null, 0);
 
         foreach (var root in roots.Values)
