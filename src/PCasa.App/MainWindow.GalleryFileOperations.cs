@@ -22,22 +22,43 @@ public partial class MainWindow
 
     private string[] SelectedGalleryPaths()
     {
-        // Ctrl+A can select tens of thousands of images: one bounded IN query
-        // per 400 IDs rather than one SQLite connection per selected file.
-        var paths = new List<string>(_selectedImageIds.Count);
-        using var db = _database.OpenConnection();
-        foreach (var group in _selectedImageIds.Chunk(400))
+        if (_selectedImageIds.Count == 0) return [];
+
+        // Browse index + folder summaries are already a read-only projection
+        // of the catalog on the UI thread. On a drag gesture, never wait for
+        // SQLite transactions from an unrelated running scan. Reconstruct
+        // the same local paths for indexed images without probing the NAS.
+        var folders = _photoFolders.ToDictionary(folder => folder.Id,
+            folder => folder.LocalPath);
+        var pathsById = new Dictionary<long, string>(_selectedImageIds.Count);
+        foreach (var image in _browseIndex)
         {
-            using var command = db.CreateCommand();
-            var placeholders = group.Select((_, i) => "$id" + i).ToArray();
-            for (var i = 0; i < group.Length; i++)
-                command.Parameters.AddWithValue(placeholders[i], group[i]);
-            command.CommandText = "SELECT local_path FROM images WHERE id IN (" +
-                string.Join(",", placeholders) + ");";
-            using var reader = command.ExecuteReader();
-            while (reader.Read()) paths.Add(reader.GetString(0));
+            if (!_selectedImageIds.Contains(image.ImageId) ||
+                !folders.TryGetValue(image.PhotoFolderId, out var folderPath))
+                continue;
+            pathsById[image.ImageId] = Path.Combine(folderPath, image.FileName);
         }
-        return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        // Uncached images still use the same catalog as the authority;
+        // no additional path cache or divergent source of truth is created.
+        if (pathsById.Count < _selectedImageIds.Count)
+        {
+            using var db = _database.OpenConnection();
+            foreach (var group in _selectedImageIds
+                .Where(id => !pathsById.ContainsKey(id)).Chunk(400))
+            {
+                using var command = db.CreateCommand();
+                var placeholders = group.Select((_, i) => "$id" + i).ToArray();
+                for (var i = 0; i < group.Length; i++)
+                    command.Parameters.AddWithValue(placeholders[i], group[i]);
+                command.CommandText = "SELECT id, local_path FROM images WHERE id IN (" +
+                    string.Join(",", placeholders) + ");";
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    pathsById[reader.GetInt64(0)] = reader.GetString(1);
+            }
+        }
+        return pathsById.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private void CopyGalleryFilesToClipboard(bool cut)
