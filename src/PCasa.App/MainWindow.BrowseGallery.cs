@@ -205,11 +205,13 @@ public partial class MainWindow
         }
     }
 
-    // One owner for gallery publication. Requests are coalesced rather than
-    // canceling each other; a committed manual mutation cannot vanish merely
-    // because a concurrent scanner requests another refresh.
+    // Exactly one publisher at a time. The pending bit AND the publisher
+    // lifetime change under the SAME gate. A Task.IsCompleted check was
+    // insufficient: a request between the last pending check and task
+    // completion could disappear forever, leaving moved images on screen.
     private readonly object _galleryRefreshGate = new();
-    private Task _galleryRefreshRunner = Task.CompletedTask;
+    private bool _galleryRefreshRunning;
+    private TaskCompletionSource? _galleryRefreshCompletion;
     private bool _galleryRefreshPending;
     private bool _galleryRefreshForceIndex;
     private bool _galleryRefreshWarmViewport;
@@ -223,44 +225,90 @@ public partial class MainWindow
             _galleryRefreshPending = true;
             _galleryRefreshForceIndex |= forceIndexReload;
             _galleryRefreshWarmViewport |= warmViewport;
-            if (_galleryRefreshRunner.IsCompleted)
-                _galleryRefreshRunner = DrainGalleryRefreshAsync();
-            return _galleryRefreshRunner;
+            if (!_galleryRefreshRunning)
+            {
+                _galleryRefreshRunning = true;
+                _galleryRefreshCompletion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = DrainGalleryRefreshAsync(_galleryRefreshCompletion);
+            }
+            return _galleryRefreshCompletion!.Task;
         }
     }
 
-    private async Task DrainGalleryRefreshAsync()
+    private async Task DrainGalleryRefreshAsync(TaskCompletionSource completion)
     {
-        // Allow caller to store the runner before its first publication.
+        // Never execute publication inside the caller's gate.
         await Task.Yield();
-        while (!Dispatcher.HasShutdownStarted)
+        try
         {
-            bool force, warm;
-            lock (_galleryRefreshGate)
+            while (!Dispatcher.HasShutdownStarted)
             {
-                if (!_galleryRefreshPending) return;
-                force = _galleryRefreshForceIndex;
-                warm = _galleryRefreshWarmViewport;
-                _galleryRefreshPending = false;
-                _galleryRefreshForceIndex = false;
-                _galleryRefreshWarmViewport = false;
-            }
-
-            try
-            {
-                await RefreshBrowseGalleryCoreAsync(force, warm);
-            }
-            catch (OperationCanceledException) when (!Dispatcher.HasShutdownStarted)
-            {
-                // An input/filter revision can cancel one projection; a
-                // committed catalog change still requires a later projection.
+                bool force = false, warm = false, finished = false;
                 lock (_galleryRefreshGate)
                 {
-                    _galleryRefreshPending = true;
-                    _galleryRefreshForceIndex = true;
+                    if (!_galleryRefreshPending)
+                    {
+                        // This is the only legal idle transition. A new
+                        // request from now on creates its OWN publisher.
+                        _galleryRefreshRunning = false;
+                        _galleryRefreshCompletion = null;
+                        finished = true;
+                    }
+                    else
+                    {
+                        force = _galleryRefreshForceIndex;
+                        warm = _galleryRefreshWarmViewport;
+                        _galleryRefreshPending = false;
+                        _galleryRefreshForceIndex = false;
+                        _galleryRefreshWarmViewport = false;
+                    }
                 }
-                await Task.Yield();
+                if (finished)
+                {
+                    completion.TrySetResult();
+                    return;
+                }
+
+                try
+                {
+                    await RefreshBrowseGalleryCoreAsync(force, warm);
+                }
+                catch (OperationCanceledException) when (!Dispatcher.HasShutdownStarted)
+                {
+                    // Filter/input versions can cancel an individual
+                    // projection; the latest confirmed catalog still needs
+                    // a publication. Retry after newer UI changes settle.
+                    lock (_galleryRefreshGate)
+                    {
+                        _galleryRefreshPending = true;
+                        _galleryRefreshForceIndex = true;
+                    }
+                    await Task.Yield();
+                }
             }
+
+            lock (_galleryRefreshGate)
+            {
+                if (ReferenceEquals(_galleryRefreshCompletion, completion))
+                {
+                    _galleryRefreshRunning = false;
+                    _galleryRefreshCompletion = null;
+                }
+            }
+            completion.TrySetResult(); // Owner window is shutting down.
+        }
+        catch (Exception ex)
+        {
+            lock (_galleryRefreshGate)
+            {
+                if (ReferenceEquals(_galleryRefreshCompletion, completion))
+                {
+                    _galleryRefreshRunning = false;
+                    _galleryRefreshCompletion = null;
+                }
+            }
+            completion.TrySetException(ex);
         }
     }
 
