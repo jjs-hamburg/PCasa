@@ -375,11 +375,26 @@ public partial class MainWindow
     {
         // Every valid manual drop must reach the scheduler, even if an
         // earlier manual transfer is still running or awaiting a source lock.
-        var requested = input.Where(FolderScanner.IsSupportedImagePath)
-            .Select(Path.GetFullPath)
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (requested.Length == 0) return;
-        var targetPath = Path.GetFullPath(targetDirectory);
+        string[] requested;
+        string targetPath;
+        try
+        {
+            requested = input.Where(FolderScanner.IsSupportedImagePath)
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (requested.Length == 0)
+            {
+                StatusText.Text = "Keine unterstützten Bilddateien für die Ablage";
+                return;
+            }
+            targetPath = Path.GetFullPath(targetDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or
+            NotSupportedException or PathTooLongException)
+        {
+            ShowFileActionError(ex);
+            return;
+        }
         var key = $"gallery:file-transfer:{Guid.NewGuid():N}";
         var transferPhase = move ? "Bilder verschieben" : "Bilder kopieren";
         var completed = new List<string>();
@@ -395,9 +410,9 @@ public partial class MainWindow
         // _activeScanCancellation here would turn safe preemption into a
         // permanent cancellation of a user-initiated or initial import.
         _backgroundDebounceTimer?.Stop();
-        BeginVisibleManualOperation(key, transferPhase, requested.Length);
         try
         {
+            BeginVisibleManualOperation(key, transferPhase, requested.Length);
             // This ONE scheduler job owns physical operations, catalog
             // commits, and the subsequent visible gallery publication.
             // It must not become Completed before the view has caught up.
@@ -634,15 +649,18 @@ public partial class MainWindow
         catch (Exception ex) { ShowFileActionError(ex); }
         finally
         {
-            EndVisibleManualOperation(key);
-            _outstandingGalleryMutations--;
-            _outstandingFileTransfers--;
-            if (!_manualFileTransferActive)
+            try { EndVisibleManualOperation(key); }
+            finally
             {
-                QueuePendingInitialScans();
-                if (_backgroundPending.Count > 0 &&
-                    _backgroundScanSettings?.Enabled == true)
-                    _backgroundDebounceTimer?.Start();
+                _outstandingGalleryMutations--;
+                _outstandingFileTransfers--;
+                if (!_manualFileTransferActive)
+                {
+                    QueuePendingInitialScans();
+                    if (_backgroundPending.Count > 0 &&
+                        _backgroundScanSettings?.Enabled == true)
+                        _backgroundDebounceTimer?.Start();
+                }
             }
         }
     }
