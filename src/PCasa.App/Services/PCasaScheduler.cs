@@ -45,6 +45,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
     private int _catalogInteractiveRunning;
+    private int _manualSourceProbeRunning;
     private readonly CancellationTokenSource?[] _runningYield = new CancellationTokenSource?[3];
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
@@ -97,6 +98,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _ => LaneBackground
             }
         };
+
+    // Call ONLY under _gate. A manual network mutation has to suspend bulk
+    // scanner scheduling for its entire operation, not merely while queued.
+    private bool HasManualSourceProbeUnsafe()
+        => _manualSourceProbeRunning > 0 ||
+            _pending.Any(item => item.Kind == SchedulerWorkKind.SourceProbe &&
+                item.Priority == SchedulerPriority.ManualAction);
 
     // Typed scheduler results use exactly the same queue, priority,
     // cancellation and lifetime bookkeeping as catalog mutations.
@@ -210,7 +218,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
             // A running background or bulk-user request can yield, but a slow
             // SMB/decoder call never holds the dispatcher or a different lane.
-            if (workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
+            if (workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan ||
+                (workKind == SchedulerWorkKind.SourceProbe &&
+                 priority == SchedulerPriority.ManualAction))
             {
                 for (var lane = 0; lane <= LaneManual; lane++)
                 {
@@ -220,7 +230,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // never cancel one another.
                     var supersedesManualScan =
                         priority == SchedulerPriority.ManualAction &&
-                        workKind == SchedulerWorkKind.Catalog &&
+                        workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe &&
                         active?.Priority == SchedulerPriority.ManualAction &&
                         active.Kind == SchedulerWorkKind.CatalogScan;
                     if (active is not null &&
@@ -262,10 +272,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var blockedByHigherPriority =
                         lane == LaneBackground &&
                         (_catalogForegroundRunning > 0 ||
+                         HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.UserAction)) ||
                         lane == LaneUserAction &&
                         (_catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
+                         HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.Interactive));
                     item = blockedByHigherPriority ? null :
@@ -295,6 +307,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 _catalogInteractiveRunning++;
                             }
                         }
+                        if (lane == LaneManualSourceProbe)
+                            _manualSourceProbeRunning++;
                         if (lane <= LaneManual)
                         {
                             yieldRequest = new CancellationTokenSource();
@@ -365,6 +379,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 _runningPriorityJobs[lane] = null;
                                 _runningYield[lane] = null;
                             }
+                            if (lane == LaneManualSourceProbe)
+                                _manualSourceProbeRunning--;
                             if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
                             {
                                 if (lane == LaneUserAction) _catalogForegroundRunning--;
@@ -387,11 +403,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                     _signals[LaneManual].Release();
                                 if (_catalogInteractiveRunning == 0 &&
                                     _catalogManualRunning == 0 &&
+                                    !HasManualSourceProbeUnsafe() &&
                                     !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                                         x.Priority <= SchedulerPriority.Interactive) &&
                                     _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneUserAction))
                                     _signals[LaneUserAction].Release();
                                 if (_catalogForegroundRunning == 0 &&
+                                    !HasManualSourceProbeUnsafe() &&
                                     !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                                         x.Priority <= SchedulerPriority.UserAction) &&
                                     _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneBackground))
