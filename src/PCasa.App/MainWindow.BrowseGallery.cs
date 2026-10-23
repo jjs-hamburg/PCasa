@@ -66,9 +66,13 @@ public partial class MainWindow
     {
         try
         {
+            // Recovery may encounter a disconnected NAS. It runs in the
+            // cancellable background lane; a fresh MANUAL operation can
+            // preempt it. Startup recovery is never allowed to occupy the
+            // sole manual executor while an unreachable SMB path times out.
             var result = await _scheduler.RunAsync(
                 "catalog:recover-file-transfers",
-                SchedulerPriority.ManualAction,
+                SchedulerPriority.Background,
                 token => _imageCatalog.RecoverRelocations(
                     _folderRepository.GetAll(), token),
                 workKind: SchedulerWorkKind.Catalog);
