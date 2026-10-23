@@ -46,6 +46,12 @@ public partial class BrowseCacheProgressWindow : Window
     private bool _finished;
     private bool _manualPresentationActive;
     private bool _finishRequestedWhileManual;
+    // Owned borderless WPF windows can lose their rendered composition when
+    // the taskbar minimizes/restores the owner. Restore only an intentionally
+    // visible progress window; a user-hidden background window must stay hidden.
+    private bool _hiddenByUser;
+    private bool _ownerWasMinimized;
+    private bool _restoreAfterOwnerMinimize;
     private IntPtr _anchoredMonitor;
     private bool _hasScreenPlacement;
     private bool _placingWindow;
@@ -71,7 +77,7 @@ public partial class BrowseCacheProgressWindow : Window
         };
     }
 
-    private void PositionOnOwnerMonitor()
+    private void PositionOnOwnerMonitor(bool force = false)
     {
         if (Owner is null || !IsLoaded) return;
 
@@ -79,7 +85,7 @@ public partial class BrowseCacheProgressWindow : Window
         // Resizing/moving PCasa within a screen leaves this position alone.
         var handle = new WindowInteropHelper(Owner).Handle;
         var monitor = MonitorFromWindow(handle, 2); // MONITOR_DEFAULTTONEAREST
-        if (_hasScreenPlacement && monitor == _anchoredMonitor) return;
+        if (!force && _hasScreenPlacement && monitor == _anchoredMonitor) return;
 
         // Preserve a manually selected vertical position on monitor changes.
         // X is ALWAYS computed from the monitor's work-area right edge.
@@ -133,7 +139,49 @@ public partial class BrowseCacheProgressWindow : Window
         => ScheduleOwnerReanchor();
 
     private void Owner_StateChanged(object? sender, EventArgs e)
-        => ScheduleOwnerReanchor();
+    {
+        if (_finished || Owner is null) return;
+        if (Owner.WindowState == WindowState.Minimized)
+        {
+            _ownerWasMinimized = true;
+            _restoreAfterOwnerMinimize = !_hiddenByUser;
+            // WPF may already have hidden an owned window by this point.
+            // Explicitly hiding here makes the state transition deterministic.
+            if (_restoreAfterOwnerMinimize && IsVisible) Hide();
+            return;
+        }
+
+        if (!_ownerWasMinimized)
+        {
+            ScheduleOwnerReanchor();
+            return;
+        }
+
+        _ownerWasMinimized = false;
+        var restore = _restoreAfterOwnerMinimize && !_hiddenByUser;
+        _restoreAfterOwnerMinimize = false;
+        if (!restore)
+        {
+            ScheduleOwnerReanchor();
+            return;
+        }
+
+        // Wait until Windows has restored the owner's HWND and WPF has
+        // processed its StateChanged/SizeChanged events. Re-show the SAME
+        // progress window, preserving scan text, thumbnail and job identity.
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_finished || Owner is null ||
+                Owner.WindowState == WindowState.Minimized || _hiddenByUser)
+                return;
+            if (IsVisible) Hide();
+            Show();
+            PositionOnOwnerMonitor(force: true);
+            InvalidateMeasure();
+            InvalidateVisual();
+            UpdateLayout();
+        }), DispatcherPriority.ContextIdle);
+    }
 
     private void ScheduleOwnerReanchor()
     {
@@ -160,6 +208,7 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _manualPresentationActive = true;
+        _hiddenByUser = false;
         PhaseText.Text = name + " · angefordert";
         Progress.IsIndeterminate = true;
         CountText.Text = $"0 / {total:N0}";
@@ -344,13 +393,29 @@ public partial class BrowseCacheProgressWindow : Window
         _verticalPositionAdjusted = true;
     }
 
-    private void Hide_Click(object sender, RoutedEventArgs e) => Hide();
+    public void ShowFromStatus()
+    {
+        if (_finished || Dispatcher.HasShutdownStarted) return;
+        _hiddenByUser = false;
+        if (Owner?.WindowState != WindowState.Minimized)
+        {
+            if (!IsVisible) Show();
+            Activate();
+        }
+    }
+
+    private void Hide_Click(object sender, RoutedEventArgs e)
+    {
+        _hiddenByUser = true;
+        Hide();
+    }
 
     protected override void OnClosing(CancelEventArgs e)
     {
         if (!_finished)
         {
             e.Cancel = true;
+            _hiddenByUser = true;
             Hide();
             return;
         }

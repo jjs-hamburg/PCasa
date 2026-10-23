@@ -365,6 +365,60 @@ internal static class Program
                 }
                 Console.WriteLine(
                     $"PASS: Compact progress stays right-anchored and moves vertically only (gap {rightGap:F1} px).");
+
+                // Real taskbar transition of an owned, borderless WPF
+                // progress window. Previous behavior reanchored only when
+                // the monitor changed, leaving a partially painted window.
+                var displayedPhase = (TextBlock)progressWindow.FindName("PhaseText");
+                progressWindow.UpdateScan(new ScanProgress(
+                    3, 1, 0, 0, "photo-minimize.jpg"));
+                var expectedPhase = displayedPhase.Text;
+                var savedWindowState = window.WindowState;
+                try
+                {
+                    window.WindowState = WindowState.Minimized;
+                    Flush(window);
+                    window.WindowState = WindowState.Normal;
+                    Flush(window);
+                    Flush(progressWindow);
+                    if (!progressWindow.IsVisible ||
+                        Math.Abs(progressWindow.ActualWidth - 348) > 1 ||
+                        Math.Abs(progressWindow.ActualHeight - 76) > 1 ||
+                        displayedPhase.Text != expectedPhase)
+                        throw new Exception(
+                            "Restoring PCasa did not restore the entire progress window.");
+                    var restoredGap = SystemParameters.WorkArea.Right -
+                        (progressWindow.Left + progressWindow.ActualWidth);
+                    if (restoredGap < -1 || restoredGap > 20)
+                        throw new Exception(
+                            "Restored progress window has invalid desktop placement.");
+
+                    var hide = progressType.GetMethod("Hide_Click",
+                        System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance)
+                        ?? throw new Exception("Manual progress hide handler missing.");
+                    hide.Invoke(progressWindow, [progressWindow, new RoutedEventArgs()]);
+                    window.WindowState = WindowState.Minimized;
+                    Flush(window);
+                    window.WindowState = WindowState.Normal;
+                    Flush(window);
+                    if (progressWindow.IsVisible)
+                        throw new Exception(
+                            "User-hidden progress window reappeared on owner restore.");
+                    progressWindow.ShowFromStatus();
+                    Flush(progressWindow);
+                    if (!progressWindow.IsVisible)
+                        throw new Exception(
+                            "Status click did not reopen hidden progress window.");
+                    Console.WriteLine(
+                        "PASS: Taskbar restore reconstructs progress window while respecting user Hide.");
+                }
+                finally
+                {
+                    window.WindowState = savedWindowState;
+                    Flush(window);
+                }
+
             }
             finally
             {
