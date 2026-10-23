@@ -195,6 +195,33 @@ internal static class TagFlow
                 surface.GetFolderOffset(a.Id) is null,
                 "Current-only search included a sibling folder.");
 
+            var invertFilter = (MenuItem?)window.FindName("InvertFilterResultsMenu")
+                ?? throw new Exception("Filter inversion control missing.");
+            var filteredIndex = typeof(PCasa.App.MainWindow).GetField(
+                "_displayedBrowseIndex", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var filterClick = typeof(PCasa.App.MainWindow).GetMethod(
+                "FilterResultsInversion_Click",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            invertFilter.IsChecked = true;
+            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
+            Until(window, () => status.Text.Contains("Bilder ohne Dateiname: topaz") &&
+                ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                    filteredIndex.GetValue(window)!).Count == 6,
+                "Inverted filename filter did not show the six originals.");
+            var complement = (IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                filteredIndex.GetValue(window)!;
+            if (complement.Any(image => image.FileName.Contains(
+                    "topaz", StringComparison.OrdinalIgnoreCase)) ||
+                complement.Any(image => image.PhotoFolderId != b.Id))
+                throw new Exception("Inverted results leaked matching files or other folders.");
+            invertFilter.IsChecked = false;
+            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
+            Until(window, () => status.Text.Contains("Bilder mit Dateiname: topaz"),
+                "Switching back to matching results failed.");
+            Console.WriteLine("PASS: Filter results invert independently within exact folder scope.");
+
             var selectedField = typeof(PCasa.App.MainWindow).GetField(
                 "_selectedImageIds", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;

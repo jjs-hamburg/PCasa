@@ -17,6 +17,7 @@ public partial class MainWindow
     private bool _searchWithinTree;
     private bool _searchCurrentFolderOnly;
     private bool _searchFileNames;
+    private bool _invertFilterResults;
     private string? _searchRootPath;
 
     private void StartTagBackfill()
@@ -95,6 +96,15 @@ public partial class MainWindow
         catch (Exception ex) { PCasaDiagnostics.Write("Search.Mode", ex); }
     }
 
+    private async void FilterResultsInversion_Click(object sender, RoutedEventArgs e)
+    {
+        _invertFilterResults = InvertFilterResultsMenu.IsChecked;
+        if (_browsePageCache is null || string.IsNullOrWhiteSpace(TagSearchBox.Text)) return;
+        try { await ApplyTagFilterAsync(true); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Search.InvertResults", ex); }
+    }
+
     private void ClearTagSearch_Click(object sender, RoutedEventArgs e)
     {
         TagSearchBox.Clear();
@@ -103,6 +113,12 @@ public partial class MainWindow
 
     private async void TagSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
+        {
+            _invertFilterResults = false;
+            if (InvertFilterResultsMenu is not null)
+                InvertFilterResultsMenu.IsChecked = false;
+        }
         ClearTagSearchButton.Visibility = string.IsNullOrEmpty(TagSearchBox.Text)
             ? Visibility.Collapsed : Visibility.Visible;
         if (!_browseInitialized || _browsePageCache is null)
@@ -164,12 +180,9 @@ public partial class MainWindow
                 (FoldersTree.SelectedItem as TreeViewItem)?.Tag is FolderTreeTag selected
                     ? selected.FullPath : null));
 
-        IReadOnlyList<BrowseThumbnailIndexEntry> desired =
-            query.Length == 0 ? _browseIndex :
-            _searchFileNames
-                ? _browseIndex.Where(image => image.FileName.Contains(
-                    query, StringComparison.OrdinalIgnoreCase)).ToArray()
-                : _browseIndex.Where(image => imageIds!.Contains(image.ImageId)).ToArray();
+        // The chosen scope is the universe. Inverting search results
+        // complements the match WITHIN that universe, never all folders.
+        IReadOnlyList<BrowseThumbnailIndexEntry> scope = _browseIndex;
         if (query.Length > 0 && _searchWithinTree)
         {
             if (_searchRootPath is string rootPath)
@@ -182,10 +195,23 @@ public partial class MainWindow
                         : IsPathWithinTagSearchRoot(folder.CanonicalPath, rootPath) ||
                           IsPathWithinTagSearchRoot(folder.LocalPath, rootPath)))
                     .Select(folder => folder.Id).ToHashSet();
-                desired = desired.Where(image => included.Contains(image.PhotoFolderId)).ToArray();
+                scope = _browseIndex.Where(image =>
+                    included.Contains(image.PhotoFolderId)).ToArray();
             }
             else
-                desired = Array.Empty<BrowseThumbnailIndexEntry>();
+                scope = Array.Empty<BrowseThumbnailIndexEntry>();
+        }
+
+        IReadOnlyList<BrowseThumbnailIndexEntry> desired =
+            query.Length == 0 ? _browseIndex :
+            _searchFileNames
+                ? scope.Where(image => image.FileName.Contains(
+                    query, StringComparison.OrdinalIgnoreCase)).ToArray()
+                : scope.Where(image => imageIds!.Contains(image.ImageId)).ToArray();
+        if (query.Length > 0 && _invertFilterResults)
+        {
+            var matchingIds = desired.Select(image => image.ImageId).ToHashSet();
+            desired = scope.Where(image => !matchingIds.Contains(image.ImageId)).ToArray();
         }
         if (_displayedBrowseIndex.Count != desired.Count ||
             !_displayedBrowseIndex.SequenceEqual(desired))
@@ -198,13 +224,14 @@ public partial class MainWindow
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanelHeading.Text = query.Length == 0
             ? "Noch keine Bilder im Katalog" :
+                _invertFilterResults ? "Keine übrigen Bilder gefunden" :
                 _searchFileNames ? "Keine passenden Dateinamen gefunden" : "Keine passenden Tags gefunden";
         EmptyPanelDescription.Text = query.Length == 0
             ? "Ordner im Menü einlesen, um die Galerie zu füllen."
             : _searchFileNames ? "Gesucht wird in den katalogisierten Dateinamen."
                 : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
         StatusText.Text = query.Length > 0
-            ? $"{desired.Count:N0} Bilder mit {(_searchFileNames ? "Dateiname" : "Tags")}: {query}"
+            ? $"{desired.Count:N0} Bilder {(_invertFilterResults ? "ohne" : "mit")} {(_searchFileNames ? "Dateiname" : "Tags")}: {query}"
             : $"{_imageCatalog.CountAll():N0} Bilder";
         _lastAppliedTagQuery = query;
         BrowseScrollViewer.UpdateLayout();

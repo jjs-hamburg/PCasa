@@ -176,18 +176,34 @@ public partial class MainWindow
         string targetDirectory, bool move)
     {
         if (_galleryFileOperationRunning) return;
-        var sources = input.Where(File.Exists)
-            .Where(FolderScanner.IsSupportedImagePath)
+
+        // Only lexical path normalization happens on the UI thread.
+        // All filesystem checks, conflict planning and catalog lookups must
+        // enter the scheduler immediately at MANUAL priority, even on SMB.
+        var requested = input.Where(FolderScanner.IsSupportedImagePath)
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (sources.Length == 0) return;
-        targetDirectory = Path.GetFullPath(targetDirectory);
-        if (!Directory.Exists(targetDirectory) ||
-            !IsMonitoredGalleryDestination(targetDirectory))
+        if (requested.Length == 0) return;
+        var targetPath = Path.GetFullPath(targetDirectory);
+        _galleryFileOperationRunning = true;
+        StatusText.Text = move ? "Verschieben angefordert (höchste Priorität)"
+                               : "Kopieren angefordert (höchste Priorität)";
+        var completed = new List<string>();
+        var failed = new List<string>();
+
+        try
         {
-            StatusText.Text = "Ablage nur in einem erreichbaren überwachten Ordner möglich";
-            return;
-        }
+            await _scheduler.EnqueueAsync(
+                $"gallery:file-transfer:{Guid.NewGuid():N}",
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!Directory.Exists(targetPath) ||
+                        !IsMonitoredGalleryDestination(targetPath))
+                        throw new IOException(
+                            "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
+                    var sources = requested.Where(File.Exists).ToArray();
+                    var targetDirectory = targetPath;
         var plans = new List<GalleryFileOperation>();
         var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in sources)
@@ -207,7 +223,8 @@ public partial class MainWindow
             }
             else if (samePath || File.Exists(destination))
             {
-                var choice = samePath ? NameConflict.KeepBoth : ResolveFileConflict(destination);
+                var choice = samePath ? NameConflict.KeepBoth :
+                    await Dispatcher.InvokeAsync(() => ResolveFileConflict(destination));
                 if (choice == NameConflict.Cancel) return;
                 if (choice == NameConflict.Skip) continue;
                 if (choice == NameConflict.Replace && !samePath) replace = true;
@@ -218,16 +235,9 @@ public partial class MainWindow
                 CatalogImageIdAtPath(source),
                 replace ? CatalogImageIdAtPath(destination) : null));
         }
-        if (plans.Count == 0) return;
-        _galleryFileOperationRunning = true;
-        var completed = new List<string>();
-        var failed = new List<string>();
-        try
-        {
-            await _scheduler.EnqueueAsync(
-                $"gallery:file-transfer:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
-                token =>
-                {
+
+                    if (plans.Count == 0) return;
+
                     var roots = _folderRepository.GetAll();
                     foreach (var plan in plans)
                     {
@@ -292,27 +302,37 @@ public partial class MainWindow
                             failed.Add(Path.GetFileName(plan.Source) + ": " + ex.Message);
                         }
                     }
-                    return Task.CompletedTask;
+
                 });
+            if (completed.Count == 0)
+                return;
             await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
             // Catalog refresh registers newly populated destination folders
             // through the existing targeted node insertion, never a full
             // tree rebuild (which would disrupt tree focus and scroll).
-            _selectedImageIds.Clear();
-            using (var db = _database.OpenConnection())
-            {
-                foreach (var group in completed.Chunk(400))
+            var movedIds = await _scheduler.RunAsync(
+                $"catalog:transferred-selection:{Guid.NewGuid():N}",
+                SchedulerPriority.ManualAction,
+                token =>
                 {
-                    using var cmd = db.CreateCommand();
-                    var placeholders = group.Select((_, i) => "$p" + i).ToArray();
-                    for (var i = 0; i < group.Length; i++)
-                        cmd.Parameters.AddWithValue(placeholders[i], group[i]);
-                    cmd.CommandText = "SELECT id FROM images WHERE local_path IN (" +
-                        string.Join(",", placeholders) + ");";
-                    using var reader = cmd.ExecuteReader();
-                    while (reader.Read()) _selectedImageIds.Add(reader.GetInt64(0));
-                }
-            }
+                    var result = new HashSet<long>();
+                    using var db = _database.OpenConnection();
+                    foreach (var group in completed.Chunk(400))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        using var cmd = db.CreateCommand();
+                        var placeholders = group.Select((_, i) => "$p" + i).ToArray();
+                        for (var i = 0; i < group.Length; i++)
+                            cmd.Parameters.AddWithValue(placeholders[i], group[i]);
+                        cmd.CommandText = "SELECT id FROM images WHERE local_path IN (" +
+                            string.Join(",", placeholders) + ");";
+                        using var reader = cmd.ExecuteReader();
+                        while (reader.Read()) result.Add(reader.GetInt64(0));
+                    }
+                    return result;
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            _selectedImageIds.Clear();
+            _selectedImageIds.UnionWith(movedIds);
             ApplyGallerySelection();
             var first = _displayedBrowseIndex.FirstOrDefault(entry =>
                 _selectedImageIds.Contains(entry.ImageId));
@@ -324,6 +344,8 @@ public partial class MainWindow
                 MessageBox.Show(this, string.Join("\n", failed.Take(15)),
                     "Dateiübertragung teilweise fehlgeschlagen",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
         }
         catch (Exception ex) { ShowFileActionError(ex); }
         finally { _galleryFileOperationRunning = false; }
@@ -351,7 +373,7 @@ public partial class MainWindow
         try
         {
             await _scheduler.EnqueueAsync(
-                $"gallery:delete:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
+                $"gallery:delete:{Guid.NewGuid():N}", SchedulerPriority.ManualAction,
                 token =>
                 {
                     foreach (var (id, path) in selected)

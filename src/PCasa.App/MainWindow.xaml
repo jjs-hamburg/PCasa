@@ -240,6 +240,11 @@
                     </Menu.Resources>
                     <MenuItem Header="Datei" Margin="0,0,20,0" HorizontalAlignment="Left" />
                     <MenuItem Header="Bearbeiten" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem x:Name="InvertFilterResultsMenu"
+                                  Header="Filterergebnisse invertieren"
+                                  IsCheckable="True" IsChecked="False"
+                                  Click="FilterResultsInversion_Click"/>
+                        <Separator/>
                         <MenuItem Header="Auswahl invertieren (aktueller Ordner)"
                                   InputGestureText="Strg+I" Click="GalleryInvertSelection_Click"/>
                     </MenuItem>

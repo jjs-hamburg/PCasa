@@ -99,7 +99,7 @@ public partial class MainWindow
             var changed = false;
             await _scheduler.EnqueueAsync(
                 $"gallery:external-move:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive, token =>
+                SchedulerPriority.ManualAction, token =>
                 {
                     foreach (var source in originalPaths)
                     {

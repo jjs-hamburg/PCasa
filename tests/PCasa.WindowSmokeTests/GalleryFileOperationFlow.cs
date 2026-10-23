@@ -55,7 +55,42 @@ internal static class GalleryFileOperationFlow
                 folderRepo.GetPendingInitialScans().Count == 0,
                 "Initial source image was not indexed.");
 
-            Transfer(window, [original], second, move: false);
+            // Keep a background catalog worker occupied. The copy must
+            // START and finish in the dedicated manual lane without waiting.
+            var scheduler = (PCasaScheduler?)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(window) ?? throw new Exception("Shared scheduler missing.");
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var background = scheduler.EnqueueAsync(
+                "test:background-blocker", SchedulerPriority.Background,
+                async token =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            try
+            {
+                Until(window, () => entered.Task.IsCompleted,
+                    "Background scheduler worker never started.");
+                Transfer(window, [original], second, move: false);
+                var job = scheduler.Snapshot().LastOrDefault(item =>
+                    item.Key.StartsWith("gallery:file-transfer:", StringComparison.Ordinal));
+                if (job is null || job.Priority != SchedulerPriority.ManualAction ||
+                    job.StartedAt is null || background.IsCompleted)
+                    throw new Exception(
+                        "Manual copy waited for background job or bypassed highest scheduler priority.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                Until(window, () => background.IsCompleted,
+                    "Background worker did not recover after manual copy.");
+                background.GetAwaiter().GetResult();
+            }
+            Console.WriteLine("PASS: Manual file transfer preempts occupied background scheduler.");
             Until(window, () => File.Exists(copied) &&
                 CountInRoot(db, root) == 2,
                 "Copy did not materialize/index destination.");
