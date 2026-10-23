@@ -21,6 +21,11 @@ public partial class MainWindow
         bool Move, bool Replace, long? CatalogImageId, long? ExistingTargetId);
 
     private async Task<string[]> SelectedGalleryPathsAsync(long[] selectedIds)
+        => (await SelectedGalleryImagePathsAsync(selectedIds))
+            .Select(item => item.Path).ToArray();
+
+    private async Task<(long Id, string Path)[]> SelectedGalleryImagePathsAsync(
+        long[] selectedIds)
     {
         if (selectedIds.Length == 0) return [];
 
@@ -70,7 +75,10 @@ public partial class MainWindow
             foreach (var (id, path) in uncachedPaths)
                 pathsById[id] = path;
         }
-        return pathsById.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return pathsById
+            .Select(item => (Id: item.Key, Path: item.Value))
+            .DistinctBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private async Task CopyGalleryFilesToClipboardAsync(bool cut)
@@ -548,12 +556,25 @@ public partial class MainWindow
     private async Task DeleteSelectedImagesAsync()
     {
         if (_galleryFileOperationRunning || _selectedImageIds.Count == 0) return;
-        var selected = _selectedImageIds
-            .Select(id => (Id: id, Path: GetImagePath(id)))
-            .Where(item => item.Path is not null)
-            .Select(item => (item.Id, Path: item.Path!)).ToArray();
-        if (selected.Length == 0) return;
-        var anyNetwork = selected.Any(item => PathClassifier.Classify(item.Path).IsNetwork);
+        (long Id, string Path)[] selected;
+        bool anyNetwork;
+        try
+        {
+            // Resolve the selection and network classification through the
+            // same scheduler-owned readers used by drag/drop. Never query
+            // SQLite or a drive provider synchronously on the WPF thread.
+            selected = await SelectedGalleryImagePathsAsync(_selectedImageIds.ToArray());
+            if (selected.Length == 0) return;
+            anyNetwork = await _scheduler.RunAsync(
+                $"gallery:delete-network-probe:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return selected.Any(item => PathClassifier.Classify(item.Path).IsNetwork);
+                }, workKind: SchedulerWorkKind.SourceProbe);
+        }
+        catch (Exception ex) { ShowFileActionError(ex); return; }
         var prompt = anyNetwork
             ? $"{selected.Length:N0} Bilddatei(en) löschen?\n\n" +
               "Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht."
