@@ -11,6 +11,10 @@ public sealed record SchedulerJobSnapshot(
 {
     public TimeSpan? Duration =>
         StartedAt is null ? null : (FinishedAt ?? DateTimeOffset.UtcNow) - StartedAt;
+    public string? Phase { get; init; }
+    public int Processed { get; init; }
+    public int Total { get; init; }
+    public string? CurrentPath { get; init; }
 }
 
 /// <summary>
@@ -105,6 +109,34 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public IReadOnlyList<SchedulerJobSnapshot> Snapshot()
     {
         lock (_gate) return _history.ToArray();
+    }
+
+    // Progress is part of the SAME scheduler snapshot as priority/status.
+    // Presenters observe this event; they never create a second task state.
+    public event Action<SchedulerJobSnapshot>? ProgressChanged;
+
+    public void ReportProgress(string key, string phase, int processed,
+        int total, string? currentPath = null)
+    {
+        SchedulerJobSnapshot? snapshot;
+        lock (_gate)
+        {
+            var index = _history.FindLastIndex(x =>
+                x.Key == key && x.State is SchedulerJobState.Running or
+                    SchedulerJobState.YieldRequested);
+            if (index < 0) return;
+            snapshot = _history[index] with
+            {
+                Phase = phase,
+                Processed = Math.Max(0, processed),
+                Total = Math.Max(0, total),
+                CurrentPath = currentPath
+            };
+            _history[index] = snapshot;
+        }
+        // Observers (including WPF) are outside _gate, just like yield.
+        try { ProgressChanged?.Invoke(snapshot); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
     }
 
     public Task EnqueueAsync(string key, SchedulerPriority priority,

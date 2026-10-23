@@ -44,6 +44,8 @@ public partial class BrowseCacheProgressWindow : Window
     private DateTime _lastPreviewUpdate = DateTime.MinValue;
     private bool _previewBusy;
     private bool _finished;
+    private bool _manualPresentationActive;
+    private bool _finishRequestedWhileManual;
     private IntPtr _anchoredMonitor;
     private bool _hasScreenPlacement;
     private bool _placingWindow;
@@ -151,9 +153,54 @@ public partial class BrowseCacheProgressWindow : Window
         }), DispatcherPriority.Loaded);
     }
 
-    public void UpdateScan(ScanProgress progress)
+    // Manual work overrides the presentation of any preempted scan, using
+    // the scheduler's own job state and progress. Underlying scanner status
+    // remains in the scheduler and resumes without a competing UI model.
+    public void BeginManualOperation(string name, int total)
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
+        _manualPresentationActive = true;
+        PhaseText.Text = name + " · angefordert";
+        Progress.IsIndeterminate = true;
+        CountText.Text = $"0 / {total:N0}";
+        CurrentFileText.Text = "Warte auf Scheduler";
+        CurrentThumbnail.Source = null;
+        if (!IsVisible) Show();
+    }
+
+    public void UpdateManualOperation(SchedulerJobSnapshot progress)
+    {
+        if (_finished || !_manualPresentationActive ||
+            Dispatcher.HasShutdownStarted) return;
+        PhaseText.Text = progress.Phase ?? "Dateioperation läuft";
+        Progress.IsIndeterminate = progress.Total == 0;
+        if (progress.Total > 0)
+        {
+            Progress.Maximum = progress.Total;
+            Progress.Value = Math.Min(progress.Total, progress.Processed);
+            CountText.Text = $"{progress.Processed:N0} / {progress.Total:N0}";
+        }
+        if (progress.CurrentPath is { Length: > 0 })
+        {
+            CurrentFileText.Text = Path.GetFileName(progress.CurrentPath);
+            CurrentFileText.ToolTip = progress.CurrentPath;
+        }
+    }
+
+    public void EndManualOperation()
+    {
+        _manualPresentationActive = false;
+        if (_finishRequestedWhileManual)
+        {
+            _finishRequestedWhileManual = false;
+            Finish();
+        }
+    }
+
+    public void UpdateScan(ScanProgress progress)
+    {
+        if (_finished || _manualPresentationActive ||
+            Dispatcher.HasShutdownStarted) return;
         PhaseText.Text = "Bilder werden eingelesen";
         Progress.IsIndeterminate = true;
         var processed = progress.Updated + progress.Unchanged + progress.Failed;
@@ -167,7 +214,8 @@ public partial class BrowseCacheProgressWindow : Window
 
     public void BeginCachePhase()
     {
-        if (_finished || Dispatcher.HasShutdownStarted) return;
+        if (_finished || _manualPresentationActive ||
+            Dispatcher.HasShutdownStarted) return;
         PhaseText.Text = "Vorschaudaten werden vorbereitet";
         Progress.IsIndeterminate = false;
         Progress.Value = 0;
@@ -177,7 +225,8 @@ public partial class BrowseCacheProgressWindow : Window
 
     public void Update(BrowseCacheBuildProgress progress)
     {
-        if (_finished || Dispatcher.HasShutdownStarted) return;
+        if (_finished || _manualPresentationActive ||
+            Dispatcher.HasShutdownStarted) return;
         Progress.IsIndeterminate = false;
         Progress.Maximum = Math.Max(1, progress.TotalImages);
         Progress.Value = Math.Min(Progress.Maximum, progress.ProcessedImages);
@@ -312,6 +361,11 @@ public partial class BrowseCacheProgressWindow : Window
     public void Finish()
     {
         if (_finished) return;
+        if (_manualPresentationActive)
+        {
+            _finishRequestedWhileManual = true;
+            return;
+        }
         if (Owner is not null)
         {
             Owner.LocationChanged -= Owner_LocationChanged;
