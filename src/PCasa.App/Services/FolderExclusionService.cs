@@ -25,18 +25,26 @@ public sealed class FolderExclusionService
     public async Task<int> ChangeAsync(long folderId, string path, bool excluded,
         Action<long, string, bool>? onChanged = null,
         IProgress<string>? progress = null,
-        Func<long, string, bool, IReadOnlyList<string>, Task>? publish = null)
+        Func<long, string, bool, IReadOnlyList<string>, Task>? publish = null,
+        string? operationKey = null)
     {
         var normalized = FolderExclusionRules.Normalize(path);
         FolderManagerSelectionService.ExclusionTransition transition = default;
+        var key = operationKey ?? $"folder-exclusion:{folderId}:{Guid.NewGuid():N}";
         await _scheduler.EnqueueAsync(
-            $"folder-exclusion:{folderId}:{Guid.NewGuid():N}",
-            SchedulerPriority.ManualAction,
+            key, SchedulerPriority.ManualAction,
             async token =>
             {
+                _scheduler.ReportProgress(key,
+                    excluded ? "Unterordner entfernen" : "Unterordner aufnehmen",
+                    0, 1, normalized);
                 transition = _selection.ChangeExclusion(
                     folderId, normalized, excluded, token);
-                if (!transition.Changed) return;
+                if (!transition.Changed)
+                {
+                    _scheduler.ReportProgress(key, "Ordner unverändert", 1, 1, normalized);
+                    return;
+                }
                 progress?.Report(excluded
                     ? $"{transition.Removed:N0} Bildeinträge ausgeschlossen"
                     : "Unterordner wieder in die Überwachung aufgenommen");
@@ -48,6 +56,9 @@ public sealed class FolderExclusionService
                     var currentRules = _folders.GetExcludedPaths(folderId);
                     await publish(folderId, normalized, excluded, currentRules);
                 }
+                _scheduler.ReportProgress(key,
+                    excluded ? "Unterordner entfernt" : "Unterordner aufgenommen",
+                    1, 1, normalized);
             });
 
         // Post-completion observers (e.g. tests) may enqueue another decision

@@ -31,7 +31,9 @@ public partial class MainWindow
         // Establish the cancellation barrier first. It may be awaiting
         // background work, but hiding the subtree below is synchronous and
         // immediately visible on Dispatcher while cancellation completes.
+        var key = $"folder:remove:{folderId}:{Guid.NewGuid():N}";
         var preparation = PrepareFolderRemovalAsync(folderId, normalized);
+        BeginVisibleManualOperation(key, "Ordner entfernen", 1);
         try
         {
             HideFolderFromCurrentGallery(normalized);
@@ -44,11 +46,11 @@ public partial class MainWindow
                 // No scan may repopulate this folder after the removal barrier.
                 removed = 0;
                 await _scheduler.EnqueueAsync(
-                    $"monitor-remove:{folder.CanonicalPath}:{folderId}",
-                    SchedulerPriority.ManualAction,
+                    key, SchedulerPriority.ManualAction,
                     async token =>
                     {
                         token.ThrowIfCancellationRequested();
+                        _scheduler.ReportProgress(key, "Ordner entfernen", 0, 1, normalized);
                         var current = _folderRepository.GetAll()
                             .FirstOrDefault(root => root.Id == folderId)
                             ?? throw new OperationCanceledException(
@@ -73,12 +75,14 @@ public partial class MainWindow
                             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                                 warmViewport: false);
                         }).Task.Unwrap();
+                        _scheduler.ReportProgress(key, "Ordner entfernt", 1, 1, normalized);
                     });
             }
             else
             {
                 removed = await new FolderExclusionService(_folderRepository, _database, _scheduler)
                     .ChangeAsync(folderId, normalized, excluded: true,
+                        operationKey: key,
                         publish: async (id, changedPath, excluded, currentRules) =>
                             await Dispatcher.InvokeAsync(async () =>
                             {
@@ -118,6 +122,7 @@ public partial class MainWindow
         }
         finally
         {
+            EndVisibleManualOperation(key);
             CompleteFolderRemoval();
         }
     }

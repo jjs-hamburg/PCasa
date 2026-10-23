@@ -24,6 +24,7 @@ public partial class MainWindow
     private bool _browseInitialized;
     private bool _browseCacheBuilding;
     private bool _folderManagerOpen;
+    private bool _folderManagerCommitPending;
     private BrowseCacheProgressWindow? _browseProgressWindow;
 
     private async void BrowseSurface_Loaded(object sender, RoutedEventArgs e)
@@ -699,7 +700,7 @@ public partial class MainWindow
 
     private async void BrowseFolderManager_Click(object sender, RoutedEventArgs e)
     {
-        if (_folderManagerOpen) return;
+        if (_folderManagerOpen || _folderManagerCommitPending) return;
         _folderManagerOpen = true;
         FolderManagerSelection? selection = null;
         try
@@ -739,15 +740,19 @@ public partial class MainWindow
         if (selection is null) return; // Abbruch / X: zero persisted changes.
 
         var durableCommitted = false;
+        const string operationKey = "folder-manager:commit-selection";
+        _folderManagerCommitPending = true;
+        BeginVisibleManualOperation(operationKey, "Ordnerauswahl übernehmen", 1);
         try
         {
             // One user operation owns the persisted decision, the updated
             // folder-tree snapshot AND publication of its catalog view.
             await _scheduler.EnqueueAsync(
-                "folder-manager:commit-selection",
-                SchedulerPriority.ManualAction,
+                operationKey, SchedulerPriority.ManualAction,
                 async token =>
                 {
+                    _scheduler.ReportProgress(operationKey,
+                        "Ordnerauswahl übernehmen", 0, 1);
                     var modified = new FolderManagerSelectionService(_database)
                         .Apply(selection, token);
                     durableCommitted = true;
@@ -782,6 +787,8 @@ public partial class MainWindow
                                 warmViewport: false);
                         }).Task.Unwrap();
                     }
+                    _scheduler.ReportProgress(operationKey,
+                        "Ordnerauswahl übernommen", 1, 1);
                 });
         }
         catch (Exception ex)
@@ -794,6 +801,11 @@ public partial class MainWindow
                     : "Die Ordnerauswahl konnte nicht übernommen werden.\n\n" +
                       ex.Message,
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            EndVisibleManualOperation(operationKey);
+            _folderManagerCommitPending = false;
         }
     }
 
