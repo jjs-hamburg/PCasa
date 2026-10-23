@@ -98,11 +98,42 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Copy deleted original source.");
             Console.WriteLine("PASS: Copy preserved original and indexed second photo.");
 
-            Transfer(window, [copied], third, move: true);
+            // A move must not re-import or re-encode an already indexed photo.
+            // Preserve identity, EXIF, tags, all cache offsets and the cached
+            // thumbnail path; the WPF gallery must show the target immediately.
+            var preservedId = CatalogIdAt(db, copied);
+            var beforeCache = ThumbnailIdentities(db, preservedId);
+            if (beforeCache.Length == 0)
+                throw new Exception("Cannot test move: no prepared thumbnail tiers.");
+            var previousMetadata = MetadataIdentity(db, preservedId);
+            var originalIndexCount = new BrowseCacheRepository(db).CountEntries();
+
+            // This lock blocks scanner reconstruction of the destination.
+            // A true catalog relocation must finish without ever needing it.
+            lock (SourceFileLocks.ForPath(moved))
+            {
+                Transfer(window, [copied], third, move: true);
+                if (!File.Exists(moved) || File.Exists(copied))
+                    throw new Exception("Physical move failed.");
+                if (CatalogIdAt(db, moved) != preservedId)
+                    throw new Exception("Move replaced the original image ID.");
+                if (!beforeCache.SequenceEqual(ThumbnailIdentities(db, preservedId)))
+                    throw new Exception("Move re-created or discarded thumbnail cache tiers.");
+                if (MetadataIdentity(db, preservedId) != previousMetadata)
+                    throw new Exception("Move lost original EXIF or tag references.");
+                if (new BrowseCacheRepository(db).CountEntries() != originalIndexCount)
+                    throw new Exception("Move scheduled a duplicate thumbnail import.");
+                var cachedTarget = new BrowseCacheRepository(db).GetIndex(96)
+                    .FirstOrDefault(entry => entry.ImageId == preservedId);
+                if (cachedTarget is null ||
+                    !string.Equals(cachedTarget.FileName, "test.jpg",
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Immediate browse index still shows old location.");
+            }
             Until(window, () => !File.Exists(copied) && File.Exists(moved) &&
                 CountInRoot(db, root) == 2,
-                "Move did not detach old catalog image and index new path.");
-            Console.WriteLine("PASS: Move removed source, kept original and updated catalog.");
+                "Move did not commit target catalog location.");
+            Console.WriteLine("PASS: Cached move preserves image ID, EXIF, tags and thumb tiers with no destination scan.");
 
             Transfer(window, [original], first, move: false);
             Until(window, () => File.Exists(duplicate) &&
@@ -357,6 +388,51 @@ internal static class GalleryFileOperationFlow
             foreach (var nested in FindFolderItems(item))
                 yield return nested;
         }
+    }
+
+    private static long CatalogIdAt(LocalDatabase db, string path)
+    {
+        using var connection = db.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id FROM images WHERE local_path = $path COLLATE NOCASE;";
+        command.Parameters.AddWithValue("$path", path);
+        return Convert.ToInt64(command.ExecuteScalar()
+            ?? throw new Exception("Catalog image missing: " + path));
+    }
+
+    private static string[] ThumbnailIdentities(LocalDatabase db, long imageId)
+    {
+        using var connection = db.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT tier, pack_file, byte_offset, byte_length,
+                   source_modified_utc_ticks
+            FROM thumbnail_entries WHERE image_id = $id ORDER BY tier;
+            """;
+        command.Parameters.AddWithValue("$id", imageId);
+        using var reader = command.ExecuteReader();
+        var values = new List<string>();
+        while (reader.Read())
+            values.Add(string.Join("|", Enumerable.Range(0, 5)
+                .Select(index => reader.GetValue(index).ToString())));
+        return values.ToArray();
+    }
+
+    private static string MetadataIdentity(LocalDatabase db, long imageId)
+    {
+        using var connection = db.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+              (SELECT exif_json FROM image_exif WHERE image_id = $id),
+              (SELECT keywords FROM image_tags WHERE image_id = $id),
+              (SELECT thumbnail_path FROM images WHERE id = $id)
+            """;
+        command.Parameters.AddWithValue("$id", imageId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) throw new Exception("Missing EXIF/cache metadata.");
+        return string.Join("\u001f", Enumerable.Range(0, 3)
+            .Select(i => reader.IsDBNull(i) ? "<null>" : reader.GetString(i)));
     }
 
     private static bool CatalogContains(LocalDatabase db, string path)
