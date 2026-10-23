@@ -735,46 +735,61 @@ public partial class MainWindow
 
         if (selection is null) return; // Abbruch / X: zero persisted changes.
 
+        var durableCommitted = false;
         try
         {
-            var modified = false;
-            IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> committedConfiguration =
-                Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
+            // One user operation owns the persisted decision, the updated
+            // folder-tree snapshot AND publication of its catalog view.
             await _scheduler.EnqueueAsync(
                 "folder-manager:commit-selection",
-                SchedulerPriority.Interactive,
-                token =>
+                SchedulerPriority.ManualAction,
+                async token =>
                 {
-                    modified = new FolderManagerSelectionService(_database)
+                    var modified = new FolderManagerSelectionService(_database)
                         .Apply(selection, token);
+                    durableCommitted = true;
+                    IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> snapshot =
+                        Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
                     if (modified)
-                        committedConfiguration = ReadFolderTreeConfigurationSnapshot();
-                    return Task.CompletedTask;
+                        snapshot = ReadFolderTreeConfigurationSnapshot();
+
+                    // Preferences persist only after the catalog decision.
+                    // No I/O is performed on the WPF dispatcher.
+                    if (BackgroundScanSettings.Load().Enabled != selection.BackgroundScanEnabled)
+                        new BackgroundScanSettings
+                        {
+                            Enabled = selection.BackgroundScanEnabled
+                        }.Save();
+
+                    if (modified)
+                    {
+                        await Dispatcher.InvokeAsync(async () =>
+                        {
+                            _initialScanAttempted.Clear();
+                            _dropTargetProjection = snapshot;
+                            _dragTargetValidity.Clear();
+                            RefreshFolderTree(preserveGalleryAnchor: true);
+                            StatusText.Text =
+                                "Ordnerauswahl übernommen · Einlesen mit Benutzerpriorität";
+                            // Durable initial scans can enter their own
+                            // scheduler lane, but cannot overtake this
+                            // still-running manual catalog publication.
+                            QueuePendingInitialScans();
+                            await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                                warmViewport: false);
+                        }).Task.Unwrap();
+                    }
                 });
-
-            // Settings are saved only after the catalog transaction commits.
-            // An unrelated menu or dialog never cancels manual scan work.
-            if (BackgroundScanSettings.Load().Enabled != selection.BackgroundScanEnabled)
-                new BackgroundScanSettings { Enabled = selection.BackgroundScanEnabled }.Save();
-
-            if (modified)
-            {
-                _initialScanAttempted.Clear();
-                _dropTargetProjection = committedConfiguration;
-                _dragTargetValidity.Clear();
-                RefreshFolderTree(preserveGalleryAnchor: true);
-                StatusText.Text = "Ordnerauswahl übernommen · Einlesen mit Benutzerpriorität";
-                // The scanner is a SINGLE durable user-priority scheduler
-                // operation and is launched only AFTER this dialog closes.
-                QueuePendingInitialScans();
-                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
-            }
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderManager.Commit", ex);
             MessageBox.Show(this,
-                "Die Ordnerauswahl konnte nicht übernommen werden.\n\n" + ex.Message,
+                durableCommitted
+                    ? "Die Ordnerauswahl wurde gespeichert, aber die Aktualisierung " +
+                      "der Ansicht oder Einstellungen ist fehlgeschlagen.\n\n" + ex.Message
+                    : "Die Ordnerauswahl konnte nicht übernommen werden.\n\n" +
+                      ex.Message,
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
