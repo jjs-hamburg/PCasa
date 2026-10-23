@@ -208,24 +208,6 @@ public partial class MainWindow
         return cmd.ExecuteScalar() is { } value ? Convert.ToInt64(value) : null;
     }
 
-    private static string VolumeIdentity(string path)
-    {
-        var canonical = PathClassifier.Classify(path).CanonicalPath
-            .Replace('/', '\\');
-        if (canonical.StartsWith(@"\\", StringComparison.Ordinal))
-        {
-            var parts = canonical.TrimStart('\\').Split('\\');
-            return parts.Length >= 2
-                ? @"\\" + parts[0] + "\\" + parts[1]
-                : canonical;
-        }
-        return Path.GetPathRoot(canonical) ?? canonical;
-    }
-
-    private static bool SameVolume(string first, string second)
-        => string.Equals(VolumeIdentity(first), VolumeIdentity(second),
-            StringComparison.OrdinalIgnoreCase);
-
     private static string UniqueCopyPath(string target, IReadOnlySet<string> reserved)
     {
         var folder = Path.GetDirectoryName(target)!;
@@ -500,29 +482,36 @@ public partial class MainWindow
                                         destinationRoot.Id);
                                 }
 
-                                if (replace)
+                                if (move)
                                 {
+                                    // One physical move path. Try a server-side
+                                    // rename first, even for overwrite or mapped
+                                    // aliases. Only ERROR_NOT_SAME_DEVICE permits
+                                    // copying a file across the VPN.
+                                    var method = ServerSideFileMover.Move(
+                                        source, destination, replace);
+                                    PCasaDiagnostics.Write(
+                                        "Gallery.TransferMode",
+                                        $"{method}: {source} -> {destination}");
+                                }
+                                else if (replace)
+                                {
+                                    // Cross-volume-copy semantics for explicit
+                                    // COPY+Replace: stage completely before
+                                    // replacing the target file.
                                     var stage = destination + ".pcasa-" +
                                         Guid.NewGuid().ToString("N") + ".tmp";
                                     try
                                     {
                                         File.Copy(source, stage, overwrite: false);
+                                        if (new FileInfo(source).Length !=
+                                            new FileInfo(stage).Length)
+                                            throw new IOException("Kopie unvollständig.");
                                         File.Move(stage, destination, overwrite: true);
-                                        if (move) File.Delete(source);
                                     }
                                     finally
                                     {
                                         if (File.Exists(stage)) File.Delete(stage);
-                                    }
-                                }
-                                else if (move)
-                                {
-                                    if (SameVolume(source, destination))
-                                        File.Move(source, destination);
-                                    else
-                                    {
-                                        File.Copy(source, destination, overwrite: false);
-                                        File.Delete(source);
                                     }
                                 }
                                 else File.Copy(source, destination, overwrite: false);

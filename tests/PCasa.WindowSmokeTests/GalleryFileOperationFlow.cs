@@ -487,6 +487,31 @@ internal static class GalleryFileOperationFlow
             Console.WriteLine(
                 "PASS: Overlapping manual drops are queued, executed and visible without losing files.");
 
+            // The same-volume path, including replacement, must use a
+            // native rename; it must never stage a full image over the VPN.
+            var fastSource = Path.Combine(first, "fast-rename-photo.jpg");
+            var fastTarget = Path.Combine(third, "fast-rename-photo.jpg");
+            var fastOriginal = new byte[96 * 1024];
+            Random.Shared.NextBytes(fastOriginal);
+            File.WriteAllBytes(fastSource, fastOriginal);
+            var fastMode = ServerSideFileMover.Move(fastSource, fastTarget);
+            if (fastMode != ServerSideFileMover.MoveMethod.Rename ||
+                File.Exists(fastSource) ||
+                !File.ReadAllBytes(fastTarget).SequenceEqual(fastOriginal))
+                throw new Exception("Same-volume rename copied data or lost image content.");
+
+            var replaceSource = Path.Combine(first, "fast-replace.jpg");
+            var replaceTarget = Path.Combine(third, "fast-replace.jpg");
+            File.WriteAllBytes(replaceSource, fastOriginal);
+            File.WriteAllText(replaceTarget, "old-data");
+            var replaceMode = ServerSideFileMover.Move(
+                replaceSource, replaceTarget, replace: true);
+            if (replaceMode != ServerSideFileMover.MoveMethod.Rename ||
+                File.Exists(replaceSource) ||
+                !File.ReadAllBytes(replaceTarget).SequenceEqual(fastOriginal))
+                throw new Exception("Replace move was not a server-side rename.");
+            Console.WriteLine("PASS: Rename and overwrite use OS metadata moves, not byte copies.");
+
             // Progress is read from the scheduler's live operation, not a
             // second UI timer. Block one file lock to observe Running before
             // the job finishes, and verify the shared progress window.
