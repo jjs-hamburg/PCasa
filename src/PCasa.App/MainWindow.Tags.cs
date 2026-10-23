@@ -15,6 +15,8 @@ public partial class MainWindow
     private int _tagSearchVersion;
     private string _lastAppliedTagQuery = string.Empty;
     private bool _searchWithinTree;
+    private bool _searchCurrentFolderOnly;
+    private bool _searchFileNames;
     private string? _searchRootPath;
 
     private void StartTagBackfill()
@@ -59,8 +61,11 @@ public partial class MainWindow
 
     private async void TagSearchScope_Changed(object sender, RoutedEventArgs e)
     {
-        if (SearchTreeScope is null || SearchAllScope is null) return;
-        _searchWithinTree = SearchTreeScope.IsChecked == true;
+        if (SearchTreeScope is null || SearchAllScope is null ||
+            SearchCurrentScope is null) return;
+        _searchWithinTree = SearchTreeScope.IsChecked == true ||
+            SearchCurrentScope.IsChecked == true;
+        _searchCurrentFolderOnly = SearchCurrentScope.IsChecked == true;
         if (_searchWithinTree)
             CaptureTagSearchRoot();
         if (TagSearchBox is null || _browsePageCache is null)
@@ -77,6 +82,17 @@ public partial class MainWindow
             PCasaDiagnostics.Write("Tags.SearchScope", ex);
             StatusText.Text = "Tag-Suche fehlgeschlagen";
         }
+    }
+
+    private async void SearchMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (SearchFileNameMode is null || TagSearchBox is null) return;
+        _searchFileNames = SearchFileNameMode.IsChecked == true;
+        TagSearchBox.ToolTip = _searchFileNames ? "Dateinamen suchen" : "Tags suchen";
+        if (_browsePageCache is null) return;
+        try { await ApplyTagFilterAsync(true); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Search.Mode", ex); }
     }
 
     private void ClearTagSearch_Click(object sender, RoutedEventArgs e)
@@ -116,7 +132,7 @@ public partial class MainWindow
         var version = ++_tagSearchVersion;
         var query = TagSearchBox.Text.Trim();
         HashSet<long>? imageIds = null;
-        if (query.Length > 0)
+        if (query.Length > 0 && !_searchFileNames)
         {
             imageIds = await _scheduler.RunAsync(
                 $"catalog:tag-search:{version}", SchedulerPriority.Interactive,
@@ -149,15 +165,22 @@ public partial class MainWindow
                     ? selected.FullPath : null));
 
         IReadOnlyList<BrowseThumbnailIndexEntry> desired =
-            imageIds is null ? _browseIndex :
-                _browseIndex.Where(image => imageIds.Contains(image.ImageId)).ToArray();
-        if (imageIds is not null && _searchWithinTree)
+            query.Length == 0 ? _browseIndex :
+            _searchFileNames
+                ? _browseIndex.Where(image => image.FileName.Contains(
+                    query, StringComparison.OrdinalIgnoreCase)).ToArray()
+                : _browseIndex.Where(image => imageIds!.Contains(image.ImageId)).ToArray();
+        if (query.Length > 0 && _searchWithinTree)
         {
             if (_searchRootPath is string rootPath)
             {
                 var included = _photoFolders.Where(folder =>
-                    IsPathWithinTagSearchRoot(folder.CanonicalPath, rootPath) ||
-                    IsPathWithinTagSearchRoot(folder.LocalPath, rootPath))
+                    (_searchCurrentFolderOnly
+                        ? string.Equals(FolderExclusionRules.Normalize(folder.LocalPath),
+                            FolderExclusionRules.Normalize(rootPath),
+                            StringComparison.OrdinalIgnoreCase)
+                        : IsPathWithinTagSearchRoot(folder.CanonicalPath, rootPath) ||
+                          IsPathWithinTagSearchRoot(folder.LocalPath, rootPath)))
                     .Select(folder => folder.Id).ToHashSet();
                 desired = desired.Where(image => included.Contains(image.PhotoFolderId)).ToArray();
             }
@@ -174,12 +197,14 @@ public partial class MainWindow
         BrowseSurface.SetSelection(_selectedImageIds);
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanelHeading.Text = query.Length == 0
-            ? "Noch keine Bilder im Katalog" : "Keine passenden Tags gefunden";
+            ? "Noch keine Bilder im Katalog" :
+                _searchFileNames ? "Keine passenden Dateinamen gefunden" : "Keine passenden Tags gefunden";
         EmptyPanelDescription.Text = query.Length == 0
             ? "Ordner im Menü einlesen, um die Galerie zu füllen."
-            : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
+            : _searchFileNames ? "Gesucht wird in den katalogisierten Dateinamen."
+                : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
         StatusText.Text = query.Length > 0
-            ? $"{desired.Count:N0} Bilder mit Tags: {query}"
+            ? $"{desired.Count:N0} Bilder mit {(_searchFileNames ? "Dateiname" : "Tags")}: {query}"
             : $"{_imageCatalog.CountAll():N0} Bilder";
         _lastAppliedTagQuery = query;
         BrowseScrollViewer.UpdateLayout();
