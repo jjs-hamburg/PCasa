@@ -275,11 +275,14 @@ public partial class MainWindow
 
     private void VisibleManualProgressChanged(SchedulerJobSnapshot status)
     {
-        if (Dispatcher.HasShutdownStarted ||
-            !_visibleManualOperations.ContainsKey(status.Key)) return;
+        if (Dispatcher.HasShutdownStarted) return;
+        // ProgressChanged is raised by the scheduler worker. Presentation
+        // ownership belongs exclusively to the WPF dispatcher; never read
+        // the UI-owned job dictionary on a background thread.
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (status.Key == _visibleManualActiveKey)
+            if (_visibleManualOperations.ContainsKey(status.Key) &&
+                status.Key == _visibleManualActiveKey)
                 _visibleManualWindow?.UpdateManualOperation(status);
         }));
     }
