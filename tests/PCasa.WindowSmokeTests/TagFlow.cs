@@ -290,6 +290,12 @@ internal static class TagFlow
             if (originals.Any(File.Exists) ||
                 originals.Any(path => !File.Exists(Path.Combine(org, Path.GetFileName(path)))))
                 throw new Exception("Topaz originals were not moved into ORG.");
+            if (((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                    filteredIndex.GetValue(window)!).Count != 0 ||
+                surface.GetFolderOffset(b.Id) is not null)
+                throw new Exception(
+                    "Move finished in filesystem/catalog but left the old source gallery visible.");
+            Console.WriteLine("PASS: Active inverted filename filter immediately removes moved originals.");
 
             var albumAItem = Walk(tree).FirstOrDefault(item =>
                 string.Equals(ReadPath(item), albumA,

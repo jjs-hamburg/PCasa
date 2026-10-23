@@ -319,13 +319,84 @@ internal static class GalleryFileOperationFlow
                 Until(window, () => !File.Exists(uncachedSource) &&
                     File.Exists(uncachedDestination),
                     "Physical move waited for the destination image decoder.");
-                if (deferredIndexing.IsCompleted)
-                    throw new Exception("Destination indexing was not deferred after physical move.");
+                // File movement AND its gallery publication must not wait
+                // for the new file's EXIF/thumbnail import. That is another
+                // scheduler job using the existing scanner after completion.
+                Until(window, () => deferredIndexing.IsCompleted,
+                    "Manual move still waited for destination image indexing.");
             }
             Until(window, () => deferredIndexing.IsCompleted,
                 "Deferred image indexing did not complete.");
             deferredIndexing.GetAwaiter().GetResult();
-            Console.WriteLine("PASS: Physical file moves precede destination EXIF/thumbnail indexing.");
+            Console.WriteLine("PASS: Uncatalogued move completes before destination EXIF/thumbnail import.");
+
+            // Progress is read from the scheduler's live operation, not a
+            // second UI timer. Block one file lock to observe Running before
+            // the job finishes, and verify the shared progress window.
+            var progressSource = Path.Combine(first, "progress-operation.jpg");
+            WriteJpeg(progressSource);
+            Task progressTask;
+            lock (SourceFileLocks.ForPath(progressSource))
+            {
+                progressTask = StartTransfer(window, [progressSource], third, move: true);
+                Until(window, () => scheduler.Snapshot().Any(x =>
+                        x.Key.StartsWith("gallery:file-transfer:") &&
+                        x.State == SchedulerJobState.Running &&
+                        x.Phase == "Bilder verschieben"),
+                    "Manual move was not visible as a running scheduler job.");
+                var presenter = typeof(PCasa.App.MainWindow).GetField(
+                    "_visibleTransferWindow",
+                    BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .GetValue(window) as PCasa.App.BrowseCacheProgressWindow;
+                if (presenter is null || !presenter.IsVisible)
+                    throw new Exception("Manual move has no visible progress presenter.");
+                var title = (TextBlock?)presenter.FindName("PhaseText");
+                if (title is null || !title.Text.Contains("verschieben",
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Progress window does not show manual move.");
+                presenter.UpdateScan(new ScanProgress(3, 1, 2, 0, progressSource));
+                if (!title.Text.Contains("verschieben",
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Background scanner overwrote manual progress.");
+            }
+            Until(window, () => progressTask.IsCompleted,
+                "Foreground operation did not finish.");
+            progressTask.GetAwaiter().GetResult();
+            var mostRecent = scheduler.Snapshot().Last(item =>
+                item.Key.StartsWith("gallery:file-transfer:"));
+            if (mostRecent.State != SchedulerJobState.Completed ||
+                mostRecent.Phase != "Galerie aktualisiert")
+                throw new Exception("Scheduler reports Completed before gallery publication.");
+            Console.WriteLine("PASS: Progress and completion use the same scheduler job, ahead of scan status.");
+
+            // Simulate a crash AFTER File.Move and BEFORE SQLite relocation.
+            // Startup recovery must retain image identity, cache and metadata
+            // without a second decoder, and clear the durable intent.
+            var recoveryFrom = Path.Combine(first, "recovery-test.jpg");
+            var recoveryTo = Path.Combine(second, "recovery-test.jpg");
+            WriteJpeg(recoveryFrom);
+            new FolderScanner(new ImageCatalogRepository(db), new ThumbnailCache(),
+                folderRepo).ScanFile(sourceRoot, recoveryFrom);
+            var recoveryId = CatalogIdAt(db, recoveryFrom);
+            var recoveryCache = ThumbnailIdentities(db, recoveryId);
+            var recoveryIntent = Guid.NewGuid().ToString("N");
+            var repository = new ImageCatalogRepository(db);
+            repository.BeginRelocationIntent(recoveryIntent, recoveryId,
+                recoveryFrom, recoveryTo, sourceRoot.Id);
+            File.Move(recoveryFrom, recoveryTo);
+            var recovered = repository.RecoverRelocations(folderRepo.GetAll());
+            if (recovered.Recovered != 1 || recovered.Unresolved != 0 ||
+                CatalogIdAt(db, recoveryTo) != recoveryId ||
+                !recoveryCache.SequenceEqual(ThumbnailIdentities(db, recoveryId)))
+                throw new Exception("Interrupted move was not safely recovered.");
+            using (var connection = db.OpenConnection())
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT COUNT(*) FROM file_transfer_intents;";
+                if (Convert.ToInt32(command.ExecuteScalar()) != 0)
+                    throw new Exception("Completed recovery left an uncommitted intent.");
+            }
+            Console.WriteLine("PASS: Crash after physical move is recovered without thumbnail rebuild.");
 
             // The progress window is now screen-anchored, intentionally
             // independent of the PCasa window's size on that monitor.

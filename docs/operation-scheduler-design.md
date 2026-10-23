@@ -116,3 +116,66 @@ Anzeigen: laufende/wartende/pausierende/unterbrochene Aufträge, Quelle und Pfad
 5. Exakte Abnahmeszenarien und lokal ausführbarer Testmodus ohne fortlaufende CI-Kosten.
 
 **Status:** Die Grundentscheidungen sind beschlossen; die fünf technischen Punkte sind *noch zu entwerfen* und dürfen nicht mit fertiger Implementierung verwechselt werden.
+
+
+## 11. Operativer Vertrag für physische Dateioperationen (Sanierung 23.10.2026)
+
+Der frühere Konzeptstatus oben beschreibt Ausgangsentscheidungen, nicht mehr
+den aktuellen Entwicklungsstand. Die folgenden Regeln sind **verbindliche
+Implementierungsinvarianten** im Branch `scheduler-consistency`.
+
+### Ein OperationRequest und ein bestätigter Abschluss
+
+- Der Scheduler besitzt Schlüssel, Priorität, Lifecycle **und Fortschritt**
+  derselben manuellen Verschiebung. Das Fortschrittsfenster liest diese
+  Fortschrittsdaten; es hält keine eigene Fortschrittsberechnung.
+- `Completed` bedeutet: Die fachliche Dateibewegung ist abgeschlossen,
+  der Katalogstand wurde bestätigt **und die Galerie hat eine
+  Aktualisierung dieses bestätigten Stands übernommen**. Eine physisch
+  bewegte Datei ohne Katalogbestätigung ist nicht `Completed`.
+- Die Galerie hat **genau eine** koaleszierende Publikationsschleife.
+  Zeitgleiche Import-, Filter- und Dateiänderungen dürfen die zuletzt
+  bestätigte Katalogänderung nicht dauerhaft aus der Anzeige verdrängen.
+  Der existierende Browse-Renderer wird nicht ersetzt.
+- Die Fortschrittsanzeige erhält die Phase direkt aus dem Scheduler.
+  Ein verdrängter Scan darf die sichtbar laufende Benutzeroperation
+  nicht mit einer älteren Bild-/Phasenmeldung überdecken.
+- Der Scanner bleibt der einzige Importpfad für **neue** Bilder.
+  Unveränderte, katalogisierte Originale behalten beim Verschieben ihre
+  Bild-ID, Bildmetadaten und vorhandenen Thumbnail-Pack-Verweise.
+  Kopieren/Neuimport kann nach physischer Übertragung eine eigenständige,
+  nachgelagerte Scanneroperation auslösen.
+
+### Konsistenzgrenze zwischen Dateisystem und SQLite
+
+Windows-/NAS-Dateisystemoperation und SQLite besitzen **keine gemeinsame
+ACID-Transaktion**. Für jede bekannte Original-ID persistiert PCasa
+deshalb *vor* der physischen Bewegung eine `file_transfer_intents`-Zeile.
+Die bestätigte Katalogverschiebung löscht den Intent **innerhalb
+derselben SQLite-Transaktion**, in der Pfade und Ordneridentität
+umgeschrieben werden.
+
+Beim Wiederanlauf werden diese Intents unter Scheduler-Hoheit geprüft:
+
+- Quelle vorhanden, Ziel nicht vorhanden: Es gab noch keinen vollständigen
+  Umzug; der Intent darf verworfen werden.
+- Quelle nicht vorhanden, Ziel vorhanden, beide Eltern erreichbar:
+  Die eindeutige Bewegung darf im Katalog nachvollzogen werden.
+- Beide vorhanden, beide fehlen, Zielquelle ausgeschlossen oder NAS offline:
+  **unaufgelöst** lassen; weder löschen noch stillschweigend überschreiben.
+  Benutzerdiagnose und erneute Prüfung sind erforderlich.
+
+Ein fehlgeschlagener Katalog-Commit darf **nicht** ersatzweise die alte
+Bild-ID samt Cache löschen und eine neue Bildidentität erzwingen.
+
+### Begrenzung und ehrliche Abnahme
+
+Ein laufender nativer Decoder oder OS-/SMB-Aufruf kann eine sichere
+Abbruchgrenze verzögern; der Scheduler meldet bis dahin `YieldRequested`,
+nicht `Completed` oder `Canceled`. Es ist technisch falsch, jede
+laufende Systemoperation als sofort hart unterbrechbar zu versprechen.
+
+Automatisierte WPF-/SQLite-Tests kontrollieren den Vertrag, beweisen jedoch
+keine erfolgreiche Bedienung am NAS. Freigabe setzt eine reale
+End-to-End-Abnahme mit gleichzeitigem Import, Topaz-Filter und Verschiebung
+nach ORG voraus. **Ein grüner Build allein ist ausdrücklich keine Freigabe.**
