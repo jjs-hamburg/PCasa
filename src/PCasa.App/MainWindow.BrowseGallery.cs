@@ -815,9 +815,7 @@ public partial class MainWindow
 
     private void BrowseStatus_Click(object sender, MouseButtonEventArgs e)
     {
-        if (_browseProgressWindow is not { } window) return;
-        if (!window.IsVisible) window.Show();
-        window.Activate();
+        _browseProgressWindow?.ShowFromStatus();
     }
 
     private void BrowseCleanupStatusChanged(string message)

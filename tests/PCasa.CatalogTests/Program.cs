@@ -35,6 +35,7 @@ internal static class Program
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
+        Run("Manual folder creation preempts and safely resumes network scan", SchedulerManualFolderCreateYieldsScan, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
@@ -528,6 +529,65 @@ internal static class Program
             {
                 release.TrySetResult();
                 await Task.WhenAll(blocked).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerManualFolderCreateYieldsScan()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var firstScanStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var scanHeld = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseManual = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var manualStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var scanPasses = 0;
+            var scanResumedTooEarly = false;
+            var scan = scheduler.EnqueueAsync("test:scan-before-new-folder",
+                SchedulerPriority.Background, async token =>
+                {
+                    var pass = Interlocked.Increment(ref scanPasses);
+                    if (pass == 1)
+                    {
+                        firstScanStarted.TrySetResult();
+                        await scanHeld.Task.WaitAsync(token);
+                    }
+                    else if (!releaseManual.Task.IsCompleted)
+                    {
+                        scanResumedTooEarly = true;
+                    }
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                await firstScanStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var create = scheduler.EnqueueAsync("test:create-folder",
+                    SchedulerPriority.ManualAction, async token =>
+                    {
+                        manualStarted.TrySetResult();
+                        await releaseManual.Task.WaitAsync(token);
+                    }, workKind: SchedulerWorkKind.SourceProbe);
+                await manualStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (scan.IsCompleted)
+                    throw new Exception("Background scan vanished during folder creation.");
+                if (!scheduler.Snapshot().Any(job =>
+                    job.Key == "test:scan-before-new-folder" &&
+                    job.State is SchedulerJobState.YieldRequested or SchedulerJobState.Queued))
+                    throw new Exception("Manual network operation did not yield the scan.");
+                releaseManual.TrySetResult();
+                await Task.WhenAll(create, scan).WaitAsync(TimeSpan.FromSeconds(5));
+                if (scanPasses < 2 || scanResumedTooEarly)
+                    throw new Exception("Background scan resumed before manual folder creation finished.");
+            }
+            finally
+            {
+                releaseManual.TrySetResult();
+                scanHeld.TrySetResult();
             }
         }
         Check().GetAwaiter().GetResult();
