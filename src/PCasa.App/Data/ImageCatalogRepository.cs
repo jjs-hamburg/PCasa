@@ -94,19 +94,11 @@ public sealed class ImageCatalogRepository
             {
                 lock (SourceFileLocks.ForPath(intent.Source))
                 {
-                    var sourceParent = Path.GetDirectoryName(intent.Source);
-                    var destParent = Path.GetDirectoryName(intent.Destination);
-                    if (sourceParent is null || destParent is null ||
-                        !Directory.Exists(sourceParent) ||
-                        !Directory.Exists(destParent))
-                    {
-                        unresolved++; // offline != removed
-                        continue;
-                    }
-
-                    var sourceExists = File.Exists(intent.Source);
-                    var destinationExists = File.Exists(intent.Destination);
-                    if (!sourceExists && destinationExists)
+                    var sourcePresence = SourceFilePresence.Probe(intent.Source);
+                    var destinationPresence =
+                        SourceFilePresence.Probe(intent.Destination);
+                    if (sourcePresence == FilePresence.ConfirmedMissing &&
+                        destinationPresence == FilePresence.Present)
                     {
                         if (RelocateImage(intent.ImageId, intent.Source,
                             intent.Destination, root, cancellationToken,
@@ -116,7 +108,8 @@ public sealed class ImageCatalogRepository
                             recovered++;
                         else unresolved++;
                     }
-                    else if (sourceExists && !destinationExists)
+                    else if (sourcePresence == FilePresence.Present &&
+                             destinationPresence == FilePresence.ConfirmedMissing)
                     {
                         // The operation never reached its physical move.
                         ClearRelocationIntent(intent.Id);

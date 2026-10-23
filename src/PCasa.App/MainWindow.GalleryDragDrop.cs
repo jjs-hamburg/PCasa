@@ -74,20 +74,7 @@ public partial class MainWindow
     // access. Only a confirmed absent FILE inside a reachable parent folder
     // may be detached after a shell move.
     private static bool ConfirmedMissingExternalMove(string path)
-    {
-        var parent = Path.GetDirectoryName(path);
-        if (string.IsNullOrEmpty(parent) || !Directory.Exists(parent))
-            return false;
-        try
-        {
-            _ = File.GetAttributes(path);
-            return false;
-        }
-        catch (FileNotFoundException) { return true; }
-        catch (DirectoryNotFoundException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
-        catch (IOException) { return false; }
-    }
+        => SourceFilePresence.Probe(path) == FilePresence.ConfirmedMissing;
 
     private async Task ReconcileMovedExternalFilesAsync(string[] originalPaths)
     {
