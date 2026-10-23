@@ -633,6 +633,31 @@ public partial class MainWindow
 
         _appearance.SelectedTreePath = tag.FullPath;
         SaveAppearance();
+
+        // A deliberate click changes the active search root in the two
+        // folder-scoped modes. The previous implementation captured it only
+        // once, so after moving filtered pictures away ALL other tree clicks
+        // appeared to do nothing because no folder had an offset in the
+        // stale result set. The single existing search pipeline owns reflow.
+        if (_searchWithinTree && !string.IsNullOrWhiteSpace(TagSearchBox?.Text))
+        {
+            CaptureTagSearchRoot();
+            try { await ApplyTagFilterAsync(scrollToTop: true); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Search.FolderSelection", ex);
+                StatusText.Text = "Ordnerfilter konnte nicht aktualisiert werden.";
+                return;
+            }
+            // The filtered result already presents this folder's content.
+            // Do not start a second catalog refresh for an empty result.
+            if (tag.PhotoFolderId is long filteredId &&
+                BrowseSurface.GetFolderOffset(filteredId) is double filteredTop)
+                BrowseScrollViewer.ScrollToVerticalOffset(filteredTop);
+            return;
+        }
+
         if (tag.PhotoFolderId is long photoFolderId)
             await NavigateToPhotoFolderAsync(item, photoFolderId);
     }
@@ -686,6 +711,11 @@ public partial class MainWindow
             {
                 BrowseScrollViewer.ScrollToVerticalOffset(offset.Value);
                 UpdateActiveFolderDisplay(photoFolderId, updateTreeSelection: false);
+            }
+            else if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text))
+            {
+                StatusText.Text = "Keine Filtertreffer in diesem Ordner. " +
+                    "Suchbereich ändern oder Filter löschen.";
             }
     }
 

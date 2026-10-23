@@ -262,6 +262,51 @@ internal static class TagFlow
                 throw new Exception("Scheduled ORG folder was not created.");
             Console.WriteLine("PASS: Create ORG on monitored filesystem through shared scheduler.");
 
+            // Real Topaz workflow: with filename/current-folder search still
+            // active, invert results to show originals, move those originals
+            // to ORG, then click a different folder. Its images MUST appear
+            // without clearing the filter first.
+            fileMode.IsChecked = true;
+            albumBItem.IsSelected = true;
+            current.IsChecked = true;
+            search.Text = "topaz";
+            invertFilter.IsChecked = true;
+            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
+            Until(window, () => ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                    filteredIndex.GetValue(window)!).Count == 6 &&
+                status.Text.Contains("Bilder ohne Dateiname: topaz"),
+                "Unable to stage six visible originals for relocation.");
+            var originals = Enumerable.Range(6, 6)
+                .Select(i => Path.Combine(albumB, $"b-{i:00}.jpg")).ToArray();
+            var transfer = typeof(PCasa.App.MainWindow).GetMethod(
+                "TransferGalleryFilesAsync",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Shared gallery transfer method missing.");
+            var moveTask = (Task)transfer.Invoke(window, [originals, org, true])!;
+            Until(window, () => moveTask.IsCompleted,
+                "Moving originals to ORG did not complete.");
+            moveTask.GetAwaiter().GetResult();
+            if (originals.Any(File.Exists) ||
+                originals.Any(path => !File.Exists(Path.Combine(org, Path.GetFileName(path)))))
+                throw new Exception("Topaz originals were not moved into ORG.");
+
+            var albumAItem = Walk(tree).FirstOrDefault(item =>
+                string.Equals(ReadPath(item), albumA,
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new Exception("Album A missing after manual move.");
+            albumAItem.IsSelected = true;
+            Until(window, () => ReferenceEquals(tree.SelectedItem, albumAItem) &&
+                surface.GetFolderOffset(a.Id) is not null &&
+                surface.GetFolderOffset(b.Id) is null &&
+                ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                    filteredIndex.GetValue(window)!).Count == 8,
+                "After moving originals, clicking another folder did not navigate.");
+            Console.WriteLine("PASS: Folder tree remains navigable with current-folder inverted filter after move.");
+            invertFilter.IsChecked = false;
+            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
+            search.Clear();
+
             tagMode.IsChecked = true;
             window.Close();
             window = null;
