@@ -317,6 +317,57 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Uncached selected paths never query SQLite on the WPF dispatcher.");
 
+            // Regression for a REAL native mouse gesture: async void returns
+            // from MouseMove while the held button may be released; later
+            // DoDragDrop then cannot deliver a physical move.
+            var beginDrag = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseSurface_ImagesDragRequested",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Native gallery drag callback is missing.");
+            if (beginDrag.GetCustomAttributes(
+                    typeof(System.Runtime.CompilerServices.AsyncStateMachineAttribute),
+                    inherit: false).Length != 0)
+                throw new Exception(
+                    "Native mouse drag crosses an async state-machine boundary.");
+            var prepareDrag = typeof(PCasa.App.MainWindow).GetMethod(
+                "PreparedDragFilesOrQueueLookup",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Synchronous drag-file preparation is missing.");
+
+            // With catalog read lanes held, the mouse gesture MUST return
+            // without blocking and without attempting a late native drag.
+            var dragReadersRelease = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var dragReaders = Enumerable.Range(0, 2).Select(i =>
+                scheduler.EnqueueAsync(
+                    $"test:drag-held-catalog-read:{i}",
+                    SchedulerPriority.Interactive,
+                    async token => await dragReadersRelease.Task.WaitAsync(token),
+                    workKind: SchedulerWorkKind.CatalogRead)).ToArray();
+            var dragFallbackId = CatalogIdAt(db, Path.Combine(batch,
+                "renamed-manually.jpg"));
+            try
+            {
+                Until(window, () => scheduler.Snapshot().Count(job =>
+                    job.Key.StartsWith("test:drag-held-catalog-read:") &&
+                    job.State == SchedulerJobState.Running) == 2,
+                    "Drag path lookup lanes did not block.");
+                var prepared = (string[]?)prepareDrag.Invoke(window,
+                    [new long[] { dragFallbackId, long.MaxValue }]);
+                if (prepared is not null)
+                    throw new Exception("Uncached native drag tried to start before path lookup.");
+                var status = (TextBlock)window.FindName("StatusText");
+                if (!status.Text.Contains("vorbereitet", StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Deferred drag was not reported to the user.");
+            }
+            finally
+            {
+                dragReadersRelease.TrySetResult();
+                Until(window, () => dragReaders.All(task => task.IsCompleted),
+                    "Deferred drag catalog readers remained blocked.");
+            }
+            Console.WriteLine("PASS: Mouse gesture never awaits a catalog read; missing drag paths are prepared explicitly.");
+
             // The previous priority test only occupied a worker with Task.
             // Hold the actual FolderScanner in a source-image lock to prove
             // a MANUAL file move starts before the in-flight image scan ends.

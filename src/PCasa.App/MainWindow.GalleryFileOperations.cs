@@ -20,6 +20,11 @@ public partial class MainWindow
     private sealed record GalleryFileOperation(string Source, string Destination,
         bool Move, bool Replace, long? CatalogImageId, long? ExistingTargetId);
 
+    // Only a fallback for selected IDs absent from the current browse index.
+    // This cache is populated by scheduler catalog reads before mouse dragging;
+    // no await may ever interrupt an active WPF mouse gesture.
+    private readonly Dictionary<long, string> _dragSelectionPathCache = new();
+
     private async Task<string[]> SelectedGalleryPathsAsync(long[] selectedIds)
         => (await SelectedGalleryImagePathsAsync(selectedIds))
             .Select(item => item.Path).ToArray();
@@ -35,6 +40,9 @@ public partial class MainWindow
         var folders = _photoFolders.ToDictionary(folder => folder.Id,
             folder => folder.LocalPath);
         var pathsById = new Dictionary<long, string>(selected.Count);
+        foreach (var id in selected)
+            if (_dragSelectionPathCache.TryGetValue(id, out var cachedPath))
+                pathsById[id] = cachedPath;
         foreach (var image in _browseIndex)
         {
             if (!selected.Contains(image.ImageId) ||
@@ -73,12 +81,56 @@ public partial class MainWindow
                     return result;
                 }, workKind: SchedulerWorkKind.CatalogRead);
             foreach (var (id, path) in uncachedPaths)
+            {
                 pathsById[id] = path;
+                _dragSelectionPathCache[id] = path;
+            }
         }
         return pathsById
             .Select(item => (Id: item.Key, Path: item.Value))
             .DistinctBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    // Called SYNCHRONOUSLY from MouseMove. A native OLE drag can only start
+    // while the initiating mouse button remains pressed. Waiting for SQLite
+    // here silently loses the gesture, even if the read later succeeds.
+    private string[]? PreparedDragFilesOrQueueLookup(long[] selectedIds)
+    {
+        var pending = SelectedGalleryPathsAsync(selectedIds);
+        if (!pending.IsCompletedSuccessfully)
+        {
+            StatusText.Text = "Bildpfade werden vorbereitet – anschließend erneut ziehen";
+            _ = CompleteDeferredDragLookupAsync(pending, selectedIds);
+            return null;
+        }
+        var paths = pending.GetAwaiter().GetResult();
+        if (paths.Length != selectedIds.Length)
+        {
+            StatusText.Text = "Nicht alle ausgewählten Dateien sind im Katalog vorhanden";
+            return null;
+        }
+        return paths;
+    }
+
+    private async Task CompleteDeferredDragLookupAsync(
+        Task<string[]> pending, long[] selectedIds)
+    {
+        try
+        {
+            var paths = await pending;
+            if (Dispatcher.HasShutdownStarted ||
+                !_selectedImageIds.SetEquals(selectedIds)) return;
+            StatusText.Text = paths.Length == selectedIds.Length
+                ? "Bildpfade vorbereitet – jetzt erneut ziehen"
+                : "Nicht alle ausgewählten Dateien sind im Katalog vorhanden";
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.PrepareDrag", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text = "Bildpfade konnten nicht geladen werden";
+        }
     }
 
     private async Task CopyGalleryFilesToClipboardAsync(bool cut)
