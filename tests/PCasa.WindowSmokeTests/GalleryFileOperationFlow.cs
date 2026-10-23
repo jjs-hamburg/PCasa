@@ -368,6 +368,25 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Mouse gesture never awaits a catalog read; missing drag paths are prepared explicitly.");
 
+            // In-app dragging means MOVE even between different drive roots,
+            // unless Ctrl requests COPY. Explorer-origin drags still use
+            // Windows same-/cross-volume behavior.
+            var preferredEffect = typeof(PCasa.App.MainWindow).GetMethod(
+                "PreferredDropEffect", BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new Exception("Shared drag effect rule missing.");
+            static DragDropEffects Effect(System.Reflection.MethodInfo method,
+                bool own, bool ctrl, bool shift, bool sameRoot)
+                => (DragDropEffects)method.Invoke(null,
+                    [own, ctrl, shift, sameRoot,
+                     DragDropEffects.Copy | DragDropEffects.Move])!;
+            if (Effect(preferredEffect, true, false, false, false) != DragDropEffects.Move ||
+                Effect(preferredEffect, true, true, false, true) != DragDropEffects.Copy ||
+                Effect(preferredEffect, false, false, false, false) != DragDropEffects.Copy ||
+                Effect(preferredEffect, false, false, false, true) != DragDropEffects.Move)
+                throw new Exception("Internal move and Explorer drag intent diverged.");
+            Console.WriteLine("PASS: Internal drag MOVE and Ctrl COPY respect Explorer external conventions.");
+
+
             // The previous priority test only occupied a worker with Task.
             // Hold the actual FolderScanner in a source-image lock to prove
             // a MANUAL file move starts before the in-flight image scan ends.
