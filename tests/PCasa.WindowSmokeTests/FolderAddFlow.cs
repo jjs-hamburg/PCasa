@@ -208,35 +208,54 @@ internal static class FolderAddFlow
                 try { handler.Invoke(window, new object[] { window, new RoutedEventArgs() }); }
                 catch (Exception error) { dispatchError = error; completed = true; }
             }));
-        window.Dispatcher.BeginInvoke(DispatcherPriority.Background,
-            new Action(() =>
+        // The dialog now loads its authoritative configuration on a
+        // scheduler catalog-read worker BEFORE ShowDialog. A one-shot
+        // Background callback is racy: it may execute before the dialog
+        // exists, then an unanswered modal window hangs the entire CI job.
+        // Poll only the visible WPF dialog; this has no product-side
+        // scheduling or state of its own.
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        var dialogTimer = new DispatcherTimer(DispatcherPriority.Background,
+            window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(40) };
+        dialogTimer.Tick += (_, _) =>
+        {
+            if (completed) { dialogTimer.Stop(); return; }
+            try
             {
-                try
+                var dialog = Application.Current.Windows
+                    .OfType<PCasa.App.FolderManagerWindow>()
+                    .SingleOrDefault(w => w.IsVisible);
+                if (dialog is null)
                 {
-                    var dialog = Application.Current.Windows.OfType<PCasa.App.FolderManagerWindow>()
-                        .SingleOrDefault(w => w.IsVisible)
-                        ?? throw new Exception("Real folder manager did not open.");
-                    if (dialog.FindName("OkButton") is not Button ||
-                        dialog.FindName("CancelButton") is not Button)
-                        throw new Exception("Folder manager has no OK/Abbruch buttons.");
-                    staging.Invoke(dialog, new object[] { path });
-                    if (repository.GetAll().Any(root => SamePath(root.LocalPath, path)))
-                        throw new Exception("Folder was written to SQLite before OK.");
-                    var control = (Button)dialog.FindName(commit ? "OkButton" : "CancelButton");
-                    control.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, control));
-                    completed = true;
+                    if (DateTime.UtcNow < deadline) return;
+                    throw new TimeoutException(
+                        "The scheduled folder-manager read did not open its dialog.");
                 }
-                catch (Exception error)
-                {
-                    dispatchError = error;
-                    completed = true;
-                    foreach (var manager in Application.Current.Windows
-                                 .OfType<PCasa.App.FolderManagerWindow>().Where(w => w.IsVisible))
-                        manager.Close();
-                }
-            }));
+                dialogTimer.Stop();
+                if (dialog.FindName("OkButton") is not Button ||
+                    dialog.FindName("CancelButton") is not Button)
+                    throw new Exception("Folder manager has no OK/Abbruch buttons.");
+                staging.Invoke(dialog, new object[] { path });
+                if (repository.GetAll().Any(root => SamePath(root.LocalPath, path)))
+                    throw new Exception("Folder was written to SQLite before OK.");
+                var control = (Button)dialog.FindName(commit ? "OkButton" : "CancelButton");
+                control.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, control));
+                completed = true;
+            }
+            catch (Exception error)
+            {
+                dialogTimer.Stop();
+                dispatchError = error;
+                completed = true;
+                foreach (var manager in Application.Current.Windows
+                             .OfType<PCasa.App.FolderManagerWindow>().Where(w => w.IsVisible))
+                    manager.Close();
+            }
+        };
+        dialogTimer.Start();
 
-        Until(window, () => completed, "Could not complete manager dialog.");
+        try { Until(window, () => completed, "Could not complete manager dialog."); }
+        finally { dialogTimer.Stop(); }
         if (dispatchError is not null)
             throw new Exception("Real WPF manager staging failed.", dispatchError);
     }
