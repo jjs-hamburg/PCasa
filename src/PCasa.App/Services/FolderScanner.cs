@@ -255,7 +255,8 @@ public sealed class FolderScanner
                             canonicalPath,
                             fileLength,
                             modifiedUtcTicks,
-                            originalSourcePath: localPath);
+                            originalSourcePath: localPath,
+                            cancellationToken: cancellationToken);
 
                         cancellationToken.ThrowIfCancellationRequested();
 

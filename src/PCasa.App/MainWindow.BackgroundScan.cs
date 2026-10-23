@@ -634,7 +634,8 @@ public partial class MainWindow
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
                             folder.CanonicalPath, sourceState.Value.Generation, true),
-                        scanCancellation.Token);
+                        scanCancellation.Token,
+                        workKind: SchedulerWorkKind.CatalogScan);
                     var result = scanResult ?? throw new OperationCanceledException();
                     catalogChanged |= result.CatalogChanged;
                     TrackFolderActivity(

@@ -27,15 +27,19 @@ public sealed class ThumbnailCache
         string canonicalPath,
         long fileSize,
         long modifiedUtcTicks,
-        string? originalSourcePath = null)
+        string? originalSourcePath = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         originalSourcePath ??= sourcePath;
         var rawSource = RawImageSource.IsRawPath(originalSourcePath);
         var cachePath = GetCachePath(canonicalPath, fileSize, modifiedUtcTicks,
             rawSource);
         if (File.Exists(cachePath))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var header = Image.NewFromFile(sourcePath, access: Enums.Access.Sequential);
+            cancellationToken.ThrowIfCancellationRequested();
             var rotated = rawSource && RawImageSource.GetRawOrientation(originalSourcePath)
                 is 5 or 6 or 7 or 8;
             return new ThumbnailResult(cachePath,
@@ -48,18 +52,26 @@ public sealed class ThumbnailCache
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             using var header = Image.NewFromFile(sourcePath, access: Enums.Access.Sequential);
+            cancellationToken.ThrowIfCancellationRequested();
             var rotated = rawSource && RawImageSource.GetRawOrientation(originalSourcePath)
                 is 5 or 6 or 7 or 8;
             var width = rotated ? header.Height : header.Width;
             var height = rotated ? header.Width : header.Height;
 
             using var thumbnail = RawImageSource.LoadDisplayThumbnail(
-                sourcePath, originalSourcePath, ThumbnailSize, ThumbnailSize);
+                sourcePath, originalSourcePath, ThumbnailSize, ThumbnailSize,
+                cancellationToken);
+            // Scheduler cancellation reaches the native libvips evaluation,
+            // not merely the boundary between two images.
+            thumbnail.SetProgress(new Progress<int>(_ => { }), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (thumbnail.HasAlpha())
             {
                 using var flattened = thumbnail.Flatten(background: new[] { 255.0, 255.0, 255.0 });
+                flattened.SetProgress(new Progress<int>(_ => { }), cancellationToken);
                 flattened.Jpegsave(
                     temporaryPath,
                     q: 82,
@@ -75,6 +87,7 @@ public sealed class ThumbnailCache
                     keep: Enums.ForeignKeep.None);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryPath, cachePath, overwrite: true);
             return new ThumbnailResult(cachePath, width, height);
         }

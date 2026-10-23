@@ -83,13 +83,16 @@ public sealed class PackedThumbnailStore : IDisposable
         using var largestPipeline = RawImageSource.LoadDisplayThumbnail(
             sourcePath, originalSourcePath, largestTier, largestTier,
             cancellationToken);
+        largestPipeline.SetProgress(new Progress<int>(_ => { }), cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
 
         using var preparedPipeline = largestPipeline.HasAlpha()
             ? largestPipeline.Flatten(background: new[] { 255.0, 255.0, 255.0 })
             : largestPipeline.Copy();
+        preparedPipeline.SetProgress(new Progress<int>(_ => { }), cancellationToken);
         using var residentSource = preparedPipeline.CopyMemory();
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Encode every requested tier first. Only after all tiers succeeded are bytes
         // appended to pack files. A conversion failure can therefore no longer leave
@@ -100,6 +103,7 @@ public sealed class PackedThumbnailStore : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
 
             using var tierImage = CreateTierImage(residentSource, tier);
+            tierImage.SetProgress(new Progress<int>(_ => { }), cancellationToken);
             var bytes = tierImage.JpegsaveBuffer(
                 q: TierQuality(tier),
                 optimizeCoding: true,

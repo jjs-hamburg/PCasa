@@ -2,7 +2,7 @@ namespace PCasa.App.Services;
 
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
-public enum SchedulerWorkKind { Catalog, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe }
+public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe }
 
 public sealed record SchedulerJobSnapshot(
     long Id, string Key, SchedulerPriority Priority, SchedulerJobState State,
@@ -147,12 +147,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
             // A running background or bulk-user request can yield, but a slow
             // SMB/decoder call never holds the dispatcher or a different lane.
-            if (workKind == SchedulerWorkKind.Catalog)
+            if (workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
             {
                 for (var lane = 0; lane <= LaneManual; lane++)
                 {
                     var active = _runningPriorityJobs[lane];
-                    if (active is not null && priority < active.Priority &&
+                    // An incoming user file mutation supersedes a longer
+                    // manual SCAN in the same lane. Two manual mutations
+                    // never cancel one another.
+                    var supersedesManualScan =
+                        priority == SchedulerPriority.ManualAction &&
+                        workKind == SchedulerWorkKind.Catalog &&
+                        active?.Priority == SchedulerPriority.ManualAction &&
+                        active.Kind == SchedulerWorkKind.CatalogScan;
+                    if (active is not null &&
+                        (priority < active.Priority || supersedesManualScan) &&
                         !active.YieldRequested)
                     {
                         active.YieldRequested = true;
@@ -190,11 +199,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var blockedByHigherPriority =
                         lane == LaneBackground &&
                         (_catalogForegroundRunning > 0 ||
-                         _pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                         _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.UserAction)) ||
                         lane == LaneUserAction &&
                         (_catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
-                         _pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                         _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.Interactive));
                     item = blockedByHigherPriority ? null :
                         _pending.Where(x => LaneFor(x.Priority, x.Kind) == lane)
@@ -203,7 +212,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     {
                         _pending.Remove(item);
                         item.YieldRequested = false;
-                        if (item.Kind == SchedulerWorkKind.Catalog)
+                        if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
                         {
                             if (lane == LaneUserAction) _catalogForegroundRunning++;
                             if (lane == LaneManual)
@@ -287,7 +296,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 _runningPriorityJobs[lane] = null;
                                 _runningYield[lane] = null;
                             }
-                            if (item.Kind == SchedulerWorkKind.Catalog)
+                            if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
                             {
                                 if (lane == LaneUserAction) _catalogForegroundRunning--;
                                 if (lane == LaneManual)
@@ -309,12 +318,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                     _signals[LaneManual].Release();
                                 if (_catalogInteractiveRunning == 0 &&
                                     _catalogManualRunning == 0 &&
-                                    !_pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                                    !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                                         x.Priority <= SchedulerPriority.Interactive) &&
                                     _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneUserAction))
                                     _signals[LaneUserAction].Release();
                                 if (_catalogForegroundRunning == 0 &&
-                                    !_pending.Any(x => x.Kind == SchedulerWorkKind.Catalog &&
+                                    !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                                         x.Priority <= SchedulerPriority.UserAction) &&
                                     _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneBackground))
                                     _signals[LaneBackground].Release();

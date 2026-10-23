@@ -186,7 +186,8 @@ public partial class MainWindow
                     folder, directory, recursive: true, progress, token);
                 return Task.CompletedTask;
             },
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken,
+            workKind: SchedulerWorkKind.CatalogScan);
         return completed ?? throw new OperationCanceledException();
     }
 
