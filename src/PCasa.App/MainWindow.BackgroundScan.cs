@@ -698,7 +698,9 @@ public partial class MainWindow
             }
             else
             {
-                StatusText.Text = $"{_imageCatalog.CountAll():N0} Bilder";
+                // The catalog summary already owns this count. Never open a new
+                // SQLite connection to update a cosmetic WPF status label.
+                StatusText.Text = $"{_lastCatalogImageCount:N0} Bilder";
             }
         }
         catch (OperationCanceledException)
@@ -745,7 +747,8 @@ public partial class MainWindow
                 // cache jobs. Resume that work later without rescanning images.
                 if (catalogChanged)
                 {
-                    var firstRoot = _folderRepository.GetAll().FirstOrDefault();
+                    var firstRoot = _dropTargetProjection
+                        .Select(root => root.Folder).FirstOrDefault();
                     if (firstRoot is not null)
                         QueueBackgroundChange(new BackgroundFolderChange(
                             firstRoot.Id, firstRoot.LocalPath,
