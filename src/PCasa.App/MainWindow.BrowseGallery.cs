@@ -729,7 +729,8 @@ public partial class MainWindow
     private void BrowseCleanupStatusChanged(string message)
         => StatusText.Text = message;
 
-    private void OnFolderExclusionCommitted(long folderId, string path, bool excluded)
+    private void OnFolderExclusionCommitted(long folderId, string path,
+        bool excluded, IReadOnlyList<string>? committedRules = null)
     {
         // Stop any running scan of this monitored root before modifying its
         // stored index; without cancellation it could re-add excluded photos.
@@ -738,8 +739,10 @@ public partial class MainWindow
             _activeScanCancellation?.Cancel();
         }
 
+        // The scheduler has already read this committed snapshot. Do not
+        // block WPF on a second SQLite read during publication.
         _backgroundExcludedPaths[folderId] =
-            _folderRepository.GetExcludedPaths(folderId);
+            committedRules ?? _folderRepository.GetExcludedPaths(folderId);
         if (excluded)
         {
             ForgetFolderActivity(path);

@@ -56,14 +56,21 @@ public partial class MainWindow
             {
                 removed = await new FolderExclusionService(_folderRepository, _database, _scheduler)
                     .ChangeAsync(folderId, normalized, excluded: true,
-                        (id, changedPath, excluded) =>
-                            OnFolderExclusionCommitted(id, changedPath, excluded));
+                        publish: async (id, changedPath, excluded, currentRules) =>
+                            await Dispatcher.InvokeAsync(async () =>
+                            {
+                                OnFolderExclusionCommitted(id, changedPath,
+                                    excluded, currentRules);
+                                await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                                    warmViewport: false);
+                            }).Task.Unwrap());
             }
 
             // Complete the visible view refresh BEFORE releasing background
             // workers or returning control to either UI entry point.
-            await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                warmViewport: false);
+            if (removeMonitoredRoot)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                    warmViewport: false);
             StatusText.Text = $"{removed:N0} Bildeinträge aus PCasa entfernt";
             return removed;
         }

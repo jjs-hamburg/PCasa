@@ -9,6 +9,9 @@ using PCasa.App.Services;
 
 internal static class Program
 {
+    private static readonly Lazy<PCasaScheduler> ExclusionTestScheduler =
+        new(() => new PCasaScheduler());
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -108,6 +111,8 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
+        if (ExclusionTestScheduler.IsValueCreated)
+            ExclusionTestScheduler.Value.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Console.WriteLine($"RESULT: catalog regression suite complete, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
     }
@@ -1348,9 +1353,16 @@ internal static class Program
         scanner.Scan(root);
         Require(db, 1);
         var observed = new List<bool>();
-        var service = new FolderExclusionService(new FolderRepository(db), db);
+        var service = new FolderExclusionService(new FolderRepository(db), db,
+            ExclusionTestScheduler.Value);
         service.ChangeAsync(root.Id, child, true,
-            (_, _, excluded) => observed.Add(excluded)).GetAwaiter().GetResult();
+            (_, _, excluded) =>
+            {
+                observed.Add(excluded);
+                if (new ImageCatalogRepository(db).CountAll() != 0 ||
+                    new FolderRepository(db).GetExcludedPaths(root.Id).Count == 0)
+                    throw new Exception("Published exclusion exposed only half of the commit.");
+            }).GetAwaiter().GetResult();
         Require(db, 0);
         if (!new CatalogRemovalService(db).HasPendingMaintenance())
             throw new Exception("User-excluded subtree did not defer cache cleanup.");
@@ -1548,7 +1560,8 @@ internal static class Program
         scanner.Scan(root);
         Require(db, 1);
 
-        var service = new FolderExclusionService(new FolderRepository(db), db);
+        var service = new FolderExclusionService(new FolderRepository(db), db,
+            ExclusionTestScheduler.Value);
         var reincluded = false;
         service.ChangeAsync(root.Id, child, true,
             (_, _, excluded) =>
@@ -1563,6 +1576,11 @@ internal static class Program
             throw new Exception("The controlled re-inclusion point was not reached.");
         if (new FolderRepository(db).GetExcludedPaths(root.Id).Count != 0)
             throw new Exception("The newer inclusion decision was not persisted.");
+        // The first exclusion and its catalog pruning are one commit.
+        // Re-inclusion persists a new scan obligation; the original file
+        // returns through the existing scanner, never a stale cleanup.
+        Require(db, 0);
+        scanner.Scan(root);
         Require(db, 1);
         if (!File.Exists(original))
             throw new Exception("The original file was unexpectedly removed.");
@@ -2141,7 +2159,8 @@ internal static class Program
         var (db, root, scanner) = sandbox.Prepare();
         scanner.Scan(root);
         Require(db, 2);
-        var service = new FolderExclusionService(new FolderRepository(db), db);
+        var service = new FolderExclusionService(new FolderRepository(db), db,
+            ExclusionTestScheduler.Value);
         service.ChangeAsync(root.Id, excluded, true).GetAwaiter().GetResult();
         Require(db, 1);
         scanner.Scan(root);
@@ -3261,7 +3280,8 @@ internal static class Program
         var (db, root, scanner) = sandbox.Prepare();
         scanner.Scan(root);
         Require(db, 9);
-        var service = new FolderExclusionService(new FolderRepository(db), db);
+        var service = new FolderExclusionService(new FolderRepository(db), db,
+            ExclusionTestScheduler.Value);
         var concurrentScan = Task.Run(() => scanner.Scan(root));
         var exclusion = service.ChangeAsync(root.Id, child, true);
         try { Task.WhenAll(concurrentScan, exclusion).GetAwaiter().GetResult(); }

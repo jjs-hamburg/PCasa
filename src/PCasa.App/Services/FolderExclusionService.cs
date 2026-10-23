@@ -3,64 +3,58 @@ using PCasa.App.Data;
 namespace PCasa.App.Services;
 
 /// <summary>
-/// Shared exclusion workflow. Cleanup belongs to the exact source generation
-/// committed with the decision, not just to an exclusion path that still exists.
+/// Sole scheduler-owned context-menu exclusion operation. The domain commit
+/// is shared with the folder manager and is atomic across rules, source
+/// generation and catalog pruning. An optional UI publication is awaited
+/// before the same scheduler job can report Completed.
 /// </summary>
 public sealed class FolderExclusionService
 {
     private readonly FolderRepository _folders;
-    private readonly CatalogRemovalService _removal;
-    private readonly PCasaScheduler? _scheduler;
+    private readonly FolderManagerSelectionService _selection;
+    private readonly PCasaScheduler _scheduler;
 
     public FolderExclusionService(FolderRepository folders, LocalDatabase database,
-        PCasaScheduler? scheduler = null)
+        PCasaScheduler scheduler)
     {
         _folders = folders;
-        _removal = new CatalogRemovalService(database);
+        _selection = new FolderManagerSelectionService(database);
         _scheduler = scheduler;
     }
 
     public async Task<int> ChangeAsync(long folderId, string path, bool excluded,
         Action<long, string, bool>? onChanged = null,
-        IProgress<string>? progress = null)
+        IProgress<string>? progress = null,
+        Func<long, string, bool, IReadOnlyList<string>, Task>? publish = null)
     {
         var normalized = FolderExclusionRules.Normalize(path);
-        var generation = await Task.Run(
-            () => _folders.SetExcluded(folderId, normalized, excluded));
-        onChanged?.Invoke(folderId, normalized, excluded);
-        if (!excluded) return 0;
-
-        var folder = _folders.GetAll().FirstOrDefault(f => f.Id == folderId);
-        if (folder is null ||
-            !_folders.IsCurrentSourceGeneration(folder.CanonicalPath, generation, true))
-            return 0;
-
-        int Delete(CancellationToken token) =>
-            _removal.DetachSubtree(folderId, normalized, progress, token,
-                sourceCanonicalPath: folder.CanonicalPath,
-                expectedGeneration: generation);
-
-        if (_scheduler is null)
-        {
-            try { return await Task.Run(() => Delete(CancellationToken.None)); }
-            catch (OperationCanceledException) { return 0; }
-        }
-
-        var removed = 0;
-        try
-        {
-            await _scheduler.EnqueueAsync(
-                $"folder-exclude:{folderId}:{generation}:{normalized}",
-                SchedulerPriority.UserAction,
-                token =>
+        FolderManagerSelectionService.ExclusionTransition transition = default;
+        await _scheduler.EnqueueAsync(
+            $"folder-exclusion:{folderId}:{Guid.NewGuid():N}",
+            SchedulerPriority.ManualAction,
+            async token =>
+            {
+                transition = _selection.ChangeExclusion(
+                    folderId, normalized, excluded, token);
+                if (!transition.Changed) return;
+                progress?.Report(excluded
+                    ? $"{transition.Removed:N0} Bildeinträge ausgeschlossen"
+                    : "Unterordner wieder in die Überwachung aufgenommen");
+                if (publish is not null)
                 {
-                    removed = Delete(token);
-                    return Task.CompletedTask;
-                },
-                () => _folders.IsCurrentSourceGeneration(
-                    folder.CanonicalPath, generation, true));
-        }
-        catch (OperationCanceledException) { return 0; }
-        return removed;
+                    // Snapshot comes from the same durable SQLite authority;
+                    // the callback may switch to the UI Dispatcher. The
+                    // scheduler owns completion until publication finishes.
+                    var currentRules = _folders.GetExcludedPaths(folderId);
+                    await publish(folderId, normalized, excluded, currentRules);
+                }
+            });
+
+        // Post-completion observers (e.g. tests) may enqueue another decision
+        // without deadlocking the manual lane. Production WPF publication is
+        // awaited INSIDE that lane using the explicit publish callback above.
+        if (transition.Changed)
+            onChanged?.Invoke(folderId, normalized, excluded);
+        return transition.Removed;
     }
 }

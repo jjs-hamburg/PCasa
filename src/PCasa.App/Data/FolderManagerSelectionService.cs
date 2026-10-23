@@ -127,88 +127,16 @@ public sealed class FolderManagerSelectionService
                     if (!FolderExclusionRules.IsAtOrBelow(excluded, classified.LocalPath))
                         throw new ArgumentException($"Ausschluss liegt außerhalb der Wurzel: {excluded}");
 
-                var previouslyExcluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                using (var fetch = Command(connection, transaction, """
-                    SELECT local_path FROM excluded_folders
-                    WHERE monitored_folder_id = $id;
-                    """))
+                // Folder manager and context-menu exclusions share this one
+                // transactional transition: desired rules, source generation,
+                // catalog rows and deferred cache-reclaim intent.
+                var transition = ApplyExclusionSet(connection, transaction, id,
+                    classified.LocalPath, classified.CanonicalPath, wanted,
+                    cancellationToken);
+                if (transition.Changed)
                 {
-                    fetch.Parameters.AddWithValue("$id", id);
-                    using var reader = fetch.ExecuteReader();
-                    while (reader.Read()) previouslyExcluded.Add(reader.GetString(0));
-                }
-
-                if (!previouslyExcluded.SetEquals(wanted))
-                {
-                    using (var removeOld = Command(connection, transaction, """
-                        DELETE FROM excluded_folders WHERE monitored_folder_id = $id;
-                        """))
-                    {
-                        removeOld.Parameters.AddWithValue("$id", id);
-                        removeOld.ExecuteNonQuery();
-                    }
-                    foreach (var excluded in wanted)
-                    {
-                        using var add = Command(connection, transaction, """
-                            INSERT INTO excluded_folders (monitored_folder_id, local_path, created_utc)
-                            VALUES ($id, $path, $now);
-                            """);
-                        add.Parameters.AddWithValue("$id", id);
-                        add.Parameters.AddWithValue("$path", excluded);
-                        add.Parameters.AddWithValue("$now", timestamp);
-                        add.ExecuteNonQuery();
-                    }
-
-                    // A completed old scan cannot commit over a new checkbox
-                    // decision. Re-inclusion requests a full prioritized scan.
-                    using (var advance = Command(connection, transaction, """
-                        UPDATE scheduler_sources SET generation = generation + 1,
-                            updated_utc = $now
-                        WHERE canonical_path = $canonical AND desired_present = 1;
-                        """))
-                    {
-                        advance.Parameters.AddWithValue("$canonical", classified.CanonicalPath);
-                        advance.Parameters.AddWithValue("$now", timestamp);
-                        if (advance.ExecuteNonQuery() != 1)
-                            throw new OperationCanceledException("Überwachungsordner nicht mehr aktiv.");
-                    }
-
-                    if (previouslyExcluded.Except(wanted, StringComparer.OrdinalIgnoreCase).Any())
-                    {
-                        using var pending = Command(connection, transaction, """
-                            UPDATE monitored_folders SET initial_scan_pending = 1 WHERE id = $id;
-                            """);
-                        pending.Parameters.AddWithValue("$id", id);
-                        pending.ExecuteNonQuery();
-                    }
-
-                    // Prune excluded photos in the same transaction as the
-                    // exclusions. No scanner can repopulate them from an old
-                    // source generation after OK.
-                    foreach (var excluded in wanted)
-                    {
-                        using var prune = Command(connection, transaction, """
-                            DELETE FROM images WHERE folder_id = $id
-                            AND (local_path = $path COLLATE NOCASE OR
-                                 substr(local_path, 1, length($prefix)) = $prefix COLLATE NOCASE);
-                            """);
-                        prune.Parameters.AddWithValue("$id", id);
-                        prune.Parameters.AddWithValue("$path", excluded);
-                        prune.Parameters.AddWithValue("$prefix",
-                            Path.TrimEndingDirectorySeparator(excluded) + "\\");
-                        if (prune.ExecuteNonQuery() > 0) reclaim = true;
-                    }
-                    using (var empty = Command(connection, transaction, """
-                        DELETE FROM photo_folders
-                        WHERE monitored_folder_id = $id
-                        AND NOT EXISTS (SELECT 1 FROM images
-                            WHERE photo_folder_id = photo_folders.id);
-                        """))
-                    {
-                        empty.Parameters.AddWithValue("$id", id);
-                        empty.ExecuteNonQuery();
-                    }
                     modified = true;
+                    reclaim |= transition.Removed > 0;
                 }
 
                 using (var sync = Command(connection, transaction, """
@@ -238,6 +166,178 @@ public sealed class FolderManagerSelectionService
             transaction.Commit();
             return modified;
         }
+    }
+
+
+    public readonly record struct ExclusionTransition(bool Changed, int Removed);
+
+    // Explicit single-subtree decision. This is a complete durable operation,
+    // not a metadata update followed by a second cleanup request. The root
+    // decision in the folder manager uses the SAME ApplyExclusionSet method.
+    public ExclusionTransition ChangeExclusion(long folderId, string path,
+        bool excluded, CancellationToken cancellationToken = default)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        lock (CatalogRemovalService.CacheLock)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var connection = _database.OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            string rootPath;
+            string canonicalPath;
+            using (var root = Command(connection, transaction,
+                "SELECT local_path, canonical_path FROM monitored_folders WHERE id=$id;"))
+            {
+                root.Parameters.AddWithValue("$id", folderId);
+                using var reader = root.ExecuteReader();
+                if (!reader.Read())
+                    throw new OperationCanceledException(
+                        "Der überwachte Ordner ist inzwischen entfernt.");
+                rootPath = reader.GetString(0);
+                canonicalPath = reader.GetString(1);
+            }
+            if (!FolderExclusionRules.IsAtOrBelow(normalized, rootPath) ||
+                string.Equals(normalized,
+                    FolderExclusionRules.Normalize(rootPath),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException(
+                    "Nur Unterordner innerhalb einer überwachten Wurzel dürfen ausgeschlossen werden.");
+
+            var wanted = ReadExcludedPaths(connection, transaction, folderId);
+            if (excluded)
+            {
+                // Excluding an ancestor supersedes all nested exclusions.
+                // A child of an already excluded ancestor adds no new state.
+                if (!FolderExclusionRules.IsExcluded(normalized, wanted))
+                {
+                    wanted.RemoveWhere(current =>
+                        FolderExclusionRules.IsAtOrBelow(current, normalized));
+                    wanted.Add(normalized);
+                }
+            }
+            else wanted.Remove(normalized);
+
+            var transition = ApplyExclusionSet(connection, transaction,
+                folderId, rootPath, canonicalPath, wanted, cancellationToken);
+            if (transition.Removed > 0)
+            {
+                using var cleanup = Command(connection, transaction, """
+                    UPDATE cache_maintenance
+                    SET cleanup_pending=1, request_generation=request_generation+1
+                    WHERE id=1;
+                    """);
+                cleanup.ExecuteNonQuery();
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            transaction.Commit();
+            return transition;
+        }
+    }
+
+    private static HashSet<string> ReadExcludedPaths(
+        SqliteConnection connection, SqliteTransaction transaction, long folderId)
+    {
+        using var read = Command(connection, transaction, """
+            SELECT local_path FROM excluded_folders WHERE monitored_folder_id=$id;
+            """);
+        read.Parameters.AddWithValue("$id", folderId);
+        using var reader = read.ExecuteReader();
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (reader.Read()) result.Add(reader.GetString(0));
+        return result;
+    }
+
+    // One SQLite transaction is the complete domain commit. A crash leaves
+    // EITHER the old rules and catalog, OR the new rules and pruned catalog.
+    // The cache compactor only receives a durable maintenance request.
+    private static ExclusionTransition ApplyExclusionSet(
+        SqliteConnection connection, SqliteTransaction transaction,
+        long folderId, string rootPath, string canonicalPath,
+        IEnumerable<string> targetPaths, CancellationToken cancellationToken)
+    {
+        var wanted = targetPaths.Select(FolderExclusionRules.Normalize)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in wanted)
+            if (!FolderExclusionRules.IsAtOrBelow(path, rootPath))
+                throw new ArgumentException(
+                    $"Ausschluss liegt außerhalb der Überwachungswurzel: {path}");
+
+        var previous = ReadExcludedPaths(connection, transaction, folderId);
+        if (previous.SetEquals(wanted)) return new(false, 0);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using (var remove = Command(connection, transaction, """
+            DELETE FROM excluded_folders WHERE monitored_folder_id=$id;
+            """))
+        {
+            remove.Parameters.AddWithValue("$id", folderId);
+            remove.ExecuteNonQuery();
+        }
+        foreach (var path in wanted)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var add = Command(connection, transaction, """
+                INSERT INTO excluded_folders(monitored_folder_id, local_path, created_utc)
+                VALUES($id,$path,$now);
+                """);
+            add.Parameters.AddWithValue("$id", folderId);
+            add.Parameters.AddWithValue("$path", path);
+            add.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            add.ExecuteNonQuery();
+        }
+
+        // This generation increment is in the SAME commit as the exclusion
+        // and catalog deletion, closing the old scan's commit boundary.
+        using (var advance = Command(connection, transaction, """
+            UPDATE scheduler_sources
+            SET generation=generation+1, updated_utc=$now
+            WHERE canonical_path=$canonical AND desired_present=1;
+            """))
+        {
+            advance.Parameters.AddWithValue("$canonical", canonicalPath);
+            advance.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            if (advance.ExecuteNonQuery() != 1)
+                throw new OperationCanceledException(
+                    "Der Überwachungsordner wurde inzwischen entfernt.");
+        }
+
+        if (previous.Except(wanted, StringComparer.OrdinalIgnoreCase).Any())
+        {
+            // Persist the reimport obligation. It survives restart and is not
+            // dependent on whether the background watcher is enabled.
+            using var pending = Command(connection, transaction, """
+                UPDATE monitored_folders SET initial_scan_pending=1 WHERE id=$id;
+                """);
+            pending.Parameters.AddWithValue("$id", folderId);
+            pending.ExecuteNonQuery();
+        }
+
+        var removedImages = 0;
+        foreach (var path in wanted)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var prune = Command(connection, transaction, """
+                DELETE FROM images WHERE folder_id=$id AND
+                    (local_path=$path COLLATE NOCASE OR
+                     substr(local_path,1,length($prefix))=$prefix COLLATE NOCASE);
+                """);
+            prune.Parameters.AddWithValue("$id", folderId);
+            prune.Parameters.AddWithValue("$path", path);
+            prune.Parameters.AddWithValue("$prefix",
+                Path.TrimEndingDirectorySeparator(path) + "\\");
+            removedImages += prune.ExecuteNonQuery();
+        }
+        using (var empty = Command(connection, transaction, """
+            DELETE FROM photo_folders
+            WHERE monitored_folder_id=$id
+              AND NOT EXISTS (SELECT 1 FROM images WHERE photo_folder_id=photo_folders.id);
+            """))
+        {
+            empty.Parameters.AddWithValue("$id", folderId);
+            empty.ExecuteNonQuery();
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        return new(true, removedImages);
     }
 
     private static SqliteCommand Command(SqliteConnection connection,
