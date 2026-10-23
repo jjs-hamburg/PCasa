@@ -34,11 +34,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneThumbnail = 5;
     private const int LaneCatalogRead = 6;
     private const int LaneSourceProbe = 7;
+    private const int LaneManualSourceProbe = 8;
+    private const int LaneInteractiveSourceProbe = 9;
     private readonly object _gate = new();
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, 8).Select(_ => new SemaphoreSlim(0)).ToArray();
+        Enumerable.Range(0, 10).Select(_ => new SemaphoreSlim(0)).ToArray();
     private readonly WorkItem?[] _runningPriorityJobs = new WorkItem?[3];
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
@@ -66,7 +68,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
             Task.Run(() => RunAsync(LaneCatalogRead)),
             Task.Run(() => RunAsync(LaneCatalogRead)),
             Task.Run(() => RunAsync(LaneSourceProbe)),
-            Task.Run(() => RunAsync(LaneSourceProbe))
+            Task.Run(() => RunAsync(LaneSourceProbe)),
+            // A disconnected NAS can occupy both automatic probe workers.
+            // User-initiated source I/O has its own bounded capacity but
+            // remains under the SAME scheduler queue and job lifecycle.
+            Task.Run(() => RunAsync(LaneManualSourceProbe)),
+            Task.Run(() => RunAsync(LaneInteractiveSourceProbe))
         };
     }
 
@@ -76,7 +83,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
             SchedulerWorkKind.ViewerRead => LaneViewer,
             SchedulerWorkKind.CatalogRead => LaneCatalogRead,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
-            SchedulerWorkKind.SourceProbe => LaneSourceProbe,
+            SchedulerWorkKind.SourceProbe => priority switch
+            {
+                SchedulerPriority.ManualAction => LaneManualSourceProbe,
+                SchedulerPriority.Interactive => LaneInteractiveSourceProbe,
+                _ => LaneSourceProbe
+            },
             _ => priority switch
             {
                 SchedulerPriority.ManualAction => LaneManual,

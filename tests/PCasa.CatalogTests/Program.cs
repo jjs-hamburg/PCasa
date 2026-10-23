@@ -31,7 +31,7 @@ internal static class Program
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
-        Run("Manual action bypasses blocked background source probe", SchedulerManualBypassesBlockedSourceProbe, failures);
+        Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
@@ -482,29 +482,44 @@ internal static class Program
         static async Task Check()
         {
             await using var scheduler = new PCasaScheduler();
-            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var blocked = scheduler.RunAsync("blocked-smb-probe", SchedulerPriority.Background,
+            var bothStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var count = 0;
+            // Both automatic source-probe workers are held in an OS-like
+            // noninterruptible call. Neither may consume foreground capacity.
+            var blocked = Enumerable.Range(0, 2).Select(i => scheduler.RunAsync(
+                $"blocked-smb-probe-{i}", SchedulerPriority.Background,
                 _ =>
                 {
-                    started.TrySetResult();
+                    if (Interlocked.Increment(ref count) == 2)
+                        bothStarted.TrySetResult();
                     release.Task.GetAwaiter().GetResult();
                     return true;
-                }, workKind: SchedulerWorkKind.SourceProbe);
+                }, workKind: SchedulerWorkKind.SourceProbe)).ToArray();
             try
             {
-                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                var ran = false;
-                await scheduler.EnqueueAsync("manual-scan-during-probe", SchedulerPriority.ManualAction,
-                    _ => { ran = true; return Task.CompletedTask; })
+                await bothStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var manualProbe = scheduler.RunAsync(
+                    "manual-create-folder-probe", SchedulerPriority.ManualAction,
+                    _ => true, workKind: SchedulerWorkKind.SourceProbe);
+                var interactiveProbe = scheduler.RunAsync(
+                    "interactive-expand-folder", SchedulerPriority.Interactive,
+                    _ => true, workKind: SchedulerWorkKind.SourceProbe);
+                var scan = scheduler.EnqueueAsync(
+                    "manual-scan-during-probe", SchedulerPriority.ManualAction,
+                    _ => Task.CompletedTask);
+                await Task.WhenAll(manualProbe, interactiveProbe, scan)
                     .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!ran || blocked.IsCompleted)
-                    throw new Exception("Manual scan was blocked by a slow SMB probe.");
+                if (blocked.Any(task => task.IsCompleted))
+                    throw new Exception(
+                        "A foreground action completed only after background probe ended.");
             }
             finally
             {
                 release.TrySetResult();
-                await blocked.WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.WhenAll(blocked).WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();
