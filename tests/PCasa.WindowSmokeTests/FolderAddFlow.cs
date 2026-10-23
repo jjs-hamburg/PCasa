@@ -114,6 +114,107 @@ internal static class FolderAddFlow
                 "Completed scan did not expose later JPEG in gallery.");
             Console.WriteLine("PASS: Full catalog/gallery completes without background monitoring.");
 
+            // A manually created folder is published on the WPF tree before
+            // the actual I/O can start. Occupy the one Manual SourceProbe
+            // worker to simulate a slow network creation request.
+            var createScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(window)!;
+            var releaseCreateProbe = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var pendingProbe = createScheduler.EnqueueAsync(
+                "test:slow-manual-source-probe",
+                SchedulerPriority.ManualAction,
+                async token => await releaseCreateProbe.Task.WaitAsync(token),
+                workKind: SchedulerWorkKind.SourceProbe);
+            try
+            {
+                Until(window, () => createScheduler.Snapshot().Any(job =>
+                        job.Key == "test:slow-manual-source-probe" &&
+                        job.State == SchedulerJobState.Running),
+                    "Manual source-probe test lane did not start.");
+                initialTreeRoot.IsSelected = true;
+                var newFolderPath = Path.Combine(initialRoot, "FreshFolder");
+                var createHandler = typeof(PCasa.App.MainWindow).GetMethod(
+                    "FolderContext_CreateDirectory_Click",
+                    BindingFlags.NonPublic | BindingFlags.Instance)
+                    ?? throw new Exception("New-folder context-menu handler missing.");
+                var submitted = false;
+                Exception? creationDialogError = null;
+                var dialogTimer = new DispatcherTimer(DispatcherPriority.Background,
+                    window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(35) };
+                var dialogDeadline = DateTime.UtcNow.AddSeconds(10);
+                dialogTimer.Tick += (_, _) =>
+                {
+                    if (submitted) { dialogTimer.Stop(); return; }
+                    var dialog = Application.Current.Windows
+                        .OfType<Window>()
+                        .FirstOrDefault(w => w.IsVisible &&
+                            w.Title == "Neuen Unterordner anlegen");
+                    if (dialog is null)
+                    {
+                        if (DateTime.UtcNow < dialogDeadline) return;
+                        creationDialogError = new TimeoutException(
+                            "Folder creation dialog did not open.");
+                        submitted = true;
+                        dialogTimer.Stop();
+                        return;
+                    }
+                    dialogTimer.Stop();
+                    try
+                    {
+                        var panel = dialog.Content as StackPanel ??
+                            throw new Exception("New folder dialog has no input panel.");
+                        var nameInput = panel.Children.OfType<TextBox>().Single();
+                        if (nameInput.Text.Length != 0)
+                            throw new Exception("New folder name must start empty.");
+                        nameInput.Text = "FreshFolder";
+                        var button = panel.Children.OfType<Button>().Single();
+                        button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+                        submitted = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        creationDialogError = ex;
+                        submitted = true;
+                        dialog.Close();
+                    }
+                };
+                window.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
+                    new Action(() => createHandler.Invoke(
+                        window, [window, new RoutedEventArgs()])));
+                dialogTimer.Start();
+                try
+                {
+                    Until(window, () => submitted, "New-folder dialog was not handled.");
+                }
+                finally { dialogTimer.Stop(); }
+                if (creationDialogError is not null)
+                    throw new Exception("Could not submit new-folder dialog.",
+                        creationDialogError);
+
+                Until(window, () =>
+                    Walk(tree).Any(item => SamePath(PathOf(item), newFolderPath)),
+                    "New folder did not appear before scheduled disk I/O.");
+                if (Directory.Exists(newFolderPath))
+                    throw new Exception("New folder creation bypassed blocked manual scheduler.");
+                Until(window, () => createScheduler.Snapshot().Any(job =>
+                    job.Key.StartsWith("folder:create:") &&
+                    job.State == SchedulerJobState.Queued),
+                    "New folder creation was not scheduled immediately.");
+                releaseCreateProbe.TrySetResult();
+                Until(window, () => Directory.Exists(newFolderPath),
+                    "New folder was never created on disk.");
+                Console.WriteLine(
+                    "PASS: Empty folder name, immediate tree entry, manual priority and real directory creation.");
+            }
+            finally
+            {
+                releaseCreateProbe.TrySetResult();
+                Until(window, () => pendingProbe.IsCompleted,
+                    "Held manual source-probe never finished.");
+            }
+
             window.Close();
             window = null;
 
