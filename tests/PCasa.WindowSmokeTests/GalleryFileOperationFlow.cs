@@ -354,6 +354,10 @@ internal static class GalleryFileOperationFlow
                 if (title is null || !title.Text.Contains("verschieben",
                         StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Progress window does not show manual move.");
+                Until(window, () =>
+                    (presenter.FindName("CurrentFileText") as TextBlock)?.Text ==
+                        Path.GetFileName(progressSource),
+                    "First file was not presented before waiting on the source lock.");
                 presenter.UpdateScan(new ScanProgress(3, 1, 2, 0, progressSource));
                 if (!title.Text.Contains("verschieben",
                         StringComparison.OrdinalIgnoreCase))

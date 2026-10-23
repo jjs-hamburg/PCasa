@@ -144,6 +144,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // of many thousands of files cannot flood the dispatcher.
             publish = work is null ||
                 !string.Equals(previous.Phase, phase, StringComparison.Ordinal) ||
+                (previous.CurrentPath is null && currentPath is { Length: > 0 }) ||
                 processed >= total ||
                 now - work.LastProgressNoticeTick >= 100;
             if (publish && work is not null)

@@ -258,6 +258,7 @@ public partial class MainWindow
         if (requested.Length == 0) return;
         var targetPath = Path.GetFullPath(targetDirectory);
         var key = $"gallery:file-transfer:{Guid.NewGuid():N}";
+        var transferPhase = move ? "Bilder verschieben" : "Bilder kopieren";
         var completed = new List<string>();
         var retainedIds = new HashSet<long>();
         var needsIndex = new List<string>();
@@ -296,8 +297,7 @@ public partial class MainWindow
                     var catalog = _imageCatalog;
                     var reserved = new HashSet<string>(
                         StringComparer.OrdinalIgnoreCase);
-                    _scheduler.ReportProgress(key, move ? "Bilder verschieben" :
-                        "Bilder kopieren", 0, requested.Length);
+                    _scheduler.ReportProgress(key, transferPhase, 0, requested.Length);
 
                     foreach (var source in requested)
                     {
@@ -306,7 +306,7 @@ public partial class MainWindow
                         {
                             failed.Add(Path.GetFileName(source) +
                                 ": Quelldatei nicht erreichbar");
-                            _scheduler.ReportProgress(key, "Dateien übertragen",
+                            _scheduler.ReportProgress(key, transferPhase,
                                 completed.Count + failed.Count, requested.Length, source);
                             continue;
                         }
@@ -317,7 +317,7 @@ public partial class MainWindow
                         if (samePath && move) continue;
                         try
                         {
-                            _scheduler.ReportProgress(key, "Dateien übertragen",
+                            _scheduler.ReportProgress(key, transferPhase,
                                 completed.Count + failed.Count,
                                 requested.Length, source);
                             var replace = false;
@@ -419,7 +419,7 @@ public partial class MainWindow
                             failed.Add(Path.GetFileName(source) + ": " + ex.Message);
                             PCasaDiagnostics.Write("Gallery.Transfer", ex);
                         }
-                        _scheduler.ReportProgress(key, "Dateien übertragen",
+                        _scheduler.ReportProgress(key, transferPhase,
                             completed.Count + failed.Count, requested.Length, source);
                     }
 
