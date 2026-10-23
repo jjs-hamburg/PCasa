@@ -49,11 +49,44 @@ public partial class MainWindow
         CatalogChanges.ImageCommitted += OnCatalogImageCommitted;
         Closed += BrowseWindow_Closed;
 
+        // Recovery is a scheduler operation, not an alternative scanner.
+        // It may perform slow SMB probes without blocking WPF startup.
+        // If any durable move is recovered, the SAME gallery publication
+        // owner will bring the new catalog state into the current view.
+        _ = RecoverPendingFileTransfersAsync();
+
         // A persistent user Add must outrank all startup cache preparation.
         // Start its scheduler work BEFORE any background cache repair.
         QueuePendingInitialScans();
         await EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();
+    }
+
+    private async Task RecoverPendingFileTransfersAsync()
+    {
+        try
+        {
+            var result = await _scheduler.RunAsync(
+                "catalog:recover-file-transfers",
+                SchedulerPriority.ManualAction,
+                token => _imageCatalog.RecoverRelocations(
+                    _folderRepository.GetAll(), token),
+                workKind: SchedulerWorkKind.Catalog);
+            if (result.Recovered > 0)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true);
+            if (result.Unresolved > 0)
+            {
+                StatusText.Text =
+                    $"{result.Unresolved:N0} Dateioperation(en) benötigen Prüfung " +
+                    "(Quell-/Zielzustand unklar)";
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Catalog.TransferRecovery", ex);
+            StatusText.Text = "Ausstehende Dateioperationen konnten nicht geprüft werden";
+        }
     }
 
     private async Task EnsureBrowseCacheAndRefreshAsync()
