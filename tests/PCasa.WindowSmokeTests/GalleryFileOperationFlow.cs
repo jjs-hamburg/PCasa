@@ -270,6 +270,53 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Context-menu manual scan bypasses busy background state, reconciles renamed file and reloads browse index.");
 
+            // A thumbnail tier is allowed to be missing: its path fallback
+            // must use the shared catalog-read worker, not block the UI.
+            var getSelectedPaths = typeof(PCasa.App.MainWindow).GetMethod(
+                "SelectedGalleryPathsAsync", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Scheduled selected-image path reader is missing.");
+            var heldReaders = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseReaders = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var readers = Enumerable.Range(0, 2).Select(i => scheduler.EnqueueAsync(
+                $"test:held-catalog-read:{i}", SchedulerPriority.Interactive,
+                async token =>
+                {
+                    heldReaders.TrySetResult();
+                    await releaseReaders.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.CatalogRead)).ToArray();
+            try
+            {
+                Until(window, () => scheduler.Snapshot().Count(job =>
+                    job.Key.StartsWith("test:held-catalog-read:") &&
+                    job.State == SchedulerJobState.Running) == 2,
+                    "Catalog-read worker lanes were not occupied.");
+                var fetchPaths = (Task<string[]>)getSelectedPaths.Invoke(
+                    window, [new long[] { CatalogIdAt(db, Path.Combine(batch,
+                        "renamed-manually.jpg")), long.MaxValue }])!;
+                if (fetchPaths.IsCompleted)
+                    throw new Exception("Uncached selected paths bypassed catalog scheduler.");
+                var dispatcherStillResponsive = false;
+                window.Dispatcher.BeginInvoke(() => dispatcherStillResponsive = true);
+                Until(window, () => dispatcherStillResponsive,
+                    "Uncached selected-path read blocked WPF dispatcher.");
+                releaseReaders.TrySetResult();
+                Until(window, () => fetchPaths.IsCompleted,
+                    "Uncached selected-path read did not resume.");
+                var resolved = fetchPaths.GetAwaiter().GetResult();
+                if (!resolved.Contains(Path.Combine(batch, "renamed-manually.jpg"),
+                        StringComparer.OrdinalIgnoreCase))
+                    throw new Exception("Scheduled fallback lost a catalogued selection.");
+            }
+            finally
+            {
+                releaseReaders.TrySetResult();
+                Until(window, () => readers.All(job => job.IsCompleted),
+                    "Held catalog readers did not finish.");
+            }
+            Console.WriteLine("PASS: Uncached selected paths never query SQLite on the WPF dispatcher.");
+
             // The previous priority test only occupied a worker with Task.
             // Hold the actual FolderScanner in a source-image lock to prove
             // a MANUAL file move starts before the in-flight image scan ends.

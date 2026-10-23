@@ -16,7 +16,7 @@ public partial class MainWindow
     {
         var selected = FoldersTree.SelectedItem as TreeViewItem;
         if (selected?.Tag is not FolderTreeTag tag) return;
-        if (!IsMonitoredGalleryDestination(tag.FullPath))
+        if (!ValidDragTarget(tag.FullPath))
         {
             MessageBox.Show(this, "Der Zielordner wird nicht überwacht.", "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Warning);

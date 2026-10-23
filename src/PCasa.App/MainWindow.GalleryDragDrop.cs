@@ -38,7 +38,12 @@ public partial class MainWindow
     private bool ValidDragTarget(string path)
     {
         if (_dragTargetValidity.TryGetValue(path, out var valid)) return valid;
-        valid = IsMonitoredGalleryDestination(path);
+        // Drag-over is purely a UI hint. Do not query SQLite once per
+        // pointer event: the authoritative check remains in the scheduler
+        // when the actual transfer begins.
+        valid = _dropTargetProjection.Any(root =>
+            FolderExclusionRules.IsAtOrBelow(path, root.RootPath) &&
+            !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths));
         _dragTargetValidity[path] = valid;
         return valid;
     }
@@ -50,24 +55,35 @@ public partial class MainWindow
             HighlightDropFolder(null);
     }
 
-    private void BrowseSurface_ImagesDragRequested(object? sender,
+    private async void BrowseSurface_ImagesDragRequested(object? sender,
         BrowseImageClickedEventArgs e)
     {
         if (_viewerOpen || !_selectedImageIds.Contains(e.ImageId)) return;
-        var files = SelectedGalleryPaths();
-        if (files.Length == 0) return;
-        var data = new DataObject(DataFormats.FileDrop, files);
-        // FileDrop is the native shell protocol, not a proprietary PCasa blob.
-        // Therefore the same drag works inside PCasa and into Windows Explorer.
-        DragDropEffects effect;
+        var selected = _selectedImageIds.ToArray();
         try
         {
-            effect = DragDrop.DoDragDrop(BrowseSurface, data,
-                DragDropEffects.Copy | DragDropEffects.Move);
+            var files = await SelectedGalleryPathsAsync(selected);
+            if (files.Length == 0 || _viewerOpen || Dispatcher.HasShutdownStarted ||
+                !_selectedImageIds.SetEquals(selected))
+                return;
+            // FileDrop remains the native shell protocol for PCasa and Explorer.
+            var data = new DataObject(DataFormats.FileDrop, files);
+            DragDropEffects effect;
+            try
+            {
+                effect = DragDrop.DoDragDrop(BrowseSurface, data,
+                    DragDropEffects.Copy | DragDropEffects.Move);
+            }
+            finally { HighlightDropFolder(null); }
+            if (effect.HasFlag(DragDropEffects.Move))
+                _ = ReconcileMovedExternalFilesAsync(files);
         }
-        finally { HighlightDropFolder(null); }
-        if (effect.HasFlag(DragDropEffects.Move))
-            _ = ReconcileMovedExternalFilesAsync(files);
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.StartDrag", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text = "Bilder konnten nicht zum Ziehen vorbereitet werden";
+        }
     }
 
     // File.Exists also returns false when Windows cannot reach a NAS or lacks

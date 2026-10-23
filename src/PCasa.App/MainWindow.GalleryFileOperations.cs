@@ -20,58 +20,81 @@ public partial class MainWindow
     private sealed record GalleryFileOperation(string Source, string Destination,
         bool Move, bool Replace, long? CatalogImageId, long? ExistingTargetId);
 
-    private string[] SelectedGalleryPaths()
+    private async Task<string[]> SelectedGalleryPathsAsync(long[] selectedIds)
     {
-        if (_selectedImageIds.Count == 0) return [];
+        if (selectedIds.Length == 0) return [];
 
-        // Browse index + folder summaries are already a read-only projection
-        // of the catalog on the UI thread. On a drag gesture, never wait for
-        // SQLite transactions from an unrelated running scan. Reconstruct
-        // the same local paths for indexed images without probing the NAS.
+        // The gallery index is a disposable, read-only catalog projection.
+        // Use it immediately without touching SQLite or the filesystem.
+        var selected = selectedIds.ToHashSet();
         var folders = _photoFolders.ToDictionary(folder => folder.Id,
             folder => folder.LocalPath);
-        var pathsById = new Dictionary<long, string>(_selectedImageIds.Count);
+        var pathsById = new Dictionary<long, string>(selected.Count);
         foreach (var image in _browseIndex)
         {
-            if (!_selectedImageIds.Contains(image.ImageId) ||
+            if (!selected.Contains(image.ImageId) ||
                 !folders.TryGetValue(image.PhotoFolderId, out var folderPath))
                 continue;
             pathsById[image.ImageId] = Path.Combine(folderPath, image.FileName);
         }
 
-        // Uncached images still use the same catalog as the authority;
-        // no additional path cache or divergent source of truth is created.
-        if (pathsById.Count < _selectedImageIds.Count)
+        var missingIds = selected.Where(id => !pathsById.ContainsKey(id)).ToArray();
+        if (missingIds.Length > 0)
         {
-            using var db = _database.OpenConnection();
-            foreach (var group in _selectedImageIds
-                .Where(id => !pathsById.ContainsKey(id)).Chunk(400))
-            {
-                using var command = db.CreateCommand();
-                var placeholders = group.Select((_, i) => "$id" + i).ToArray();
-                for (var i = 0; i < group.Length; i++)
-                    command.Parameters.AddWithValue(placeholders[i], group[i]);
-                command.CommandText = "SELECT id, local_path FROM images WHERE id IN (" +
-                    string.Join(",", placeholders) + ");";
-                using var reader = command.ExecuteReader();
-                while (reader.Read())
-                    pathsById[reader.GetInt64(0)] = reader.GetString(1);
-            }
+            // A selected image may have no prepared thumbnail tier. Read its
+            // authoritative path on the catalog-read lane, NEVER on the WPF
+            // dispatcher. The selection snapshot also prevents later clicks
+            // from changing this particular drag or clipboard request.
+            var uncachedPaths = await _scheduler.RunAsync(
+                $"catalog:selected-gallery-paths:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    var result = new Dictionary<long, string>();
+                    using var db = _database.OpenConnection();
+                    foreach (var group in missingIds.Chunk(400))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        using var command = db.CreateCommand();
+                        var placeholders = group.Select((_, i) => "$id" + i).ToArray();
+                        for (var i = 0; i < group.Length; i++)
+                            command.Parameters.AddWithValue(placeholders[i], group[i]);
+                        command.CommandText = "SELECT id, local_path FROM images WHERE id IN (" +
+                            string.Join(",", placeholders) + ");";
+                        using var reader = command.ExecuteReader();
+                        while (reader.Read())
+                            result[reader.GetInt64(0)] = reader.GetString(1);
+                    }
+                    return result;
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            foreach (var (id, path) in uncachedPaths)
+                pathsById[id] = path;
         }
         return pathsById.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private void CopyGalleryFilesToClipboard(bool cut)
+    private async Task CopyGalleryFilesToClipboardAsync(bool cut)
     {
-        var paths = SelectedGalleryPaths();
-        if (paths.Length == 0) return;
-        var data = new DataObject(DataFormats.FileDrop, paths);
-        data.SetData("Preferred DropEffect",
-            new MemoryStream(BitConverter.GetBytes(cut ? 2 : 1)));
-        Clipboard.SetDataObject(data, true);
-        StatusText.Text = cut
-            ? $"{paths.Length:N0} Datei(en) zum Verschieben vorgemerkt"
-            : $"{paths.Length:N0} Datei(en) kopiert";
+        var selected = _selectedImageIds.ToArray();
+        if (selected.Length == 0) return;
+        try
+        {
+            var paths = await SelectedGalleryPathsAsync(selected);
+            if (paths.Length == 0 || Dispatcher.HasShutdownStarted) return;
+            var data = new DataObject(DataFormats.FileDrop, paths);
+            data.SetData("Preferred DropEffect",
+                new MemoryStream(BitConverter.GetBytes(cut ? 2 : 1)));
+            Clipboard.SetDataObject(data, true);
+            StatusText.Text = cut
+                ? $"{paths.Length:N0} Datei(en) zum Verschieben vorgemerkt"
+                : $"{paths.Length:N0} Datei(en) kopiert";
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.CopyToClipboard", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text = "Ausgewählte Bildpfade konnten nicht gelesen werden";
+        }
     }
 
     private async Task PasteGalleryFilesAsync()
@@ -97,8 +120,9 @@ public partial class MainWindow
     {
         if ((FoldersTree.SelectedItem as TreeViewItem)?.Tag is
             not FolderTreeTag tag) return null;
-        return Directory.Exists(tag.FullPath) && IsMonitoredGalleryDestination(tag.FullPath)
-            ? tag.FullPath : null;
+        // Only capture the selected tree path. NAS reachability and monitoring
+        // validity are checked by the actual scheduler operation below.
+        return tag.FullPath;
     }
 
     private bool IsMonitoredGalleryDestination(string path)

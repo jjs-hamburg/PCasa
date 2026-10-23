@@ -104,6 +104,11 @@ public partial class MainWindow : Window
         SaveFolderTreeState();
     }
 
+    // The tree's read-only drop eligibility projection. SQLite remains the
+    // sole authority; it is rechecked in each scheduled mutation.
+    private IReadOnlyList<(string RootPath, IReadOnlyList<string> ExcludedPaths)>
+        _dropTargetProjection = Array.Empty<(string, IReadOnlyList<string>)>();
+
     private readonly HashSet<string> _createdEmptyFolderPaths =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _rebuildingFolderTree;
@@ -128,10 +133,20 @@ public partial class MainWindow : Window
         FoldersTree.Items.Clear();
         _folderTreeItems.Clear();
 
-        var monitoredFolders = _folderRepository.GetAll()
-            .Where(folder => !FolderExclusionRules.IsExcluded(
-                folder.LocalPath, _folderRepository.GetExcludedPaths(folder.Id)))
+        var monitoredRoots = _folderRepository.GetAll();
+        var rootsWithExclusions = monitoredRoots
+            .Select(folder => (Folder: folder,
+                Exclusions: _folderRepository.GetExcludedPaths(folder.Id)))
+            .Where(root => !FolderExclusionRules.IsExcluded(
+                root.Folder.LocalPath, root.Exclusions))
             .ToArray();
+        var monitoredFolders = rootsWithExclusions
+            .Select(root => root.Folder).ToArray();
+        _dropTargetProjection = rootsWithExclusions
+            .Select(root => (RootPath: root.Folder.LocalPath,
+                ExcludedPaths: root.Exclusions))
+            .ToArray();
+        _dragTargetValidity.Clear();
         var monitoredFolderIds = monitoredFolders.Select(folder => folder.Id).ToHashSet();
         var roots = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
         var nodesByPath = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);

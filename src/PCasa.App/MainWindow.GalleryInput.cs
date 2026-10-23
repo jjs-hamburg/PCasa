@@ -73,13 +73,13 @@ public partial class MainWindow
         }
         if (ctrl && e.Key == Key.C)
         {
-            CopyGalleryFilesToClipboard(cut: false);
+            _ = CopyGalleryFilesToClipboardAsync(cut: false);
             e.Handled = true;
             return;
         }
         if (ctrl && e.Key == Key.X)
         {
-            CopyGalleryFilesToClipboard(cut: true);
+            _ = CopyGalleryFilesToClipboardAsync(cut: true);
             e.Handled = true;
             return;
         }
