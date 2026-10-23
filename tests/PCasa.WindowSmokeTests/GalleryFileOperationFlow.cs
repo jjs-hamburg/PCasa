@@ -392,7 +392,7 @@ internal static class GalleryFileOperationFlow
                         x.Phase == "Bilder verschieben"),
                     "Manual move was not visible as a running scheduler job.");
                 var presenter = typeof(PCasa.App.MainWindow).GetField(
-                    "_visibleTransferWindow",
+                    "_visibleManualWindow",
                     BindingFlags.NonPublic | BindingFlags.Instance)!
                     .GetValue(window) as PCasa.App.BrowseCacheProgressWindow;
                 if (presenter is null || !presenter.IsVisible)
