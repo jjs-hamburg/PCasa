@@ -257,6 +257,12 @@ public sealed class LocalDatabase
             CREATE INDEX IF NOT EXISTS idx_images_file_name
                 ON images(file_name COLLATE NOCASE);
 
+            -- Manual file transfers and reconciliation locate an image by
+            -- its full local source path. Without this index, 500K images
+            -- would require a full catalog scan per moved file.
+            CREATE INDEX IF NOT EXISTS idx_images_local_path
+                ON images(local_path COLLATE NOCASE);
+
             CREATE INDEX IF NOT EXISTS idx_thumbnail_entries_tier_image
                 ON thumbnail_entries(tier, image_id);
 

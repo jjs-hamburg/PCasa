@@ -382,15 +382,19 @@ public sealed class CatalogScanSession : IDisposable
         var canonicalDestination =
             FolderScanner.ResolveCanonicalFullPath(targetRoot, destinationPath);
         // Check the source before creating any target directory catalog row.
+        long? oldPhotoFolderId;
         using (var source = _connection.CreateCommand())
         {
             source.CommandText = """
-                SELECT 1 FROM images
+                SELECT photo_folder_id FROM images
                 WHERE id = $imageId AND local_path = $source COLLATE NOCASE;
                 """;
             source.Parameters.AddWithValue("$imageId", imageId);
             source.Parameters.AddWithValue("$source", sourcePath);
-            if (source.ExecuteScalar() is null) return false;
+            var sourceFolder = source.ExecuteScalar();
+            if (sourceFolder is null) return false;
+            oldPhotoFolderId = sourceFolder is DBNull
+                ? null : Convert.ToInt64(sourceFolder);
         }
 
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
@@ -450,10 +454,12 @@ public sealed class CatalogScanSession : IDisposable
             empty.Transaction = _transaction;
             empty.CommandText = """
                 DELETE FROM photo_folders
-                WHERE id <> $keep
+                WHERE id = $oldFolder AND id <> $keep
                   AND NOT EXISTS (SELECT 1 FROM images
                                   WHERE photo_folder_id = photo_folders.id);
                 """;
+            empty.Parameters.AddWithValue("$oldFolder",
+                (object?)oldPhotoFolderId ?? DBNull.Value);
             empty.Parameters.AddWithValue("$keep", targetFolderId);
             empty.ExecuteNonQuery();
         }
