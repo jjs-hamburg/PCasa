@@ -262,6 +262,7 @@ public partial class MainWindow
         var retainedIds = new HashSet<long>();
         var needsIndex = new List<string>();
         var failed = new List<string>();
+        var userCanceled = false;
 
         _galleryFileOperationRunning = true;
         _manualFileTransferActive = true;
@@ -325,7 +326,11 @@ public partial class MainWindow
                                 var choice = samePath ? NameConflict.KeepBoth :
                                     await Dispatcher.InvokeAsync(() =>
                                         ResolveFileConflict(conflictPath));
-                                if (choice == NameConflict.Cancel) break;
+                                if (choice == NameConflict.Cancel)
+                                {
+                                    userCanceled = true;
+                                    break;
+                                }
                                 if (choice == NameConflict.Skip) continue;
                                 if (choice == NameConflict.Replace && !samePath)
                                     replace = true;
@@ -480,11 +485,25 @@ public partial class MainWindow
                                     .Task.Unwrap();
                             }, workKind: SchedulerWorkKind.CatalogScan);
                     }
+
+                    // Scheduler state reflects the outcome, not merely that
+                    // this delegate returned: partial failure is FAILED and
+                    // deliberate cancellation is CANCELED, even if individual
+                    // preceding files were already moved and published.
+                    if (failed.Count > 0)
+                        throw new InvalidOperationException(
+                            $"{completed.Count:N0} Datei(en) übertragen, " +
+                            $"{failed.Count:N0} fehlgeschlagen:\n" +
+                            string.Join("\n", failed.Take(15)));
+                    if (userCanceled)
+                        throw new OperationCanceledException(
+                            "Dateiübertragung vom Benutzer abgebrochen.");
                 });
-            if (failed.Count > 0)
-                MessageBox.Show(this, string.Join("\n", failed.Take(15)),
-                    "Dateiübertragung teilweise fehlgeschlagen",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText.Text = $"{completed.Count:N0} Datei(en) übertragen · " +
+                "weitere Übertragung abgebrochen";
         }
         catch (Exception ex) { ShowFileActionError(ex); }
         finally
