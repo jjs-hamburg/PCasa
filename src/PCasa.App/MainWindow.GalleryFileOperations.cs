@@ -203,12 +203,11 @@ public partial class MainWindow
                         throw new IOException(
                             "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
                     var sources = requested.Where(File.Exists).ToArray();
-                    var targetDirectory = targetPath;
-        var plans = new List<GalleryFileOperation>();
+                    var plans = new List<GalleryFileOperation>();
         var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var source in sources)
         {
-            var destination = Path.Combine(targetDirectory, Path.GetFileName(source));
+            var destination = Path.Combine(targetPath, Path.GetFileName(source));
             var samePath = string.Equals(source, destination,
                 StringComparison.OrdinalIgnoreCase);
             if (samePath && move) continue;
@@ -344,8 +343,6 @@ public partial class MainWindow
                 MessageBox.Show(this, string.Join("\n", failed.Take(15)),
                     "Dateiübertragung teilweise fehlgeschlagen",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-
         }
         catch (Exception ex) { ShowFileActionError(ex); }
         finally { _galleryFileOperationRunning = false; }
