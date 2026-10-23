@@ -239,7 +239,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                              x.Priority <= SchedulerPriority.Interactive));
                     item = blockedByHigherPriority ? null :
                         _pending.Where(x => LaneFor(x.Priority, x.Kind) == lane)
-                            .OrderBy(x => x.Priority).ThenBy(x => x.Id).FirstOrDefault();
+                            .OrderBy(x => x.Priority)
+                            // Manual mutations are P0 and a resumed scan is
+                            // P2 within the shared manual lane. Otherwise an
+                            // old yielded scan wins by ID and starves the
+                            // exact user move that requested its preemption.
+                            .ThenBy(x => x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
+                            .ThenBy(x => x.Id).FirstOrDefault();
                     if (item is not null)
                     {
                         _pending.Remove(item);

@@ -25,6 +25,7 @@ internal static class Program
         Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
+        Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
@@ -165,6 +166,50 @@ internal static class Program
             if (scheduler.Snapshot().Single(x => x.Key == "long-background").State
                 != SchedulerJobState.Completed)
                 throw new Exception("Resumed operation was not recorded as completed.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void ManualMutationOvertakesYieldingManualScan()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var scanStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var order = new List<string>();
+            var scan = scheduler.EnqueueAsync("manual-folder-scan",
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        scanStarted.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    order.Add("scan resumed");
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var transfer = scheduler.EnqueueAsync("gallery:file-transfer:must-run-first",
+                SchedulerPriority.ManualAction,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    order.Add("file moved");
+                    scheduler.ReportProgress("gallery:file-transfer:must-run-first",
+                        "Galerie aktualisiert", 1, 1);
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.Catalog);
+            await Task.WhenAll(scan, transfer).WaitAsync(TimeSpan.FromSeconds(5));
+            if (!order.SequenceEqual(["file moved", "scan resumed"]) || attempts != 2)
+                throw new Exception(
+                    "The yielded manual scan re-entered ahead of the requested file mutation.");
+            var jobs = scheduler.Snapshot();
+            var mutation = jobs.Single(x => x.Key == "gallery:file-transfer:must-run-first");
+            if (mutation.State != SchedulerJobState.Completed ||
+                mutation.Phase != "Galerie aktualisiert")
+                throw new Exception("Manual operation status/progress was not authoritative.");
         }
         Check().GetAwaiter().GetResult();
     }
