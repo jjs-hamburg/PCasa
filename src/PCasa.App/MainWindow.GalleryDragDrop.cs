@@ -299,7 +299,7 @@ public partial class MainWindow
         e.Effects = effect;
         e.Handled = true;
         _dragTargetValidity.Clear();
-        _ = TransferGalleryFilesAsync(files,
+        _ = TransferGalleryFilesAsync(files, target,
             effect.HasFlag(DragDropEffects.Move));
     }
 }
