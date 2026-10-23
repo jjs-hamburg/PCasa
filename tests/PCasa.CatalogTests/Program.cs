@@ -2735,6 +2735,23 @@ internal static class Program
             throw new Exception("Large spacing setting did not change vertical spacing.");
 
         gallery.EndSpacingPreview();
+        // No filename caption: the gap between uniform landscape photo rows
+        // must be exactly the same as the chosen horizontal minimum.
+        gallery.SetThumbnailAnnotations(false, true);
+        gallery.SetThumbnailSpacing(25);
+        gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
+        gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));
+        var sections = (System.Collections.IEnumerable)typeof(BrowseGallerySurface)
+            .GetField("_sections", System.Reflection.BindingFlags.NonPublic |
+                                   System.Reflection.BindingFlags.Instance)!
+            .GetValue(gallery)!;
+        var first = sections.Cast<object>().First();
+        var offsets = (double[])first.GetType().GetProperty("RowOffsets")!
+            .GetValue(first)!;
+        var photoHeights = (double[])first.GetType().GetProperty("RowImageHeights")!
+            .GetValue(first)!;
+        if (Math.Abs(offsets[1] - offsets[0] - photoHeights[0] - 25) > 0.05)
+            throw new Exception("Row spacing without captions is not the configured spacing.");
         gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
         gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));
 

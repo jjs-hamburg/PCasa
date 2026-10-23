@@ -27,8 +27,10 @@ internal static class TagFlow
         {
             for (var i = 0; i < 12; i++)
             {
-                CreatePhoto(Path.Combine(albumA, $"a-{i:00}.jpg"));
-                CreatePhoto(Path.Combine(albumB, $"b-{i:00}.jpg"));
+                CreatePhoto(Path.Combine(albumA,
+                    i < 4 ? $"a-{i:00}-topaz.jpg" : $"a-{i:00}.jpg"));
+                CreatePhoto(Path.Combine(albumB,
+                    i < 6 ? $"b-{i:00}-topaz.jpg" : $"b-{i:00}.jpg"));
             }
 
             var db = new LocalDatabase();
@@ -161,6 +163,79 @@ internal static class TagFlow
                 throw new Exception("Leaving tag search did not restore photo position.");
             Console.WriteLine("PASS: Clearing live search restores original parent selection and photo anchor.");
 
+            // Search type is independent of scope. File-name matching uses
+            // the existing catalogue index (no filesystem walk).
+            var fileMode = (RadioButton?)window.FindName("SearchFileNameMode")
+                ?? throw new Exception("Filename search mode missing.");
+            var tagMode = (RadioButton?)window.FindName("SearchTagsMode")
+                ?? throw new Exception("Tag search mode missing.");
+            var global = (RadioButton?)window.FindName("SearchAllScope")
+                ?? throw new Exception("Global scope missing.");
+            var treeScope = (RadioButton?)window.FindName("SearchTreeScope")
+                ?? throw new Exception("Tree scope missing.");
+            var current = (RadioButton?)window.FindName("SearchCurrentScope")
+                ?? throw new Exception("Current-only scope missing.");
+            fileMode.IsChecked = true;
+            global.IsChecked = true;
+            search.Text = "topaz";
+            Until(window, () => status.Text.Contains("Bilder mit Dateiname: topaz") &&
+                surface.GetFolderOffset(a.Id) is not null &&
+                surface.GetFolderOffset(b.Id) is not null,
+                "Global filename search did not match both folders.");
+
+            monitoredRootItem.IsSelected = true;
+            treeScope.IsChecked = true;
+            Until(window, () => surface.GetFolderOffset(a.Id) is not null &&
+                surface.GetFolderOffset(b.Id) is not null,
+                "Tree search lost child directories.");
+
+            albumBItem.IsSelected = true;
+            current.IsChecked = true;
+            Until(window, () => surface.GetFolderOffset(b.Id) is not null &&
+                surface.GetFolderOffset(a.Id) is null,
+                "Current-only search included a sibling folder.");
+
+            var selectedField = typeof(PCasa.App.MainWindow).GetField(
+                "_selectedImageIds", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var selected = (HashSet<long>)selectedField.GetValue(window)!;
+            var filteredIndexField = typeof(PCasa.App.MainWindow).GetField(
+                "_displayedBrowseIndex", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var displayed = (IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                filteredIndexField.GetValue(window)!;
+            var selectFolder = typeof(PCasa.App.MainWindow).GetField(
+                "_gallerySelection", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            ((GallerySelection)selectFolder.GetValue(window)!).SelectFolder(b.Id, displayed, selected);
+            var invert = typeof(PCasa.App.MainWindow).GetMethod("InvertCurrentFolderSelection",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            invert.Invoke(window, null);
+            if (selected.Count != 6)
+                throw new Exception("Inverting 6 Topaz files must select 6 hidden originals.");
+            search.Clear();
+            Until(window, () => surface.GetFolderOffset(b.Id) is not null &&
+                surface.GetFolderOffset(a.Id) is not null,
+                "Clearing filename filter did not restore gallery.");
+            if (selected.Count != 6)
+                throw new Exception("Clearing filename filter lost inverted selection.");
+            Console.WriteLine("PASS: Filename/tag switching, all three scopes and hidden-file inversion.");
+
+            // Creating an empty target must go through the scheduler, and the
+            // result must exist on the filesystem before it is used for moves.
+            var create = typeof(PCasa.App.MainWindow).GetMethod("CreateGallerySubfolderAsync",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var org = Path.Combine(albumB, "ORG");
+            var task = (Task)create.Invoke(window, [org])!;
+            Until(window, () => task.IsCompleted, "Scheduled creation of ORG never completed.");
+            task.GetAwaiter().GetResult();
+            if (!Directory.Exists(org))
+                throw new Exception("Scheduled ORG folder was not created.");
+            Console.WriteLine("PASS: Create ORG on monitored filesystem through shared scheduler.");
+
+            tagMode.IsChecked = true;
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Live WPF tag-search round trip passed.");
