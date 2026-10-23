@@ -13,11 +13,8 @@ public partial class MainWindow
     // Input handlers use the already published folder-tree snapshot.
     // Only the scheduler may perform authoritative SQLite revalidation.
     private MonitoredFolder? DisplayedMonitoredRoot(string path)
-        => _dropTargetProjection
-            .Where(entry => IsInside(path, entry.Folder.LocalPath))
-            .OrderByDescending(entry => entry.Folder.LocalPath.Length)
-            .Select(entry => entry.Folder)
-            .FirstOrDefault();
+        => FolderExclusionRules.FindOwner(
+            path, _dropTargetProjection.Select(entry => entry.Folder));
 
     private IReadOnlyList<string> DisplayedExcludedPaths(long folderId)
         => _dropTargetProjection.FirstOrDefault(entry =>

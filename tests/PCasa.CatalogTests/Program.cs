@@ -48,6 +48,7 @@ internal static class Program
         Run("User-added empty root is immediately persisted and resumes initial import after restart", NewlyAddedFolderInitialImportSurvivesRestart, failures);
         Run("Folder manager changes are atomic on OK with no staged side effects", FolderManagerSelectionCommitsAtomically, failures);
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
+        Run("Nested monitored root owns exclusion decision", NestedMonitoredRootOwnsExclusion, failures);
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
         Run("Watcher delete defers cache compaction", WatcherDeletionDefersCacheMaintenance, failures);
         Run("Compacted pack file names are never reused", CompactedPackNamesAreNeverReused, failures);
@@ -1670,6 +1671,30 @@ internal static class Program
         Require(db, 1);
         if (!File.Exists(original))
             throw new Exception("The original file was unexpectedly removed.");
+    }
+
+    private static void NestedMonitoredRootOwnsExclusion()
+    {
+        using var sandbox = new Sandbox();
+        var (db, outer, _) = sandbox.Prepare();
+        var innerPath = Path.Combine(sandbox.Images, "Inner");
+        var leaf = Path.Combine(innerPath, "Private");
+        Directory.CreateDirectory(leaf);
+        var folders = new FolderRepository(db);
+        folders.Add(innerPath);
+        var inner = folders.GetAll().Single(root =>
+            string.Equals(root.LocalPath, innerPath, StringComparison.OrdinalIgnoreCase));
+        if (FolderExclusionRules.FindOwner(leaf, folders.GetAll())?.Id != inner.Id)
+            throw new Exception("Nested folder was incorrectly assigned to outer root.");
+        folders.SetExcluded(inner.Id, leaf, true);
+        var owner = FolderExclusionRules.FindOwner(leaf, folders.GetAll())
+            ?? throw new Exception("Nested root disappeared.");
+        if (!FolderExclusionRules.IsExcluded(
+                leaf, folders.GetExcludedPaths(owner.Id)))
+            throw new Exception(
+                "A permissive outer root overrode the nested root's exclusion.");
+        if (FolderExclusionRules.FindOwner(sandbox.Images, folders.GetAll())?.Id != outer.Id)
+            throw new Exception("Non-nested paths stopped belonging to outer root.");
     }
 
     private static void ExclusionAdvancesGeneration()

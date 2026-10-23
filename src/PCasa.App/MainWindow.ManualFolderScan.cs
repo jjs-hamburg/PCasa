@@ -200,10 +200,8 @@ public partial class MainWindow
             .Replace('/', '\\')
             .TrimEnd('\\');
 
-        return _folderRepository.GetAll()
-            .Where(folder => IsInside(normalized, folder.LocalPath))
-            .OrderByDescending(folder => Path.GetFullPath(folder.LocalPath).Length)
-            .FirstOrDefault();
+        return FolderExclusionRules.FindOwner(
+            normalized, _folderRepository.GetAll());
     }
 
     private static bool IsInside(string normalizedPath, string rootPath)

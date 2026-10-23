@@ -134,10 +134,16 @@ public partial class MainWindow
     }
 
     private bool IsMonitoredGalleryDestination(string path)
-        => _folderRepository.GetAll().Any(root =>
-            FolderExclusionRules.IsAtOrBelow(path, root.LocalPath) &&
+    {
+        // The scanner and the file operation must resolve the SAME owning
+        // root. A permissive outer root cannot override the exclusion of a
+        // nested monitored root.
+        var root = FolderExclusionRules.FindOwner(
+            path, _folderRepository.GetAll());
+        return root is not null &&
             !FolderExclusionRules.IsExcluded(path,
-                _folderRepository.GetExcludedPaths(root.Id)));
+                _folderRepository.GetExcludedPaths(root.Id));
+    }
 
     private long? CatalogImageIdAtPath(string path)
     {
