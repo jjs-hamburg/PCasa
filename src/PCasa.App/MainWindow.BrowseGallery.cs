@@ -172,7 +172,66 @@ public partial class MainWindow
         }
     }
 
-    private async Task RefreshBrowseGalleryAsync(
+    // One owner for gallery publication. Requests are coalesced rather than
+    // canceling each other; a committed manual mutation cannot vanish merely
+    // because a concurrent scanner requests another refresh.
+    private readonly object _galleryRefreshGate = new();
+    private Task _galleryRefreshRunner = Task.CompletedTask;
+    private bool _galleryRefreshPending;
+    private bool _galleryRefreshForceIndex;
+    private bool _galleryRefreshWarmViewport;
+
+    private Task RefreshBrowseGalleryAsync(
+        bool forceIndexReload,
+        bool warmViewport = false)
+    {
+        lock (_galleryRefreshGate)
+        {
+            _galleryRefreshPending = true;
+            _galleryRefreshForceIndex |= forceIndexReload;
+            _galleryRefreshWarmViewport |= warmViewport;
+            if (_galleryRefreshRunner.IsCompleted)
+                _galleryRefreshRunner = DrainGalleryRefreshAsync();
+            return _galleryRefreshRunner;
+        }
+    }
+
+    private async Task DrainGalleryRefreshAsync()
+    {
+        // Allow caller to store the runner before its first publication.
+        await Task.Yield();
+        while (!Dispatcher.HasShutdownStarted)
+        {
+            bool force, warm;
+            lock (_galleryRefreshGate)
+            {
+                if (!_galleryRefreshPending) return;
+                force = _galleryRefreshForceIndex;
+                warm = _galleryRefreshWarmViewport;
+                _galleryRefreshPending = false;
+                _galleryRefreshForceIndex = false;
+                _galleryRefreshWarmViewport = false;
+            }
+
+            try
+            {
+                await RefreshBrowseGalleryCoreAsync(force, warm);
+            }
+            catch (OperationCanceledException) when (!Dispatcher.HasShutdownStarted)
+            {
+                // An input/filter revision can cancel one projection; a
+                // committed catalog change still requires a later projection.
+                lock (_galleryRefreshGate)
+                {
+                    _galleryRefreshPending = true;
+                    _galleryRefreshForceIndex = true;
+                }
+                await Task.Yield();
+            }
+        }
+    }
+
+    private async Task RefreshBrowseGalleryCoreAsync(
         bool forceIndexReload,
         bool warmViewport = false)
     {
