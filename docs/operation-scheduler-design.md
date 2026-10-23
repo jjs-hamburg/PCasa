@@ -304,3 +304,56 @@ Benutzerabnahme noch Freigabe/Änderung an `main`.
 
 **CI-Betrieb:** nur manuell durch `workflow_dispatch`. Es wurde durch
 diese Sanierung **kein automatischer CI-Testlauf** gestartet.
+
+## 14. Abschließende Konsolidierung und Abnahmekriterien (23.10.2026)
+
+Der aktuelle Entwicklungszweig besitzt folgende **eine Zuständigkeit je Aufgabe**:
+
+- **Dateien kopieren/duplizieren/verschieben:** ausschließlich
+  `TransferGalleryFilesAsync`; eine separate Kopier- und
+  Scanner-Implementierung im Bildkontextmenü wurde entfernt.
+- **Bildpfade und Dateisysteminformationen:** bei fehlender Index-Projektion
+  über `SelectedGalleryImagePathsAsync` und die Katalog-Lesespur; Netzwerk-
+  Klassifikation und Dateiprobe gehören in die Scheduler-Probes und nicht
+  in Tastatur- oder Kontextmenüereignisse.
+- **Ordnerauswahl und -entfernung:** ein Scheduler-Auftrag kontrolliert
+  SQLite-Transaktion, Quellgeneration, Galerie-/Ordnerbaum-Publikation und
+  den sichtbaren Abschluss. Der Ordnermanager blockiert eine zweite
+  überlappende OK-Entscheidung bis zum vollständigen Abschluss der ersten.
+- **Verschachtelte überwachte Wurzeln:** `FolderExclusionRules.FindOwner`
+  entscheidet für Scanner, Dateioperation und Drag-Ziel ausschließlich
+  nach der längsten passenden Wurzel. Ein überwachter äußerer Ordner
+  hebt keinen Ausschluss der inneren Überwachungswurzel auf.
+- **Fortschritt:** `BeginVisibleManualOperation` und
+  `EndVisibleManualOperation` sind dieselbe nur lesende Projektion des
+  `PCasaScheduler` für Dateiübertragung, Ordnerentfernung und OK im
+  Ordnermanager. Mehrere gleichzeitig ausstehende manuelle Aktionen
+  können die Anzeige nicht durch den Abschluss eines älteren Auftrags
+  versehentlich schließen. Die Präsentationsliste gehört allein zum
+  WPF-Dispatcher; Hintergrundbenachrichtigungen werden dorthin
+  transportiert.
+- **Statusanzeigen:** rein kosmetische Statusmeldungen verwenden die
+  bereits veröffentlichte Katalogzählung und öffnen keine eigenständige
+  SQLite-Verbindung.
+
+### Prüfungen
+
+Drei auf einen getrennten Prüfbranch begrenzte Windows-Actions-Läufe
+(`40021841906`, `40022234062` und `40022689686`) wurden gestartet,
+um die architektonischen Änderungen mit realem WPF und SQLite zu prüfen.
+Der letzte Lauf deckt bereits die Besitzerregel ab, aber nicht die
+anschließend ergänzte gemeinsame Fortschrittspräsentation.
+Für die endgültige Windows-Paketabnahme muss ein zusätzlicher
+manuell begrenzter Prüfbranch-Lauf den exakten Endstand kompilieren,
+die realen WPF-Smokes, die Katalogregressionen und die Paketierung
+erfolgreich bestätigen.
+
+**Grenze der maschinellen Prüfung:** Ein Windows-CI-Runner kann das reale
+NAS-/VPN-Verhalten oder die Interaktion mit Topaz nicht vollständig
+simulieren. Diese Umgebungsabnahme kann nur auf dem Ziel-PC erfolgen.
+Der erzeugte Windows-Build bleibt daher ein **Abnahme-/Testpaket**,
+keine ungeprüfte Produktionsfreigabe. `main` wird nicht verändert.
+
+Die automatischen GitHub-Tests des Entwicklungsbranches sind weiterhin
+deaktiviert. Nur der isolierte Prübranch besitzt einen absichtlich
+eingeschränkten Push-Trigger, um seine gezielten Abnahmeläufe auszuführen.
