@@ -2752,6 +2752,7 @@ internal static class Program
             .GetValue(first)!;
         if (Math.Abs(offsets[1] - offsets[0] - photoHeights[0] - 25) > 0.05)
             throw new Exception("Row spacing without captions is not the configured spacing.");
+        gallery.SetThumbnailSpacing(160);
         gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
         gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));
 
