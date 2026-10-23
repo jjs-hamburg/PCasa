@@ -232,7 +232,7 @@ public partial class MainWindow
                 : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
         StatusText.Text = query.Length > 0
             ? $"{desired.Count:N0} Bilder {(_invertFilterResults ? "ohne" : "mit")} {(_searchFileNames ? "Dateiname" : "Tags")}: {query}"
-            : $"{_imageCatalog.CountAll():N0} Bilder";
+            : $"{_lastCatalogImageCount:N0} Bilder";
         _lastAppliedTagQuery = query;
         BrowseScrollViewer.UpdateLayout();
         if (leavingSearch)

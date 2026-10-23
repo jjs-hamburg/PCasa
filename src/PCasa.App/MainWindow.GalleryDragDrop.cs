@@ -41,9 +41,11 @@ public partial class MainWindow
         // Drag-over is purely a UI hint. Do not query SQLite once per
         // pointer event: the authoritative check remains in the scheduler
         // when the actual transfer begins.
-        valid = _dropTargetProjection.Any(root =>
-            FolderExclusionRules.IsAtOrBelow(path, root.Folder.LocalPath) &&
-            !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths));
+        var owner = FolderExclusionRules.FindOwner(
+            path, _dropTargetProjection.Select(entry => entry.Folder));
+        valid = owner is not null &&
+            !FolderExclusionRules.IsExcluded(path,
+                DisplayedExcludedPaths(owner.Id));
         _dragTargetValidity[path] = valid;
         return valid;
     }

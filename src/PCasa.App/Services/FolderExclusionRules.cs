@@ -1,5 +1,6 @@
 using System.IO;
 using PCasa.App.Data;
+using PCasa.App.Models;
 
 namespace PCasa.App.Services;
 
@@ -22,6 +23,15 @@ public static class FolderExclusionRules
             p.StartsWith(r.EndsWith('\\') ? r : r + "\\",
                 StringComparison.OrdinalIgnoreCase);
     }
+
+    // A nested monitored root owns its own subtree. Never allow an outer
+    // root to override an inner root's exclusion rule or generation guard.
+    public static MonitoredFolder? FindOwner(
+        string path, IEnumerable<MonitoredFolder> monitoredRoots)
+        => monitoredRoots
+            .Where(root => IsAtOrBelow(path, root.LocalPath))
+            .OrderByDescending(root => Normalize(root.LocalPath).Length)
+            .FirstOrDefault();
 
     public static bool IsExcluded(
         string path, IReadOnlyCollection<string> exclusions)
