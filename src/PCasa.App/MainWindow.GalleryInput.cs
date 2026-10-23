@@ -32,6 +32,12 @@ public partial class MainWindow
         // while the thumbnail canvas actually owns the keyboard focus.
         if (!galleryHasFocus && !(ctrl && e.Key == Key.A && treeHasFocus))
             return;
+        if (ctrl && e.Key == Key.I)
+        {
+            InvertCurrentFolderSelection();
+            e.Handled = true;
+            return;
+        }
         if (ctrl && e.Key == Key.A)
         {
             // The selected TREE item is authoritative, not the current scroll
@@ -117,6 +123,31 @@ public partial class MainWindow
             }
             e.Handled = true;
         }
+    }
+
+    private void GalleryInvertSelection_Click(object sender, RoutedEventArgs e)
+        => InvertCurrentFolderSelection();
+
+    private void InvertCurrentFolderSelection()
+    {
+        if ((FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
+            FolderTreeTag { PhotoFolderId: long folderId })
+        {
+            StatusText.Text = "Zum Invertieren einen Bildordner auswählen.";
+            return;
+        }
+
+        // Invert the WHOLE folder, not the currently filtered results.
+        // This makes hidden originals selectable while topaz results are
+        // still displayed; clearing the filter then reveals the selection.
+        foreach (var image in _browseIndex.Where(item => item.PhotoFolderId == folderId))
+        {
+            if (!_selectedImageIds.Add(image.ImageId))
+                _selectedImageIds.Remove(image.ImageId);
+        }
+        _gallerySelection.Reset();
+        ApplyGallerySelection();
+        StatusText.Text = $"{_selectedImageIds.Count:N0} Dateien ausgewählt (Ordner invertiert)";
     }
 
     private static T? FindAncestor<T>(DependencyObject? element)

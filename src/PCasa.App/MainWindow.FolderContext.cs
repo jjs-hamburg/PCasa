@@ -12,6 +12,83 @@ public partial class MainWindow
     private FolderTreeTag? ContextFolder()
         => (FoldersTree.SelectedItem as TreeViewItem)?.Tag as FolderTreeTag;
 
+    private async void FolderContext_CreateDirectory_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = FoldersTree.SelectedItem as TreeViewItem;
+        if (selected?.Tag is not FolderTreeTag tag) return;
+        if (!IsMonitoredGalleryDestination(tag.FullPath))
+        {
+            MessageBox.Show(this, "Der Zielordner wird nicht überwacht.", "PCasa",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var dialog = new Window
+        {
+            Title = "Neuen Unterordner anlegen", Owner = this,
+            Width = 355, Height = 142, ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false
+        };
+        dialog.SetResourceReference(Window.BackgroundProperty, "PcasaPanelBrush");
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        var nameField = new TextBox { Text = "ORG", Margin = new Thickness(0, 0, 0, 10) };
+        var accept = new Button { Content = "Anlegen", Width = 85,
+            Style = (Style)FindResource("PcasaStatusButtonStyle"),
+            HorizontalAlignment = HorizontalAlignment.Right, IsDefault = true };
+        panel.Children.Add(nameField);
+        panel.Children.Add(accept);
+        dialog.Content = panel;
+        accept.Click += (_, _) => dialog.DialogResult = true;
+        nameField.Loaded += (_, _) => { nameField.SelectAll(); nameField.Focus(); };
+        if (dialog.ShowDialog() != true) return;
+        var name = nameField.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." ||
+            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+            name.EndsWith(' ') || name.EndsWith('.'))
+        {
+            MessageBox.Show(this, "Ungültiger Ordnername.", "PCasa",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var destination = Path.Combine(tag.FullPath, name);
+        try
+        {
+            await CreateGallerySubfolderAsync(destination);
+            _createdEmptyFolderPaths.Add(destination);
+            if (FindFolderTreeItemByPath(FoldersTree, destination) is null)
+            {
+                var item = new TreeViewItem
+                {
+                    Header = name, Tag = CreateFolderTreeTag(destination, null),
+                    ToolTip = destination, AllowDrop = true
+                };
+                selected.Items.Add(item);
+                selected.IsExpanded = true;
+            }
+            StatusText.Text = "Unterordner angelegt: " + destination;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("FolderContext.Create", ex);
+            MessageBox.Show(this, ex.Message, "Ordner anlegen",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private Task CreateGallerySubfolderAsync(string destination)
+        => _scheduler.EnqueueAsync($"folder:create:{Guid.NewGuid():N}",
+            SchedulerPriority.ManualAction, token =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (!IsMonitoredGalleryDestination(destination))
+                    throw new IOException("Zielordner wird nicht überwacht.");
+                if (Directory.Exists(destination) || File.Exists(destination))
+                    throw new IOException("Der Ordner existiert bereits.");
+                Directory.CreateDirectory(destination);
+                return Task.CompletedTask;
+            }, workKind: SchedulerWorkKind.SourceProbe);
+
     private void FolderContext_OpenExplorer_Click(object sender, RoutedEventArgs e)
     {
         var tag = ContextFolder();

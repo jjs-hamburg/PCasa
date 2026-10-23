@@ -104,6 +104,8 @@ public partial class MainWindow : Window
         SaveFolderTreeState();
     }
 
+    private readonly HashSet<string> _createdEmptyFolderPaths =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _rebuildingFolderTree;
     private bool _expandingCompressedTree;
 
@@ -162,6 +164,11 @@ public partial class MainWindow : Window
                 folder.Id,
                 folder.ImageCount);
         }
+
+        // Targets created through the context menu stay in the folder tree
+        // while empty. Scan work still owns their eventual photo catalog.
+        foreach (var empty in _createdEmptyFolderPaths)
+            AddFolderTreePath(roots, nodesByPath, empty, empty, null, 0);
 
         foreach (var root in roots.Values)
         {
