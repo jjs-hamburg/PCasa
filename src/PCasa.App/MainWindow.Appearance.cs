@@ -454,12 +454,4 @@ public partial class MainWindow
                $"\nLetzte Änderung: {modified:g}";
     }
 
-    private string? GetImagePath(long id)
-    {
-        using var connection = _database.OpenConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT local_path FROM images WHERE id = $id";
-        command.Parameters.AddWithValue("$id", id);
-        return command.ExecuteScalar() as string;
-    }
 }
