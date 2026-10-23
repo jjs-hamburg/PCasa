@@ -259,6 +259,14 @@ sondern dokumentiert ihre aktuelle Bearbeitung.
   wird beim Laden und nach einer Ordnermanagerentscheidung einmal über die
   Katalog-Leseexecutor des Schedulers ermittelt. Der Ordnermanager
   bekommt eine schreibgeschützte Ausgangssicht und schreibt erst nach OK.
+  Sein manueller Scheduler-Auftrag bleibt bis zur fertigen Galerie-
+  und Ordnerbaum-Publikation aktiv; die Einstellungen werden nach dem
+  Katalog-Commit unter derselben Scheduler-Hoheit gespeichert.
+- »Alle scannen« verwendet die veröffentlichte Quellübersicht zur
+  UI-Steuerung; der Scanner validiert selbst seine aktuelle Quelle.
+  Der dauerhafte Erstimport liest seine wartenden Ordner über
+  `SchedulerWorkKind.CatalogRead` und nicht über eine eigene synchrone
+  WPF-Datenbankabfrage.
 - Bei Start prüft ein Hintergrundauftrag im Scheduler bestehende
   Exklusionsregeln gegen den lokalen Katalog. Er beseitigt ausschließlich
   **verwaiste Katalogzeilen** aus alten, nicht atomaren Vorgängen, mit
@@ -288,8 +296,9 @@ sondern dokumentiert ihre aktuelle Bearbeitung.
 
 **Weiterhin offen:** Ein Scheduler-Monitor mit ausführlichen
 Ressourcen-/Blockiergründen; einheitliche Fortschrittsfenster-Publikation
-auch für Ordnerentscheidungen; die Prüfung aller weiteren UI-SQLite-Einstiege
-(unter anderem »Alle scannen«); Überschneidungen mehrerer
+auch für Ordnerentscheidungen; eine vollständige Auditierung der
+verbleibenden UI-SQLite-Einstiege außerhalb von Ordnerbaum, Dialog,
+»Alle scannen« und Erstimport; Überschneidungen mehrerer
 Überwachungswurzeln und NAS-/VPN-Abnahme. Bis dahin weder ZIP zur
 Benutzerabnahme noch Freigabe/Änderung an `main`.
 
