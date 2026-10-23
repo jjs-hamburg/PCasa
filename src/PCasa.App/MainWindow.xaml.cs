@@ -109,6 +109,22 @@ public partial class MainWindow : Window
     private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)>
         _dropTargetProjection = Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
 
+
+    // ONE immutable view of monitored roots and exclusions, read by a
+    // scheduler catalog worker. Folder-tree layout, context menus and the
+    // folder-manager dialog consume this projection without SQLite I/O.
+    private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)>
+        ReadFolderTreeConfigurationSnapshot()
+    {
+        var roots = _folderRepository.GetAll();
+        return roots
+            .Select(root => (
+                Folder: root,
+                ExcludedPaths: (IReadOnlyList<string>)_folderRepository
+                    .GetExcludedPaths(root.Id).ToArray()))
+            .ToArray();
+    }
+
     private readonly HashSet<string> _createdEmptyFolderPaths =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _rebuildingFolderTree;
@@ -133,19 +149,15 @@ public partial class MainWindow : Window
         FoldersTree.Items.Clear();
         _folderTreeItems.Clear();
 
-        var monitoredRoots = _folderRepository.GetAll();
-        var rootsWithExclusions = monitoredRoots
-            .Select(folder => (Folder: folder,
-                Exclusions: _folderRepository.GetExcludedPaths(folder.Id)))
+        // Rebuild the UI exclusively from the last committed scheduler
+        // snapshot. The user can collapse/expand or resize this tree without
+        // waiting on SQLite writes or unreachable NAS paths.
+        var rootsWithExclusions = _dropTargetProjection
             .Where(root => !FolderExclusionRules.IsExcluded(
-                root.Folder.LocalPath, root.Exclusions))
+                root.Folder.LocalPath, root.ExcludedPaths))
             .ToArray();
         var monitoredFolders = rootsWithExclusions
             .Select(root => root.Folder).ToArray();
-        _dropTargetProjection = rootsWithExclusions
-            .Select(root => (root.Folder, ExcludedPaths: root.Exclusions))
-            .ToArray();
-        _dragTargetValidity.Clear();
         var monitoredFolderIds = monitoredFolders.Select(folder => folder.Id).ToHashSet();
         var roots = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);
         var nodesByPath = new Dictionary<string, FolderTreeNode>(StringComparer.OrdinalIgnoreCase);

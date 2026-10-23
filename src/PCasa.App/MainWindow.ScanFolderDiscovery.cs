@@ -20,8 +20,12 @@ public partial class MainWindow
             !_browseInitialized || _folderTreeItems.ContainsKey(photoId))
             return;
 
-        var monitored = _folderRepository.GetAll().FirstOrDefault(root =>
-            FolderExclusionRules.IsAtOrBelow(folderPath, root.LocalPath));
+        var monitored = _dropTargetProjection
+            .Select(entry => entry.Folder)
+            .Where(root => FolderExclusionRules.IsAtOrBelow(
+                folderPath, root.LocalPath))
+            .OrderByDescending(root => root.LocalPath.Length)
+            .FirstOrDefault();
         if (monitored is null) return;
         var item = FindFolderTreeItemByPath(FoldersTree, monitored.LocalPath);
         if (item is null) return;

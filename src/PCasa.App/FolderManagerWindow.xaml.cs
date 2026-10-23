@@ -15,7 +15,6 @@ public partial class FolderManagerWindow : Window
         MonitoredFolder? Root, string LocalPath, bool IsRoot,
         bool IsSystemFolder = false, string? Label = null);
 
-    private readonly FolderRepository _repository;
     private readonly PCasaScheduler _scheduler;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
@@ -37,16 +36,16 @@ public partial class FolderManagerWindow : Window
             root.ServerSyncEnabled)).ToArray(),
         BackgroundScanCheckBox.IsChecked == true);
 
-    public FolderManagerWindow(FolderRepository repository, PCasaScheduler scheduler,
-        bool serverDatabaseConfigured)
+    public FolderManagerWindow(
+        IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> configuration,
+        PCasaScheduler scheduler, bool serverDatabaseConfigured)
     {
         InitializeComponent();
-        _repository = repository;
         _scheduler = scheduler;
         _backgroundScanSettings = BackgroundScanSettings.Load();
-        _monitoredRoots = _repository.GetAll();
-        foreach (var folder in _monitoredRoots)
-            _exclusions[folder.Id] = _repository.GetExcludedPaths(folder.Id);
+        _monitoredRoots = configuration.Select(item => item.Folder).ToArray();
+        foreach (var (folder, excludedPaths) in configuration)
+            _exclusions[folder.Id] = excludedPaths;
 
         ServerSyncCheckBox.Visibility = serverDatabaseConfigured
             ? Visibility.Visible : Visibility.Collapsed;

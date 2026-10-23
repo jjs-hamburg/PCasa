@@ -133,6 +133,8 @@ public partial class MainWindow
         }
 
         IReadOnlyList<PhotoFolderSummary> initialFolders = Array.Empty<PhotoFolderSummary>();
+        IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> initialConfiguration =
+            Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
         var imageCount = 0;
         await _scheduler.EnqueueAsync(
             $"catalog:initial-summary:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
@@ -141,10 +143,13 @@ public partial class MainWindow
                 token.ThrowIfCancellationRequested();
                 initialFolders = _imageCatalog.GetPhotoFolders();
                 imageCount = _imageCatalog.CountAll();
+                initialConfiguration = ReadFolderTreeConfigurationSnapshot();
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.CatalogRead);
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
+        _dropTargetProjection = initialConfiguration;
+        _dragTargetValidity.Clear();
         RefreshFolderTree(preserveGalleryAnchor: false);
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -683,22 +688,36 @@ public partial class MainWindow
     private async void BrowseFolderManager_Click(object sender, RoutedEventArgs e)
     {
         if (_folderManagerOpen) return;
-        var window = new FolderManagerWindow(
-            _folderRepository,
-            _scheduler,
-            serverDatabaseConfigured: false)
-        {
-            Owner = this
-        };
-
         _folderManagerOpen = true;
         FolderManagerSelection? selection = null;
         try
         {
-            // No UI checkbox may save to SQLite, cancel an active scan or
-            // launch an import. The user makes ONE decision on OK.
+            // Opening the dialog is a scheduled catalog read. No WPF
+            // constructor or checkbox may open a SQLite connection.
+            var configuration = await _scheduler.RunAsync(
+                $"catalog:folder-manager-configuration:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return ReadFolderTreeConfigurationSnapshot();
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            if (Dispatcher.HasShutdownStarted) return;
+            var window = new FolderManagerWindow(
+                configuration, _scheduler, serverDatabaseConfigured: false)
+            {
+                Owner = this
+            };
+            // No checkbox mutates SQLite. Cancel closes without side effects.
             if (window.ShowDialog() == true)
                 selection = window.SelectedConfiguration;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("FolderManager.Open", ex);
+            MessageBox.Show(this, "Der Ordnermanager konnte nicht geöffnet werden.\n\n" +
+                ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
         }
         finally
         {
@@ -710,6 +729,8 @@ public partial class MainWindow
         try
         {
             var modified = false;
+            IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> committedConfiguration =
+                Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
             await _scheduler.EnqueueAsync(
                 "folder-manager:commit-selection",
                 SchedulerPriority.Interactive,
@@ -717,6 +738,8 @@ public partial class MainWindow
                 {
                     modified = new FolderManagerSelectionService(_database)
                         .Apply(selection, token);
+                    if (modified)
+                        committedConfiguration = ReadFolderTreeConfigurationSnapshot();
                     return Task.CompletedTask;
                 });
 
@@ -728,6 +751,8 @@ public partial class MainWindow
             if (modified)
             {
                 _initialScanAttempted.Clear();
+                _dropTargetProjection = committedConfiguration;
+                _dragTargetValidity.Clear();
                 RefreshFolderTree(preserveGalleryAnchor: true);
                 StatusText.Text = "Ordnerauswahl übernommen · Einlesen mit Benutzerpriorität";
                 // The scanner is a SINGLE durable user-priority scheduler

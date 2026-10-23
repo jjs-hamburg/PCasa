@@ -379,7 +379,8 @@ internal static class Program
             try
             {
                 manager = new PCasa.App.FolderManagerWindow(
-                    new PCasa.App.Data.FolderRepository(new PCasa.App.Data.LocalDatabase()),
+                    Array.Empty<(PCasa.App.Models.MonitoredFolder Folder,
+                        IReadOnlyList<string> ExcludedPaths)>(),
                     managerScheduler, serverDatabaseConfigured: false)
                 {
                     Owner = window

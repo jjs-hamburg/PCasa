@@ -102,6 +102,18 @@ public partial class MainWindow
             // pretend that an uncommitted exclusion was accepted.
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
+            // A DB commit might have succeeded while its UI publication
+            // failed. Reload the authoritative configuration on a catalog
+            // worker before restoring the visual tree.
+            _dropTargetProjection = await _scheduler.RunAsync(
+                $"catalog:restore-folder-tree:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return ReadFolderTreeConfigurationSnapshot();
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            _dragTargetValidity.Clear();
             RefreshFolderTree(preserveGalleryAnchor: true);
             throw;
         }
