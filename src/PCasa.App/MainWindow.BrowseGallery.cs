@@ -24,6 +24,7 @@ public partial class MainWindow
     private bool _browseInitialized;
     private bool _browseCacheBuilding;
     private bool _folderManagerOpen;
+    private bool _folderManagerCommitPending;
     private BrowseCacheProgressWindow? _browseProgressWindow;
 
     private async void BrowseSurface_Loaded(object sender, RoutedEventArgs e)
@@ -699,7 +700,7 @@ public partial class MainWindow
 
     private async void BrowseFolderManager_Click(object sender, RoutedEventArgs e)
     {
-        if (_folderManagerOpen) return;
+        if (_folderManagerOpen || _folderManagerCommitPending) return;
         _folderManagerOpen = true;
         FolderManagerSelection? selection = null;
         try
@@ -740,6 +741,7 @@ public partial class MainWindow
 
         var durableCommitted = false;
         const string operationKey = "folder-manager:commit-selection";
+        _folderManagerCommitPending = true;
         BeginVisibleManualOperation(operationKey, "Ordnerauswahl übernehmen", 1);
         try
         {
@@ -803,6 +805,7 @@ public partial class MainWindow
         finally
         {
             EndVisibleManualOperation(operationKey);
+            _folderManagerCommitPending = false;
         }
     }
 

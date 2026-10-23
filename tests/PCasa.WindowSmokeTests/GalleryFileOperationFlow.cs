@@ -470,6 +470,33 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Progress dialog stays screen-anchored when PCasa resizes.");
 
+            // Two user operations may overlap in separate scheduler lanes.
+            // Finishing an older operation must not close the current
+            // foreground presentation or replace its status.
+            var beginManual = typeof(PCasa.App.MainWindow).GetMethod(
+                "BeginVisibleManualOperation",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("Shared manual scheduler presenter missing.");
+            var endManual = typeof(PCasa.App.MainWindow).GetMethod(
+                "EndVisibleManualOperation",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("Shared manual presenter end missing.");
+            beginManual.Invoke(window, ["test:older-manual", "Älterer Auftrag", 1]);
+            beginManual.Invoke(window, ["test:newer-manual", "Neuerer Auftrag", 1]);
+            endManual.Invoke(window, ["test:older-manual"]);
+            var currentProgress = Application.Current.Windows
+                .OfType<PCasa.App.BrowseCacheProgressWindow>()
+                .FirstOrDefault(p => p.IsVisible);
+            if (currentProgress is null ||
+                (currentProgress.FindName("PhaseText") as TextBlock)?.Text
+                    is not string currentPhase ||
+                !currentPhase.Contains("Neuerer Auftrag", StringComparison.Ordinal))
+                throw new Exception(
+                    "Older manual completion replaced or closed a newer progress presenter.");
+            endManual.Invoke(window, ["test:newer-manual"]);
+            Console.WriteLine(
+                "PASS: Older manual completion cannot hide newer scheduler progress.");
+
             if (typeof(PCasa.App.MainWindow).GetMethod("SHObjectProperties",
                     BindingFlags.NonPublic | BindingFlags.Static) is null)
                 throw new Exception("Native Windows properties invocation is missing.");
