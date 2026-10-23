@@ -179,3 +179,51 @@ Automatisierte WPF-/SQLite-Tests kontrollieren den Vertrag, beweisen jedoch
 keine erfolgreiche Bedienung am NAS. Freigabe setzt eine reale
 End-to-End-Abnahme mit gleichzeitigem Import, Topaz-Filter und Verschiebung
 nach ORG voraus. **Ein grüner Build allein ist ausdrücklich keine Freigabe.**
+
+## 12. Scheduler-/UI-Eintrittsregeln und offene Abnahmesperren (23.10.2026)
+
+### Bereits implementiert und automatisiert geprüft
+
+- Die Galerie ermittelt fehlende Pfade ausgewählter Bilder über
+  `SchedulerWorkKind.CatalogRead`; die WPF-Geste verwendet für vorhandene
+  Bilder nur den aktuellen Index. Die Auswahl wird vor einer asynchronen
+  Drag-Geste festgehalten und nach dem Warten erneut abgeglichen.
+- Drag-over/Drop-Zielmarkierung benutzt eine schreibgeschützte Projektion der
+  überwachten Wurzeln und Ausschlüsse. Die Projektion darf nie die
+  autoritative Prüfung ersetzen: Der gestartete Scheduler-Auftrag prüft
+  Erreichbarkeit und Monitoringstatus erneut. Einfügen fragt nicht vorab
+  synchron `Directory.Exists` auf dem Dispatcher ab.
+- Source-Probes bleiben im selben `PCasaScheduler`, verfügen jedoch über
+  begrenzte, getrennte Kapazitäten für manuelle, interaktive und automatische
+  Anforderungen. Zwei im Betriebssystem blockierte automatische SMB-Probes
+  dürfen eine neue Benutzeranforderung nicht in ihrer Queue festhalten.
+- Die Tests zu diesen drei Verträgen wurden im Windows-Actions-Lauf
+  `40017852470` für Commit `e87d13fd2302` erfolgreich ausgeführt.
+  Dies ist **keine** reale NAS-/VPN-End-to-End-Abnahme.
+- Der Scheduler-Testworkflow wird nur noch über `workflow_dispatch`
+  gestartet. Commits starten keinen kostspieligen automatischen Windows-Lauf.
+
+### Verbindliche, noch offene Architekturprüfung
+
+1. **`FolderExclusionService.ChangeAsync`**: `SetExcluded` erfolgt zurzeit
+   über ein unabhängiges `Task.Run`; die spätere Katalogbereinigung ist ein
+   separater Scheduler-Auftrag mit `UserAction`-Priorität. Das widerspricht
+   der einheitlichen Scheduler-Hoheit über manuelle Zustandsänderungen. Vor
+   dem Umbau müssen commitfeste Generationen, die unmittelbare optimistische
+   UI-Projektion, Unterbrechung zwischen Entscheidung und Bereinigung sowie
+   Wiederanlauf nach Neustart zusammenhängend festgelegt werden. Ein
+   isoliertes Ersetzen von `Task.Run` durch `EnqueueAsync` ist **keine**
+   ausreichende Sanierung.
+2. **`RemoveFolderFromPcasaAsync`** liest die überwachte Wurzel noch
+   synchron vor der optimistischen Galerieausblendung. Auch dieser Pfad muss
+   Teil des einheitlichen manuellen Operationsvertrags werden, damit ein
+   SQLite-Wartezustand die Benutzerreaktion nicht verzögert.
+3. **`RefreshFolderTree`** führt bei Neuaufbau weiterhin lokale
+   Repository-Abfragen auf dem Dispatcher aus. Die zugehörige konsistente
+   Projektion darf nicht durch einen separaten Poller oder eine zweite
+   fachliche Zustandsquelle ersetzt werden; ihr Aktualisierungsvertrag mit
+   Scheduler, Katalog und Ordnerverwaltung ist vor der Migration zu klären.
+
+**Freigabestatus:** keine vollständige Architekturabnahme. Alle offenen
+Punkte bleiben gesperrt, bis ihr Codepfad analytisch begründet ist und
+anschließend gezielt geprüft wurde. `main` bleibt unverändert.
