@@ -45,11 +45,45 @@
             <Setter Property="Margin" Value="0,0,5,0"/>
             <Setter Property="Padding" Value="3,2"/>
         </Style>
+        <!-- The two footer sliders use neutral Picasa-like rails and
+             narrow rectangular knobs. No Windows accent blue and no circles. -->
         <ControlTemplate x:Key="PcasaCompactSliderThumbTemplate" TargetType="{x:Type primitives:Thumb}">
-            <Ellipse Width="12" Height="12"
-                     Fill="{DynamicResource PcasaAccentBrush}"
-                     Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1" />
+            <Border Width="13" Height="21" CornerRadius="3"
+                    BorderBrush="#80858A" BorderThickness="1"
+                    Background="#E1E2E3">
+                <Border Margin="2" CornerRadius="2" BorderThickness="1,0,0,0"
+                        BorderBrush="#FFFFFF" Background="#ECEDEE"/>
+            </Border>
         </ControlTemplate>
+        <Style x:Key="PcasaNeutralSliderStyle" TargetType="Slider">
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Focusable" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid Height="26" Background="Transparent">
+                            <Border Height="6" CornerRadius="3" VerticalAlignment="Center"
+                                    BorderThickness="1" BorderBrush="#989DA2" Background="#C4C8CB"/>
+                            <primitives:Track x:Name="PART_Track" VerticalAlignment="Center"
+                                              IsDirectionReversed="False">
+                                <primitives:Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge"
+                                                  IsTabStop="False" Opacity="0"/>
+                                </primitives:Track.DecreaseRepeatButton>
+                                <primitives:Track.Thumb>
+                                    <primitives:Thumb Width="13" Height="21"
+                                        Template="{StaticResource PcasaCompactSliderThumbTemplate}" />
+                                </primitives:Track.Thumb>
+                                <primitives:Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge"
+                                                  IsTabStop="False" Opacity="0"/>
+                                </primitives:Track.IncreaseRepeatButton>
+                            </primitives:Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -628,7 +662,7 @@
                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                             </Canvas>
                         </Viewbox>
-                        <Slider x:Name="ThumbnailSizeSlider" Width="120" Minimum="72" Maximum="600"
+                        <Slider x:Name="ThumbnailSizeSlider" Style="{StaticResource PcasaNeutralSliderStyle}" Width="120" Minimum="72" Maximum="600"
                                 Value="190" Loaded="CompactThumbnailSlider_Loaded"
                                 ValueChanged="BrowseThumbnailSizeSlider_ValueChanged"
                                 VerticalAlignment="Center" ToolTip="Thumbnailgröße" />
@@ -646,7 +680,7 @@
                                       StrokeLineJoin="Round"/>
                             </Canvas>
                         </Viewbox>
-                        <Slider x:Name="ThumbnailSpacingSlider" Width="112" Minimum="0" Maximum="160" Value="10"
+                        <Slider x:Name="ThumbnailSpacingSlider" Style="{StaticResource PcasaNeutralSliderStyle}" Width="112" Minimum="0" Maximum="160" Value="10"
                                 Loaded="CompactThumbnailSlider_Loaded"
                                 ValueChanged="ThumbnailSpacingSlider_ValueChanged"
                                 VerticalAlignment="Center" ToolTip="Thumbnailabstand" />
