@@ -741,8 +741,14 @@ public partial class MainWindow
 
         // The scheduler has already read this committed snapshot. Do not
         // block WPF on a second SQLite read during publication.
-        _backgroundExcludedPaths[folderId] =
-            committedRules ?? _folderRepository.GetExcludedPaths(folderId);
+        var rules = committedRules ?? _folderRepository.GetExcludedPaths(folderId);
+        _backgroundExcludedPaths[folderId] = rules;
+        _dropTargetProjection = _dropTargetProjection
+            .Select(entry => entry.Folder.Id == folderId
+                ? (entry.Folder, ExcludedPaths: rules)
+                : entry)
+            .ToArray();
+        _dragTargetValidity.Clear();
         if (excluded)
         {
             ForgetFolderActivity(path);

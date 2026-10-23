@@ -12,8 +12,13 @@ public partial class MainWindow
     private async Task<int> RemoveFolderFromPcasaAsync(long folderId,
         string path, bool removeMonitoredRoot)
     {
-        var folder = _folderRepository.GetAll().FirstOrDefault(f => f.Id == folderId)
-            ?? throw new InvalidOperationException("Der überwachte Ordner ist nicht mehr vorhanden.");
+        // UI reads its published tree snapshot; SQLite/UNC probes never
+        // precede the immediate visible removal on the WPF dispatcher.
+        var folder = _dropTargetProjection
+            .Select(root => root.Folder)
+            .FirstOrDefault(root => root.Id == folderId)
+            ?? throw new InvalidOperationException(
+                "Der überwachte Ordner ist nicht mehr im Ordnerbaum vorhanden.");
         var normalized = FolderExclusionRules.Normalize(path);
         if (!FolderExclusionRules.IsAtOrBelow(normalized, folder.LocalPath))
             throw new InvalidOperationException("Der Ordner liegt außerhalb der Überwachung.");
@@ -41,16 +46,35 @@ public partial class MainWindow
                 removed = 0;
                 await _scheduler.EnqueueAsync(
                     $"monitor-remove:{folder.CanonicalPath}:{folderId}",
-                    SchedulerPriority.Interactive,
-                    token =>
+                    SchedulerPriority.ManualAction,
+                    async token =>
                     {
                         token.ThrowIfCancellationRequested();
+                        var current = _folderRepository.GetAll()
+                            .FirstOrDefault(root => root.Id == folderId)
+                            ?? throw new OperationCanceledException(
+                                "Dieser Überwachungsordner existiert nicht mehr.");
+                        if (!string.Equals(
+                                FolderExclusionRules.Normalize(current.LocalPath),
+                                normalized, StringComparison.OrdinalIgnoreCase))
+                            throw new OperationCanceledException(
+                                "Ein inzwischen geänderter Ordner darf nicht entfernt werden.");
                         var before = _imageCatalog.CountAll();
                         _folderRepository.Remove(folderId);
                         removed = Math.Max(0, before - _imageCatalog.CountAll());
-                        return Task.CompletedTask;
+
+                        // Like an exclusion, monitored-root removal is
+                        // Completed only after its catalog view was published.
+                        await Dispatcher.InvokeAsync(async () =>
+                        {
+                            _dropTargetProjection = _dropTargetProjection
+                                .Where(root => root.Folder.Id != folderId).ToArray();
+                            _dragTargetValidity.Clear();
+                            ForgetFolderActivity(normalized);
+                            await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                                warmViewport: false);
+                        }).Task.Unwrap();
                     });
-                ForgetFolderActivity(normalized);
             }
             else
             {
@@ -66,11 +90,8 @@ public partial class MainWindow
                             }).Task.Unwrap());
             }
 
-            // Complete the visible view refresh BEFORE releasing background
-            // workers or returning control to either UI entry point.
-            if (removeMonitoredRoot)
-                await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
+            // Both root and subtree operations now publish inside their
+            // single scheduler job, before returning to either UI entry.
             StatusText.Text = $"{removed:N0} Bildeinträge aus PCasa entfernt";
             return removed;
         }

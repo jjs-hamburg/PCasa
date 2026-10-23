@@ -106,8 +106,8 @@ public partial class MainWindow : Window
 
     // The tree's read-only drop eligibility projection. SQLite remains the
     // sole authority; it is rechecked in each scheduled mutation.
-    private IReadOnlyList<(string RootPath, IReadOnlyList<string> ExcludedPaths)>
-        _dropTargetProjection = Array.Empty<(string, IReadOnlyList<string>)>();
+    private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)>
+        _dropTargetProjection = Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
 
     private readonly HashSet<string> _createdEmptyFolderPaths =
         new(StringComparer.OrdinalIgnoreCase);
@@ -143,8 +143,7 @@ public partial class MainWindow : Window
         var monitoredFolders = rootsWithExclusions
             .Select(root => root.Folder).ToArray();
         _dropTargetProjection = rootsWithExclusions
-            .Select(root => (RootPath: root.Folder.LocalPath,
-                ExcludedPaths: root.Exclusions))
+            .Select(root => (root.Folder, ExcludedPaths: root.Exclusions))
             .ToArray();
         _dragTargetValidity.Clear();
         var monitoredFolderIds = monitoredFolders.Select(folder => folder.Id).ToHashSet();

@@ -9,6 +9,20 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+
+    // Input handlers use the already published folder-tree snapshot.
+    // Only the scheduler may perform authoritative SQLite revalidation.
+    private MonitoredFolder? DisplayedMonitoredRoot(string path)
+        => _dropTargetProjection
+            .Where(entry => IsInside(path, entry.Folder.LocalPath))
+            .OrderByDescending(entry => entry.Folder.LocalPath.Length)
+            .Select(entry => entry.Folder)
+            .FirstOrDefault();
+
+    private IReadOnlyList<string> DisplayedExcludedPaths(long folderId)
+        => _dropTargetProjection.FirstOrDefault(entry =>
+            entry.Folder.Id == folderId).ExcludedPaths ?? Array.Empty<string>();
+
     private FolderTreeTag? ContextFolder()
         => (FoldersTree.SelectedItem as TreeViewItem)?.Tag as FolderTreeTag;
 
@@ -112,12 +126,12 @@ public partial class MainWindow
     {
         var tag = ContextFolder();
         if (tag is null) return;
-        var root = ResolveMonitoredFolder(tag.FullPath);
+        var root = DisplayedMonitoredRoot(tag.FullPath);
         var folders = _photoFolders.Where(f => IsInside(f.LocalPath, tag.FullPath)).ToArray();
         var total = folders.Sum(f => f.ImageCount);
         var excluded = root is not null &&
             FolderExclusionRules.IsExcluded(tag.FullPath,
-                _folderRepository.GetExcludedPaths(root.Id));
+                DisplayedExcludedPaths(root.Id));
         var state = root is null ? "Nicht überwacht" :
             excluded ? "Im Ordnermanager deaktiviert" : "Überwacht";
         MessageBox.Show(this,
@@ -133,7 +147,7 @@ public partial class MainWindow
     {
         var tag = ContextFolder();
         if (tag is null) return;
-        var root = ResolveMonitoredFolder(tag.FullPath);
+        var root = DisplayedMonitoredRoot(tag.FullPath);
         if (root is null)
         {
             MessageBox.Show(this, "Dieser Ordner liegt außerhalb der PCasa-Überwachung.",
@@ -142,7 +156,7 @@ public partial class MainWindow
         }
         var path = FolderExclusionRules.Normalize(tag.FullPath);
         if (FolderExclusionRules.IsExcluded(path,
-                _folderRepository.GetExcludedPaths(root.Id)))
+                DisplayedExcludedPaths(root.Id)))
         {
             MessageBox.Show(this, "Der Ordner ist bereits deaktiviert.",
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);

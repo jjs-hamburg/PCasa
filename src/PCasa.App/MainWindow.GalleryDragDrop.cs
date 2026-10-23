@@ -42,7 +42,7 @@ public partial class MainWindow
         // pointer event: the authoritative check remains in the scheduler
         // when the actual transfer begins.
         valid = _dropTargetProjection.Any(root =>
-            FolderExclusionRules.IsAtOrBelow(path, root.RootPath) &&
+            FolderExclusionRules.IsAtOrBelow(path, root.Folder.LocalPath) &&
             !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths));
         _dragTargetValidity[path] = valid;
         return valid;
