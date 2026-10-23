@@ -34,8 +34,22 @@ public partial class MainWindow
                     (_isScanning && !_backgroundWorkerRunning))
                     return;
 
-                var next = _folderRepository.GetPendingInitialScans()
-                    .FirstOrDefault(folder => !_initialScanAttempted.Contains(folder.Id));
+                // A pending initial import is a durable catalog decision.
+                // Read it through the scheduler, never synchronously on the
+                // UI dispatcher while another operation holds SQLite.
+                var attempted = _initialScanAttempted.ToHashSet();
+                var next = await _scheduler.RunAsync(
+                    $"catalog:pending-first-import:{Guid.NewGuid():N}",
+                    SchedulerPriority.UserAction,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return _folderRepository.GetPendingInitialScans()
+                            .FirstOrDefault(folder => !attempted.Contains(folder.Id));
+                    }, workKind: SchedulerWorkKind.CatalogRead);
+                if (_folderRemovalPending || _folderManagerOpen ||
+                    _manualFileTransferActive || Dispatcher.HasShutdownStarted)
+                    return;
                 if (next is null) break;
                 _initialScanAttempted.Add(next.Id);
                 await RunPendingInitialScanAsync(next);

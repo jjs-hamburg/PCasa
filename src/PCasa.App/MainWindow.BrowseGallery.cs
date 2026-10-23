@@ -586,7 +586,7 @@ public partial class MainWindow
         if (_manualScanAllActive || _folderRemovalPending)
             return;
 
-        if (_folderRepository.GetAll().Count == 0)
+        if (_dropTargetProjection.Count == 0)
         {
             MessageBox.Show(
                 this,
@@ -615,7 +615,10 @@ public partial class MainWindow
         {
             while (!_folderRemovalPending)
             {
-                var currentFolders = _folderRepository.GetAll();
+                // Scan-all chooses from the published folder configuration.
+                // The scheduled scanner revalidates the source ID, generation
+                // and exclusions against SQLite before accessing any files.
+                var currentFolders = _dropTargetProjection.Select(root => root.Folder);
                 var folder = currentFolders.FirstOrDefault(
                     candidate => !processedFolderIds.Contains(candidate.Id));
                 if (folder is null)
@@ -645,7 +648,7 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException)
                     when (_folderRemovalPending ||
-                          !_folderRepository.GetAll().Any(candidate => candidate.Id == folder.Id))
+                          !_dropTargetProjection.Any(candidate => candidate.Folder.Id == folder.Id))
                 {
                 }
                 catch (Exception ex)
