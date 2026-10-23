@@ -384,6 +384,8 @@ public partial class MainWindow
         var needsIndex = new List<string>();
         var failed = new List<string>();
         var userCanceled = false;
+        var serverRenames = 0;
+        var crossVolumeCopies = 0;
 
         _outstandingGalleryMutations++;
         _outstandingFileTransfers++;
@@ -490,9 +492,10 @@ public partial class MainWindow
                                     // copying a file across the VPN.
                                     var method = ServerSideFileMover.Move(
                                         source, destination, replace);
-                                    PCasaDiagnostics.Write(
-                                        "Gallery.TransferMode",
-                                        $"{method}: {source} -> {destination}");
+                                    if (method == ServerSideFileMover.MoveMethod.Rename)
+                                        serverRenames++;
+                                    else
+                                        crossVolumeCopies++;
                                 }
                                 else if (replace)
                                 {
@@ -575,6 +578,8 @@ public partial class MainWindow
                             ScrollGalleryImageIntoView(first.ImageId);
                         StatusText.Text = $"{completed.Count:N0} Datei(en) " +
                             (move ? "verschoben" : "kopiert") +
+                            (move ? $" · {serverRenames:N0} direkt, " +
+                                $"{crossVolumeCopies:N0} per Kopie" : "") +
                             (failed.Count > 0 ? $" · {failed.Count:N0} Fehler" : "");
                     }, System.Windows.Threading.DispatcherPriority.Normal)
                         .Task.Unwrap();
