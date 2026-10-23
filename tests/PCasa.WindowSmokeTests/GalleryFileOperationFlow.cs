@@ -239,6 +239,63 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Context-menu manual scan bypasses busy background state, reconciles renamed file and reloads browse index.");
 
+            // The previous priority test only occupied a worker with Task.
+            // Hold the actual FolderScanner in a source-image lock to prove
+            // a MANUAL file move starts before the in-flight image scan ends.
+            var blockingPhoto = Path.Combine(first, "priority-scan-photo.jpg");
+            var prioritySource = Path.Combine(first, "priority-move-photo.jpg");
+            var priorityTarget = Path.Combine(second, "priority-move-photo.jpg");
+            WriteJpeg(blockingPhoto);
+            WriteJpeg(prioritySource);
+            Task actualBackgroundScan;
+            lock (SourceFileLocks.ForPath(blockingPhoto))
+            {
+                actualBackgroundScan = scheduler.EnqueueAsync(
+                    "test:running-image-scanner", SchedulerPriority.Background,
+                    token =>
+                    {
+                        new FolderScanner(new ImageCatalogRepository(db),
+                            new ThumbnailCache(), folderRepo).ScanFile(
+                                sourceRoot, blockingPhoto, cancellationToken: token);
+                        return Task.CompletedTask;
+                    });
+                Until(window, () => scheduler.Snapshot().Any(job =>
+                        job.Key == "test:running-image-scanner" &&
+                        job.State == SchedulerJobState.Running),
+                    "Real image scanner did not start.");
+
+                Transfer(window, [prioritySource], second, move: true);
+                if (!File.Exists(priorityTarget) || File.Exists(prioritySource) ||
+                    actualBackgroundScan.IsCompleted)
+                    throw new Exception(
+                        "Manual move waited for a running real image scanner.");
+            }
+            Until(window, () => actualBackgroundScan.IsCompleted,
+                "Real image scanner did not recover after yielding manual priority.");
+            actualBackgroundScan.GetAwaiter().GetResult();
+            Console.WriteLine("PASS: Manual move completes ahead of real in-flight image scanning.");
+
+            // Next block just the destination's EXIF/thumbnail source lock.
+            // The actual move must already be committed while its indexing
+            // continuation is blocked, proving physical work runs FIRST.
+            var uncachedSource = Path.Combine(first, "physical-first.jpg");
+            var uncachedDestination = Path.Combine(third, "physical-first.jpg");
+            WriteJpeg(uncachedSource);
+            Task deferredIndexing;
+            lock (SourceFileLocks.ForPath(uncachedDestination))
+            {
+                deferredIndexing = StartTransfer(window, [uncachedSource], third, move: true);
+                Until(window, () => !File.Exists(uncachedSource) &&
+                    File.Exists(uncachedDestination),
+                    "Physical move waited for the destination image decoder.");
+                if (deferredIndexing.IsCompleted)
+                    throw new Exception("Destination indexing was not deferred after physical move.");
+            }
+            Until(window, () => deferredIndexing.IsCompleted,
+                "Deferred image indexing did not complete.");
+            deferredIndexing.GetAwaiter().GetResult();
+            Console.WriteLine("PASS: Physical file moves precede destination EXIF/thumbnail indexing.");
+
             // The progress window is now screen-anchored, intentionally
             // independent of the PCasa window's size on that monitor.
             var progressWindow = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
@@ -316,14 +373,20 @@ internal static class GalleryFileOperationFlow
             .Where(folder => FolderExclusionRules.IsAtOrBelow(folder.LocalPath, path))
             .Sum(folder => folder.ImageCount);
 
-    private static void Transfer(PCasa.App.MainWindow window,
+    private static Task StartTransfer(PCasa.App.MainWindow window,
         string[] paths, string target, bool move)
     {
         var method = typeof(PCasa.App.MainWindow).GetMethod(
             "TransferGalleryFilesAsync", BindingFlags.NonPublic | BindingFlags.Instance)
             ?? throw new Exception("Shared gallery file-operation path was not found.");
-        var task = (Task?)method.Invoke(window, [paths, target, move])
+        return (Task?)method.Invoke(window, [paths, target, move])
             ?? throw new Exception("Transfer method did not return completion task.");
+    }
+
+    private static void Transfer(PCasa.App.MainWindow window,
+        string[] paths, string target, bool move)
+    {
+        var task = StartTransfer(window, paths, target, move);
         Until(window, () => task.IsCompleted, "File transfer never completed.");
         task.GetAwaiter().GetResult();
     }
