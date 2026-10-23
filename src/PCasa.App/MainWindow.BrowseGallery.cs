@@ -54,12 +54,38 @@ public partial class MainWindow
         // If any durable move is recovered, the SAME gallery publication
         // owner will bring the new catalog state into the current view.
         _ = RecoverPendingFileTransfersAsync();
+        _ = ReconcilePersistedExclusionsAsync();
 
         // A persistent user Add must outrank all startup cache preparation.
         // Start its scheduler work BEFORE any background cache repair.
         QueuePendingInitialScans();
         await EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();
+    }
+
+
+    private async Task ReconcilePersistedExclusionsAsync()
+    {
+        try
+        {
+            var removed = await _scheduler.RunAsync(
+                "catalog:reconcile-persisted-exclusions",
+                SchedulerPriority.Background,
+                token => new FolderManagerSelectionService(_database)
+                    .ReconcilePersistedExclusions(token),
+                workKind: SchedulerWorkKind.Catalog);
+            if (removed > 0 && !Dispatcher.HasShutdownStarted)
+            {
+                await RefreshBrowseGalleryAsync(forceIndexReload: true);
+                StatusText.Text =
+                    $"{removed:N0} verwaiste Einträge ausgeschlossener Ordner bereinigt";
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Catalog.ExclusionRecovery", ex);
+        }
     }
 
     private async Task RecoverPendingFileTransfersAsync()

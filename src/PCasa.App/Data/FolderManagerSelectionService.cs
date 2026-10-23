@@ -234,6 +234,56 @@ public sealed class FolderManagerSelectionService
         }
     }
 
+
+    // Startup repair for durable exclusions written by older, split-phase
+    // context operations. The desired rules are already in SQLite; only
+    // catalog rows that violate them can be removed. No network probe or
+    // original-file mutation occurs here.
+    public int ReconcilePersistedExclusions(
+        CancellationToken cancellationToken = default)
+    {
+        lock (CatalogRemovalService.CacheLock)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var connection = _database.OpenConnection();
+            using var transaction = connection.BeginTransaction();
+            var roots = new List<(long Id, string Local, string Canonical)>();
+            using (var query = Command(connection, transaction, """
+                SELECT id, local_path, canonical_path FROM monitored_folders;
+                """))
+            using (var reader = query.ExecuteReader())
+            {
+                while (reader.Read())
+                    roots.Add((reader.GetInt64(0), reader.GetString(1),
+                        reader.GetString(2)));
+            }
+
+            var removed = 0;
+            foreach (var root in roots)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var persisted = ReadExcludedPaths(connection, transaction, root.Id);
+                if (persisted.Count == 0) continue;
+                var outcome = ApplyExclusionSet(connection, transaction,
+                    root.Id, root.Local, root.Canonical, persisted,
+                    cancellationToken);
+                removed += outcome.Removed;
+            }
+            if (removed > 0)
+            {
+                using var cleanup = Command(connection, transaction, """
+                    UPDATE cache_maintenance
+                    SET cleanup_pending=1, request_generation=request_generation+1
+                    WHERE id=1;
+                    """);
+                cleanup.ExecuteNonQuery();
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            transaction.Commit();
+            return removed;
+        }
+    }
+
     private static HashSet<string> ReadExcludedPaths(
         SqliteConnection connection, SqliteTransaction transaction, long folderId)
     {
@@ -263,9 +313,36 @@ public sealed class FolderManagerSelectionService
                     $"Ausschluss liegt außerhalb der Überwachungswurzel: {path}");
 
         var previous = ReadExcludedPaths(connection, transaction, folderId);
-        if (previous.SetEquals(wanted)) return new(false, 0);
+        var rulesChanged = !previous.SetEquals(wanted);
+        if (!rulesChanged)
+        {
+            // Repair catalogs left half-finished by pre-atomic versions.
+            // This is catalog-only; never infer file deletion from NAS reachability.
+            var staleCatalogRows = false;
+            foreach (var path in wanted)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var check = Command(connection, transaction, """
+                    SELECT EXISTS(SELECT 1 FROM images WHERE folder_id=$id AND
+                        (local_path=$path COLLATE NOCASE OR
+                         substr(local_path,1,length($prefix))=$prefix COLLATE NOCASE));
+                    """);
+                check.Parameters.AddWithValue("$id", folderId);
+                check.Parameters.AddWithValue("$path", path);
+                check.Parameters.AddWithValue("$prefix",
+                    Path.TrimEndingDirectorySeparator(path) + "\\");
+                if (Convert.ToInt32(check.ExecuteScalar()) == 1)
+                {
+                    staleCatalogRows = true;
+                    break;
+                }
+            }
+            if (!staleCatalogRows) return new(false, 0);
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (rulesChanged)
+        {
         using (var remove = Command(connection, transaction, """
             DELETE FROM excluded_folders WHERE monitored_folder_id=$id;
             """))
@@ -285,6 +362,7 @@ public sealed class FolderManagerSelectionService
             add.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             add.ExecuteNonQuery();
         }
+        }
 
         // This generation increment is in the SAME commit as the exclusion
         // and catalog deletion, closing the old scan's commit boundary.
@@ -301,7 +379,8 @@ public sealed class FolderManagerSelectionService
                     "Der Überwachungsordner wurde inzwischen entfernt.");
         }
 
-        if (previous.Except(wanted, StringComparer.OrdinalIgnoreCase).Any())
+        if (rulesChanged &&
+            previous.Except(wanted, StringComparer.OrdinalIgnoreCase).Any())
         {
             // Persist the reimport obligation. It survives restart and is not
             // dependent on whether the background watcher is enabled.
@@ -337,7 +416,7 @@ public sealed class FolderManagerSelectionService
             empty.ExecuteNonQuery();
         }
         cancellationToken.ThrowIfCancellationRequested();
-        return new(true, removedImages);
+        return new(rulesChanged || removedImages > 0, removedImages);
     }
 
     private static SqliteCommand Command(SqliteConnection connection,

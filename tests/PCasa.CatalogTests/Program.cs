@@ -71,6 +71,8 @@ internal static class Program
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
         Run("Exclusion service removes and re-includes folder", ExclusionServiceRoundTrip, failures);
+        Run("Exclusion and catalog removal rollback atomically", ExclusionCommitRollback, failures);
+        Run("Restart repairs legacy split-phase exclusions", LegacyExclusionRecovery, failures);
         Run("Canceled scan preserves catalog", CanceledScanPreservesCatalog, failures);
         Run("Cancellation in final progress cannot prune catalog", FinalProgressCancellationPreservesCatalog, failures);
         Run("Source disappearing after enumeration never deletes catalog", SourceLossAfterEnumerationPreservesCatalog, failures);
@@ -1379,9 +1381,93 @@ internal static class Program
             throw new Exception("Notifications must follow the actual persisted change.");
     }
 
-    // G02: The exclusion callback is a deterministic synchronization point:
-    // the old removal has not started yet, but the newer desired state is
-    // already persisted. No sleeps or scheduler timing assumptions.
+    // The manager's entire OK decision uses one SQLite commit with the
+    // exact same exclusion transition used by the context-menu service.
+
+    // A SQL failure AFTER new exclusion rules have been written must roll
+    // back those rules, catalog rows, source generation and cleanup marker.
+    private static void ExclusionCommitRollback()
+    {
+        using var sandbox = new Sandbox();
+        var excluded = Path.Combine(sandbox.Images, "Rollback");
+        Directory.CreateDirectory(excluded);
+        var photo = Path.Combine(excluded, "original.jpg");
+        WriteJpeg(photo);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+        var repository = new FolderRepository(db);
+        var generation = repository.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        using (var connection = db.OpenConnection())
+        using (var trigger = connection.CreateCommand())
+        {
+            trigger.CommandText = """
+                CREATE TRIGGER pcasa_test_exclusion_failure
+                BEFORE DELETE ON images
+                BEGIN SELECT RAISE(ABORT, 'simulate catalog delete failure'); END;
+                """;
+            trigger.ExecuteNonQuery();
+        }
+        try
+        {
+            var failed = false;
+            try
+            {
+                new FolderExclusionService(repository, db,
+                    ExclusionTestScheduler.Value)
+                    .ChangeAsync(root.Id, excluded, true).GetAwaiter().GetResult();
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException) { failed = true; }
+            if (!failed)
+                throw new Exception("Injected catalog failure did not abort exclusion.");
+        }
+        finally
+        {
+            using var connection = db.OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TRIGGER IF EXISTS pcasa_test_exclusion_failure;";
+            command.ExecuteNonQuery();
+        }
+        if (repository.GetExcludedPaths(root.Id).Count != 0 ||
+            repository.GetSourceState(root.CanonicalPath)!.Value.Generation != generation)
+            throw new Exception("Failed exclusion left a committed rule or generation.");
+        Require(db, 1);
+        if (!File.Exists(photo))
+            throw new Exception("Failed catalog operation damaged an original.");
+    }
+
+    // This reproduces the pre-atomic crash gap without modifying originals:
+    // exclusion metadata was persisted, but pruning never started.
+    private static void LegacyExclusionRecovery()
+    {
+        using var sandbox = new Sandbox();
+        var excluded = Path.Combine(sandbox.Images, "Legacy");
+        Directory.CreateDirectory(excluded);
+        var photo = Path.Combine(excluded, "original.jpg");
+        WriteJpeg(photo);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 1);
+        var folders = new FolderRepository(db);
+        folders.SetExcluded(root.Id, excluded, true);
+        Require(db, 1); // Simulates crash before legacy cleanup.
+        db.Initialize(); // Simulates opening the persistent catalog after restart.
+        var reconcile = new FolderManagerSelectionService(db);
+        if (reconcile.ReconcilePersistedExclusions() != 1)
+            throw new Exception("Restart did not reconcile the legacy exclusion.");
+        Require(db, 0);
+        if (folders.GetExcludedPaths(root.Id).Count != 1 ||
+            !File.Exists(photo))
+            throw new Exception("Legacy recovery changed desired rules or original.");
+        if (!new CatalogRemovalService(db).HasPendingMaintenance())
+            throw new Exception("Legacy cleanup was not deferred for idle compaction.");
+        if (reconcile.ReconcilePersistedExclusions() != 0)
+            throw new Exception("Repeated exclusion recovery was not idempotent.");
+        folders.SetExcluded(root.Id, excluded, false);
+        scanner.Scan(root);
+        Require(db, 1);
+    }
+
     private static void FolderManagerSelectionCommitsAtomically()
     {
         using var sandbox = new Sandbox();

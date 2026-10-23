@@ -97,10 +97,12 @@ public partial class MainWindow
         }
         catch
         {
-            // An optimistic view must never become a second source of truth.
-            // Re-read the catalog if the database mutation failed.
+            // Roll back the optimistic visual removal if the domain commit
+            // failed. Neither the cache of displayed roots nor the tree may
+            // pretend that an uncommitted exclusion was accepted.
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
+            RefreshFolderTree(preserveGalleryAnchor: true);
             throw;
         }
         finally
