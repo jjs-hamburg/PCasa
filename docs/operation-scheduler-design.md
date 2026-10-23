@@ -227,3 +227,71 @@ nach ORG voraus. **Ein grüner Build allein ist ausdrücklich keine Freigabe.**
 **Freigabestatus:** keine vollständige Architekturabnahme. Alle offenen
 Punkte bleiben gesperrt, bis ihr Codepfad analytisch begründet ist und
 anschließend gezielt geprüft wurde. `main` bleibt unverändert.
+
+## 13. Zusammenhängende Sanierung der Ordnerentscheidungen (23.10.2026)
+
+**Stand des Arbeitszweigs:** implementiert und analytisch durchgesehen;
+Windows-Kompilierung, gezielte Regressionen und reale NAS-End-to-End-Abnahme
+dieser letzten Änderungen **noch nicht ausgeführt**. Dieser Abschnitt ersetzt
+die unter §12 beschriebenen damaligen offenen Punkte nicht rückwirkend,
+sondern dokumentiert ihre aktuelle Bearbeitung.
+
+### Einheitliche dauerhafte Zustandsgrenze
+
+- `FolderManagerSelectionService.ApplyExclusionSet` ist der **gemeinsame
+  Transaktionsweg** für die Exklusionsregeln des Ordnermanagers und
+  `ChangeExclusion` für das Kontextmenü. Exklusionssätze, Quellgeneration,
+  Katalogbereinigung und vorgemerkte Cachepflege werden innerhalb **eines
+  SQLite-Commits** wirksam oder vollständig zurückgerollt.
+- `FolderExclusionService.ChangeAsync` benutzt ausschließlich den
+  `PCasaScheduler` mit manueller Priorität. Keine `Task.Run`-Umgehung und
+  kein nachgelagerter separater Löschauftrag. Die WPF-Publikation erfolgt
+  vor `Completed` desselben Scheduler-Auftrags.
+- `RemoveFolderFromPcasaAsync` verwendet eine vorhandene UI-Projektion
+  für die unmittelbare Ausblendung; die autoritative Prüfung und physisch
+  nicht löschende Katalogänderung erfolgen im Scheduler. Auch ein entfernter
+  Überwachungsstamm gilt erst nach Galerieübernahme als abgeschlossen.
+- Während einer noch ausstehenden Löschung bleibt die vorläufig
+  ausgeblendete Teilbaum-Projektion auch bei einem neuen Galerie-/Baumaufbau
+  verborgen. Bei Fehlschlag wird der Katalog über den Scheduler neu gelesen
+  und die vorläufige Ausblendung aufgehoben.
+- Reine TreeView-Layouts fragen nicht mehr SQLite ab. Die Konfiguration
+  wird beim Laden und nach einer Ordnermanagerentscheidung einmal über die
+  Katalog-Leseexecutor des Schedulers ermittelt. Der Ordnermanager
+  bekommt eine schreibgeschützte Ausgangssicht und schreibt erst nach OK.
+- Bei Start prüft ein Hintergrundauftrag im Scheduler bestehende
+  Exklusionsregeln gegen den lokalen Katalog. Er beseitigt ausschließlich
+  **verwaiste Katalogzeilen** aus alten, nicht atomaren Vorgängen, mit
+  Generationenschutz und vorgemerkter Cachepflege. Keine Originale werden
+  gelöscht; ein offline befindliches NAS wird nicht als gelöscht gewertet.
+
+### Konkrete Prüfungen für die Freigabe
+
+1. SQLite-Trigger bricht die Kataloglöschung nach der Exklusionsänderung
+   absichtlich ab: **Regeln, Quellgeneration und Katalog müssen gemeinsam
+   zurückrollen**.
+2. Simulierter Neustart mit altem Zustand »Ausschluss gespeichert,
+   Bilder noch katalogisiert«: Wiederanlauf bereinigt nur diese Einträge,
+   erhält Originale, ist idempotent und ermöglicht anschließende
+   Wiederaufnahme über den Scanner.
+3. Tatsächliches WPF-Kontextmenü während `CacheLock` durch einen
+   simulierten Scan belegt ist: Der Ordner verschwindet sofort, bleibt nach
+   erneutem TreeView-Aufbau verborgen, und der Scheduler bestätigt
+   abschließend Katalog und Galerie.
+4. Ordnermanager: Abbruch schreibt nichts; OK speichert vollständige
+   Auswahl; erneutes OK ohne Änderungen führt keine erneuten Migrationen aus.
+5. Verschieben nach ORG während eines echten, laufenden Netzwerkscans,
+   danach Auswahl, Galerie und Fortschrittsanzeige ohne Neustart prüfen.
+6. VPN/NAS offline/online, Abbruch während sicherer SQLite-Grenze,
+   Überwachungswurzel entfernen/neu hinzufügen sowie verschachtelte
+   überwachte Wurzeln gesondert abnehmen.
+
+**Weiterhin offen:** Ein Scheduler-Monitor mit ausführlichen
+Ressourcen-/Blockiergründen; einheitliche Fortschrittsfenster-Publikation
+auch für Ordnerentscheidungen; die Prüfung aller weiteren UI-SQLite-Einstiege
+(unter anderem »Alle scannen«); Überschneidungen mehrerer
+Überwachungswurzeln und NAS-/VPN-Abnahme. Bis dahin weder ZIP zur
+Benutzerabnahme noch Freigabe/Änderung an `main`.
+
+**CI-Betrieb:** nur manuell durch `workflow_dispatch`. Es wurde durch
+diese Sanierung **kein automatischer CI-Testlauf** gestartet.

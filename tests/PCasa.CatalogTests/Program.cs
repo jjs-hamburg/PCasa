@@ -43,7 +43,7 @@ internal static class Program
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Failed image decoding does not block safe rename pruning", DecodeFailureStillReconcilesKnownMissingPaths, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
-        Run("Re-inclusion during pending exclusion must not prune catalog", ReincludeDuringExclusionDoesNotPrune, failures);
+        Run("Re-inclusion after atomic exclusion restores original catalog through scan", ReincludeAfterExclusionRestoresCatalogOnScan, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
         Run("User-added empty root is immediately persisted and resumes initial import after restart", NewlyAddedFolderInitialImportSurvivesRestart, failures);
         Run("Folder manager changes are atomic on OK with no staged side effects", FolderManagerSelectionCommitsAtomically, failures);
@@ -1635,7 +1635,7 @@ internal static class Program
         if (State() != (3L, 1L)) throw new Exception("Migration reset existing source generation.");
     }
 
-    private static void ReincludeDuringExclusionDoesNotPrune()
+    private static void ReincludeAfterExclusionRestoresCatalogOnScan()
     {
         using var sandbox = new Sandbox();
         var child = Path.Combine(sandbox.Images, "child");

@@ -343,25 +343,25 @@ public sealed class FolderManagerSelectionService
         cancellationToken.ThrowIfCancellationRequested();
         if (rulesChanged)
         {
-        using (var remove = Command(connection, transaction, """
-            DELETE FROM excluded_folders WHERE monitored_folder_id=$id;
-            """))
-        {
-            remove.Parameters.AddWithValue("$id", folderId);
-            remove.ExecuteNonQuery();
-        }
-        foreach (var path in wanted)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var add = Command(connection, transaction, """
-                INSERT INTO excluded_folders(monitored_folder_id, local_path, created_utc)
-                VALUES($id,$path,$now);
-                """);
-            add.Parameters.AddWithValue("$id", folderId);
-            add.Parameters.AddWithValue("$path", path);
-            add.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-            add.ExecuteNonQuery();
-        }
+            using (var remove = Command(connection, transaction, """
+                DELETE FROM excluded_folders WHERE monitored_folder_id=$id;
+                """))
+            {
+                remove.Parameters.AddWithValue("$id", folderId);
+                remove.ExecuteNonQuery();
+            }
+            foreach (var path in wanted)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var add = Command(connection, transaction, """
+                    INSERT INTO excluded_folders(monitored_folder_id, local_path, created_utc)
+                    VALUES($id,$path,$now);
+                    """);
+                add.Parameters.AddWithValue("$id", folderId);
+                add.Parameters.AddWithValue("$path", path);
+                add.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                add.ExecuteNonQuery();
+            }
         }
 
         // This generation increment is in the SAME commit as the exclusion

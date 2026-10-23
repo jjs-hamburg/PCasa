@@ -54,11 +54,11 @@ public partial class MainWindow
         // If any durable move is recovered, the SAME gallery publication
         // owner will bring the new catalog state into the current view.
         _ = RecoverPendingFileTransfersAsync();
-        _ = ReconcilePersistedExclusionsAsync();
 
-        // A persistent user Add must outrank all startup cache preparation.
-        // Start its scheduler work BEFORE any background cache repair.
+        // Durable user imports enter the scheduler BEFORE background legacy
+        // repair. Both use the SAME catalog and generation guards.
         QueuePendingInitialScans();
+        _ = ReconcilePersistedExclusionsAsync();
         await EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();
     }
