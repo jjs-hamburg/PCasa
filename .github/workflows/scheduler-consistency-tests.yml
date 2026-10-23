@@ -1,11 +1,8 @@
 name: Scheduler Consistency Tests
 
-# Run regression and real-WPF smoke tests for every development push.
-# Manual dispatch, or a push marked [package], additionally publishes a tested Windows package.
+# Windows CI is intentionally manual: no run on every development push.
+# A deliberately dispatched acceptance run also publishes the test package.
 on:
-  push:
-    branches:
-      - scheduler-consistency
   workflow_dispatch:
 
 permissions:
@@ -62,7 +59,7 @@ jobs:
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
 
       - name: Publish self-contained Windows x64 acceptance package
-        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]')
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
@@ -71,7 +68,7 @@ jobs:
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
           if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
       - name: Upload scheduler acceptance test package
-        if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[package]')
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: PCasa-win-x64
