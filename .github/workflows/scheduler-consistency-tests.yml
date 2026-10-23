@@ -18,6 +18,7 @@ env:
 jobs:
   catalog-regressions:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v5
