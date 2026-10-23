@@ -217,6 +217,8 @@ public partial class MainWindow
         StatusText.Text = move ? "Verschieben angefordert (höchste Priorität)"
                                : "Kopieren angefordert (höchste Priorität)";
         var completed = new List<string>();
+        var retainedIds = new HashSet<long>();
+        var needsIndex = new List<string>();
         var failed = new List<string>();
 
         try
@@ -235,6 +237,13 @@ public partial class MainWindow
                     // Resolve conflicts per file and immediately move it;
                     // defer thumbnail regeneration until all moves are done.
                     var roots = _folderRepository.GetAll();
+                    var destinationRoot = roots
+                        .Where(root => FolderExclusionRules.IsAtOrBelow(
+                            targetPath, root.LocalPath))
+                        .OrderByDescending(root => root.LocalPath.Length)
+                        .FirstOrDefault()
+                        ?? throw new IOException("Der Zielordner ist nicht überwacht.");
+                    var catalog = new PCasa.App.Data.ImageCatalogRepository(_database);
                     var reserved = new HashSet<string>(
                         StringComparer.OrdinalIgnoreCase);
                     foreach (var source in requested)
@@ -301,12 +310,28 @@ public partial class MainWindow
                                 }
                                 else File.Copy(source, destination, overwrite: false);
 
-                                if (move && sourceId is long imageId)
-                                    new CatalogRemovalService(_database)
-                                        .DetachImage(imageId, source);
-                                if (replace && replacedId is long oldId)
-                                    new CatalogRemovalService(_database)
-                                        .DetachImage(oldId, destination);
+                                // Same image ID, same bytes, same EXIF/tags and
+                                // packed thumbnails. Do NOT run ScanFile on a
+                                // successful relocation of a catalogued photo.
+                                if (move && sourceId is long imageId &&
+                                    catalog.RelocateImage(
+                                        imageId, source, destination,
+                                        destinationRoot, token))
+                                {
+                                    retainedIds.Add(imageId);
+                                }
+                                else
+                                {
+                                    // An uncatalogued file or a COPY needs the
+                                    // ordinary scanner after physical transfer.
+                                    if (move && sourceId is long oldId)
+                                        new CatalogRemovalService(_database)
+                                            .DetachImage(oldId, source);
+                                    if (replace && replacedId is long oldTarget)
+                                        new CatalogRemovalService(_database)
+                                            .DetachImage(oldTarget, destination);
+                                    needsIndex.Add(destination);
+                                }
                             }
                             completed.Add(destination);
                         }
@@ -317,17 +342,15 @@ public partial class MainWindow
                         }
                     }
 
-                    // Physical file moves/copies are complete BEFORE the
-                    // first slow EXIF/RAW/thumbnail job starts. Keep the
-                    // one shared scanner responsible for indexing; never
-                    // invent a parallel cache or catalog-writing pathway.
-                    if (completed.Count > 0)
+                    // Only genuinely new/uncatalogued files require decoding.
+                    // Relocated originals are already completely indexed.
+                    if (needsIndex.Count > 0)
                         await Dispatcher.InvokeAsync(() =>
                             StatusText.Text = $"{completed.Count:N0} Dateien " +
                                 (move ? "verschoben" : "kopiert") +
-                                " · Vorschaudaten werden aktualisiert");
+                                " · neue Vorschaudaten werden erzeugt");
 
-                    foreach (var destination in completed)
+                    foreach (var destination in needsIndex)
                     {
                         token.ThrowIfCancellationRequested();
                         try
@@ -360,7 +383,7 @@ public partial class MainWindow
                 SchedulerPriority.ManualAction,
                 token =>
                 {
-                    var result = new HashSet<long>();
+                    var result = new HashSet<long>(retainedIds);
                     using var db = _database.OpenConnection();
                     foreach (var group in completed.Chunk(400))
                     {

@@ -531,7 +531,7 @@ public sealed class FolderScanner
         }
     }
 
-    private static string ResolveCanonicalFullPath(
+    internal static string ResolveCanonicalFullPath(
         MonitoredFolder folder,
         string fullLocalPath)
     {

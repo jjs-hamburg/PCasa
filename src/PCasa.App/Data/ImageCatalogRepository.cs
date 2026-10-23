@@ -19,6 +19,17 @@ public sealed class ImageCatalogRepository
         CancellationToken cancellationToken = default)
         => new(_database.OpenConnection(), sourcePath, folderId, generation, cancellationToken);
 
+    // Relocating an unchanged image is NOT importing it a second time.
+    // The same catalog scan session updates folder identity atomically,
+    // retaining the image ID, EXIF, tags and every existing thumbnail tier.
+    public bool RelocateImage(long imageId, string sourcePath,
+        string destinationPath, MonitoredFolder targetRoot,
+        CancellationToken cancellationToken = default)
+    {
+        using var session = CreateScanSession(cancellationToken: cancellationToken);
+        return session.RelocateImage(imageId, sourcePath, destinationPath, targetRoot);
+    }
+
     public int CountAll()
     {
         using var connection = _database.OpenConnection();
@@ -351,6 +362,117 @@ public sealed class CatalogScanSession : IDisposable
         var id = Convert.ToInt64(_upsertPhotoFolder.ExecuteScalar());
         RegisterWrite();
         return id;
+    }
+
+    // A physical rename/move does not change picture bytes. Reassign only
+    // the path/folder identity and leave thumbnail_entries/image_exif/
+    // image_tags attached to the stable image ID. Runs inside ONE SQLite
+    // transaction, including a replaced target's stale catalog row.
+    public bool RelocateImage(long imageId, string sourcePath,
+        string destinationPath, MonitoredFolder targetRoot)
+    {
+        ThrowIfDisposed();
+        _cancellationToken.ThrowIfCancellationRequested();
+        var directory = Path.GetDirectoryName(destinationPath)
+            ?? throw new ArgumentException("Destination has no parent directory.",
+                nameof(destinationPath));
+        var canonicalDirectory =
+            FolderScanner.ResolveCanonicalFullPath(targetRoot, directory);
+        var canonicalDestination =
+            FolderScanner.ResolveCanonicalFullPath(targetRoot, destinationPath);
+        // Check the source before creating any target directory catalog row.
+        using (var source = _connection.CreateCommand())
+        {
+            source.CommandText = """
+                SELECT 1 FROM images
+                WHERE id = $imageId AND local_path = $source COLLATE NOCASE;
+                """;
+            source.Parameters.AddWithValue("$imageId", imageId);
+            source.Parameters.AddWithValue("$source", sourcePath);
+            if (source.ExecuteScalar() is null) return false;
+        }
+
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(directory));
+        if (string.IsNullOrEmpty(name)) name = directory;
+        var targetFolderId = GetOrCreatePhotoFolder(
+            targetRoot.Id, directory, canonicalDirectory, name);
+        EnsureTransaction();
+
+        // Physical replacement and old catalog identity must never leave
+        // two image rows claiming the same destination. Foreign-key cleanup
+        // removes only the replaced image's metadata/cache references.
+        var replaced = 0;
+        using (var conflict = _connection.CreateCommand())
+        {
+            conflict.Transaction = _transaction;
+            conflict.CommandText = """
+                DELETE FROM images WHERE id <> $imageId
+                  AND (canonical_path = $canonical COLLATE NOCASE
+                    OR local_path = $destination COLLATE NOCASE);
+                """;
+            conflict.Parameters.AddWithValue("$imageId", imageId);
+            conflict.Parameters.AddWithValue("$canonical", canonicalDestination);
+            conflict.Parameters.AddWithValue("$destination", destinationPath);
+            replaced = conflict.ExecuteNonQuery();
+        }
+
+        using (var relocate = _connection.CreateCommand())
+        {
+            relocate.Transaction = _transaction;
+            relocate.CommandText = """
+                UPDATE images
+                SET folder_id = $rootId,
+                    photo_folder_id = $photoFolderId,
+                    canonical_path = $canonical,
+                    local_path = $destination,
+                    file_name = $name,
+                    indexed_utc = $now
+                WHERE id = $imageId AND local_path = $source COLLATE NOCASE;
+                """;
+            relocate.Parameters.AddWithValue("$rootId", targetRoot.Id);
+            relocate.Parameters.AddWithValue("$photoFolderId", targetFolderId);
+            relocate.Parameters.AddWithValue("$canonical", canonicalDestination);
+            relocate.Parameters.AddWithValue("$destination", destinationPath);
+            relocate.Parameters.AddWithValue("$name", Path.GetFileName(destinationPath));
+            relocate.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            relocate.Parameters.AddWithValue("$imageId", imageId);
+            relocate.Parameters.AddWithValue("$source", sourcePath);
+            if (relocate.ExecuteNonQuery() != 1)
+            {
+                RollbackPending();
+                return false;
+            }
+        }
+
+        using (var empty = _connection.CreateCommand())
+        {
+            empty.Transaction = _transaction;
+            empty.CommandText = """
+                DELETE FROM photo_folders
+                WHERE id <> $keep
+                  AND NOT EXISTS (SELECT 1 FROM images
+                                  WHERE photo_folder_id = photo_folders.id);
+                """;
+            empty.Parameters.AddWithValue("$keep", targetFolderId);
+            empty.ExecuteNonQuery();
+        }
+
+        if (replaced > 0)
+        {
+            // Replaced target thumbnail packs are collected by the existing
+            // idle maintenance, never while the user is moving files.
+            using var maintenance = _connection.CreateCommand();
+            maintenance.Transaction = _transaction;
+            maintenance.CommandText = """
+                UPDATE cache_maintenance
+                SET cleanup_pending = 1,
+                    request_generation = request_generation + 1
+                WHERE id = 1;
+                """;
+            maintenance.ExecuteNonQuery();
+        }
+        FlushPending();
+        return true;
     }
 
     public void UpdateLocation(
