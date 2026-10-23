@@ -306,6 +306,27 @@ public sealed class LocalDatabase
             jobs.ExecuteNonQuery();
         }
 
+        // The filesystem and SQLite cannot share an atomic transaction.
+        // Keep a durable intent BEFORE an original is physically moved.
+        // The catalog relocation clears it in the SAME SQLite commit.
+        // Unresolved intents must remain inspectable, never silently pruned.
+        using (var intents = connection.CreateCommand())
+        {
+            intents.CommandText = """
+                CREATE TABLE IF NOT EXISTS file_transfer_intents (
+                    operation_id TEXT PRIMARY KEY,
+                    image_id INTEGER NOT NULL,
+                    source_path TEXT NOT NULL,
+                    destination_path TEXT NOT NULL,
+                    target_root_id INTEGER NOT NULL,
+                    created_utc TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_transfer_intents_source
+                    ON file_transfer_intents(source_path COLLATE NOCASE);
+                """;
+            intents.ExecuteNonQuery();
+        }
+
         // One-time adoption of existing catalogs: only incomplete tier sets
         // are queued. A changed tier profile invalidates the old completion
         // assumption; it is not a reason to delete cached pack files.

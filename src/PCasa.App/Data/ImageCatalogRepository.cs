@@ -25,10 +25,137 @@ public sealed class ImageCatalogRepository
     // retaining the image ID, EXIF, tags and every existing thumbnail tier.
     public bool RelocateImage(long imageId, string sourcePath,
         string destinationPath, MonitoredFolder targetRoot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? relocationIntentId = null)
     {
         using var session = CreateScanSession(cancellationToken: cancellationToken);
-        return session.RelocateImage(imageId, sourcePath, destinationPath, targetRoot);
+        return session.RelocateImage(imageId, sourcePath, destinationPath,
+            targetRoot, relocationIntentId);
+    }
+
+    public void BeginRelocationIntent(string operationId, long imageId,
+        string sourcePath, string destinationPath, long targetRootId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO file_transfer_intents
+                (operation_id, image_id, source_path, destination_path,
+                 target_root_id, created_utc)
+            VALUES ($id, $image, $source, $destination, $root, $now);
+            """;
+        command.Parameters.AddWithValue("$id", operationId);
+        command.Parameters.AddWithValue("$image", imageId);
+        command.Parameters.AddWithValue("$source", sourcePath);
+        command.Parameters.AddWithValue("$destination", destinationPath);
+        command.Parameters.AddWithValue("$root", targetRootId);
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    // Reconciliation is conservative: an unreachable NAS or both names
+    // existing is NEVER treated as permission to delete an original.
+    // Only a confirmed, completed move is adopted into the same catalog.
+    public (int Recovered, int Unresolved) RecoverRelocations(
+        IReadOnlyList<MonitoredFolder> monitored,
+        CancellationToken cancellationToken = default)
+    {
+        var intents = new List<(string Id, long ImageId, string Source,
+            string Destination, long RootId)>();
+        using (var connection = _database.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT operation_id, image_id, source_path, destination_path,
+                       target_root_id FROM file_transfer_intents
+                ORDER BY created_utc;
+                """;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                intents.Add((reader.GetString(0), reader.GetInt64(1),
+                    reader.GetString(2), reader.GetString(3), reader.GetInt64(4)));
+        }
+
+        var recovered = 0;
+        var unresolved = 0;
+        foreach (var intent in intents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var root = monitored.FirstOrDefault(item =>
+                item.Id == intent.RootId &&
+                FolderExclusionRules.IsAtOrBelow(
+                    intent.Destination, item.LocalPath));
+            if (root is null)
+            {
+                unresolved++;
+                continue;
+            }
+            try
+            {
+                lock (SourceFileLocks.ForPath(intent.Source))
+                {
+                    var sourceParent = Path.GetDirectoryName(intent.Source);
+                    var destParent = Path.GetDirectoryName(intent.Destination);
+                    if (sourceParent is null || destParent is null ||
+                        !Directory.Exists(sourceParent) ||
+                        !Directory.Exists(destParent))
+                    {
+                        unresolved++; // offline != removed
+                        continue;
+                    }
+
+                    var sourceExists = File.Exists(intent.Source);
+                    var destinationExists = File.Exists(intent.Destination);
+                    if (!sourceExists && destinationExists)
+                    {
+                        if (RelocateImage(intent.ImageId, intent.Source,
+                            intent.Destination, root, cancellationToken,
+                            intent.Id) ||
+                            ConfirmRelocationAlreadyApplied(intent.Id,
+                                intent.ImageId, intent.Destination))
+                            recovered++;
+                        else unresolved++;
+                    }
+                    else if (sourceExists && !destinationExists)
+                    {
+                        // The operation never reached its physical move.
+                        ClearRelocationIntent(intent.Id);
+                    }
+                    else unresolved++;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or
+                UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+                unresolved++;
+            }
+        }
+        return (recovered, unresolved);
+    }
+
+    private bool ConfirmRelocationAlreadyApplied(string operationId,
+        long imageId, string destinationPath)
+    {
+        using var connection = _database.OpenConnection();
+        using var query = connection.CreateCommand();
+        query.CommandText =
+            "SELECT 1 FROM images WHERE id=$id AND local_path=$path COLLATE NOCASE";
+        query.Parameters.AddWithValue("$id", imageId);
+        query.Parameters.AddWithValue("$path", destinationPath);
+        if (query.ExecuteScalar() is null) return false;
+        ClearRelocationIntent(operationId);
+        return true;
+    }
+
+    private void ClearRelocationIntent(string operationId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "DELETE FROM file_transfer_intents WHERE operation_id=$id;";
+        command.Parameters.AddWithValue("$id", operationId);
+        command.ExecuteNonQuery();
     }
 
     public int CountAll()
@@ -370,7 +497,8 @@ public sealed class CatalogScanSession : IDisposable
     // image_tags attached to the stable image ID. Runs inside ONE SQLite
     // transaction, including a replaced target's stale catalog row.
     public bool RelocateImage(long imageId, string sourcePath,
-        string destinationPath, MonitoredFolder targetRoot)
+        string destinationPath, MonitoredFolder targetRoot,
+        string? relocationIntentId = null)
     {
         ThrowIfDisposed();
         _cancellationToken.ThrowIfCancellationRequested();
@@ -477,6 +605,21 @@ public sealed class CatalogScanSession : IDisposable
                 WHERE id = 1;
                 """;
             maintenance.ExecuteNonQuery();
+        }
+        if (relocationIntentId is not null)
+        {
+            using var completedIntent = _connection.CreateCommand();
+            completedIntent.Transaction = _transaction;
+            completedIntent.CommandText =
+                "DELETE FROM file_transfer_intents WHERE operation_id=$id AND image_id=$imageId;";
+            completedIntent.Parameters.AddWithValue("$id", relocationIntentId);
+            completedIntent.Parameters.AddWithValue("$imageId", imageId);
+            if (completedIntent.ExecuteNonQuery() != 1)
+            {
+                RollbackPending();
+                throw new InvalidOperationException(
+                    "Relocation intent is missing or has changed.");
+            }
         }
         FlushPending();
         return true;
