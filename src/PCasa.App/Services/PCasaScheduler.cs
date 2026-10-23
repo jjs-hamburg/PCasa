@@ -119,13 +119,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
         int total, string? currentPath = null)
     {
         SchedulerJobSnapshot? snapshot;
+        var publish = false;
         lock (_gate)
         {
             var index = _history.FindLastIndex(x =>
                 x.Key == key && x.State is SchedulerJobState.Running or
                     SchedulerJobState.YieldRequested);
             if (index < 0) return;
-            snapshot = _history[index] with
+            var previous = _history[index];
+            snapshot = previous with
             {
                 Phase = phase,
                 Processed = Math.Max(0, processed),
@@ -133,10 +135,26 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 CurrentPath = currentPath
             };
             _history[index] = snapshot;
+
+            var work = _runningPriorityJobs.FirstOrDefault(item =>
+                item?.Key == key);
+            var now = Environment.TickCount64;
+            // Every file updates the authoritative snapshot, but only phase
+            // transitions / final counts / <=10Hz publish to WPF. A batch
+            // of many thousands of files cannot flood the dispatcher.
+            publish = work is null ||
+                !string.Equals(previous.Phase, phase, StringComparison.Ordinal) ||
+                processed >= total ||
+                now - work.LastProgressNoticeTick >= 100;
+            if (publish && work is not null)
+                work.LastProgressNoticeTick = now;
         }
-        // Observers (including WPF) are outside _gate, just like yield.
-        try { ProgressChanged?.Invoke(snapshot); }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        if (publish)
+        {
+            // Observers (including WPF) run outside _gate.
+            try { ProgressChanged?.Invoke(snapshot); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        }
     }
 
     public Task EnqueueAsync(string key, SchedulerPriority priority,
@@ -441,6 +459,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;
         public bool YieldRequested { get; set; }
+        public long LastProgressNoticeTick { get; set; }
         public Func<CancellationToken, Task> Operation { get; } = operation;
         public Func<bool>? IsCurrent { get; } = isCurrent;
         public CancellationToken CancellationToken { get; } = cancellationToken;

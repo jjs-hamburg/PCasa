@@ -317,6 +317,9 @@ public partial class MainWindow
                         if (samePath && move) continue;
                         try
                         {
+                            _scheduler.ReportProgress(key, "Dateien übertragen",
+                                completed.Count + failed.Count,
+                                requested.Length, source);
                             var replace = false;
                             if (reserved.Contains(destination))
                                 destination = UniqueCopyPath(destination, reserved);
