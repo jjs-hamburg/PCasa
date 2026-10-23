@@ -2741,11 +2741,11 @@ internal static class Program
         gallery.SetThumbnailSpacing(25);
         gallery.Measure(new System.Windows.Size(970, double.PositiveInfinity));
         gallery.Arrange(new System.Windows.Rect(0, 0, 970, gallery.DesiredSize.Height));
-        var sections = (System.Collections.IEnumerable)typeof(BrowseGallerySurface)
+        var captionFreeSections = (System.Collections.IEnumerable)typeof(BrowseGallerySurface)
             .GetField("_sections", System.Reflection.BindingFlags.NonPublic |
                                    System.Reflection.BindingFlags.Instance)!
             .GetValue(gallery)!;
-        var first = sections.Cast<object>().First();
+        var first = captionFreeSections.Cast<object>().First();
         var offsets = (double[])first.GetType().GetProperty("RowOffsets")!
             .GetValue(first)!;
         var photoHeights = (double[])first.GetType().GetProperty("RowImageHeights")!
