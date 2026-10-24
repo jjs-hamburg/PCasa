@@ -68,6 +68,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private long? _dragStartingImageId;
     private long? _pendingSimpleClickImageId;
     private ModifierKeys _pendingSimpleClickModifiers;
+    private int? _hoveredImageIndex;
+    private bool _lightTheme;
     private double _lastViewportTop;
     private int _scrollDirection = 1;
     private bool _showShadows;
@@ -120,6 +122,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
     public void SetLightTheme(bool light)
     {
+        _lightTheme = light;
         _headerBrush = new SolidColorBrush(light ? Color.FromRgb(38, 38, 38) : Color.FromRgb(231, 231, 231));
         _mutedBrush = new SolidColorBrush(light ? Color.FromRgb(93, 93, 93) : Color.FromRgb(169, 170, 172));
         InvalidateVisual();
@@ -152,6 +155,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
             _pageCache.PageReady += PageCache_PageReady;
         }
 
+        if (!sameIndex) _hoveredImageIndex = null;
         _index = index;
         _folders = folders;
         if (!sameIndex || !sameFolders)
@@ -416,6 +420,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
             DrawSectionHeader(drawingContext, section, pixelsPerDip);
             DrawSectionImages(drawingContext, section, viewportTop, viewportBottom);
         }
+        // Expanded filename is rendered in the gallery itself, never as a
+        // transient WPF tooltip. Draw it over adjacent cells.
+        DrawHoveredFilenameOverlay(drawingContext, pixelsPerDip);
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
@@ -485,6 +492,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        EnsureLayout();
+        var hovered = _showFileNames
+            ? HitTestImageIndex(e.GetPosition(this), includeCaption: true)
+            : null;
+        if (_hoveredImageIndex != hovered)
+        {
+            _hoveredImageIndex = hovered;
+            InvalidateVisual();
+        }
         if (e.LeftButton != MouseButtonState.Pressed ||
             _dragStartingPoint is not Point origin ||
             _dragStartingImageId is not long imageId) return;
@@ -497,6 +513,16 @@ public sealed class BrowseGallerySurface : FrameworkElement
         _pendingSimpleClickImageId = null;
         ImagesDragRequested?.Invoke(this,
             new BrowseImageClickedEventArgs(imageId, Keyboard.Modifiers));
+    }
+
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (_hoveredImageIndex is not null)
+        {
+            _hoveredImageIndex = null;
+            InvalidateVisual();
+        }
     }
 
     protected override void OnMouseRightButtonDown(MouseButtonEventArgs e)
@@ -574,10 +600,6 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 var cellX = ImageColumnLeft(section, column);
                 var cellY = section.ImagesTop + section.RowOffsets[row];
                 var box = new Rect(cellX, cellY, _thumbnailWidth, section.RowImageHeights[row]);
-                // Caption belongs to the actual image bounds, not the fixed
-                // cell. Cached thumbnail dimensions are already in the index.
-                var imageBounds = FitInto(box, entry.PixelWidth, entry.PixelHeight);
-
                 if (_pageCache is not null &&
                     _pageCache.TryGet(imageIndex, out var bitmap) &&
                     bitmap is not null)
@@ -609,16 +631,62 @@ public sealed class BrowseGallerySurface : FrameworkElement
                         CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                         new Typeface("Segoe UI"), 10, _mutedBrush, pixelsPerDip)
                     {
-                        MaxTextWidth = Math.Max(1, imageBounds.Width),
+                        // Portraits and landscapes share the full column
+                        // width and the same reserved caption row.
+                        MaxTextWidth = Math.Max(1, _thumbnailWidth),
                         MaxTextHeight = FileLabelHeight,
                         Trimming = TextTrimming.CharacterEllipsis
                     };
                     drawingContext.DrawText(caption,
-                        new Point(imageBounds.Left + (imageBounds.Width - caption.Width) / 2,
-                                  imageBounds.Bottom + 6));
+                        new Point(cellX + (_thumbnailWidth - caption.Width) / 2,
+                                  box.Bottom + 4));
                 }
             }
         }
+    }
+
+    private void DrawHoveredFilenameOverlay(DrawingContext drawingContext,
+        double pixelsPerDip)
+    {
+        if (!_showFileNames || _hoveredImageIndex is not int index ||
+            index < 0 || index >= _index.Count)
+            return;
+        var entry = _index[index];
+        if (string.IsNullOrEmpty(entry.FileName)) return;
+        var section = _sections.FirstOrDefault(item =>
+            index >= item.StartImageIndex &&
+            index < item.StartImageIndex + item.ImageCount);
+        if (section is null) return;
+        var full = new FormattedText(entry.FileName,
+            CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+            new Typeface("Segoe UI"), 10, _headerBrush, pixelsPerDip);
+        if (full.WidthIncludingTrailingWhitespace <= _thumbnailWidth)
+            return; // The caption is already fully visible.
+
+        var relativeIndex = index - section.StartImageIndex;
+        var row = relativeIndex / section.ColumnCount;
+        var column = relativeIndex % section.ColumnCount;
+        var available = Math.Max(60, ActualWidth - 24);
+        var width = Math.Min(available,
+            Math.Max(_thumbnailWidth + 12,
+                Math.Min(full.WidthIncludingTrailingWhitespace + 12, 552)));
+        full.MaxTextWidth = Math.Max(1, width - 12);
+        var left = Math.Clamp(
+            ImageColumnLeft(section, column) + (_thumbnailWidth - width) / 2,
+            8, Math.Max(8, ActualWidth - width - 8));
+        var captionY = section.ImagesTop + section.RowOffsets[row] +
+            section.RowImageHeights[row] + 3;
+        var height = full.Height + 8;
+        var viewportStart = Math.Max(0, _viewportTop + 2);
+        var top = Math.Clamp(captionY, viewportStart,
+            Math.Max(viewportStart, _viewportTop + _viewportHeight - height - 2));
+        var background = _lightTheme
+            ? new SolidColorBrush(Color.FromArgb(248, 250, 250, 250))
+            : new SolidColorBrush(Color.FromArgb(248, 40, 41, 42));
+        drawingContext.DrawRoundedRectangle(background,
+            new Pen(_mutedBrush, 0.6),
+            new Rect(left, top, width, height), 3, 3);
+        drawingContext.DrawText(full, new Point(left + 6, top + 4));
     }
 
     private static void DrawThumbnailStatusIcons(DrawingContext context,
@@ -694,7 +762,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
             + column * (_thumbnailWidth + _cellGap);
     }
 
-    private int? HitTestImageIndex(Point point)
+    private int? HitTestImageIndex(Point point, bool includeCaption = false)
     {
         var section = FindSectionAt(point.Y);
         if (section is null || point.Y < section.ImagesTop || point.Y >= section.Bottom)
@@ -725,7 +793,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
         if (column < 0) return null;
         var yInsideRow = relativeY - section.RowOffsets[row];
         if (xInsideCell < 0 || xInsideCell > _thumbnailWidth ||
-            yInsideRow < 0 || yInsideRow > section.RowImageHeights[row])
+            yInsideRow < 0 || yInsideRow > section.RowImageHeights[row] +
+                (includeCaption && _showFileNames ? FileLabelHeight : 0))
         {
             return null;
         }
