@@ -126,6 +126,7 @@ internal static class FolderAddFlow
                 .GetValue(window)!;
             var releaseCreateProbe = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
+            var newFolderPath = Path.Combine(initialRoot, "FreshFolder");
             var pendingProbe = createScheduler.EnqueueAsync(
                 "test:slow-manual-source-probe",
                 SchedulerPriority.ManualAction,
@@ -138,7 +139,6 @@ internal static class FolderAddFlow
                         job.State == SchedulerJobState.Running),
                     "Manual source-probe test lane did not start.");
                 initialTreeRoot.IsSelected = true;
-                var newFolderPath = Path.Combine(initialRoot, "FreshFolder");
                 var createHandler = typeof(PCasa.App.MainWindow).GetMethod(
                     "FolderContext_CreateDirectory_Click",
                     BindingFlags.NonPublic | BindingFlags.Instance)
