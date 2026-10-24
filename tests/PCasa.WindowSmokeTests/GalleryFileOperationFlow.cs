@@ -513,6 +513,10 @@ internal static class GalleryFileOperationFlow
                     $"B source={File.Exists(secondQueuedSource)}, target={File.Exists(secondQueuedTarget)}; " +
                     $"Task A={firstQueuedTransfer.Status}, B={secondQueuedTransfer.Status}; " +
                     $"UI={(window.FindName("StatusText") as TextBlock)?.Text}; " +
+                    "A-locations=" + string.Join(",", Directory.GetFiles(root,
+                        "*two-transfers-a*", SearchOption.AllDirectories)) + "; " +
+                    "B-locations=" + string.Join(",", Directory.GetFiles(root,
+                        "*two-transfers-b*", SearchOption.AllDirectories)) + "; " +
                     "Jobs=" + string.Join(" | ", scheduler.Snapshot()
                         .Where(job => job.Key.StartsWith("gallery:file-transfer:",
                             StringComparison.Ordinal)).TakeLast(5)
