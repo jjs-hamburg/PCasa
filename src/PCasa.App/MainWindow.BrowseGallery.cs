@@ -579,10 +579,12 @@ public partial class MainWindow
 
     private void OnCatalogImageCommitted()
     {
-        // Every durable image commit can affect the gallery, including while
-        // a resumable NAS import is running. The existing coalescing timer
-        // performs ONE refresh for many commits instead of suppressing all
-        // updates until the full root inventory finishes.
+        // A running scan must not repeatedly rebuild the whole gallery.
+        // A targeted committed-image projection will handle live ingestion.
+        // Until that path is wired, preserve the stable existing gallery.
+        if (_isScanning &&
+            System.Threading.Volatile.Read(ref _galleryHasIndexedImages) != 0)
+            return;
         if (Dispatcher.HasShutdownStarted) return;
         if (System.Threading.Interlocked.Exchange(
             ref _catalogPublicationPending, 1) != 0) return;
