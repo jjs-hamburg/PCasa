@@ -48,6 +48,7 @@ public partial class MainWindow
         BrowseSurface.ImagesDragRequested += BrowseSurface_ImagesDragRequested;
         BrowseSurface.LayoutReflowed += BrowseSurface_LayoutReflowed;
         CatalogChanges.ImageCommitted += OnCatalogImageCommitted;
+        CatalogChanges.ImageIndexed += OnCatalogImageIndexed;
         Closed += BrowseWindow_Closed;
 
         // Recovery is a scheduler operation, not an alternative scanner.
@@ -1240,6 +1241,7 @@ public partial class MainWindow
         SaveGalleryPosition();
         SaveAppearance();
         CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
+        CatalogChanges.ImageIndexed -= OnCatalogImageIndexed;
         _catalogPublicationTimer?.Stop();
         _browseProgressWindow?.Finish();
         _browseProgressWindow = null;
