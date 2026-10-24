@@ -167,8 +167,13 @@ public partial class MainWindow
     {
         private readonly FolderScanner.ScanResumeState _resume = new();
         private bool _manualGenerationStarted;
+        private long? _initialSourceGeneration;
+        private string? _sourceCanonicalPath;
 
         public ScanResult? Result { get; private set; }
+        public bool SourceChanged => _initialSourceGeneration is long earlier &&
+            _sourceCanonicalPath is string path &&
+            !owner._folderRepository.IsCurrentSourceGeneration(path, earlier, true);
 
         public Task ExecuteAsync(CancellationToken token)
         {
@@ -179,6 +184,14 @@ public partial class MainWindow
             if (expectedMonitoredFolderId is long expected && folder.Id != expected)
                 throw new OperationCanceledException(
                     "Ein inzwischen ersetzter Überwachungsordner darf nicht gescannt werden.");
+            var currentSource = owner._folderRepository.GetSourceState(folder.CanonicalPath);
+            if (currentSource is not { DesiredPresent: true } ||
+                (_initialSourceGeneration is long previous &&
+                 previous != currentSource.Value.Generation))
+                throw new OperationCanceledException(
+                    "Die Ordnerauswahl wurde geändert; alte Bestandsaufnahme verworfen.");
+            _initialSourceGeneration ??= currentSource.Value.Generation;
+            _sourceCanonicalPath ??= folder.CanonicalPath;
             if (requirePendingInitialImport &&
                 !owner._folderRepository.GetPendingInitialScans().Any(candidate =>
                     candidate.Id == folder.Id))
