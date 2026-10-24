@@ -80,6 +80,7 @@ internal static class Program
         Run("Unavailable root never deletes catalog", UnavailableRootKeepsCatalog, failures);
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
+        Run("Moved images do not erase unrelated decoded gallery thumbnails", ChangedIndexRetainsUnmodifiedImages, failures);
         Run("Exclusion service removes and re-includes folder", ExclusionServiceRoundTrip, failures);
         Run("Exclusion and catalog removal rollback atomically", ExclusionCommitRollback, failures);
         Run("Restart repairs legacy split-phase exclusions", LegacyExclusionRecovery, failures);
@@ -1816,6 +1817,49 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void ChangedIndexRetainsUnmodifiedImages()
+    {
+        using var sandbox = new Sandbox();
+        foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" })
+            WriteJpeg(Path.Combine(sandbox.Images, name));
+        var (db, root, scanner) = sandbox.Prepare();
+        if (scanner.Scan(root).Failed != 0)
+            throw new Exception("Cannot prepare indexed image trio.");
+        var tier = new BrowseThumbnailProfileRepository(db).Get().Tiers[0];
+        var entries = new BrowseCacheRepository(db).GetIndex(tier).ToArray();
+        if (entries.Length != 3)
+            throw new Exception("Expected exactly three independent cache identities.");
+
+        using var cache = new BrowseThumbnailPageCache();
+        cache.SetIndex(entries);
+        cache.WarmRangeAsync(0, 2).GetAwaiter().GetResult();
+        if (!cache.TryGet(0, out var a) || a is null ||
+            !cache.TryGet(1, out var b) || b is null ||
+            !cache.TryGet(2, out var c) || c is null)
+            throw new Exception("Initial thumbnail page did not load all images.");
+
+        // Relocating one indexed photo changes folder identity and moves it
+        // to another position, shifting unrelated photos' ordinal/page.
+        // Neither the source index position nor an unchanged folder ID
+        // can authorize displaying the WRONG cached bitmap.
+        var relocated = entries[0] with
+        {
+            FileName = "relocated.jpg",
+            PhotoFolderId = entries[0].PhotoFolderId + 1000
+        };
+        cache.SetIndex(new[] { entries[2], relocated, entries[1] });
+        if (!cache.TryGet(0, out var retainedC) || !ReferenceEquals(c, retainedC) ||
+            !cache.TryGet(2, out var retainedB) || !ReferenceEquals(b, retainedB))
+            throw new Exception(
+                "Changing one folder emptied unrelated gallery pictures before page reload.");
+        if (cache.TryGet(1, out var stale) && ReferenceEquals(a, stale))
+            throw new Exception("Relocated image reused the original thumbnail identity.");
+
+        cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
+        if (cache.TryGet(0, out _))
+            throw new Exception("Empty gallery reused thumbnails from the prior index.");
     }
 
     private static void ExclusionServiceRoundTrip()
