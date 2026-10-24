@@ -684,8 +684,11 @@ public partial class MainWindow
                         step.Dispose();
                     }
                     catch (OperationCanceledException) when (
+                        step.SourceChanged ||
                         !_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
                     {
+                        // The newest folder-selection change supersedes only
+                        // this root, not the remainder of Scan All.
                         step.Dispose();
                     }
                     catch (OperationCanceledException)
