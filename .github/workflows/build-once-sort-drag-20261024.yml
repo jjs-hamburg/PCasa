@@ -1,6 +1,7 @@
 name: PCasa Sort and Right-Drag Acceptance
 
-# User-approved, one-time Windows build. Only changes to this workflow
+# User-approved, one-time Windows build.
+# Retry after C# 14 contextual keyword fix in sort preference accessor. Only changes to this workflow
 # file trigger it; regular CI remains manual. Remove after completion.
 on:
   push:
