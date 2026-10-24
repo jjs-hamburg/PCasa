@@ -7,6 +7,10 @@ public sealed class BrowseThumbnailPageCache : IDisposable
 {
     private const int PageSize = 32;
     private const long MaximumDecodedBytes = 512L * 1024 * 1024;
+    // During an index reflow, unchanged photos retain a small, bounded
+    // bitmap bridge keyed by durable thumbnail identity. Their old page
+    // numbers may have shifted because other photos were moved.
+    private const long MaximumRetainedBytes = 128L * 1024 * 1024;
     private static readonly int PageLoadConcurrency =
         Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
 
@@ -18,6 +22,9 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         new(PageLoadConcurrency, PageLoadConcurrency);
     private readonly Dictionary<int, PageState> _pages = new();
     private readonly LinkedList<int> _lru = new();
+    private readonly Dictionary<BrowseThumbnailIndexEntry, BitmapSource>
+        _retainedBitmaps = new();
+    private long _retainedBytes;
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> _index =
         Array.Empty<BrowseThumbnailIndexEntry>();
@@ -52,8 +59,32 @@ public sealed class BrowseThumbnailPageCache : IDisposable
                 return;
             _generation++;
 
+            // The old index may have shifted because a single picture moved.
+            // Keep ONLY unchanged, already-decoded image identities available
+            // until the new viewport pages are ready. This is a presentation
+            // bridge, never a second catalog or alternative index. A changed
+            // pack location/timestamp cannot accidentally reuse old pixels.
+            _retainedBitmaps.Clear();
+            _retainedBytes = 0;
             foreach (var page in _pages.Values)
             {
+                if (page.Bitmaps is { } decoded)
+                {
+                    var start = page.PageNumber * PageSize;
+                    for (var offset = 0; offset < decoded.Length &&
+                         start + offset < _index.Count; offset++)
+                    {
+                        var bitmap = decoded[offset];
+                        if (bitmap is null) continue;
+                        var bytes = (long)bitmap.PixelWidth *
+                            Math.Max(1, bitmap.PixelHeight) * 4L;
+                        if (bytes > MaximumRetainedBytes ||
+                            bytes + _retainedBytes > MaximumRetainedBytes)
+                            continue;
+                        if (_retainedBitmaps.TryAdd(_index[start + offset], bitmap))
+                            _retainedBytes += bytes;
+                    }
+                }
                 page.Cancellation.Cancel();
                 page.Cancellation.Dispose();
             }
@@ -76,16 +107,20 @@ public sealed class BrowseThumbnailPageCache : IDisposable
             }
 
             var pageNumber = imageIndex / PageSize;
-            if (!_pages.TryGetValue(pageNumber, out var page) ||
-                page.Bitmaps is null)
+            if (_pages.TryGetValue(pageNumber, out var page) &&
+                page.Bitmaps is { } bitmaps)
             {
-                bitmap = null;
-                return false;
+                TouchLoadedPage(page);
+                bitmap = bitmaps[imageIndex - (pageNumber * PageSize)];
+                if (bitmap is not null) return true;
             }
-
-            TouchLoadedPage(page);
-            bitmap = page.Bitmaps[imageIndex - (pageNumber * PageSize)];
-            return bitmap is not null;
+            // A changed index may renumber every page after a moved image.
+            // Reuse unchanged decoded pictures by their full cache entry,
+            // not by their old ordinal (which would display wrong photos).
+            if (_retainedBitmaps.TryGetValue(_index[imageIndex], out bitmap))
+                return true;
+            bitmap = null;
+            return false;
         }
     }
 
@@ -321,6 +356,15 @@ public sealed class BrowseThumbnailPageCache : IDisposable
                     state.EstimatedBytes = estimatedBytes;
                     _decodedBytes += estimatedBytes;
                     TouchLoadedPage(state);
+                    // A full fresh page supersedes its identical retained
+                    // entries. Release their extra lifetime before eviction.
+                    for (var offset = 0; offset < count; offset++)
+                    {
+                        if (_retainedBitmaps.Remove(index[start + offset],
+                            out var retained))
+                            _retainedBytes -= (long)retained.PixelWidth *
+                                Math.Max(1, retained.PixelHeight) * 4L;
+                    }
                     EvictIfNeeded(state.PageNumber);
                     publish = true;
                 }
@@ -365,6 +409,12 @@ public sealed class BrowseThumbnailPageCache : IDisposable
 
     private void EvictIfNeeded(int protectedPage)
     {
+        if (_decodedBytes + _retainedBytes > MaximumDecodedBytes)
+        {
+            // Favor the newly visible page over an old-index preview bridge.
+            _retainedBitmaps.Clear();
+            _retainedBytes = 0;
+        }
         while (_decodedBytes > MaximumDecodedBytes && _lru.Last is { } last)
         {
             var pageNumber = last.Value;
@@ -410,6 +460,8 @@ public sealed class BrowseThumbnailPageCache : IDisposable
             _pages.Clear();
             _lru.Clear();
             _decodedBytes = 0;
+            _retainedBitmaps.Clear();
+            _retainedBytes = 0;
             _index = Array.Empty<BrowseThumbnailIndexEntry>();
         }
 
