@@ -1,6 +1,7 @@
 name: PCasa One-Row Header Acceptance
 
 # Single user-requested Windows acceptance, without source-push CI.
+# Retry 2: resolve 13px toolbar overflow at minimum supported window width.
 # Only this temporary workflow file triggers a run. Delete after verification.
 on:
   push:
