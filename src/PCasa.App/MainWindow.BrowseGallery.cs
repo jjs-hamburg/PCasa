@@ -387,29 +387,16 @@ public partial class MainWindow
         }
         catch (OperationCanceledException) { return; }
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
-        _photoFolders = freshFolders
+        // Do not publish a new folder summary while the corresponding
+        // thumbnail index is still queued behind SQLite/network work.
+        // The last fully published gallery remains available during a move.
+        var nextFolders = freshFolders
             .Where(folder => !IsPendingFolderRemovalHidden(folder.LocalPath))
             .ToArray();
-        _lastCatalogImageCount = imageCount;
-        // A newly imported catalog folder may not yet have been reported by
-        // incremental scan progress (notably Explorer drops). Add ONLY its
-        // tree node before calculating gallery order; existing nodes remain
-        // untouched, and gallery data is still loaded independently.
-        foreach (var discovered in _photoFolders)
-        {
-            if (_folderTreeItems.ContainsKey(discovered.Id)) continue;
-            ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
-                DiscoveredPhotoFolderId: discovered.Id,
-                DiscoveredPhotoFolderPath: discovered.LocalPath));
-        }
-        RefreshVisibleFolderCounts();
-        // Gallery catalog reloads are independent of the folder TreeView.
-        // The tree has its own targeted additions and explicit refreshes;
-        // rebuilding it here also invalidates the gallery's scroll geometry.
-        UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
 
         if (imageCount == 0)
         {
+            PublishPhotoFolderSnapshot(nextFolders, imageCount);
             System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 0);
             _browseIndex = Array.Empty<BrowseThumbnailIndexEntry>();
             _dragSelectionPathCache.Clear();
@@ -430,6 +417,7 @@ public partial class MainWindow
 
         var profile = _browseProfileRepository.Get();
         var tier = profile.ChooseForDisplayWidth(ThumbnailSizeSlider.Value);
+        IReadOnlyList<BrowseThumbnailIndexEntry>? nextIndex = null;
 
         if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
         {
@@ -454,32 +442,9 @@ public partial class MainWindow
                 return;
             }
 
-            // The visual folder tree determines Picasa gallery order.
-            // Database canonical/UNC names are storage identity, not order.
-            if (_pendingFolderRemovalPath is not null)
-            {
-                var visibleIds = _photoFolders.Select(folder => folder.Id)
-                    .ToHashSet();
-                index = index.Where(image =>
-                    visibleIds.Contains(image.PhotoFolderId)).ToArray();
-            }
-            index = GalleryFolderOrdering.Order(index, CaptureGalleryFolderOrder());
-
-            // The database may have been checked without any change to this
-            // tier. Reusing the old index keeps decoded thumbnail pages alive.
-            var indexChanged = _activeBrowseTier != tier ||
-                _browseIndex.Count != index.Count ||
-                !_browseIndex.SequenceEqual(index);
-            if (indexChanged)
-            {
-                _browseIndex = index;
-                // Paths captured for an older catalog generation must not
-                // survive image moves, renames or a gallery index replacement.
-                _dragSelectionPathCache.Clear();
-            }
-            _activeBrowseTier = tier;
-            if (_browseIndex.Count > 0)
-                System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 1);
+            // Keep the newly read index PRIVATE until the last awaited
+            // catalog read. Neither index nor folders may be published alone.
+            nextIndex = index;
         }
 
         if (_selectedImageIds.Count > 0)
@@ -511,6 +476,35 @@ public partial class MainWindow
                 _ = UpdateSidebarContentAsync();
             }
         }
+
+        // One WPF publication boundary. The summary and index have both
+        // finished loading, and the last source-selection/catalog read has
+        // validated this refresh request. Consumers cannot observe a newer
+        // folder list paired with the previous gallery index.
+        if (!_browseRefreshRequests.IsCurrent(refresh)) return;
+        PublishPhotoFolderSnapshot(nextFolders, imageCount);
+        if (nextIndex is not null)
+        {
+            IReadOnlyList<BrowseThumbnailIndexEntry> ordered = nextIndex;
+            if (_pendingFolderRemovalPath is not null)
+            {
+                var visibleIds = nextFolders.Select(folder => folder.Id).ToHashSet();
+                ordered = ordered.Where(image =>
+                    visibleIds.Contains(image.PhotoFolderId)).ToArray();
+            }
+            ordered = GalleryFolderOrdering.Order(ordered,
+                CaptureGalleryFolderOrder());
+            if (_activeBrowseTier != tier ||
+                _browseIndex.Count != ordered.Count ||
+                !_browseIndex.SequenceEqual(ordered))
+            {
+                _browseIndex = ordered;
+                _dragSelectionPathCache.Clear();
+            }
+            _activeBrowseTier = tier;
+        }
+        System.Threading.Volatile.Write(ref _galleryHasIndexedImages,
+            _browseIndex.Count > 0 ? 1 : 0);
 
         await ApplyTagFilterAsync();
         if (!_browseRefreshRequests.IsCurrent(refresh))
@@ -551,6 +545,25 @@ public partial class MainWindow
             if (!_isScanning && !_manualScanRunning)
             StatusText.Text = $"{imageCount:N0} Bilder";
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
+    }
+
+    // Called only on Dispatcher, with a complete paired gallery snapshot.
+    // Numeric counts and discovered tree nodes are incremental; never rebuild
+    // the entire TreeView merely because a photo moved.
+    private void PublishPhotoFolderSnapshot(
+        IReadOnlyList<PhotoFolderSummary> folders, int imageCount)
+    {
+        _photoFolders = folders;
+        _lastCatalogImageCount = imageCount;
+        foreach (var discovered in folders)
+        {
+            if (_folderTreeItems.ContainsKey(discovered.Id)) continue;
+            ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
+                DiscoveredPhotoFolderId: discovered.Id,
+                DiscoveredPhotoFolderPath: discovered.LocalPath));
+        }
+        RefreshVisibleFolderCounts();
+        UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
     }
 
     // Every committed image (not just the FIRST image) may change a visible
