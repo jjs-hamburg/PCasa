@@ -579,15 +579,10 @@ public partial class MainWindow
 
     private void OnCatalogImageCommitted()
     {
-        // An active scanner owns one coherent, resumable catalog inventory.
-        // Once the first gallery index exists, rebuilding the entire view for
-        // every subsequent image commit produces the visible periodic jumping.
-        // The scan's completion owner already publishes the final index.
-        // Exception: an initially empty gallery needs its FIRST thumbnail
-        // before a long initial import has completed.
-        if (_isScanning &&
-            System.Threading.Volatile.Read(ref _galleryHasIndexedImages) != 0)
-            return;
+        // Every durable image commit can affect the gallery, including while
+        // a resumable NAS import is running. The existing coalescing timer
+        // performs ONE refresh for many commits instead of suppressing all
+        // updates until the full root inventory finishes.
         if (Dispatcher.HasShutdownStarted) return;
         if (System.Threading.Interlocked.Exchange(
             ref _catalogPublicationPending, 1) != 0) return;
