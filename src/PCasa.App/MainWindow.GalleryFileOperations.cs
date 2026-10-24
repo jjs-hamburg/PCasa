@@ -486,12 +486,14 @@ public partial class MainWindow
                             // A preempted step must not reserve a name it has
                             // NOT yet materialized. Only a successfully
                             // completed file mutation can claim this target.
-                            var sourceId = move ? CatalogImageIdAtPath(source) : null;
-                            var replacedId = replace
-                                ? CatalogImageIdAtPath(destination) : null;
-                            using (SourceFileLocks.Enter(source, token))
+                            using (SourceFileLocks.EnterPair(source, destination, token))
                             {
                                 token.ThrowIfCancellationRequested();
+                                // Both catalog identities are read inside the
+                                // same path gate as the physical mutation.
+                                var sourceId = move ? CatalogImageIdAtPath(source) : null;
+                                var replacedId = replace
+                                    ? CatalogImageIdAtPath(destination) : null;
                                 // Any in-flight older NAS inventory must not
                                 // prune a newly copied/moved destination.
                                 FenceInventory(destinationRoot!);
