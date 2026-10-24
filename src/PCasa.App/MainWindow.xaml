@@ -293,7 +293,8 @@
                         Margin="2,0,8,0" VerticalAlignment="Center"
                         Style="{StaticResource PcasaSearchSortButtonStyle}"
                         ToolTip="Bilder innerhalb jedes Ordners sortieren"
-                        Click="GallerySortSelector_Click">
+                        Click="GallerySortSelector_Click"
+                        Loaded="GallerySortSelector_Loaded">
                     <Button.Content>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <!-- LAP-like graded lines with flow-direction arrow; no extra triangle -->
