@@ -258,7 +258,8 @@ public sealed class CatalogRemovalService
     public int RemoveMissing(long folderId, string localDirectory,
         IReadOnlySet<string> currentPaths, IProgress<string>? progress = null,
         bool recursive = true, CancellationToken cancellationToken = default,
-        string? sourceCanonicalPath = null, long? expectedGeneration = null)
+        string? sourceCanonicalPath = null, long? expectedGeneration = null,
+        long? expectedScanEpoch = null)
     {
         var normalized = Path.GetFullPath(localDirectory).Replace('/', '\\');
         var prefix = Path.TrimEndingDirectorySeparator(normalized) + "\\";
@@ -268,14 +269,16 @@ public sealed class CatalogRemovalService
         return Remove(folderId, normalized, prefix, removeRoot: false, progress,
             currentPaths, recursive, cancellationToken, deferCleanup: true,
             sourceCanonicalPath: sourceCanonicalPath,
-            expectedGeneration: expectedGeneration);
+            expectedGeneration: expectedGeneration,
+            expectedScanEpoch: expectedScanEpoch);
     }
 
     private int Remove(long folderId, string path, string prefix, bool removeRoot,
         IProgress<string>? progress, IReadOnlySet<string>? currentPaths = null,
         bool recursive = true, CancellationToken cancellationToken = default,
         bool deferCleanup = false, string? requireExcludedPath = null,
-        string? sourceCanonicalPath = null, long? expectedGeneration = null)
+        string? sourceCanonicalPath = null, long? expectedGeneration = null,
+        long? expectedScanEpoch = null)
     {
         // A complete scan may have observed hundreds of thousands of paths.
         // Filling this connection-local TEMP table is preparation, not a
@@ -333,6 +336,19 @@ public sealed class CatalogRemovalService
                     guard.Parameters.AddWithValue("$generation", expectedGeneration.Value);
                     if (Convert.ToInt32(guard.ExecuteScalar()) != 1)
                         throw new OperationCanceledException("Old scan may not prune catalog.");
+                    if (expectedScanEpoch is long epoch)
+                    {
+                        // A newer scan may have started during a paused old scan.
+                        // Its catalogue is safe; the old inventory no longer
+                        // has permission to DELETE, but may finish normally.
+                        // The check and DELETE share this write transaction.
+                        using var epochGuard = connection.CreateCommand();
+                        epochGuard.Transaction = transaction;
+                        epochGuard.CommandText = "SELECT scan_epoch FROM scheduler_sources WHERE canonical_path = $path;";
+                        epochGuard.Parameters.AddWithValue("$path", sourceCanonicalPath);
+                        if (Convert.ToInt64(epochGuard.ExecuteScalar()) != epoch)
+                            return 0;
+                    }
                 }
                 if (requireExcludedPath is not null)
                 {

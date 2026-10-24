@@ -31,6 +31,8 @@ internal static class Program
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
+        Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
+        Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
@@ -291,6 +293,102 @@ internal static class Program
             throw new Exception(
                 "Resumed scan did not continue at its previous file; counted " +
                 result.ImageFilesSeen);
+    }
+
+
+    private static void ScanEpochSupersessionRetainsCursor()
+    {
+        using var sandbox = new Sandbox();
+        for (var i = 0; i < 3; i++)
+            WriteJpeg(Path.Combine(sandbox.Images, $"kept-{i}.jpg"));
+        var obsolete = Path.Combine(sandbox.Images, "obsolete.jpg");
+        WriteJpeg(obsolete);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 4);
+        File.Delete(obsolete);
+
+        using var resume = new FolderScanner.ScanResumeState();
+        using var yield = new CancellationTokenSource();
+        var paused = false;
+        var progress = new InlineProgress<ScanProgress>(scan =>
+        {
+            if (paused || scan.CurrentFile is null) return;
+            paused = true;
+            yield.Cancel();
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, recursive: true,
+                progress: progress, cancellationToken: yield.Token, resume: resume);
+            throw new Exception("Scanner ignored the requested checkpoint.");
+        }
+        catch (OperationCanceledException) when (paused) { }
+        if (resume.CommittedFiles != 1)
+            throw new Exception("Scanner checkpoint was not retained.");
+
+        var folders = new FolderRepository(db);
+        var sourceGeneration = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        var previousEpoch = folders.GetScanEpoch(root.CanonicalPath);
+        if (folders.BeginManualScan(root.CanonicalPath) != previousEpoch + 1 ||
+            folders.GetSourceState(root.CanonicalPath)!.Value.Generation != sourceGeneration)
+            throw new Exception("Manual scan incorrectly invalidated source membership.");
+
+        var resumed = scanner.ScanDirectory(root, root.LocalPath,
+            recursive: true, resume: resume);
+        if (resumed.ImageFilesSeen != 3 || resumed.Removed != 0)
+            throw new Exception("Superseded scan restarted files or pruned using stale inventory.");
+        Require(db, 4);
+
+        var latest = scanner.Scan(root);
+        if (latest.Removed != 1) 
+            throw new Exception("Newest complete inventory failed to reconcile missing paths.");
+        Require(db, 3);
+    }
+
+    private static void SourceLockWaitCanYield()
+    {
+        static async Task Check()
+        {
+            var path = Path.Combine(Path.GetTempPath(),
+                "pcasa-source-lock-" + Guid.NewGuid().ToString("N") + ".jpg");
+            using var cancel = new CancellationTokenSource();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var gate = SourceFileLocks.ForPath(path);
+            var holder = Task.Run(() =>
+            {
+                lock (gate)
+                {
+                    entered.TrySetResult();
+                    release.Task.GetAwaiter().GetResult();
+                }
+            });
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var waiter = Task.Run(() =>
+                {
+                    waiting.TrySetResult();
+                    using (SourceFileLocks.Enter(path, cancel.Token)) { }
+                });
+                await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                cancel.Cancel();
+                try
+                {
+                    await waiter.WaitAsync(TimeSpan.FromSeconds(5));
+                    throw new Exception("A canceled lock waiter entered a held source.");
+                }
+                catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                release.TrySetResult();
+                await holder.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void ManualMutationOvertakesYieldingManualScan()
@@ -2054,9 +2152,11 @@ internal static class Program
                 WriteJpeg(second);
                 var folders = new FolderRepository(db);
                 var previousGeneration = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
-                var newerGeneration = folders.BeginManualScan(root.CanonicalPath);
-                if (newerGeneration != previousGeneration + 1)
-                    throw new Exception("Manual scan did not advance source generation.");
+                var previousEpoch = folders.GetScanEpoch(root.CanonicalPath);
+                var newerEpoch = folders.BeginManualScan(root.CanonicalPath);
+                if (newerEpoch != previousEpoch + 1 ||
+                    folders.GetSourceState(root.CanonicalPath)!.Value.Generation != previousGeneration)
+                    throw new Exception("Manual scan did not advance its independent inventory epoch.");
                 var manualScanner = new FolderScanner(
                     new ImageCatalogRepository(db), new ThumbnailCache(),
                     folders, new BrowseThumbnailProfileRepository(db));
@@ -2068,10 +2168,9 @@ internal static class Program
                 release.TrySetResult();
             }
 
-            var rejected = false;
-            try { await old.WaitAsync(TimeSpan.FromSeconds(15)); }
-            catch (OperationCanceledException) { rejected = true; }
-            if (!rejected) throw new Exception("Older background scan was allowed to reconcile.");
+            var oldResult = await old.WaitAsync(TimeSpan.FromSeconds(15));
+            if (oldResult.Removed != 0)
+                throw new Exception("Older background inventory was allowed to prune.");
             Require(db, 2);
         }
         Check().GetAwaiter().GetResult();

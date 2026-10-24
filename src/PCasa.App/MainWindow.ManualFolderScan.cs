@@ -56,7 +56,8 @@ public partial class MainWindow
         _manualContextScanActive = true;
         _manualScanRunning = true;
         _manualFolderScanWaiting = true;
-        _backgroundCurrentScanCancellation?.Cancel();
+        // Manual work preempts through the scheduler yield token. Do not
+        // permanently cancel and dispose the background scanner's cursor.
         _cacheMaintenanceCancellation?.Cancel();
         _browseCacheCancellation?.Cancel();
         _isScanning = true;

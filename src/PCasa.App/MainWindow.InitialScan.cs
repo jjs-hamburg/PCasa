@@ -75,7 +75,7 @@ public partial class MainWindow
         _isScanning = true;
         _activeScanCancellation = cancellation;
         _activeScanFolderId = folder.Id;
-        _backgroundCurrentScanCancellation?.Cancel();
+        // Retain the running NAS scan cursor; scheduler yield is reversible.
         _browseCacheCancellation?.Cancel();
         _cacheMaintenanceCancellation?.Cancel();
         UpdateManualScanControls();

@@ -633,7 +633,7 @@ public partial class MainWindow
         // Do not await background pack maintenance before submitting a
         // foreground operation. The scheduler preempts its idle lane.
         _cacheMaintenanceCancellation?.Cancel();
-        _backgroundCurrentScanCancellation?.Cancel();
+        // A manual scan is not a permanent cancellation of the NAS scan.
         _browseCacheCancellation?.Cancel();
         _manualScanAllActive = true;
         _manualScanRunning = true;

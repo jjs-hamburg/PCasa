@@ -214,6 +214,7 @@ public sealed class LocalDatabase
                 CREATE TABLE IF NOT EXISTS scheduler_sources (
                     canonical_path TEXT PRIMARY KEY COLLATE NOCASE,
                     generation INTEGER NOT NULL DEFAULT 1 CHECK (generation > 0),
+                    scan_epoch INTEGER NOT NULL DEFAULT 0 CHECK (scan_epoch >= 0),
                     desired_present INTEGER NOT NULL CHECK (desired_present IN (0, 1)),
                     updated_utc TEXT NOT NULL
                 );
@@ -224,6 +225,10 @@ public sealed class LocalDatabase
                 """;
             sources.ExecuteNonQuery();
         }
+        // Manual scan epochs are independent from source membership/exclusion
+        // generations. Older installations need this additive column.
+        EnsureColumn(connection, "scheduler_sources", "scan_epoch",
+            "INTEGER NOT NULL DEFAULT 0");
 
         // One-time upgrade for folders added by older builds that never
         // initiated their first scan: do not strand an empty monitored root.

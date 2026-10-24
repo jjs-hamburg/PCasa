@@ -50,6 +50,7 @@ public sealed class FolderScanner
         internal string? CurrentFile;
         internal bool EnumerationComplete;
         internal long? SourceGeneration;
+        internal long? ScanEpoch;
         internal readonly Dictionary<string, long> PhotoFolderIds =
             new(StringComparer.OrdinalIgnoreCase);
         internal readonly HashSet<string> ObservedPaths =
@@ -67,6 +68,7 @@ public sealed class FolderScanner
             CurrentFile = null;
             EnumerationComplete = false;
             SourceGeneration = null;
+            ScanEpoch = null;
             PhotoFolderIds.Clear();
             ObservedPaths.Clear();
             ImageFilesSeen = Updated = Unchanged = Added = Changed =
@@ -168,6 +170,12 @@ public sealed class FolderScanner
             resume.Reset();
         }
         if (resume is not null) resume.SourceGeneration = generation;
+        // Capture the inventory epoch only once per resumable enumeration.
+        // A newer manual scan can supersede its deletion authority without
+        // discarding the old scanner's work or restarting NAS enumeration.
+        var scanEpoch = resume?.ScanEpoch ??
+            _folderRepository.GetScanEpoch(folder.CanonicalPath);
+        if (resume is not null) resume.ScanEpoch = scanEpoch;
         var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
         if (FolderExclusionRules.IsExcluded(scanRoot, exclusions))
             return new ScanResult(0, 0, 0, 0);
@@ -237,7 +245,7 @@ public sealed class FolderScanner
                 {
                     // Metadata edits and original-image decoding share one
                     // file-specific lock, not the global pack/index lock.
-                    lock (SourceFileLocks.ForPath(localPath))
+                    using (SourceFileLocks.Enter(localPath, cancellationToken))
                     {
                     observedPaths?.Add(localPath);
                     var file = new FileInfo(localPath);
@@ -494,7 +502,7 @@ public sealed class FolderScanner
             removed = cleanup.RemoveMissing(folder.Id, scanRoot, observedPaths,
                 recursive: recursive, cancellationToken: cancellationToken,
                 sourceCanonicalPath: folder.CanonicalPath,
-                expectedGeneration: generation);
+                expectedGeneration: generation, expectedScanEpoch: scanEpoch);
         }
 
         if (imageFilesSeen > 0 && updated == 0 && unchanged == 0 && failed == imageFilesSeen)
@@ -515,7 +523,7 @@ public sealed class FolderScanner
                 StringComparison.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _folderRepository.CompleteInitialScan(folder.Id, generation);
+            _folderRepository.CompleteInitialScan(folder.Id, generation, scanEpoch);
         }
 
         return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed, metadataUpdated);

@@ -474,7 +474,7 @@ public partial class MainWindow
                             var sourceId = move ? CatalogImageIdAtPath(source) : null;
                             var replacedId = replace
                                 ? CatalogImageIdAtPath(destination) : null;
-                            lock (SourceFileLocks.ForPath(source))
+                            using (SourceFileLocks.Enter(source, token))
                             {
                                 token.ThrowIfCancellationRequested();
 

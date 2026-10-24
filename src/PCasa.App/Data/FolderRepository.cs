@@ -116,7 +116,8 @@ public sealed class FolderRepository
         return GetAll().Where(folder => paths.Contains(folder.LocalPath)).ToArray();
     }
 
-    public bool CompleteInitialScan(long folderId, long expectedGeneration)
+    public bool CompleteInitialScan(long folderId, long expectedGeneration,
+        long? expectedScanEpoch = null)
     {
         using var connection = _database.OpenConnection();
         using var update = connection.CreateCommand();
@@ -126,10 +127,12 @@ public sealed class FolderRepository
               AND EXISTS (
                   SELECT 1 FROM scheduler_sources s
                   WHERE s.canonical_path = monitored_folders.canonical_path
-                    AND s.generation = $generation AND s.desired_present = 1);
+                    AND s.generation = $generation AND s.desired_present = 1
+                    AND ($scanEpoch IS NULL OR s.scan_epoch = $scanEpoch));
             """;
         update.Parameters.AddWithValue("$id", folderId);
         update.Parameters.AddWithValue("$generation", expectedGeneration);
+        update.Parameters.AddWithValue("$scanEpoch", (object?)expectedScanEpoch ?? DBNull.Value);
         return update.ExecuteNonQuery() == 1;
     }
 
@@ -259,10 +262,10 @@ public sealed class FolderRepository
         return Convert.ToInt64(generation);
     }
 
-    // A manual scan supersedes older enumerations of this source, even when
-    // the monitored-folder selection itself has not changed. Otherwise a
-    // background enumeration finished later could prune new files already
-    // committed by a user's newer, complete scan.
+    // Starting a newer scan invalidates ONLY the older inventory's authority
+    // to prune missing paths. It must not invalidate already completed EXIF,
+    // thumbnails, or the enumeration cursor of a suspended older scan.
+    // Source generation remains reserved for remove/re-add/exclusion changes.
     public long BeginManualScan(string canonicalPath)
     {
         using var connection = _database.OpenConnection();
@@ -271,9 +274,9 @@ public sealed class FolderRepository
         update.Transaction = transaction;
         update.CommandText = """
             UPDATE scheduler_sources
-            SET generation = generation + 1, updated_utc = $now
+            SET scan_epoch = scan_epoch + 1, updated_utc = $now
             WHERE canonical_path = $path AND desired_present = 1
-            RETURNING generation;
+            RETURNING scan_epoch;
             """;
         update.Parameters.AddWithValue("$path", canonicalPath);
         update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
@@ -288,6 +291,17 @@ public sealed class FolderRepository
     // Every asynchronous operation captures this token before starting work.
     // A token is valid only while the same source is still desired at the
     // same generation. No old scan or cleanup may commit after re-inclusion.
+    public long GetScanEpoch(string canonicalPath)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT scan_epoch FROM scheduler_sources WHERE canonical_path = $path AND desired_present = 1;";
+        command.Parameters.AddWithValue("$path", canonicalPath);
+        return command.ExecuteScalar() is { } epoch
+            ? Convert.ToInt64(epoch)
+            : throw new OperationCanceledException("The monitored source was removed.");
+    }
+
     public (long Generation, bool DesiredPresent)? GetSourceState(string canonicalPath)
     {
         using var connection = _database.OpenConnection();
