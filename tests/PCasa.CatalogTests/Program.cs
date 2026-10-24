@@ -32,6 +32,7 @@ internal static class Program
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
+        Run("Durable first-import checkpoints survive restart without unsafe pruning", DurableInitialImportRestartSafe, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
@@ -356,6 +357,61 @@ internal static class Program
                 result.ImageFilesSeen);
     }
 
+
+    private static void DurableInitialImportRestartSafe()
+    {
+        using var sandbox = new Sandbox();
+        var paths = Enumerable.Range(0, 3).Select(i =>
+        {
+            var dir = Path.Combine(sandbox.Images, $"Batch-{i:D2}");
+            Directory.CreateDirectory(dir);
+            var photo = Path.Combine(dir, $"photo-{i:D2}.jpg");
+            WriteJpeg(photo);
+            return photo;
+        }).ToArray();
+        var (db, root, scanner) = sandbox.Prepare();
+        using var cancellation = new CancellationTokenSource();
+        var discovered = 0;
+        var progress = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.DiscoveredPhotoFolderId is null) return;
+            if (++discovered == 2) cancellation.Cancel();
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, true, progress,
+                cancellation.Token, durableInitialImport: true);
+            throw new Exception("First-import interruption was ignored.");
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+
+        var repository = new FolderRepository(db);
+        var state = repository.GetSourceState(root.CanonicalPath)!.Value;
+        var done = repository.GetCompletedInitialScanDirectories(
+            root.Id, state.Generation, repository.GetScanEpoch(root.CanonicalPath));
+        if (!done.Contains(Path.GetDirectoryName(paths[0])!) ||
+            done.Contains(Path.GetDirectoryName(paths[1])!))
+            throw new Exception("Directory completion was not checkpointed at a safe boundary.");
+
+        // The completed directory is not re-inventoried by a restarted first
+        // import. A file removed while PCasa was closed must NOT be pruned by
+        // an incomplete/mixed inventory. A later full scan owns reconciliation.
+        File.Delete(paths[0]);
+        db.Initialize();
+        var afterRestart = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
+        var result = afterRestart.ScanDirectory(root, root.LocalPath, true,
+            durableInitialImport: true);
+        if (result.Failed != 0 ||
+            repository.GetPendingInitialScans().Any(folder => folder.Id == root.Id))
+            throw new Exception("Restarted first import did not complete.");
+        if (new ImageCatalogRepository(db).CountAll() != 3)
+            throw new Exception("Restart accidentally deleted a checkpointed image.");
+        afterRestart.Scan(root);
+        if (new ImageCatalogRepository(db).CountAll() != 2)
+            throw new Exception("Subsequent complete scan failed to reconcile missing file.");
+    }
 
     private static void ScanEpochSupersessionRetainsCursor()
     {
