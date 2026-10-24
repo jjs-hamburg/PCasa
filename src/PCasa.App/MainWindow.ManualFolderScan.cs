@@ -147,51 +147,64 @@ public partial class MainWindow
         bool requirePendingInitialImport = false,
         string? operationKey = null)
     {
-        ScanResult? completed = null;
-        using var resume = new FolderScanner.ScanResumeState();
-        var manualGenerationStarted = false;
         var key = operationKey ?? $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
-        // Scanner progress belongs to the scheduler snapshot even when the
-        // WPF progress window is shared with another preempting manual packet.
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
-        await _scheduler.EnqueueAsync(
-            key, priority,
-            token =>
-            {
-                token.ThrowIfCancellationRequested();
-                var folder = ResolveMonitoredFolder(directory)
-                    ?? throw new InvalidOperationException(
-                        "Dieser Ordner liegt außerhalb der PCasa-Überwachung.");
-                if (expectedMonitoredFolderId is long expected && folder.Id != expected)
-                    throw new OperationCanceledException(
-                        "Ein inzwischen ersetzter Überwachungsordner darf nicht gescannt werden.");
-                if (requirePendingInitialImport &&
-                    !_folderRepository.GetPendingInitialScans().Any(candidate =>
-                        candidate.Id == folder.Id))
-                    throw new OperationCanceledException(
-                        "Der Erstimport wurde bereits durch einen neueren Scan erledigt.");
-                if (FolderExclusionRules.IsExcluded(directory,
-                    _folderRepository.GetExcludedPaths(folder.Id)))
-                    throw new InvalidOperationException(
-                        "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
-                if (!Directory.Exists(directory))
-                    throw new DirectoryNotFoundException(
-                        $"Der Ordner ist nicht erreichbar: {directory}");
-                // The scanner and the generation-safe RemoveMissing operation
-                // are shared by context scan, Scan All, initial import and
-                // background directory scans. No alternative SQL pruning.
-                if (!manualGenerationStarted)
-                {
-                    _folderRepository.BeginManualScan(folder.CanonicalPath);
-                    manualGenerationStarted = true;
-                }
-                completed = _folderScanner.ScanDirectory(
-                    folder, directory, recursive: true, schedulerProgress, token, resume);
-                return Task.CompletedTask;
-            },
+        using var step = new CompleteFolderScanStep(this, directory,
+            schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport);
+        await _scheduler.EnqueueAsync(key, priority, step.ExecuteAsync,
             cancellationToken: cancellationToken,
             workKind: SchedulerWorkKind.CatalogScan);
-        return completed ?? throw new OperationCanceledException();
+        return step.Result ?? throw new OperationCanceledException();
+    }
+
+    // All complete scans use this ONE scanner step: explicit one-folder,
+    // Scan All, and first import. Its iterator and generation checkpoint
+    // belong to the step for the entire lifetime of its parent package.
+    private sealed class CompleteFolderScanStep(
+        MainWindow owner, string directory, IProgress<ScanProgress>? progress,
+        long? expectedMonitoredFolderId = null,
+        bool requirePendingInitialImport = false) : IDisposable
+    {
+        private readonly FolderScanner.ScanResumeState _resume = new();
+        private bool _manualGenerationStarted;
+
+        public ScanResult? Result { get; private set; }
+
+        public Task ExecuteAsync(CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            var folder = owner.ResolveMonitoredFolder(directory)
+                ?? throw new InvalidOperationException(
+                    "Dieser Ordner liegt außerhalb der PCasa-Überwachung.");
+            if (expectedMonitoredFolderId is long expected && folder.Id != expected)
+                throw new OperationCanceledException(
+                    "Ein inzwischen ersetzter Überwachungsordner darf nicht gescannt werden.");
+            if (requirePendingInitialImport &&
+                !owner._folderRepository.GetPendingInitialScans().Any(candidate =>
+                    candidate.Id == folder.Id))
+                throw new OperationCanceledException(
+                    "Der Erstimport wurde bereits durch einen neueren Scan erledigt.");
+            if (FolderExclusionRules.IsExcluded(directory,
+                owner._folderRepository.GetExcludedPaths(folder.Id)))
+                throw new InvalidOperationException(
+                    "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
+            if (!Directory.Exists(directory))
+                throw new DirectoryNotFoundException(
+                    $"Der Ordner ist nicht erreichbar: {directory}");
+            if (!_manualGenerationStarted)
+            {
+                owner._folderRepository.BeginManualScan(folder.CanonicalPath);
+                _manualGenerationStarted = true;
+            }
+
+            // No duplicate import or cleanup path. The scanner owns all EXIF,
+            // cache, catalog, and safe reconciliation transitions.
+            Result = owner._folderScanner.ScanDirectory(
+                folder, directory, recursive: true, progress, token, _resume);
+            return Task.CompletedTask;
+        }
+
+        public void Dispose() => _resume.Dispose();
     }
 
     // A synchronous progress relay: scheduler state is committed on the
