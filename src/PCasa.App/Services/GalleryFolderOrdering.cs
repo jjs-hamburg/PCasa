@@ -69,6 +69,10 @@ public static class GalleryFolderOrdering
         var folder = Position(left.PhotoFolderId, treePositions)
             .CompareTo(Position(right.PhotoFolderId, treePositions));
         if (folder != 0) return folder;
+        // A newly discovered folder may not have received a tree position
+        // yet. Never merge two such folders into one mixed image section.
+        if (left.PhotoFolderId != right.PhotoFolderId)
+            return left.PhotoFolderId.CompareTo(right.PhotoFolderId);
 
         int order = options.Field switch
         {
