@@ -61,7 +61,13 @@ public sealed record BrowseThumbnailIndexEntry(
     string FileName = "",
     bool HasGps = false,
     bool HasTags = false,
-    bool IsRaw = false);
+    bool IsRaw = false,
+    long FileSize = 0,
+    long ModifiedUtcTicks = 0,
+    long? CreatedUtcTicks = null,
+    string? DateTimeOriginal = null,
+    int OriginalWidth = 0,
+    int OriginalHeight = 0);
 
 public sealed record BrowseCacheCandidate(
     long ImageId,
