@@ -100,15 +100,23 @@ internal static class TagFlow
             // The agreed default is Name ASCENDING, independently within
             // each photo folder. Changing the menu direction must not merge
             // the two sections or disrupt the existing selection/search.
-            var sortName = (MenuItem?)window.FindName("GallerySortNameMenu")
-                ?? throw new Exception("Name sort menu not initialized.");
-            var sortAscending = (MenuItem?)window.FindName("GallerySortAscendingMenu")
-                ?? throw new Exception("Ascending sort menu not initialized.");
-            var sortDescending = (MenuItem?)window.FindName("GallerySortDescendingMenu")
-                ?? throw new Exception("Descending sort menu not initialized.");
+            var sortButton = (Button?)window.FindName("GallerySortSelectorButton")
+                ?? throw new Exception("Sorting is not in the search toolbar.");
+            var sortItems = sortButton.ContextMenu?.Items.OfType<MenuItem>().ToArray()
+                ?? throw new Exception("Search bar sort choices not available.");
+            MenuItem SortItem(string key) =>
+                sortItems.Single(item => Equals(item.Tag, key));
+            var sortName = SortItem("Name");
+            var sortAscending = SortItem("Ascending");
+            var sortDescending = SortItem("Descending");
+            var sortDirection = (TextBlock?)window.FindName("GallerySortDirectionGlyph")
+                ?? throw new Exception("Current sorting direction not visible.");
+            var sortLabel = (TextBlock?)window.FindName("GallerySortSelectedFieldLabel")
+                ?? throw new Exception("Current sorting criterion not visible.");
             if (!sortName.IsChecked || !sortAscending.IsChecked ||
-                sortDescending.IsChecked)
-                throw new Exception("PCasa did not default to Name ascending.");
+                sortDescending.IsChecked || sortDirection.Text != "↑" ||
+                sortLabel.Text != "Name")
+                throw new Exception("PCasa did not show Name ascending in the search bar.");
 
             var sortIndexField = typeof(PCasa.App.MainWindow).GetField(
                 "_displayedBrowseIndex",
@@ -124,6 +132,7 @@ internal static class TagFlow
                 var bImages = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
                 return sortDescending.IsChecked && sortName.IsChecked &&
+                    sortDirection.Text == "↓" && sortLabel.Text == "Name" &&
                     images.Count == 24 && bImages.Length == 12 &&
                     bImages.SequenceEqual(bImages.OrderByDescending(
                         name => name, StringComparer.OrdinalIgnoreCase)) &&
@@ -136,7 +145,8 @@ internal static class TagFlow
                 var images = SortedGallery();
                 var names = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
-                return sortAscending.IsChecked && names.Length == 12 &&
+                return sortAscending.IsChecked &&
+                    sortDirection.Text == "↑" && names.Length == 12 &&
                     names.SequenceEqual(names.OrderBy(
                         name => name, StringComparer.OrdinalIgnoreCase));
             }, "Ascending Name sort did not restore default order.");
