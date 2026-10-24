@@ -117,11 +117,12 @@ public sealed class FolderScanner
         bool recursive,
         IProgress<ScanProgress>? progress = null,
         CancellationToken cancellationToken = default,
-        ScanResumeState? resume = null)
+        ScanResumeState? resume = null,
+        bool durableInitialImport = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
-            resume: resume);
+            resume: resume, durableInitialImport: durableInitialImport);
     }
 
     public ScanResult ScanFile(
@@ -147,7 +148,8 @@ public sealed class FolderScanner
         CancellationToken cancellationToken,
         string? specificFile = null,
         ScanResumeState? resume = null,
-        bool publishCatalogChange = true)
+        bool publishCatalogChange = true,
+        bool durableInitialImport = false)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -203,6 +205,42 @@ public sealed class FolderScanner
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : null;
 
+        // Directory checkpoints are a first-import optimization only; manual
+        // rescans retain their established full-inventory semantics.
+        var completedDirectories = durableInitialImport
+            ? _folderRepository.GetCompletedInitialScanDirectories(
+                folder.Id, generation, scanEpoch)
+            : null;
+        var failedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void DirectoryCompleted(string directory)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (failedDirectories.Contains(directory)) return;
+            if (!Directory.Exists(folder.LocalPath) || !Directory.Exists(directory))
+                throw new DirectoryNotFoundException(
+                    $"Verzeichnis vor Checkpoint nicht erreichbar: {directory}");
+            var seen = new HashSet<string>(
+                observedPaths!.Where(path => string.Equals(
+                    Path.GetDirectoryName(path), directory,
+                    StringComparison.OrdinalIgnoreCase)),
+                StringComparer.OrdinalIgnoreCase);
+            var cleanup = new CatalogRemovalService(_catalog.Database);
+            cleanup.RemoveMissing(folder.Id, directory, seen,
+                recursive: false, cancellationToken: cancellationToken,
+                sourceCanonicalPath: folder.CanonicalPath,
+                expectedGeneration: generation, expectedScanEpoch: scanEpoch);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_folderRepository.CompleteInitialScanDirectory(
+                    folder.Id, directory, generation, scanEpoch))
+                throw new OperationCanceledException("First-import checkpoint superseded.");
+            completedDirectories!.Add(directory);
+            // A completed directory is now durable; do not keep a large
+            // duplicate inventory in memory across the rest of the NAS scan.
+            observedPaths!.RemoveWhere(path => string.Equals(
+                Path.GetDirectoryName(path), directory,
+                StringComparison.OrdinalIgnoreCase));
+        }
+
         var profile = _browseProfile.Get();
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
@@ -211,7 +249,8 @@ public sealed class FolderScanner
         var enumerator = resume?.Enumerator ??
             (specificFile is null
                 ? EnumerateIncludedFiles(
-                    scanRoot, recursive, exclusions, CancellationToken.None)
+                    scanRoot, recursive, exclusions, CancellationToken.None,
+                    completedDirectories, durableInitialImport ? DirectoryCompleted : null)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
         var enumerationComplete = resume?.EnumerationComplete ?? false;
@@ -430,6 +469,7 @@ public sealed class FolderScanner
                     cancellationToken.ThrowIfCancellationRequested();
                     scanSession.RollbackPending();
                     failed++;
+                    failedDirectories.Add(Path.GetDirectoryName(localPath) ?? scanRoot);
                     if (firstFailure is null)
                     {
                         firstFailure = ex;
@@ -508,7 +548,7 @@ public sealed class FolderScanner
         // this reconciliation. A single broken JPEG must not prevent every
         // unrelated rename/deletion in that directory from converging.
         var removed = 0;
-        if (observedPaths is not null)
+        if (observedPaths is not null && !durableInitialImport)
         {
             // The source may disappear AFTER successful enumeration (VPN/SMB
             // drop, drive removal, renamed root) but BEFORE reconciliation.
@@ -578,7 +618,9 @@ public sealed class FolderScanner
         string scanRoot,
         bool recursive,
         IReadOnlyCollection<string> exclusions,
-        CancellationToken token)
+        CancellationToken token,
+        IReadOnlySet<string>? completedDirectories = null,
+        Action<string>? onDirectoryComplete = null)
     {
         var pending = new Stack<string>();
         pending.Push(scanRoot);
@@ -598,23 +640,31 @@ public sealed class FolderScanner
             var directory = pending.Pop();
             if (FolderExclusionRules.IsExcluded(directory, exclusions)) continue;
 
-            IEnumerable<string> files;
-            try
+            var previouslyCompleted = completedDirectories?.Contains(directory) == true;
+            if (!previouslyCompleted)
             {
-                files = Directory.GetFiles(directory, "*", options);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(directory, "*", options);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
+                }
+
+                foreach (var file in files)
+                {
+                    token.ThrowIfCancellationRequested();
+                    yield return file;
+                }
             }
 
-            foreach (var file in files)
+            if (!recursive)
             {
-                token.ThrowIfCancellationRequested();
-                yield return file;
+                if (!previouslyCompleted) onDirectoryComplete?.Invoke(directory);
+                continue;
             }
-
-            if (!recursive) continue;
             string[] children;
             try
             {
@@ -625,6 +675,9 @@ public sealed class FolderScanner
                 throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
             }
 
+            // Checkpoint only after BOTH the files and child directory list
+            // have been enumerated successfully; inaccessible NAS paths abort.
+            if (!previouslyCompleted) onDirectoryComplete?.Invoke(directory);
             foreach (var child in children.Reverse())
             {
                 if (!FolderExclusionRules.IsExcluded(child, exclusions))
