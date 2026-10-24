@@ -45,14 +45,93 @@
             <Setter Property="Margin" Value="0,0,5,0"/>
             <Setter Property="Padding" Value="3,2"/>
         </Style>
-        <!-- The two footer sliders use neutral Picasa-like rails and
-             narrow rectangular knobs. No Windows accent blue and no circles. -->
-        <ControlTemplate x:Key="PcasaCompactSliderThumbTemplate" TargetType="{x:Type primitives:Thumb}">
-            <Border Width="13" Height="21" CornerRadius="3"
-                    BorderBrush="#80858A" BorderThickness="1"
-                    Background="#E1E2E3">
-                <Border Margin="2" CornerRadius="2" BorderThickness="1,0,0,0"
-                        BorderBrush="#FFFFFF" Background="#ECEDEE"/>
+        <!-- Search has two EXCLUSIVE groups plus one independent persistent
+             inversion toggle. Checked state has both a tick and a border:
+             active selection is not communicated through color alone. -->
+        <Style x:Key="PcasaSearchChoiceStyle" TargetType="RadioButton">
+            <Setter Property="Height" Value="27"/>
+            <Setter Property="MinWidth" Value="45"/>
+            <Setter Property="Padding" Value="7,0"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="ChoiceBorder" CornerRadius="4" BorderThickness="1"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                        VerticalAlignment="Center" Margin="{TemplateBinding Padding}">
+                                <ContentPresenter VerticalAlignment="Center"/>
+                                <TextBlock x:Name="SelectedTick" Text="✓" FontSize="10"
+                                           FontWeight="SemiBold" Margin="5,0,0,0"
+                                           Foreground="{TemplateBinding Foreground}"
+                                           Visibility="Collapsed"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ChoiceBorder" Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="ChoiceBorder" Property="Background" Value="#424447"/>
+                                <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="#D75A5A"/>
+                                <Setter TargetName="SelectedTick" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PcasaSearchInvertStyle" TargetType="{x:Type primitives:ToggleButton}">
+            <Setter Property="Height" Value="27"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type primitives:ToggleButton}">
+                        <Border x:Name="InvertBorder" CornerRadius="4" BorderThickness="1"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                Background="{TemplateBinding Background}">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                        HorizontalAlignment="Center" Margin="{TemplateBinding Padding}">
+                                <TextBlock x:Name="InvertCheck" Text="✓" FontSize="11"
+                                           Margin="0,0,5,0" Visibility="Collapsed"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="InvertBorder" Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="InvertBorder" Property="BorderBrush" Value="#D75A5A"/>
+                                <Setter TargetName="InvertBorder" Property="Background" Value="#424447"/>
+                                <Setter TargetName="InvertCheck" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <!-- Fine footer tracks and small, easy-to-grab thumbs. Do not touch
+             the proven drag-start/drag-completed behavior or sidebar buttons. -->
+        <ControlTemplate x:Key="PcasaCompactSliderThumbTemplate"
+                         TargetType="{x:Type primitives:Thumb}">
+            <Border Width="11" Height="16" CornerRadius="5"
+                    BorderBrush="#9DA2A7" BorderThickness="1"
+                    Background="#E0E2E4">
+                <Border Margin="2" CornerRadius="3" Background="#F1F2F3"/>
             </Border>
         </ControlTemplate>
         <Style x:Key="PcasaNeutralSliderStyle" TargetType="Slider">
@@ -62,8 +141,8 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Slider">
                         <Grid Height="26" Background="Transparent">
-                            <Border Height="6" CornerRadius="3" VerticalAlignment="Center"
-                                    BorderThickness="1" BorderBrush="#989DA2" Background="#C4C8CB"/>
+                            <Border Height="3" CornerRadius="1.5" VerticalAlignment="Center"
+                                    BorderThickness="0" Background="#858B91"/>
                             <primitives:Track x:Name="PART_Track" VerticalAlignment="Center"
                                               IsDirectionReversed="False">
                                 <primitives:Track.DecreaseRepeatButton>
@@ -71,7 +150,7 @@
                                                   IsTabStop="False" Opacity="0"/>
                                 </primitives:Track.DecreaseRepeatButton>
                                 <primitives:Track.Thumb>
-                                    <primitives:Thumb Width="13" Height="21"
+                                    <primitives:Thumb Width="11" Height="16"
                                         Template="{StaticResource PcasaCompactSliderThumbTemplate}" />
                                 </primitives:Track.Thumb>
                                 <primitives:Track.IncreaseRepeatButton>
@@ -99,9 +178,13 @@
             <DockPanel LastChildFill="True">
 
 
-                <Grid DockPanel.Dock="Right" Width="195" Height="27" Margin="8,0,12,0">
+                <!-- The search bar has exactly two exclusive selections:
+                     WAS (Tags/Name), WO (all/tree/current) and a separate
+                     NOT toggle. Keep existing control names and event paths. -->
+                <Grid DockPanel.Dock="Right" Width="180" Height="27"
+                      Margin="4,0,10,0" VerticalAlignment="Center">
                     <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
-                             Padding="6,0,27,0" ToolTip="Tags oder Dateinamen suchen"
+                             Padding="8,0,27,0" ToolTip="Tags oder Dateinamen suchen"
                              TextChanged="TagSearchBox_TextChanged" />
                     <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
                             HorizontalAlignment="Right" VerticalAlignment="Center"
@@ -130,43 +213,43 @@
                         </Button.Template>
                     </Button>
                 </Grid>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
-                    <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope" Style="{StaticResource PcasaLogicSymbolStyle}" IsChecked="True" Checked="TagSearchScope_Changed" ToolTip="Tags in der gesamten Bibliothek suchen">
-                        <Grid Width="15" Height="15">
-                            <Ellipse Width="15" Height="15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
-                            <Path Data="M9,1.5 C4,5 4,13 9,16.5 M9,1.5 C14,5 14,13 9,16.5 M1.5,9 H16.5"
-                                  Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.2"/>
-                        </Grid>
-                    </RadioButton>
-                    <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope" Style="{StaticResource PcasaLogicSymbolStyle}" Checked="TagSearchScope_Changed" ToolTip="Tags nur im ausgewählten Ordnerbaum suchen">
-                        <Grid Width="15" Height="15" RenderTransformOrigin="0.5,0.5">
-                            <Grid.LayoutTransform><ScaleTransform ScaleX="0.78" ScaleY="0.78"/></Grid.LayoutTransform>
-                            <Path Data="M2,2 V16 M2,5 H7 M2,14 H7 M7,2.5 H11 L12,4 H17 V9 H7 Z M7,11.5 H11 L12,13 H17 V18 H7 Z"
-                                  Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.35" StrokeLineJoin="Round" Fill="Transparent"/>
-                        </Grid>
-                    </RadioButton>
+                <primitives:ToggleButton x:Name="InvertFilterToggle"
+                                         DockPanel.Dock="Right" Margin="3,0,8,0"
+                                         VerticalAlignment="Center"
+                                         Style="{StaticResource PcasaSearchInvertStyle}"
+                                         Content="Nicht"
+                                         ToolTip="Treffer im gewählten Suchbereich umkehren"
+                                         Checked="FilterResultsInversion_Changed"
+                                         Unchecked="FilterResultsInversion_Changed"/>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,6,0">
+                    <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
+                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
+                    <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 IsChecked="True" Checked="TagSearchScope_Changed"
+                                 Content="Alle" ToolTip="Alle überwachten Ordner"/>
+                    <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 Checked="TagSearchScope_Changed"
+                                 Content="Ab hier" ToolTip="Ausgewählter Ordnerbaum einschließlich Unterordner"/>
                     <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaLogicSymbolStyle}"
-                                 Checked="TagSearchScope_Changed" ToolTip="Nur aktueller Ordner (ohne Unterordner)">
-                        <Grid Width="16" Height="15">
-                            <Path Data="M1,4 L5,4 L7,2 L15,2 L15,13 L1,13 Z"
-                                  Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.3"
-                                  StrokeLineJoin="Round" Fill="Transparent"/>
-                            <Path Data="M4,8 L12,8" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
-                        </Grid>
-                    </RadioButton>
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 Checked="TagSearchScope_Changed"
+                                 Content="Ordner" ToolTip="Nur aktueller Ordner ohne Unterordner"/>
                 </StackPanel>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,10,0">
+                    <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
+                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                     <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaLogicSymbolStyle}" IsChecked="True"
-                                 Checked="SearchMode_Changed" ToolTip="Nach Tags filtern">
-                        <TextBlock Text="T" FontWeight="SemiBold" FontSize="12"/>
-                    </RadioButton>
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 IsChecked="True" Checked="SearchMode_Changed"
+                                 Content="Tags" ToolTip="Nach Tags filtern"/>
                     <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaLogicSymbolStyle}"
-                                 Checked="SearchMode_Changed" ToolTip="Nach Dateinamen filtern">
-                        <TextBlock Text="F" FontWeight="SemiBold" FontSize="12"/>
-                    </RadioButton>
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 Checked="SearchMode_Changed"
+                                 Content="Name" ToolTip="Nach Dateinamen filtern"/>
                 </StackPanel>
                 <Menu Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
@@ -240,11 +323,6 @@
                     </Menu.Resources>
                     <MenuItem Header="Datei" Margin="0,0,20,0" HorizontalAlignment="Left" />
                     <MenuItem Header="Bearbeiten" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem x:Name="InvertFilterResultsMenu"
-                                  Header="Filterergebnisse invertieren"
-                                  IsCheckable="True" IsChecked="False"
-                                  Click="FilterResultsInversion_Click"/>
-                        <Separator/>
                         <MenuItem Header="Auswahl invertieren (aktueller Ordner)"
                                   InputGestureText="Strg+I" Click="GalleryInvertSelection_Click"/>
                     </MenuItem>
@@ -690,8 +768,9 @@
                                 ValueChanged="ThumbnailSpacingSlider_ValueChanged"
                                 VerticalAlignment="Center" ToolTip="Thumbnailabstand" />
                     </StackPanel>
-                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/B" Width="38" Height="25"
-                            Margin="0,0,10,0" ToolTip="Zwei ausgewählte Bilder vergleichen"
+                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/B" Width="51" Height="25"
+                            Padding="4,1" FontSize="12" Margin="0,0,10,0"
+                            ToolTip="Zwei ausgewählte Bilder vergleichen"
                             x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
                     <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
                             ToolTip="Tags anzeigen" Tag="Tags" Click="SidebarMode_Click">
