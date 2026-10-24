@@ -493,7 +493,7 @@ public partial class MainWindow
                     visibleIds.Contains(image.PhotoFolderId)).ToArray();
             }
             ordered = GalleryFolderOrdering.Order(ordered,
-                CaptureGalleryFolderOrder());
+                CaptureGalleryFolderOrder(), CurrentGallerySort);
             if (_activeBrowseTier != tier ||
                 _browseIndex.Count != ordered.Count ||
                 !_browseIndex.SequenceEqual(ordered))
