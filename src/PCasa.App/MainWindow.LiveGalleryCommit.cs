@@ -50,7 +50,7 @@ public partial class MainWindow
                     if (id is long imageId &&
                         _imageCatalog.GetImagePhotoFolderId(imageId) == photoFolderId)
                         PublishCommittedGalleryImage(tier, imageId, null);
-                    return Task.CompletedTask;
+                    return true;
                 }, workKind: SchedulerWorkKind.CatalogRead);
         }
         catch (OperationCanceledException) { }
