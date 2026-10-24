@@ -337,7 +337,7 @@ public partial class MainWindow
             // native OLE drag unwinds; otherwise it can reenter drag handlers.
             var dropItem = FindFolderTreeItemByPath(FoldersTree, target);
             _ = Dispatcher.BeginInvoke(new Action(() =>
-                ShowGalleryTreeDropChoice(dropItem ?? FoldersTree, files, target)),
+                ShowGalleryTreeDropChoice((FrameworkElement?)dropItem ?? FoldersTree, files, target)),
                 System.Windows.Threading.DispatcherPriority.Input);
         }
         else
