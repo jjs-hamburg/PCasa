@@ -83,6 +83,7 @@ public sealed class LocalDatabase
                     extension TEXT NOT NULL,
                     file_size INTEGER NOT NULL,
                     modified_utc_ticks INTEGER NOT NULL,
+                    created_utc_ticks INTEGER NULL,
                     width INTEGER NOT NULL,
                     height INTEGER NOT NULL,
                     thumbnail_path TEXT NOT NULL,
@@ -124,6 +125,11 @@ public sealed class LocalDatabase
                 """;
             command.ExecuteNonQuery();
         }
+
+        // Additive migration: preserve old catalogs and all packed thumbnails.
+        // Existing images are enriched on their next ordinary scan. Never
+        // pretend that indexed_utc is the source file's creation timestamp.
+        EnsureColumn(connection, "images", "created_utc_ticks", "INTEGER NULL");
 
         // One metadata row per photo, deleted by the existing image FK.
         // The complete EXIF JSON is kept alongside indexed camera/GPS fields.
