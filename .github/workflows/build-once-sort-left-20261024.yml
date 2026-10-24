@@ -1,6 +1,7 @@
 name: PCasa Original Header Sort Acceptance
 
 # User-requested one-time Windows build. No normal source push CI.
+# Retry 2: remove duplicate old Options sorting sub-menu from restored reference header.
 # Only a change to this temporary workflow itself triggers a run.
 on:
   push:
