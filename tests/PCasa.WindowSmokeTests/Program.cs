@@ -52,7 +52,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] { "Datei", "Bearbeiten",
-                    "Ordner", "Optionen", "Hilfe" }))
+                    "Ordner", "Sortieren", "Optionen", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
@@ -68,7 +68,8 @@ internal static class Program
                     new Rect(new Point(0, 0), items[i].RenderSize));
                 gaps.Add(next.Left - before.Right);
             }
-            if (gaps.Count != 4 || gaps.Any(gap => gap < 0 || gap > 80) ||
+            if (gaps.Count != items.Length - 1 ||
+                gaps.Any(gap => gap < 0 || gap > 80) ||
                 gaps.Max() - gaps.Min() > 2)
                 throw new Exception("Inconsistent top-level menu spacing: " +
                     string.Join(", ", gaps.Select(gap => gap.ToString("F1"))));
