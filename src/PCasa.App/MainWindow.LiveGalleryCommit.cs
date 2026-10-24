@@ -98,26 +98,16 @@ public partial class MainWindow
                 DiscoveredPhotoFolderPath: change.TargetFolder.LocalPath));
         RefreshVisibleFolderCounts();
 
-        // The existing index is sorted by tree traversal and filename.
-        // Inserting one image at its proper position avoids sorting/reloading
-        // the entire catalog on each NAS transfer step.
+        // All gallery producers use exactly ONE comparator. A file moved
+        // during a Size/Date/Dimensions sort must appear immediately at its
+        // right ordinal within the target folder, not be inserted by name.
+        // Binary search avoids a linear comparison scan over 500k photos.
         var treeOrder = CaptureGalleryFolderOrder();
-        static int Position(long folderId, IReadOnlyDictionary<long, int> positions)
-            => positions.TryGetValue(folderId, out var value)
-                ? value : int.MaxValue;
-        var targetPosition = Position(change.Image.PhotoFolderId, treeOrder);
-        var insertion = updated.FindIndex(item =>
-        {
-            var relative = Position(item.PhotoFolderId, treeOrder)
-                .CompareTo(targetPosition);
-            if (relative != 0) return relative > 0;
-            relative = StringComparer.OrdinalIgnoreCase.Compare(
-                item.FileName, change.Image.FileName);
-            return relative > 0 ||
-                relative == 0 && item.ImageId > change.Image.ImageId;
-        });
-        if (insertion < 0) updated.Add(change.Image);
-        else updated.Insert(insertion, change.Image);
+        var comparer = GalleryFolderOrdering.CreateComparer(
+            treeOrder, CurrentGallerySort);
+        var insertion = updated.BinarySearch(change.Image, comparer);
+        if (insertion < 0) insertion = ~insertion;
+        updated.Insert(insertion, change.Image);
 
         QueueGalleryAnchorRestore();
         _browseIndex = updated;
