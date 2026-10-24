@@ -97,6 +97,51 @@ internal static class TagFlow
                 surface.GetFolderOffset(b.Id) is not null,
                 "Catalog pictures never appeared in the WPF gallery.");
 
+            // The agreed default is Name ASCENDING, independently within
+            // each photo folder. Changing the menu direction must not merge
+            // the two sections or disrupt the existing selection/search.
+            var sortName = (MenuItem?)window.FindName("GallerySortNameMenu")
+                ?? throw new Exception("Name sort menu not initialized.");
+            var sortAscending = (MenuItem?)window.FindName("GallerySortAscendingMenu")
+                ?? throw new Exception("Ascending sort menu not initialized.");
+            var sortDescending = (MenuItem?)window.FindName("GallerySortDescendingMenu")
+                ?? throw new Exception("Descending sort menu not initialized.");
+            if (!sortName.IsChecked || !sortAscending.IsChecked ||
+                sortDescending.IsChecked)
+                throw new Exception("PCasa did not default to Name ascending.");
+
+            var sortIndexField = typeof(PCasa.App.MainWindow).GetField(
+                "_displayedBrowseIndex",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            IReadOnlyList<BrowseThumbnailIndexEntry> SortedGallery()
+                => (IReadOnlyList<BrowseThumbnailIndexEntry>)
+                    sortIndexField.GetValue(window)!;
+            sortDescending.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Until(window, () =>
+            {
+                var images = SortedGallery();
+                var bImages = images.Where(image => image.PhotoFolderId == b.Id)
+                    .Select(image => image.FileName).ToArray();
+                return sortDescending.IsChecked && sortName.IsChecked &&
+                    images.Count == 24 && bImages.Length == 12 &&
+                    bImages.SequenceEqual(bImages.OrderByDescending(
+                        name => name, StringComparer.OrdinalIgnoreCase)) &&
+                    images.Take(12).All(image => image.PhotoFolderId == a.Id) &&
+                    images.Skip(12).All(image => image.PhotoFolderId == b.Id);
+            }, "Descending Name sort changed folder order or did not sort within each folder.");
+            sortAscending.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Until(window, () =>
+            {
+                var images = SortedGallery();
+                var names = images.Where(image => image.PhotoFolderId == b.Id)
+                    .Select(image => image.FileName).ToArray();
+                return sortAscending.IsChecked && names.Length == 12 &&
+                    names.SequenceEqual(names.OrderBy(
+                        name => name, StringComparer.OrdinalIgnoreCase));
+            }, "Ascending Name sort did not restore default order.");
+            Console.WriteLine("PASS: Sort menu defaults to Name ascending; descending preserves distinct folders.");
+
             var monitoredRootItem = Walk(tree).FirstOrDefault(item =>
                 string.Equals(ReadPath(item), sourceRoot,
                     StringComparison.OrdinalIgnoreCase))
