@@ -1,6 +1,7 @@
 name: PCasa Search Bar Sort and NOT Acceptance
 
 # Single, user-requested Windows acceptance. No general CI on source pushes.
+# Retry 2: actual WPF menu/search overlap fixed with dedicated search row.
 # Only editing this temporary workflow triggers a run; delete after completion.
 on:
   push:
