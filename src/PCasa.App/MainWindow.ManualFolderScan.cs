@@ -70,20 +70,12 @@ public partial class MainWindow
         TrackFolderActivity(directory, "Working", recursive: true);
         RefreshFolderStatusVisuals();
 
-        var ownsWindow = _browseProgressWindow is null;
-        var window = _browseProgressWindow ??
-            new BrowseCacheProgressWindow { Owner = this };
-        if (ownsWindow)
-        {
-            _browseProgressWindow = window;
-            window.Show();
-        }
-        window.UpdateScan(new ScanProgress(0, 0, 0, 0, directory));
+        var operationKey = $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
+        BeginVisibleManualOperation(operationKey, "Ordner aktualisieren", 0);
         StatusText.Text = $"Manueller Scan angefordert (höchste Priorität): {directory}";
         var progress = new Progress<ScanProgress>(scan =>
         {
             if (cancellation.IsCancellationRequested) return;
-            window.UpdateScan(scan);
             ShowScannedPhotoFolder(scan);
             StatusText.Text =
                 $"Ordner aktualisieren: {scan.ImageFilesSeen:N0} geprüft · " +
@@ -94,7 +86,8 @@ public partial class MainWindow
         try
         {
             var result = await ScheduleCompleteFolderScanAsync(
-                directory, SchedulerPriority.ManualAction, progress, cancellation.Token);
+                directory, SchedulerPriority.ManualAction, progress, cancellation.Token,
+                operationKey: operationKey);
             TrackFolderActivity(directory,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
@@ -123,12 +116,7 @@ public partial class MainWindow
         }
         finally
         {
-            if (ownsWindow)
-            {
-                window.Finish();
-                if (ReferenceEquals(_browseProgressWindow, window))
-                    _browseProgressWindow = null;
-            }
+            EndVisibleManualOperation(operationKey);
             if (ReferenceEquals(_activeScanCancellation, cancellation))
             {
                 _activeScanCancellation = null;
@@ -156,13 +144,18 @@ public partial class MainWindow
         string directory, SchedulerPriority priority,
         IProgress<ScanProgress>? progress, CancellationToken cancellationToken,
         long? expectedMonitoredFolderId = null,
-        bool requirePendingInitialImport = false)
+        bool requirePendingInitialImport = false,
+        string? operationKey = null)
     {
         ScanResult? completed = null;
         using var resume = new FolderScanner.ScanResumeState();
         var manualGenerationStarted = false;
+        var key = operationKey ?? $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
+        // Scanner progress belongs to the scheduler snapshot even when the
+        // WPF progress window is shared with another preempting manual packet.
+        var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
         await _scheduler.EnqueueAsync(
-            $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}", priority,
+            key, priority,
             token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -193,12 +186,26 @@ public partial class MainWindow
                     manualGenerationStarted = true;
                 }
                 completed = _folderScanner.ScanDirectory(
-                    folder, directory, recursive: true, progress, token, resume);
+                    folder, directory, recursive: true, schedulerProgress, token, resume);
                 return Task.CompletedTask;
             },
             cancellationToken: cancellationToken,
             workKind: SchedulerWorkKind.CatalogScan);
         return completed ?? throw new OperationCanceledException();
+    }
+
+    // A synchronous progress relay: scheduler state is committed on the
+    // worker before posting any optional UI presentation callback.
+    private sealed class ScanJobProgress(
+        PCasaScheduler scheduler, string key, IProgress<ScanProgress>? display)
+        : IProgress<ScanProgress>
+    {
+        public void Report(ScanProgress value)
+        {
+            scheduler.ReportProgress(key, "Bilder einlesen",
+                value.ImageFilesSeen, 0, value.CurrentFile);
+            display?.Report(value);
+        }
     }
 
     private void UpdateManualScanControls()
