@@ -13,6 +13,23 @@ public partial class MainWindow
 {
     // Optional origin metadata; FileDrop remains the native shell format.
     private const string InternalGalleryDragFormat = "PCasa.InternalGalleryDrag";
+    // OLE reports Move for both an accepted in-app drop and a move to
+    // Explorer. Only the latter needs physical-source reconciliation.
+    // These two flags describe ONE synchronous native drag lifetime; they
+    // are not an alternative scheduler/task state.
+    private bool _nativeGalleryDragInProgress;
+    private bool _internalGalleryDropAccepted;
+
+    private static bool NeedsExternalMoveReconciliation(
+        DragDropEffects result, bool acceptedInternalDrop)
+        => result.HasFlag(DragDropEffects.Move) && !acceptedInternalDrop;
+
+    private void RecordAcceptedInternalGalleryDrop(DragEventArgs e)
+    {
+        if (_nativeGalleryDragInProgress &&
+            e.Data.GetDataPresent(InternalGalleryDragFormat, autoConvert: false))
+            _internalGalleryDropAccepted = true;
+    }
 
     private readonly Dictionary<string, bool> _dragTargetValidity =
         new(StringComparer.OrdinalIgnoreCase);
@@ -77,13 +94,25 @@ public partial class MainWindow
             var data = new DataObject(DataFormats.FileDrop, files);
             data.SetData(InternalGalleryDragFormat, true);
             DragDropEffects effect;
+            _nativeGalleryDragInProgress = true;
+            _internalGalleryDropAccepted = false;
+            bool acceptedInternalDrop;
             try
             {
                 effect = DragDrop.DoDragDrop(BrowseSurface, data,
                     DragDropEffects.Copy | DragDropEffects.Move);
             }
-            finally { HighlightDropFolder(null); }
-            if (effect.HasFlag(DragDropEffects.Move))
+            finally
+            {
+                acceptedInternalDrop = _internalGalleryDropAccepted;
+                _nativeGalleryDragInProgress = false;
+                _internalGalleryDropAccepted = false;
+                HighlightDropFolder(null);
+            }
+            // An in-app drop already owns ONE scheduler transfer package.
+            // Starting an external-move reconciliation here used to enqueue
+            // another manual job and preempt that package mid-transfer.
+            if (NeedsExternalMoveReconciliation(effect, acceptedInternalDrop))
                 _ = ReconcileMovedExternalFilesAsync(files);
         }
         catch (Exception ex)
@@ -233,6 +262,7 @@ public partial class MainWindow
         }
         e.Effects = effect;
         e.Handled = true;
+        RecordAcceptedInternalGalleryDrop(e);
         _dragTargetValidity.Clear();
         _ = TransferGalleryFilesAsync(files, target,
             effect.HasFlag(DragDropEffects.Move));
@@ -298,6 +328,7 @@ public partial class MainWindow
         }
         e.Effects = effect;
         e.Handled = true;
+        RecordAcceptedInternalGalleryDrop(e);
         _dragTargetValidity.Clear();
         _ = TransferGalleryFilesAsync(files, target,
             effect.HasFlag(DragDropEffects.Move));
