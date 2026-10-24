@@ -518,18 +518,23 @@ internal static class Program
             try
             {
                 await firstReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                var secondAcquired = false;
+                var secondStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var secondAcquired = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 var second = Task.Run(() =>
                 {
+                    secondStarted.TrySetResult();
                     using (SourceFileLocks.EnterPair(target, source, token.Token))
-                        secondAcquired = true;
+                        secondAcquired.TrySetResult();
                 });
+                await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 await Task.Delay(100);
-                if (secondAcquired)
+                if (secondAcquired.Task.IsCompleted)
                     throw new Exception("Destination was not locked with the source.");
                 releaseFirst.TrySetResult();
                 await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
-                if (!secondAcquired)
+                if (!secondAcquired.Task.IsCompleted)
                     throw new Exception("Paired gate acquisition did not resume.");
             }
             finally
