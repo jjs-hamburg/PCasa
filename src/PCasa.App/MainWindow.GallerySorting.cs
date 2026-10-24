@@ -8,6 +8,10 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private long _gallerySortRequestVersion;
+    // Describes the ordering of the CURRENT published index. It is not a
+    // second user preference; it protects against a sort-menu change while
+    // an older manual transfer is concurrently publishing image steps.
+    private GallerySortOptions _publishedGallerySort = GallerySortOptions.Default;
 
     private GallerySortOptions CurrentGallerySort
     {
@@ -92,6 +96,7 @@ public partial class MainWindow
         _browseRefreshRequests.Invalidate();
         QueueGalleryAnchorRestore();
         _browseIndex = reordered;
+        _publishedGallerySort = requested;
         try
         {
             // Search, inversion, selection, anchors and the page-cache must
