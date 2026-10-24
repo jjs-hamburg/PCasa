@@ -411,18 +411,24 @@ internal static class Program
             var (db, root, scanner) = sandbox.Prepare();
             using var checkpoint = new FolderScanner.ScanResumeState();
             using var cancel = new CancellationTokenSource();
-            var entered = new TaskCompletionSource(
+            var locked = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            Task worker;
-            lock (SourceFileLocks.ForPath(photo))
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var holder = Task.Run(() =>
             {
-                worker = Task.Run(() =>
+                lock (SourceFileLocks.ForPath(photo))
                 {
-                    entered.TrySetResult();
+                    locked.TrySetResult();
+                    release.Task.GetAwaiter().GetResult();
+                }
+            });
+            try
+            {
+                await locked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var worker = Task.Run(() =>
                     scanner.ScanDirectory(root, root.LocalPath, recursive: true,
-                        cancellationToken: cancel.Token, resume: checkpoint);
-                });
-                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        cancellationToken: cancel.Token, resume: checkpoint));
                 // The worker may still be enumerating. Cancellation before or
                 // during Enter must preserve CurrentFile without counting it.
                 await Task.Delay(50);
@@ -433,6 +439,11 @@ internal static class Program
                     throw new Exception("Scanner ignored an interrupted source lock.");
                 }
                 catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                release.TrySetResult();
+                await holder.WaitAsync(TimeSpan.FromSeconds(5));
             }
             if (checkpoint.CommittedFiles != 0)
                 throw new Exception("Interrupted source was counted before commit.");
