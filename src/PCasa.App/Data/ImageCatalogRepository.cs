@@ -358,7 +358,8 @@ public sealed class CatalogScanSession : IDisposable
                    i.photo_folder_id, i.local_path,
                    EXISTS(SELECT 1 FROM image_exif x WHERE x.image_id = i.id
                        AND x.source_modified_utc_ticks = i.modified_utc_ticks
-                       AND x.source_file_size = i.file_size)
+                       AND x.source_file_size = i.file_size),
+                   i.created_utc_ticks
             FROM images i WHERE i.canonical_path = $canonicalPath;
             """;
         _selectState.Parameters.Add("$canonicalPath", SqliteType.Text);
@@ -503,7 +504,8 @@ public sealed class CatalogScanSession : IDisposable
             reader.GetInt64(1),
             reader.GetString(2),
             reader.IsDBNull(3) ? null : reader.GetInt64(3),
-            reader.GetString(4), reader.GetInt32(5) != 0);
+            reader.GetString(4), reader.GetInt32(5) != 0,
+            reader.IsDBNull(6) ? null : reader.GetInt64(6));
     }
 
     public long GetOrCreatePhotoFolder(
