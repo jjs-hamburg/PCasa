@@ -278,10 +278,11 @@ public sealed class FolderScanner
                             photoFolderLocalPath,
                             photoFolderCanonicalPath,
                             displayName);
-                        photoFolderIds.Add(photoFolderCanonicalPath, photoFolderId);
-                        // A newly discovered directory must not retain the
-                        // SQLite writer across subsequent file IO or decoding.
+                        // The resume cursor must never retain an uncommitted
+                        // folder id. Cancellation during FlushPending rolls
+                        // back the row; only publish the id after commit.
                         scanSession.FlushPending();
+                        photoFolderIds.Add(photoFolderCanonicalPath, photoFolderId);
                     }
 
                     var existing = scanSession.GetState(canonicalPath);
