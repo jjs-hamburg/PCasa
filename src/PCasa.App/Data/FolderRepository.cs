@@ -229,6 +229,58 @@ public sealed class FolderRepository
         return GetAll().Where(folder => paths.Contains(folder.LocalPath)).ToArray();
     }
 
+    // A checkpoint is valid only for the same source membership and scan epoch.
+    // Stale entries remain harmless and are ignored without touching catalog data.
+    public HashSet<string> GetCompletedInitialScanDirectories(
+        long folderId, long generation, long epoch)
+    {
+        var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT d.local_path FROM initial_scan_directories d
+            JOIN monitored_folders m ON m.id = d.monitored_folder_id
+            JOIN scheduler_sources s ON s.canonical_path = m.canonical_path
+            WHERE d.monitored_folder_id = $id AND m.initial_scan_pending = 1
+              AND d.source_generation = $generation AND d.scan_epoch = $epoch
+              AND s.generation = $generation AND s.scan_epoch = $epoch
+              AND s.desired_present = 1;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$epoch", epoch);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) completed.Add(reader.GetString(0));
+        return completed;
+    }
+
+    public bool CompleteInitialScanDirectory(
+        long folderId, string path, long generation, long epoch)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO initial_scan_directories
+                (monitored_folder_id, local_path, source_generation, scan_epoch, completed_utc)
+            SELECT m.id, $path, $generation, $epoch, $now
+            FROM monitored_folders m
+            JOIN scheduler_sources s ON s.canonical_path = m.canonical_path
+            WHERE m.id = $id AND m.initial_scan_pending = 1
+              AND s.generation = $generation AND s.scan_epoch = $epoch
+              AND s.desired_present = 1
+            ON CONFLICT(monitored_folder_id, local_path) DO UPDATE SET
+                source_generation = excluded.source_generation,
+                scan_epoch = excluded.scan_epoch,
+                completed_utc = excluded.completed_utc;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$path", path);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$epoch", epoch);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
     public bool CompleteInitialScan(long folderId, long expectedGeneration,
         long? expectedScanEpoch = null)
     {
