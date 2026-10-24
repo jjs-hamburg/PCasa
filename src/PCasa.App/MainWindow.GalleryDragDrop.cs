@@ -23,6 +23,11 @@ public partial class MainWindow
     // are not an alternative scheduler/task state.
     private bool _nativeGalleryDragInProgress;
     private bool _internalGalleryDropAccepted;
+    // Pending ONLY during the synchronous native DoDragDrop call. When OLE
+    // returns, the choice is shown exactly once and this temporary event
+    // payload is discarded; it is not an alternative scheduler operation.
+    private (FrameworkElement Target, string[] Files, string Destination)?
+        _pendingRightDropChoice;
 
     private static bool NeedsExternalMoveReconciliation(
         DragDropEffects result, bool acceptedInternalDrop)
@@ -102,7 +107,9 @@ public partial class MainWindow
             DragDropEffects effect;
             _nativeGalleryDragInProgress = true;
             _internalGalleryDropAccepted = false;
+            _pendingRightDropChoice = null;
             bool acceptedInternalDrop;
+            (FrameworkElement Target, string[] Files, string Destination)? choice;
             try
             {
                 effect = DragDrop.DoDragDrop(BrowseSurface, data,
@@ -111,10 +118,19 @@ public partial class MainWindow
             finally
             {
                 acceptedInternalDrop = _internalGalleryDropAccepted;
+                choice = _pendingRightDropChoice;
+                _pendingRightDropChoice = null;
                 _nativeGalleryDragInProgress = false;
                 _internalGalleryDropAccepted = false;
                 HighlightDropFolder(null);
             }
+            // OLE must have released mouse capture before the menu opens.
+            if (choice is { } requested && !Dispatcher.HasShutdownStarted)
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                    ShowGalleryTreeDropChoice(requested.Target,
+                        requested.Files, requested.Destination)),
+                    System.Windows.Threading.DispatcherPriority.Input);
+
             // An in-app drop already owns ONE scheduler transfer package.
             // Starting an external-move reconciliation here used to enqueue
             // another manual job and preempt that package mid-transfer.
@@ -277,11 +293,8 @@ public partial class MainWindow
         _dragTargetValidity.Clear();
         if (RightDragNeedsChoice(e.Data, _nativeGalleryDragInProgress))
         {
-            // Show the decision AFTER the native drag releases the mouse.
-            // Merely hovering a target never mutates the catalog.
-            _ = Dispatcher.BeginInvoke(new Action(() =>
-                ShowGalleryTreeDropChoice(BrowseSurface, files, target)),
-                System.Windows.Threading.DispatcherPriority.Input);
+            // Only stage the choice; DoDragDrop must return before it opens.
+            _pendingRightDropChoice = (BrowseSurface, files, target);
         }
         else
             _ = TransferGalleryFilesAsync(files, target,
@@ -352,14 +365,11 @@ public partial class MainWindow
         _dragTargetValidity.Clear();
         if (RightDragNeedsChoice(e.Data, _nativeGalleryDragInProgress))
         {
-            // Right-drag shows the three choices. Left-drag still moves
-            // directly (Ctrl copies), as agreed, and an external Explorer
-            // drop retains native Windows modifier semantics.
+            // Right-drag shows the choice ONLY after DoDragDrop returns.
+            // Left-drag and Explorer drops still commit their own effect.
             var dropItem = FindFolderTreeItemByPath(FoldersTree, target);
-            _ = Dispatcher.BeginInvoke(new Action(() =>
-                ShowGalleryTreeDropChoice(
-                    (FrameworkElement?)dropItem ?? FoldersTree, files, target)),
-                System.Windows.Threading.DispatcherPriority.Input);
+            _pendingRightDropChoice =
+                ((FrameworkElement?)dropItem ?? FoldersTree, files, target);
         }
         else
             _ = TransferGalleryFilesAsync(files, target,
