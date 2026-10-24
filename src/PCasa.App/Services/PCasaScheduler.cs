@@ -106,6 +106,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
             _pending.Any(item => item.Kind == SchedulerWorkKind.SourceProbe &&
                 item.Priority == SchedulerPriority.ManualAction);
 
+    // A package is an open-ended sequence of reusable steps. It keeps its
+    // cursor when a newer manual package interrupts it, and preserves the
+    // SAME scheduler identity and priority through indexing and publication.
+    public Task EnqueuePackageAsync(SchedulerTaskPackage package,
+        SchedulerPriority priority, CancellationToken cancellationToken = default,
+        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        return EnqueueAsync(package.Key, priority, package.ExecuteAsync,
+            cancellationToken: cancellationToken, workKind: workKind);
+    }
+
     // Typed scheduler results use exactly the same queue, priority,
     // cancellation and lifetime bookkeeping as catalog mutations.
     public async Task<TResult> RunAsync<TResult>(
@@ -187,6 +199,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
         Task completion;
+        long incomingId;
         List<CancellationTokenSource> yieldRequests = new();
         lock (_gate)
         {
@@ -203,6 +216,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     _signals[LaneFor(existing.Priority, existing.Kind)].Release();
                 }
                 completion = existing.Completion.Task;
+                incomingId = existing.Id;
             }
             else
             {
@@ -214,6 +228,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 TrimHistoryUnsafe();
                 _signals[LaneFor(priority, workKind)].Release();
                 completion = item.Completion.Task;
+                incomingId = item.Id;
             }
 
             // A running background or bulk-user request can yield, but a slow
@@ -228,13 +243,19 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // An incoming user file mutation supersedes a longer
                     // manual SCAN in the same lane. Two manual mutations
                     // never cancel one another.
+                    var supersedesOlderManual =
+                        priority == SchedulerPriority.ManualAction &&
+                        active?.Priority == SchedulerPriority.ManualAction &&
+                        active.Id < incomingId &&
+                        workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe;
                     var supersedesManualScan =
                         priority == SchedulerPriority.ManualAction &&
                         workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe &&
                         active?.Priority == SchedulerPriority.ManualAction &&
                         active.Kind == SchedulerWorkKind.CatalogScan;
                     if (active is not null &&
-                        (priority < active.Priority || supersedesManualScan) &&
+                        (priority < active.Priority || supersedesManualScan ||
+                         supersedesOlderManual) &&
                         !active.YieldRequested)
                     {
                         active.YieldRequested = true;
@@ -288,7 +309,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             // old yielded scan wins by ID and starves the
                             // exact user move that requested its preemption.
                             .ThenBy(x => x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
-                            .ThenBy(x => x.Id).FirstOrDefault();
+                            // Manual packages form a stack: newest request
+                            // resumes first, older ones retain their cursor.
+                            .ThenBy(x => lane == LaneManual ? -x.Id : x.Id)
+                            .FirstOrDefault();
                     if (item is not null)
                     {
                         _pending.Remove(item);
