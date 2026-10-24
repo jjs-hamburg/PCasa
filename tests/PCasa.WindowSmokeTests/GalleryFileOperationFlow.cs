@@ -385,6 +385,67 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Internal move and Explorer drag intent diverged.");
             Console.WriteLine("PASS: Internal drag MOVE and Ctrl COPY respect Explorer external conventions.");
 
+            // Right CLICK and right DRAG are different gestures. The menu
+            // can only be requested after moving beyond Windows' native drag
+            // distance; the drag-origin data explicitly tags the right mouse
+            // button rather than guessing from keyboard modifiers.
+            var threshold = typeof(BrowseGallerySurface).GetMethod(
+                "PassedDragThreshold", BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new Exception("Missing right-click versus right-drag threshold.");
+            bool IsDrag(Point from, Point to) =>
+                (bool)threshold.Invoke(null, [from, to])!;
+            var dx = SystemParameters.MinimumHorizontalDragDistance;
+            var dy = SystemParameters.MinimumVerticalDragDistance;
+            if (IsDrag(new Point(0, 0), new Point(dx / 2, dy / 2)) ||
+                !IsDrag(new Point(0, 0), new Point(dx, 0)) ||
+                !IsDrag(new Point(0, 0), new Point(0, dy)))
+                throw new Exception("Right-button gesture cannot distinguish menu click from drag.");
+            var choice = typeof(PCasa.App.MainWindow).GetMethod(
+                "RightDragNeedsChoice", BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new Exception("Right-drop choice decision is missing.");
+            var ownRightDrag = new DataObject(DataFormats.FileDrop, new[] { original });
+            ownRightDrag.SetData("PCasa.InternalGalleryDrag", true);
+            ownRightDrag.SetData("PCasa.InternalGalleryRightDrag", true);
+            bool WantsChoice(DataObject data, bool accepted) =>
+                (bool)choice.Invoke(null, [data, accepted])!;
+            if (!WantsChoice(ownRightDrag, true) ||
+                WantsChoice(ownRightDrag, false) ||
+                WantsChoice(new DataObject(DataFormats.FileDrop, new[] { original }), true))
+                throw new Exception("The right-drop menu can appear on a left/external drag.");
+            var leftOrigin = new BrowseImageClickedEventArgs(1, ModifierKeys.None);
+            var rightOrigin = new BrowseImageClickedEventArgs(1, ModifierKeys.None,
+                System.Windows.Input.MouseButton.Right);
+            if (leftOrigin.DragButton != System.Windows.Input.MouseButton.Left ||
+                rightOrigin.DragButton != System.Windows.Input.MouseButton.Right)
+                throw new Exception("Mouse-button origin was lost in gallery drag event.");
+            Console.WriteLine("PASS: Right-click threshold and right-drop ownership are independent of left/native drag.");
+
+            // The footer design is an actual hairline slider, not the old
+            // rectangular 11x16 capsule visually scaled down.
+            var thumbTemplate = window.FindResource(
+                "PcasaCompactSliderThumbTemplate") as ControlTemplate
+                ?? throw new Exception("Footer grip template unavailable.");
+            var gripRoot = thumbTemplate.LoadContent() as Grid;
+            var grip = gripRoot?.Children.OfType<
+                System.Windows.Shapes.Ellipse>().SingleOrDefault();
+            var sizeSlider = (Slider)window.FindName("ThumbnailSizeSlider");
+            var spacingSlider = (Slider)window.FindName("ThumbnailSpacingSlider");
+            sizeSlider.ApplyTemplate();
+            spacingSlider.ApplyTemplate();
+            foreach (var slider in new[] { sizeSlider, spacingSlider })
+            {
+                var track = slider.Template.FindName("PART_Track", slider)
+                    as System.Windows.Controls.Primitives.Track;
+                if (track?.Thumb is not { Width: 20, Height: 24 } ||
+                    slider.Template.LoadContent() is not Grid sliderRoot ||
+                    !sliderRoot.Children.OfType<Border>().Any(rail =>
+                        rail.Height == 2))
+                    throw new Exception("Footer sliders reverted to the oversized WPF design.");
+            }
+            if (grip is null || grip.Width != 12 || grip.Height != 12)
+                throw new Exception("Footer still uses a bulky rectangular slider knob.");
+            Console.WriteLine("PASS: Fine hairline footer sliders have 12px flat grips with accessible drag targets.");
+
             // A completed in-app MOVE already owns its catalog mutation.
             // The native OLE Move result must NOT enqueue a second manual
             // external-reconciliation job and preempt its own transfer.
