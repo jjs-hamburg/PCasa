@@ -865,6 +865,7 @@ public sealed class CatalogScanSession : IDisposable
         _selectPhotoFolder.Transaction = _transaction;
         _upsertPhotoFolder.Transaction = _transaction;
         _updateLocation.Transaction = _transaction;
+        _updateCreatedUtc.Transaction = _transaction;
         _upsert.Transaction = _transaction;
         _pendingWrites = 0;
     }
@@ -931,6 +932,7 @@ public sealed class CatalogScanSession : IDisposable
         _selectPhotoFolder.Transaction = null;
         _upsertPhotoFolder.Transaction = null;
         _updateLocation.Transaction = null;
+        _updateCreatedUtc.Transaction = null;
         _upsert.Transaction = null;
         _pendingWrites = 0;
     }
@@ -949,6 +951,7 @@ public sealed class CatalogScanSession : IDisposable
 
         CommitBatch();
         _upsert.Dispose();
+        _updateCreatedUtc.Dispose();
         _updateLocation.Dispose();
         _upsertPhotoFolder.Dispose();
         _selectPhotoFolder.Dispose();
