@@ -109,12 +109,17 @@ internal static class TagFlow
             var sortName = SortItem("Name");
             var sortAscending = SortItem("Ascending");
             var sortDescending = SortItem("Descending");
-            var sortDirection = (TextBlock?)window.FindName("GallerySortDirectionGlyph")
-                ?? throw new Exception("Current sorting direction not visible.");
+            var sortDirection = (System.Windows.Shapes.Path?)window.FindName(
+                "GallerySortDirectionIcon")
+                ?? throw new Exception("LAP-style sort direction icon not found.");
+            var downArrow = Geometry.Parse(
+                "M 20,2 L 20,17 M 16,13 L 20,17 L 24,13").ToString();
+            var upArrow = Geometry.Parse(
+                "M 20,17 L 20,2 M 16,6 L 20,2 L 24,6").ToString();
             var sortLabel = (TextBlock?)window.FindName("GallerySortSelectedFieldLabel")
                 ?? throw new Exception("Current sorting criterion not visible.");
             if (!sortName.IsChecked || !sortAscending.IsChecked ||
-                sortDescending.IsChecked || sortDirection.Text != "↓" ||
+                sortDescending.IsChecked || sortDirection.Data?.ToString() != downArrow ||
                 sortLabel.Text != "Name")
                 throw new Exception("PCasa did not show Name ascending in the search bar.");
 
@@ -132,7 +137,7 @@ internal static class TagFlow
                 var bImages = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
                 return sortDescending.IsChecked && sortName.IsChecked &&
-                    sortDirection.Text == "↑" && sortLabel.Text == "Name" &&
+                    sortDirection.Data?.ToString() == upArrow && sortLabel.Text == "Name" &&
                     images.Count == 24 && bImages.Length == 12 &&
                     bImages.SequenceEqual(bImages.OrderByDescending(
                         name => name, StringComparer.OrdinalIgnoreCase)) &&
@@ -146,7 +151,7 @@ internal static class TagFlow
                 var names = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
                 return sortAscending.IsChecked &&
-                    sortDirection.Text == "↓" && names.Length == 12 &&
+                    sortDirection.Data?.ToString() == downArrow && names.Length == 12 &&
                     names.SequenceEqual(names.OrderBy(
                         name => name, StringComparer.OrdinalIgnoreCase));
             }, "Ascending Name sort did not restore default order.");
