@@ -80,7 +80,8 @@ internal static class Program
         Run("Unavailable root never deletes catalog", UnavailableRootKeepsCatalog, failures);
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
-        Run("Moved images do not erase unrelated decoded gallery thumbnails", ChangedIndexRetainsUnmodifiedImages, failures);
+        Run("Moved images reuse their decoded pixels without blanking unrelated folders", ChangedIndexRetainsUnmodifiedImages, failures);
+        Run("Targeted image lookup and folder counts match full catalog", SingleImageCatalogProjectionMatchesFullIndex, failures);
         Run("Exclusion service removes and re-includes folder", ExclusionServiceRoundTrip, failures);
         Run("Exclusion and catalog removal rollback atomically", ExclusionCommitRollback, failures);
         Run("Restart repairs legacy split-phase exclusions", LegacyExclusionRecovery, failures);
@@ -1854,12 +1855,49 @@ internal static class Program
             !cache.TryGet(2, out var retainedB) || !ReferenceEquals(b, retainedB))
             throw new Exception(
                 "Changing one folder emptied unrelated gallery pictures before page reload.");
-        if (cache.TryGet(1, out var stale) && ReferenceEquals(a, stale))
-            throw new Exception("Relocated image reused the original thumbnail identity.");
+        if (!cache.TryGet(1, out var relocatedPixels) ||
+            !ReferenceEquals(a, relocatedPixels))
+            throw new Exception(
+                "Moving an unchanged image unnecessarily discarded its decoded pixels.");
+
+        // A changed pack span cannot reuse old pixels merely because the
+        // image ID remains the same: cache bytes, not path, own identity.
+        cache.SetIndex(new[]
+        {
+            entries[2],
+            relocated with { ByteOffset = relocated.ByteOffset + 999 },
+            entries[1]
+        });
+        if (cache.TryGet(1, out var wrongPixels) &&
+            ReferenceEquals(a, wrongPixels))
+            throw new Exception("Changed cache bytes reused stale decoded pixels.");
 
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.TryGet(0, out _))
             throw new Exception("Empty gallery reused thumbnails from the prior index.");
+    }
+
+    private static void SingleImageCatalogProjectionMatchesFullIndex()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "single-projection.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        if (scanner.Scan(root).Failed != 0)
+            throw new Exception("Failed to prepare projection image.");
+        var catalog = new ImageCatalogRepository(db);
+        var tier = new BrowseThumbnailProfileRepository(db).Get().Tiers[0];
+        var browse = new BrowseCacheRepository(db);
+        var full = browse.GetIndex(tier).Single();
+        var targeted = browse.GetIndexEntry(tier, full.ImageId);
+        if (targeted != full ||
+            browse.GetIndexEntry(tier, long.MaxValue) is not null)
+            throw new Exception("Single-image gallery projection differed from full index.");
+
+        var expectedFolder = catalog.GetPhotoFolders().Single();
+        var sourceFolderId = catalog.GetImagePhotoFolderId(full.ImageId);
+        if (sourceFolderId != expectedFolder.Id ||
+            catalog.GetPhotoFolderSummary(expectedFolder.Id) != expectedFolder)
+            throw new Exception("Targeted folder summary differed from full folder catalog.");
     }
 
     private static void ExclusionServiceRoundTrip()
