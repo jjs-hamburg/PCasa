@@ -96,10 +96,10 @@ internal static class Program
                 throw new Exception("Search inversion toggle is not labelled NOT.");
             Console.WriteLine("PASS: Sort selector lives only in the search toolbar beside NOT.");
 
-            // The user explicitly approved ONE line, ordered as:
-            // Main menu | Search | WAS | WO | NOT | Sort.
-            // A real layout assertion must fail if one item is pushed below
-            // the header, squeezed to zero width, or overlaps its neighbor.
+            // Restore the working original header order exactly:
+            // main menu | new Sort | WAS | WO | NOT | old search field.
+            // The menu and search field must not move or change dimensions
+            // simply because the sort control was inserted before WAS.
             var searchField = window.FindName("TagSearchBox") as TextBox
                 ?? throw new Exception("Search field not found.");
             var what = window.FindName("SearchTagsMode") as RadioButton
@@ -117,14 +117,21 @@ internal static class Program
                 element.TransformToAncestor(window).TransformBounds(
                     new Rect(new Point(), element.RenderSize));
 
-            foreach (var width in new[] { 1500.0, 1100.0, 1000.0 })
+            if (Descendants<TextBlock>(sortButton).Any(block =>
+                    block.Text == "⌄" || block.Text == "▼"))
+                throw new Exception("Redundant triangle remains inside Sort selector.");
+            if (window.FindName("GallerySortDirectionIcon")
+                is not System.Windows.Shapes.Path)
+                throw new Exception("LAP-style sort arrow is not rendered.");
+
+            foreach (var width in new[] { 1500.0, 2048.0, 1100.0, 1000.0 })
             {
                 window.Width = width;
                 Flush(window);
                 var row = new[]
                 {
-                    Bounds(menu), Bounds(searchField), Bounds(whatLabel),
-                    Bounds(whereLabel), Bounds(notToggle), Bounds(sortButton)
+                    Bounds(menu), Bounds(sortButton), Bounds(whatLabel),
+                    Bounds(whereLabel), Bounds(notToggle), Bounds(searchField)
                 };
                 for (var i = 1; i < row.Length; i++)
                 {
@@ -132,21 +139,21 @@ internal static class Program
                         Math.Abs(row[i].Top + row[i].Height / 2 -
                                  (row[0].Top + row[0].Height / 2)) > 12)
                         throw new Exception(
-                            $"At window width {width}, the one-row search bar overlaps or wraps: " +
+                            $"At window width {width}, one-line controls overlap or wrap: " +
                             string.Join(", ", row.Select(r =>
                                 $"{r.Left:F0}-{r.Right:F0}@{r.Top:F0}")));
                 }
-                if (searchField.ActualWidth < 60)
+                if (Math.Abs(searchField.ActualWidth - 180) > 1)
                     throw new Exception(
-                        $"At width {width}, the search field is effectively invisible.");
+                        $"At width {width}, original 180px search-field width changed.");
                 if (row[^1].Right > window.ActualWidth - 1)
                     throw new Exception(
-                        $"At width {width}, sort button extends past the window.");
+                        $"At width {width}, search field extends past the window.");
             }
             window.Width = 1500;
             Flush(window);
             Console.WriteLine(
-                "PASS: One-line menu | search | WAS | WO | NOT | sort at 1000, 1100 and 1500 px.");
+                "PASS: One-line original menu | sort | WAS | WO | NOT | search order.");
 
             options.IsSubmenuOpen = true;
             Flush(window);
