@@ -118,6 +118,49 @@ internal static class FolderAddFlow
                 "Completed scan did not expose its second JPEG and updated folder count.");
             Console.WriteLine("PASS: Full catalog/gallery and parent count complete without background monitoring.");
 
+            // A manual folder creation borrows the NAS scan's existing progress
+            // window. Its 1/1 final caption must NEVER remain frozen when the
+            // overlay ends, even if the next SMB callback is delayed.
+            var sharedProgress = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
+            sharedProgress.Show();
+            try
+            {
+                sharedProgress.UpdateScan(new ScanProgress(
+                    2, 1, 1, 0, "scan-background-first.jpg", Added: 1));
+                sharedProgress.BeginManualOperation("Ordner anlegen", 1);
+                sharedProgress.UpdateManualOperation(new SchedulerJobSnapshot(
+                    10, "folder:create:test", SchedulerPriority.ManualAction,
+                    SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
+                {
+                    Phase = "Ordner angelegt",
+                    Processed = 1, Total = 1,
+                    CurrentPath = "ORG"
+                });
+                sharedProgress.UpdateScan(new ScanProgress(
+                    4, 2, 2, 0, "scan-background-latest.jpg", Added: 2));
+                sharedProgress.EndManualOperation();
+                var phaseText = (TextBlock?)sharedProgress.FindName("PhaseText");
+                var currentFileText = (TextBlock?)sharedProgress.FindName("CurrentFileText");
+                var countText = (TextBlock?)sharedProgress.FindName("CountText");
+                if (phaseText?.Text != "Bilder werden eingelesen" ||
+                    currentFileText?.Text != "scan-background-latest.jpg" ||
+                    countText?.Text != "Neu: 2 · geprüft: 4")
+                    throw new Exception(
+                        "After manual 1/1, borrowed background progress remained frozen.");
+
+                sharedProgress.BeginManualOperation("Ordner anlegen", 1);
+                sharedProgress.Finish(); // Real background owner completed.
+                sharedProgress.EndManualOperation();
+                if (sharedProgress.IsVisible)
+                    throw new Exception(
+                        "Background progress window failed to close after deferred Finish.");
+            }
+            finally
+            {
+                sharedProgress.Finish();
+            }
+            Console.WriteLine("PASS: Manual completion restores background scheduler presentation immediately.");
+
             // A manually created folder is published on the WPF tree before
             // the actual I/O can start. Occupy the one Manual SourceProbe
             // worker to simulate a slow network creation request.
