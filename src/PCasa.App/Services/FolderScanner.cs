@@ -269,7 +269,9 @@ public sealed class FolderScanner
                     scanRoot, recursive, exclusions, CancellationToken.None,
                     completedDirectories,
                     durableInitialImport
-                        ? directory => resume!.DirectoryCompletionHandler?.Invoke(directory)
+                        ? resume is null
+                            ? DirectoryCompleted
+                            : directory => resume.DirectoryCompletionHandler?.Invoke(directory)
                         : null)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
