@@ -19,7 +19,8 @@ public sealed record CatalogImageData(
     long ModifiedUtcTicks,
     int Width,
     int Height,
-    string ThumbnailPath);
+    string ThumbnailPath,
+    long? CreatedUtcTicks = null);
 
 public sealed record PhotoFolderSummary(
     long Id,
