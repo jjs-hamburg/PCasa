@@ -136,18 +136,29 @@ public static class RawImageSource
 
     public static Image ApplyOrientation(Image pixels, int orientation)
     {
-        // Only used on a noRotate:true input. Returning a new image keeps the
-        // caller's lifetime independent of the temporarily loaded source.
+        // Thumbnail(noRotate: true) can carry a sequential JPEG decoder.
+        // EXIF 3-8 need reverse/column-wise reads. A lazy Rot/Flip seems
+        // successful until PngsaveBuffer/JpegsaveBuffer evaluates pixels,
+        // where libvips otherwise fails with "VipsJpeg: out of order read".
+        //
+        // Materialize ONLY the already downsized thumbnail, before changing
+        // its access direction. This avoids decoding a full sensor RAW into
+        // memory, and it keeps ordinary/orientation-1 images on the fast path.
+        if (orientation is < 3 or > 8)
+            return orientation == 2
+                ? pixels.Flip(Enums.Direction.Horizontal)
+                : pixels.Copy();
+
+        using var resident = pixels.CopyMemory();
         return orientation switch
         {
-            2 => pixels.Flip(Enums.Direction.Horizontal),
-            3 => pixels.Rot(Enums.Angle.D180),
-            4 => pixels.Flip(Enums.Direction.Vertical),
-            5 => RotateAndFlip(pixels, Enums.Angle.D90, Enums.Direction.Horizontal),
-            6 => pixels.Rot(Enums.Angle.D90),
-            7 => RotateAndFlip(pixels, Enums.Angle.D90, Enums.Direction.Vertical),
-            8 => pixels.Rot(Enums.Angle.D270),
-            _ => pixels.Copy()
+            3 => resident.Rot(Enums.Angle.D180),
+            4 => resident.Flip(Enums.Direction.Vertical),
+            5 => RotateAndFlip(resident, Enums.Angle.D90, Enums.Direction.Horizontal),
+            6 => resident.Rot(Enums.Angle.D90),
+            7 => RotateAndFlip(resident, Enums.Angle.D90, Enums.Direction.Vertical),
+            8 => resident.Rot(Enums.Angle.D270),
+            _ => resident.Copy()
         };
     }
 
