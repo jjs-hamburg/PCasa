@@ -36,6 +36,26 @@ public partial class MainWindow
         GallerySortDimensionsMenu.IsChecked = option.Field == GallerySortField.Dimensions;
         GallerySortAscendingMenu.IsChecked = !option.Descending;
         GallerySortDescendingMenu.IsChecked = option.Descending;
+        // One visible, persisted criterion in the search toolbar. The
+        // direction glyph belongs to this SAME state, not a second toggle.
+        GallerySortDirectionGlyph.Text = option.Descending ? "↓" : "↑";
+        GallerySortSelectedFieldLabel.Text = option.Field switch
+        {
+            GallerySortField.Captured => "Aufnahme",
+            GallerySortField.Created => "Erstellt",
+            GallerySortField.Modified => "Geändert",
+            GallerySortField.Size => "Größe",
+            GallerySortField.Dimensions => "Dimension",
+            _ => "Name"
+        };
+    }
+
+    private void GallerySortSelector_Click(object sender, RoutedEventArgs e)
+    {
+        if (GallerySortSelectorButton.ContextMenu is not { } menu) return;
+        menu.PlacementTarget = GallerySortSelectorButton;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
     }
 
     private async void GallerySort_Click(object sender, RoutedEventArgs e)
