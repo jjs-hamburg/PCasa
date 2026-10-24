@@ -39,6 +39,43 @@ public sealed class FolderScanner
         ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
     };
 
+    /// <summary>
+    /// Durable-for-this-session enumeration cursor. Scanner yields may restart
+    /// the worker delegate, but never restart already traversed NAS folders.
+    /// The source generation fences invalidate an unsafe stale checkpoint.
+    /// </summary>
+    public sealed class ScanResumeState : IDisposable
+    {
+        internal IEnumerator<string>? Enumerator;
+        internal string? CurrentFile;
+        internal long? SourceGeneration;
+        internal readonly Dictionary<string, long> PhotoFolderIds =
+            new(StringComparer.OrdinalIgnoreCase);
+        internal readonly HashSet<string> ObservedPaths =
+            new(StringComparer.OrdinalIgnoreCase);
+        internal int ImageFilesSeen, Updated, Unchanged, Added, Changed,
+            CacheRepaired, MetadataUpdated, Failed;
+        internal Exception? FirstFailure;
+        internal string? FirstFailurePath;
+
+        public int CommittedFiles => ImageFilesSeen;
+        public void Reset()
+        {
+            Enumerator?.Dispose();
+            Enumerator = null;
+            CurrentFile = null;
+            SourceGeneration = null;
+            PhotoFolderIds.Clear();
+            ObservedPaths.Clear();
+            ImageFilesSeen = Updated = Unchanged = Added = Changed =
+                CacheRepaired = MetadataUpdated = Failed = 0;
+            FirstFailure = null;
+            FirstFailurePath = null;
+        }
+
+        public void Dispose() => Reset();
+    }
+
     private readonly ImageCatalogRepository _catalog;
     private readonly ThumbnailCache _thumbnailCache;
     private readonly FolderRepository _folderRepository;
@@ -75,9 +112,12 @@ public sealed class FolderScanner
         string localDirectory,
         bool recursive,
         IProgress<ScanProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ScanResumeState? resume = null)
     {
-        return ScanDirectoryLocked(folder, localDirectory, recursive, progress, cancellationToken);
+        return ScanDirectoryLocked(
+            folder, localDirectory, recursive, progress, cancellationToken,
+            resume: resume);
     }
 
     public ScanResult ScanFile(
@@ -99,7 +139,8 @@ public sealed class FolderScanner
         bool recursive,
         IProgress<ScanProgress>? progress,
         CancellationToken cancellationToken,
-        string? specificFile = null)
+        string? specificFile = null,
+        ScanResumeState? resume = null)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -110,19 +151,6 @@ public sealed class FolderScanner
                 $"Der einzulesende Ordner ist nicht erreichbar: {scanRoot}");
         }
 
-        var imageFilesSeen = 0;
-        var updated = 0;
-        var unchanged = 0;
-        var added = 0;
-        var changed = 0;
-        var cacheRepaired = 0;
-        var metadataUpdated = 0;
-        var failed = 0;
-        Exception? firstFailure = null;
-        string? firstFailurePath = null;
-        var photoFolderIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-        var observedPaths = specificFile is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         var progressClock = Stopwatch.StartNew();
         var catalogCommitClock = Stopwatch.StartNew();
 
@@ -130,32 +158,72 @@ public sealed class FolderScanner
         if (sourceState is not { DesiredPresent: true })
             throw new OperationCanceledException("The monitored source was removed.");
         var generation = sourceState.Value.Generation;
-        var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
-
-        // Do not even enumerate excluded subtrees. Merely filtering files
-        // after Directory.EnumerateFiles(... RecurseSubdirectories=true) would
-        // still traverse potentially hundreds of thousands of excluded files.
-        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions))
+        if (resume?.SourceGeneration is long previousGeneration &&
+            previousGeneration != generation)
         {
-            return new ScanResult(0, 0, 0, 0);
+            // A user changed the monitoring generation while paused. The old
+            // inventory cannot authorize deletion in the new generation.
+            resume.Reset();
         }
+        if (resume is not null) resume.SourceGeneration = generation;
+        var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
+        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions))
+            return new ScanResult(0, 0, 0, 0);
+
+        var imageFilesSeen = resume?.ImageFilesSeen ?? 0;
+        var updated = resume?.Updated ?? 0;
+        var unchanged = resume?.Unchanged ?? 0;
+        var added = resume?.Added ?? 0;
+        var changed = resume?.Changed ?? 0;
+        var cacheRepaired = resume?.CacheRepaired ?? 0;
+        var metadataUpdated = resume?.MetadataUpdated ?? 0;
+        var failed = resume?.Failed ?? 0;
+        Exception? firstFailure = resume?.FirstFailure;
+        string? firstFailurePath = resume?.FirstFailurePath;
+        var photoFolderIds = resume?.PhotoFolderIds ??
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var observedPaths = specificFile is null
+            ? resume?.ObservedPaths ??
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
 
         var profile = _browseProfile.Get();
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
         // ExifTool is reused throughout this scan, not restarted per file.
         using var exifReader = new ImageExifReader();
+        var enumerator = resume?.Enumerator ??
+            (specificFile is null
+                ? EnumerateIncludedFiles(
+                    scanRoot, recursive, exclusions, CancellationToken.None)
+                : new[] { specificFile }).GetEnumerator();
+        if (resume is not null) resume.Enumerator = enumerator;
+        var enumerationComplete = false;
         try
         {
-            foreach (var localPath in specificFile is null
-                ? EnumerateIncludedFiles(scanRoot, recursive, exclusions, cancellationToken)
-                : new[] { specificFile })
+            while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                string localPath;
+                if (resume?.CurrentFile is string pendingFile)
+                {
+                    localPath = pendingFile;
+                }
+                else
+                {
+                    if (!enumerator.MoveNext())
+                    {
+                        enumerationComplete = true;
+                        break;
+                    }
+                    localPath = enumerator.Current;
+                    if (resume is not null) resume.CurrentFile = localPath;
+                }
 
                 var extension = Path.GetExtension(localPath);
                 if (!SupportedExtensions.Contains(extension))
                 {
+                    if (resume is not null) resume.CurrentFile = null;
                     continue;
                 }
 
@@ -355,6 +423,20 @@ public sealed class FolderScanner
                 // reflowing the entire gallery or interrupting the scan.
                 ReportProgress(localPath, force: discoveredFolderId is not null,
                     discoveredFolderId, discoveredFolderPath);
+                if (resume is not null)
+                {
+                    resume.ImageFilesSeen = imageFilesSeen;
+                    resume.Updated = updated;
+                    resume.Unchanged = unchanged;
+                    resume.Added = added;
+                    resume.Changed = changed;
+                    resume.CacheRepaired = cacheRepaired;
+                    resume.MetadataUpdated = metadataUpdated;
+                    resume.Failed = failed;
+                    resume.FirstFailure = firstFailure;
+                    resume.FirstFailurePath = firstFailurePath;
+                    resume.CurrentFile = null;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -362,9 +444,18 @@ public sealed class FolderScanner
             scanSession.RollbackPending();
             throw;
         }
+        catch
+        {
+            resume?.Reset();
+            throw;
+        }
         finally
         {
             scanSession.Dispose();
+            if (resume is null || enumerationComplete)
+                enumerator.Dispose();
+            if (enumerationComplete && resume is not null)
+                resume.Enumerator = null;
         }
 
         ReportProgress(null, force: true);

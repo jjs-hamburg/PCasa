@@ -321,6 +321,41 @@ public partial class MainWindow : Window
         }
     }
 
+    // A catalog refresh must update existing tree-node counts as well as new
+    // nodes. Never rebuild the TreeView for a numeric change: that would lose
+    // expansion, selection and the gallery's scroll anchor during ingestion.
+    private void RefreshVisibleFolderCounts()
+    {
+        var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var photoFolder in _photoFolders)
+        {
+            foreach (var part in GetFolderPathHierarchy(photoFolder.LocalPath))
+            {
+                totals.TryGetValue(part.FullPath, out var count);
+                totals[part.FullPath] = count + photoFolder.ImageCount;
+            }
+        }
+
+        UpdateNodes(FoldersTree);
+        void UpdateNodes(ItemsControl container)
+        {
+            foreach (var item in container.Items.OfType<TreeViewItem>())
+            {
+                if (item.Tag is FolderTreeTag tag)
+                {
+                    totals.TryGetValue(tag.FullPath, out var count);
+                    var name = GetFolderPathHierarchy(tag.FullPath)[^1].DisplayName;
+                    var expected = count > 0
+                        ? $"{name} ({count:N0})" : name;
+                    if (!string.Equals(item.Header as string, expected,
+                        StringComparison.Ordinal))
+                        item.Header = expected;
+                }
+                UpdateNodes(item);
+            }
+        }
+    }
+
     private static TreeViewItem? FirstPhotoFolderTreeItem(ItemsControl parent)
     {
         foreach (var item in parent.Items.OfType<TreeViewItem>())

@@ -398,6 +398,7 @@ public partial class MainWindow
                 DiscoveredPhotoFolderId: discovered.Id,
                 DiscoveredPhotoFolderPath: discovered.LocalPath));
         }
+        RefreshVisibleFolderCounts();
         // Gallery catalog reloads are independent of the folder TreeView.
         // The tree has its own targeted additions and explicit refreshes;
         // rebuilding it here also invalidates the gallery's scroll geometry.
@@ -548,40 +549,67 @@ public partial class MainWindow
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
     }
 
-    // The gallery listens to committed catalog data, NOT to any scanner,
-    // progress window or folder-tree callback. The first stored picture
-    // wakes an empty gallery immediately, without recurring reflows during
-    // a long scan. The existing gallery stays fully interactive throughout.
-    private int _galleryFirstImageSignalPending;
+    // Every committed image (not just the FIRST image) may change a visible
+    // folder's count and the selected gallery. Coalesce notifications rather
+    // than rebuilding the index 500,000 times during a bulk scan.
+    private int _catalogPublicationPending;
+    private bool _catalogPublicationBusy;
+    private DispatcherTimer? _catalogPublicationTimer;
     private int _galleryHasIndexedImages;
 
     private void OnCatalogImageCommitted()
     {
-        if (System.Threading.Volatile.Read(ref _galleryHasIndexedImages) != 0 ||
-            System.Threading.Interlocked.Exchange(
-                ref _galleryFirstImageSignalPending, 1) != 0)
-            return;
+        if (System.Threading.Interlocked.Exchange(
+            ref _catalogPublicationPending, 1) != 0) return;
+        if (Dispatcher.HasShutdownStarted) return;
 
-        // The catalog publication can originate from a scheduler worker.
-        // Only our own Gallery view is updated on WPF's dispatcher.
-        _ = Dispatcher.BeginInvoke(new Action(async () =>
+        _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            try
+            if (Dispatcher.HasShutdownStarted || !_browseInitialized) return;
+            if (_catalogPublicationTimer is null)
             {
-                if (_browseInitialized && !_folderManagerOpen &&
-                    !_folderRemovalPending && _browseIndex.Count == 0)
-                    await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                        warmViewport: false);
+                _catalogPublicationTimer = new DispatcherTimer(
+                    DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(750)
+                };
+                _catalogPublicationTimer.Tick += CatalogPublicationTimer_Tick;
             }
-            catch (Exception ex)
-            {
-                PCasaDiagnostics.Write("Gallery.CatalogPublication", ex);
-            }
-            finally
-            {
-                System.Threading.Volatile.Write(ref _galleryFirstImageSignalPending, 0);
-            }
+            if (!_catalogPublicationTimer.IsEnabled)
+                _catalogPublicationTimer.Start();
         }), DispatcherPriority.Background);
+    }
+
+    private async void CatalogPublicationTimer_Tick(object? sender, EventArgs e)
+    {
+        _catalogPublicationTimer?.Stop();
+        if (_catalogPublicationBusy)
+        {
+            _catalogPublicationTimer?.Start();
+            return;
+        }
+        if (System.Threading.Interlocked.Exchange(
+            ref _catalogPublicationPending, 0) == 0) return;
+
+        _catalogPublicationBusy = true;
+        try
+        {
+            if (_browseInitialized && !_folderManagerOpen &&
+                !_folderRemovalPending && !Dispatcher.HasShutdownStarted)
+                await RefreshBrowseGalleryAsync(
+                    forceIndexReload: true, warmViewport: false);
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.CatalogPublication", ex);
+        }
+        finally
+        {
+            _catalogPublicationBusy = false;
+            if (System.Threading.Volatile.Read(ref _catalogPublicationPending) != 0 &&
+                !Dispatcher.HasShutdownStarted)
+                _catalogPublicationTimer?.Start();
+        }
     }
 
     private bool _manualScanAllActive;
@@ -1156,6 +1184,7 @@ public partial class MainWindow
         SaveGalleryPosition();
         SaveAppearance();
         CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
+        _catalogPublicationTimer?.Stop();
         _browseProgressWindow?.Finish();
         _browseProgressWindow = null;
         _thumbnailSizeCancellation?.Cancel();

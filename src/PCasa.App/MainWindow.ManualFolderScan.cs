@@ -155,6 +155,8 @@ public partial class MainWindow
         bool requirePendingInitialImport = false)
     {
         ScanResult? completed = null;
+        using var resume = new FolderScanner.ScanResumeState();
+        var manualGenerationStarted = false;
         await _scheduler.EnqueueAsync(
             $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}", priority,
             token =>
@@ -181,9 +183,13 @@ public partial class MainWindow
                 // The scanner and the generation-safe RemoveMissing operation
                 // are shared by context scan, Scan All, initial import and
                 // background directory scans. No alternative SQL pruning.
-                _folderRepository.BeginManualScan(folder.CanonicalPath);
+                if (!manualGenerationStarted)
+                {
+                    _folderRepository.BeginManualScan(folder.CanonicalPath);
+                    manualGenerationStarted = true;
+                }
                 completed = _folderScanner.ScanDirectory(
-                    folder, directory, recursive: true, progress, token);
+                    folder, directory, recursive: true, progress, token, resume);
                 return Task.CompletedTask;
             },
             cancellationToken: cancellationToken,

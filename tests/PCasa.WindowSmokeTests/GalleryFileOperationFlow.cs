@@ -436,16 +436,19 @@ internal static class GalleryFileOperationFlow
                 Until(window, () => !File.Exists(uncachedSource) &&
                     File.Exists(uncachedDestination),
                     "Physical move waited for the destination image decoder.");
-                // File movement AND its gallery publication must not wait
-                // for the new file's EXIF/thumbnail import. That is another
-                // scheduler job using the existing scanner after completion.
-                Until(window, () => deferredIndexing.IsCompleted,
-                    "Manual move still waited for destination image indexing.");
+                // Physical movement is committed but the SAME manual
+                // package must remain running until the image's EXIF, pack
+                // cache and catalog have been committed and published.
+                if (deferredIndexing.IsCompleted)
+                    throw new Exception(
+                        "Manual package completed before its mandatory image indexing.");
             }
             Until(window, () => deferredIndexing.IsCompleted,
                 "Deferred image indexing did not complete.");
             deferredIndexing.GetAwaiter().GetResult();
-            Console.WriteLine("PASS: Uncatalogued move completes before destination EXIF/thumbnail import.");
+            if (!CatalogContains(db, uncachedDestination))
+                throw new Exception("Package finished without indexed destination image.");
+            Console.WriteLine("PASS: Uncatalogued move waits for the same-package EXIF, cache and catalog import.");
 
             // An earlier manual file move may be stuck in a source lock.
             // The user's next manual drop must become a QUEUED scheduler job,

@@ -620,6 +620,7 @@ public partial class MainWindow
                     if (sourceState is not { DesiredPresent: true })
                         continue;
                     ScanResult? scanResult = null;
+                    using var resume = new FolderScanner.ScanResumeState();
                     await _scheduler.EnqueueAsync(
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}",
                         SchedulerPriority.Background,
@@ -629,7 +630,7 @@ public partial class MainWindow
                                 ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token)
                                 : _folderScanner.ScanDirectory(
                                     folder, scanPath, request.Recursive,
-                                    progress: scanProgress, token);
+                                    progress: scanProgress, token, resume);
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
