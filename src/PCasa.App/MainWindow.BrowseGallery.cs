@@ -136,6 +136,7 @@ public partial class MainWindow
         IReadOnlyList<PhotoFolderSummary> initialFolders = Array.Empty<PhotoFolderSummary>();
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> initialConfiguration =
             Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
+        IReadOnlyList<string> createdDirectories = Array.Empty<string>();
         var imageCount = 0;
         await _scheduler.EnqueueAsync(
             $"catalog:initial-summary:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
@@ -145,11 +146,14 @@ public partial class MainWindow
                 initialFolders = _imageCatalog.GetPhotoFolders();
                 imageCount = _imageCatalog.CountAll();
                 initialConfiguration = ReadFolderTreeConfigurationSnapshot();
+                createdDirectories = _folderRepository.GetCreatedDirectories();
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.CatalogRead);
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
         _dropTargetProjection = initialConfiguration;
+        _createdEmptyFolderPaths.Clear();
+        _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
         RefreshFolderTree(preserveGalleryAnchor: false);
         _lastCatalogImageCount = imageCount;
