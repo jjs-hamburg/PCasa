@@ -471,9 +471,12 @@ public partial class MainWindow
                             var sourceId = move ? CatalogImageIdAtPath(source) : null;
                             var replacedId = replace
                                 ? CatalogImageIdAtPath(destination) : null;
-
+                            _scheduler.ReportProgress(key, "Dateisperre abwarten",
+                                completed.Count, requested.Length, source);
                             lock (SourceFileLocks.ForPath(source))
                             {
+                                _scheduler.ReportProgress(key, "Dateisperre erhalten",
+                                    completed.Count, requested.Length, source);
                                 token.ThrowIfCancellationRequested();
 
                                 // Durable intent BEFORE File.Move. Its removal
