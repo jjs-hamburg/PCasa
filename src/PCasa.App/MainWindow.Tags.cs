@@ -96,9 +96,10 @@ public partial class MainWindow
         catch (Exception ex) { PCasaDiagnostics.Write("Search.Mode", ex); }
     }
 
-    private async void FilterResultsInversion_Click(object sender, RoutedEventArgs e)
+    private async void FilterResultsInversion_Changed(object sender, RoutedEventArgs e)
     {
-        _invertFilterResults = InvertFilterResultsMenu.IsChecked;
+        if (InvertFilterToggle is null) return;
+        _invertFilterResults = InvertFilterToggle.IsChecked == true;
         if (_browsePageCache is null || string.IsNullOrWhiteSpace(TagSearchBox.Text)) return;
         try { await ApplyTagFilterAsync(true); }
         catch (OperationCanceledException) { }
@@ -113,12 +114,8 @@ public partial class MainWindow
 
     private async void TagSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
-        {
-            _invertFilterResults = false;
-            if (InvertFilterResultsMenu is not null)
-                InvertFilterResultsMenu.IsChecked = false;
-        }
+        // NOT is a persistent filter mode, not an action. Clearing a query
+        // makes all images visible but must not silently uncheck the toggle.
         ClearTagSearchButton.Visibility = string.IsNullOrEmpty(TagSearchBox.Text)
             ? Visibility.Collapsed : Visibility.Visible;
         if (!_browseInitialized || _browsePageCache is null)
