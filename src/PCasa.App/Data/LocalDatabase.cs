@@ -51,6 +51,18 @@ public sealed class LocalDatabase
                     created_utc TEXT NOT NULL
                 );
 
+                -- A directory explicitly created by PCasa remains selectable
+                -- even before its first image is indexed. The filesystem
+                -- remains authoritative; this is a durable tree projection.
+                CREATE TABLE IF NOT EXISTS created_photo_directories (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL COLLATE NOCASE,
+                    created_utc TEXT NOT NULL,
+                    PRIMARY KEY (monitored_folder_id, local_path),
+                    FOREIGN KEY (monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS photo_folders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     monitored_folder_id INTEGER NOT NULL,
