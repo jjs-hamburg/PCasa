@@ -703,19 +703,12 @@ public partial class MainWindow
     private async Task DeleteSelectedImagesAsync()
     {
         if (_selectedImageIds.Count == 0) return;
-        if (_galleryFileOperationRunning)
-        {
-            StatusText.Text =
-                "Löschen erst nach Abschluss der laufenden Dateiübertragung möglich";
-            return;
-        }
         (long Id, string Path)[] selected;
         bool anyNetwork;
         try
         {
-            // Resolve the selection and network classification through the
-            // same scheduler-owned readers used by drag/drop. Never query
-            // SQLite or a drive provider synchronously on the WPF thread.
+            // Reads use scheduler lanes; capture the intended selection before
+            // presenting the confirmation dialog.
             selected = await SelectedGalleryImagePathsAsync(_selectedImageIds.ToArray());
             if (selected.Length == 0) return;
             anyNetwork = await _scheduler.RunAsync(
@@ -728,6 +721,7 @@ public partial class MainWindow
                 }, workKind: SchedulerWorkKind.SourceProbe);
         }
         catch (Exception ex) { ShowFileActionError(ex); return; }
+
         var prompt = anyNetwork
             ? $"{selected.Length:N0} Bilddatei(en) löschen?\n\n" +
               "Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht."
@@ -735,39 +729,54 @@ public partial class MainWindow
         if (MessageBox.Show(this, prompt, "Bilder löschen",
                 MessageBoxButton.YesNo, MessageBoxImage.Warning,
                 MessageBoxResult.No) != MessageBoxResult.Yes) return;
+
+        var key = $"gallery:delete:{Guid.NewGuid():N}";
         _outstandingGalleryMutations++;
         var succeeded = new List<long>();
         var errors = new List<string>();
         try
         {
-            await _scheduler.EnqueueAsync(
-                $"gallery:delete:{Guid.NewGuid():N}", SchedulerPriority.ManualAction,
-                token =>
+            BeginVisibleManualOperation(key, "Bilder löschen", selected.Length);
+            var package = new SchedulerTaskPackage(key);
+            foreach (var (id, path) in selected)
+            {
+                package.AddStep(token =>
                 {
-                    foreach (var (id, path) in selected)
+                    token.ThrowIfCancellationRequested();
+                    try
                     {
-                        token.ThrowIfCancellationRequested();
-                        try
+                        using (SourceFileLocks.Enter(path, token))
                         {
-                            lock (SourceFileLocks.ForPath(path))
-                            {
-                                if (PathClassifier.Classify(path).IsNetwork)
-                                    File.Delete(path);
-                                else
-                                    FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
-                                        RecycleOption.SendToRecycleBin);
-                                new CatalogRemovalService(_database).DetachImage(id, path);
-                            }
-                            succeeded.Add(id);
+                            token.ThrowIfCancellationRequested();
+                            // A suspended older transfer can change the path.
+                            // Never physically delete an image solely on the
+                            // basis of a stale gallery-selection snapshot.
+                            if (CatalogImageIdAtPath(path) != id)
+                                throw new InvalidOperationException(
+                                    "Bild wurde inzwischen verschoben oder ersetzt.");
+                            if (PathClassifier.Classify(path).IsNetwork)
+                                File.Delete(path);
+                            else
+                                FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
+                                    RecycleOption.SendToRecycleBin);
+                            if (!new CatalogRemovalService(_database).DetachImage(id, path))
+                                throw new InvalidOperationException(
+                                    "Datei entfernt, aber Katalogeintrag nicht bestätigt.");
                         }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                            or InvalidOperationException)
-                        {
-                            errors.Add(Path.GetFileName(path) + ": " + ex.Message);
-                        }
+                        succeeded.Add(id);
                     }
+                    catch (Exception ex) when (ex is IOException or
+                        UnauthorizedAccessException or InvalidOperationException)
+                    {
+                        errors.Add(Path.GetFileName(path) + ": " + ex.Message);
+                        PCasaDiagnostics.Write("Gallery.Delete", ex);
+                    }
+                    _scheduler.ReportProgress(key, "Bilder löschen",
+                        succeeded.Count + errors.Count, selected.Length, path);
                     return Task.CompletedTask;
                 });
+            }
+            await _scheduler.EnqueuePackageAsync(package, SchedulerPriority.ManualAction);
             _selectedImageIds.ExceptWith(succeeded);
             if (_selectedImageIds.Count == 0) _gallerySelection.Reset();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);
@@ -779,7 +788,16 @@ public partial class MainWindow
                     "Einige Dateien konnten nicht gelöscht werden",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+        catch (OperationCanceledException)
+        {
+            StatusText.Text = $"{succeeded.Count:N0} Datei(en) gelöscht · weitere Löschung abgebrochen";
+        }
         catch (Exception ex) { ShowFileActionError(ex); }
-        finally { _outstandingGalleryMutations--; }
+        finally
+        {
+            EndVisibleManualOperation(key);
+            _outstandingGalleryMutations--;
+        }
     }
+
 }
