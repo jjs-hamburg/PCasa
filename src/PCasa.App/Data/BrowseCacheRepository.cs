@@ -59,6 +59,16 @@ public sealed class BrowseCacheRepository
     }
 
     public IReadOnlyList<BrowseThumbnailIndexEntry> GetIndex(int tier)
+        => ReadIndex(tier, imageId: null);
+
+    // A completed file transfer needs ONE prepared image, not a reload of a
+    // half-million-entry gallery. Uses the SAME index SQL and cache validity
+    // rules as the normal full projection.
+    public BrowseThumbnailIndexEntry? GetIndexEntry(int tier, long imageId)
+        => ReadIndex(tier, imageId).FirstOrDefault();
+
+    private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
+        int tier, long? imageId)
     {
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
@@ -88,12 +98,15 @@ public sealed class BrowseCacheRepository
                 AND t.source_modified_utc_ticks = i.modified_utc_ticks
             WHERE te.tier = $tier
               AND te.source_modified_utc_ticks = i.modified_utc_ticks
+            """ + (imageId is long ? " AND i.id = $imageId " : "") + """
             ORDER BY
                 pf.canonical_path COLLATE NOCASE,
                 i.file_name COLLATE NOCASE,
                 i.canonical_path COLLATE NOCASE;
             """;
         command.Parameters.AddWithValue("$tier", tier);
+        if (imageId is long requestedId)
+            command.Parameters.AddWithValue("$imageId", requestedId);
 
         using var reader = command.ExecuteReader();
         var result = new List<BrowseThumbnailIndexEntry>();
