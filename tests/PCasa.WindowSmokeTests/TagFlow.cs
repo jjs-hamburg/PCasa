@@ -284,7 +284,38 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)
                 ?? throw new Exception("Shared gallery transfer method missing.");
-            var moveTask = (Task)transfer.Invoke(window, [originals, org, true])!;
+            // Keep the last source file locked until all previous images
+            // have moved. During this incomplete P0 manual package, the user
+            // must still be able to click an unrelated image folder, even
+            // with filename search + inverted current-folder scope enabled.
+            Task moveTask;
+            lock (SourceFileLocks.ForPath(originals[^1]))
+            {
+                moveTask = (Task)transfer.Invoke(window, [originals, org, true])!;
+                Until(window, () =>
+                    originals.Take(originals.Length - 1).All(path =>
+                        !File.Exists(path) &&
+                        File.Exists(Path.Combine(org, Path.GetFileName(path)))) &&
+                    File.Exists(originals[^1]) && !moveTask.IsCompleted,
+                    "Manual move did not pause after its first five file commits.");
+
+                var otherFolder = Walk(tree).FirstOrDefault(item =>
+                    string.Equals(ReadPath(item), albumA,
+                        StringComparison.OrdinalIgnoreCase))
+                    ?? throw new Exception("Unrelated photo folder unavailable.");
+                otherFolder.IsSelected = true;
+                Until(window, () => ReferenceEquals(tree.SelectedItem, otherFolder) &&
+                    surface.GetFolderOffset(a.Id) is not null &&
+                    ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                        filteredIndex.GetValue(window)!).Count == 8,
+                    "Unrelated gallery folder temporarily emptied during manual move.");
+
+                // Return to source scope while the file job is still paused,
+                // so completion can publish the normal empty-source result.
+                albumBItem.IsSelected = true;
+                Until(window, () => ReferenceEquals(tree.SelectedItem, albumBItem),
+                    "Folder focus did not return while transfer was pending.");
+            }
             Until(window, () => moveTask.IsCompleted,
                 "Moving originals to ORG did not complete.");
             moveTask.GetAwaiter().GetResult();
