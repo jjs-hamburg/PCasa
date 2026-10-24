@@ -14,12 +14,14 @@ public partial class MainWindow
         int Tier,
         BrowseThumbnailIndexEntry Image,
         long? PreviousFolderId,
+        long? ReplacedImageId,
         PhotoFolderSummary? PreviousFolder,
         PhotoFolderSummary TargetFolder,
         int CatalogImageCount);
 
     private void PublishCommittedGalleryImage(
-        int? activeTier, long imageId, long? previousFolderId)
+        int? activeTier, long imageId, long? previousFolderId,
+        long? replacedImageId = null)
     {
         if (activeTier is not int tier) return;
 
@@ -35,7 +37,8 @@ public partial class MainWindow
                 ? _imageCatalog.GetPhotoFolderSummary(previous) : null;
 
             var publication = new LiveGalleryCommit(tier, image,
-                previousFolderId, source, target, _imageCatalog.CountAll());
+                previousFolderId, replacedImageId, source, target,
+                _imageCatalog.CountAll());
             if (Dispatcher.HasShutdownStarted) return;
             _ = Dispatcher.BeginInvoke(
                 new Action(() => _ = ApplyCommittedGalleryImageAsync(publication)),
@@ -64,6 +67,13 @@ public partial class MainWindow
         var earlierIndex = updated.FindIndex(item =>
             item.ImageId == change.Image.ImageId);
         if (earlierIndex >= 0) updated.RemoveAt(earlierIndex);
+        if (change.ReplacedImageId is long replaced &&
+            replaced != change.Image.ImageId)
+        {
+            updated.RemoveAll(item => item.ImageId == replaced);
+            _selectedImageIds.Remove(replaced);
+            _dragSelectionPathCache.Remove(replaced);
+        }
 
         // Keep ALL other photo folders and gallery thumbnails. Change only
         // the source/target summaries. An empty photo folder loses its gallery
