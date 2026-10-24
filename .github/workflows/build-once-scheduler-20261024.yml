@@ -3,6 +3,7 @@ name: PCasa Single Build Request
 # One-time explicit Windows build requested by the user.
 # Only creation/change of THIS workflow file triggers a run, not source pushes.
 # Delete this temporary workflow after the build is complete.
+# Explicit build retry 2: SQL predicate spacing fixed after first EXIF probe.
 on:
   push:
     branches:
