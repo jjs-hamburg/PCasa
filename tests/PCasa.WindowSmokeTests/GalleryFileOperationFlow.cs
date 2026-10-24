@@ -403,6 +403,51 @@ internal static class GalleryFileOperationFlow
             Console.WriteLine("PASS: Internal MOVE does not self-preempt via external reconciliation.");
 
 
+            // A partly completed multi-photo move may temporarily change
+            // the catalog's source/target identities. It must NEVER publish
+            // a filtered/torn gallery containing only those two folders.
+            // Keep the second source locked while its first sibling moves.
+            var midFlightTarget = Path.Combine(root, "MidFlight");
+            Directory.CreateDirectory(midFlightTarget);
+            var firstMidFlight = renamed;
+            var secondMidFlight = Path.Combine(batch, "test - Kopie.jpg");
+            var unrelatedId = CatalogIdAt(db, duplicate);
+            var indexField = typeof(PCasa.App.MainWindow).GetField(
+                "_displayedBrowseIndex",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry> Displayed()
+                => (IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                    indexField.GetValue(window)!;
+            Until(window, () => Displayed().Any(image => image.ImageId == unrelatedId),
+                "Unrelated folder was already absent before starting manual transfer.");
+            Task midFlightTransfer;
+            lock (SourceFileLocks.ForPath(secondMidFlight))
+            {
+                midFlightTransfer = StartTransfer(window,
+                    [firstMidFlight, secondMidFlight], midFlightTarget, move: true);
+                Until(window, () =>
+                    File.Exists(Path.Combine(midFlightTarget,
+                        Path.GetFileName(firstMidFlight))) &&
+                    File.Exists(secondMidFlight) && !midFlightTransfer.IsCompleted,
+                    "First image did not move independently before the second locked source.");
+                // Pump WPF beyond the publication-debounce interval while the
+                // manual package remains incomplete and source image B blocked.
+                var observeUntil = DateTime.UtcNow.AddMilliseconds(1400);
+                Until(window, () => DateTime.UtcNow >= observeUntil,
+                    "WPF dispatcher stopped responding during mid-flight move.");
+                if (!Displayed().Any(image => image.ImageId == unrelatedId))
+                    throw new Exception(
+                        "A partial move temporarily emptied an unrelated gallery folder.");
+            }
+            Until(window, () => midFlightTransfer.IsCompleted,
+                "Partially completed manual package did not resume after lock release.");
+            midFlightTransfer.GetAwaiter().GetResult();
+            if (!Displayed().Any(image => image.ImageId == unrelatedId))
+                throw new Exception(
+                    "Completed manual move lost the unaffected gallery projection.");
+            Console.WriteLine(
+                "PASS: Unrelated gallery stays populated throughout an interrupted 2-image move.");
+
             // The previous priority test only occupied a worker with Task.
             // Hold the actual FolderScanner in a source-image lock to prove
             // a MANUAL file move starts before the in-flight image scan ends.
