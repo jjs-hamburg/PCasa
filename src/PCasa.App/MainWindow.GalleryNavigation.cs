@@ -11,6 +11,19 @@ public partial class MainWindow
     private bool _restoringGalleryLayoutAnchor;
     private int _galleryLayoutRestoreRevision;
 
+    // A user's explicit folder click supersedes any delayed relocation
+    // publication or automatic post-drop scroll. This is view intent, not
+    // a separate work queue.
+    private long _explicitGalleryNavigationVersion;
+
+    private void MarkExplicitGalleryNavigation()
+    {
+        _explicitGalleryNavigationVersion++;
+        _pendingGalleryAnchor = null;
+        _galleryLayoutRestoreRevision++;
+        _restoringGalleryLayoutAnchor = false;
+    }
+
     private (long ImageId, double RelativeY)? CaptureGalleryAnchor()
         => BrowseSurface.CaptureImageAnchor(BrowseScrollViewer.VerticalOffset);
 
