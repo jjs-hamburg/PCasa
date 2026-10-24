@@ -40,7 +40,7 @@ public partial class MainWindow
                 var attempted = _initialScanAttempted.ToHashSet();
                 var next = await _scheduler.RunAsync(
                     $"catalog:pending-first-import:{Guid.NewGuid():N}",
-                    SchedulerPriority.UserAction,
+                    SchedulerPriority.Background,
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
@@ -117,7 +117,7 @@ public partial class MainWindow
             // Initial imports and explicit scans share one scheduler-owned
             // scan / thumbnail / reconciliation code path.
             var result = await ScheduleCompleteFolderScanAsync(
-                folder.LocalPath, SchedulerPriority.UserAction,
+                folder.LocalPath, SchedulerPriority.Background,
                 progress, cancellation.Token, folder.Id,
                 requirePendingInitialImport: true);
 
