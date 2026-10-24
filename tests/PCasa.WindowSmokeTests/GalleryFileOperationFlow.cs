@@ -385,6 +385,23 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Internal move and Explorer drag intent diverged.");
             Console.WriteLine("PASS: Internal drag MOVE and Ctrl COPY respect Explorer external conventions.");
 
+            // A completed in-app MOVE already owns its catalog mutation.
+            // The native OLE Move result must NOT enqueue a second manual
+            // external-reconciliation job and preempt its own transfer.
+            var needsExternal = typeof(PCasa.App.MainWindow).GetMethod(
+                "NeedsExternalMoveReconciliation",
+                BindingFlags.NonPublic | BindingFlags.Static)
+                ?? throw new Exception("Missing internal/external drop ownership distinction.");
+            static bool NeedsExternal(System.Reflection.MethodInfo method,
+                DragDropEffects result, bool acceptedInternal)
+                => (bool)method.Invoke(null, [result, acceptedInternal])!;
+            if (NeedsExternal(needsExternal, DragDropEffects.Move, acceptedInternal: true) ||
+                !NeedsExternal(needsExternal, DragDropEffects.Move, acceptedInternal: false) ||
+                NeedsExternal(needsExternal, DragDropEffects.Copy, acceptedInternal: false))
+                throw new Exception(
+                    "Accepted in-app gallery drop still schedules external MOVE reconciliation.");
+            Console.WriteLine("PASS: Internal MOVE does not self-preempt via external reconciliation.");
+
 
             // The previous priority test only occupied a worker with Task.
             // Hold the actual FolderScanner in a source-image lock to prove
