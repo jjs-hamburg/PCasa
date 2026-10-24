@@ -6,7 +6,8 @@ public sealed record CatalogImageState(
     string ThumbnailPath,
     long? PhotoFolderId,
     string LocalPath,
-    bool HasCurrentExif = false);
+    bool HasCurrentExif = false,
+    long? CreatedUtcTicks = null);
 
 public sealed record CatalogImageData(
     long FolderId,
