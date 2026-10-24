@@ -9,14 +9,17 @@ namespace PCasa.App.Controls;
 
 public sealed class BrowseImageClickedEventArgs : EventArgs
 {
-    public BrowseImageClickedEventArgs(long imageId, ModifierKeys modifiers)
+    public BrowseImageClickedEventArgs(long imageId, ModifierKeys modifiers,
+        MouseButton dragButton = MouseButton.Left)
     {
         ImageId = imageId;
         Modifiers = modifiers;
+        DragButton = dragButton;
     }
 
     public long ImageId { get; }
     public ModifierKeys Modifiers { get; }
+    public MouseButton DragButton { get; }
 }
 
 public sealed class BrowseGallerySurface : FrameworkElement
@@ -66,6 +69,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double _viewportHeight;
     private Point? _dragStartingPoint;
     private long? _dragStartingImageId;
+    private Point? _rightDragStartingPoint;
+    private long? _rightDragStartingImageId;
     private long? _pendingSimpleClickImageId;
     private ModifierKeys _pendingSimpleClickModifiers;
     private int? _hoveredImageIndex;
@@ -489,6 +494,10 @@ public sealed class BrowseGallerySurface : FrameworkElement
         base.OnMouseLeftButtonUp(e);
     }
 
+    private static bool PassedDragThreshold(Point start, Point current)
+        => Math.Abs(current.X - start.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+           Math.Abs(current.Y - start.Y) >= SystemParameters.MinimumVerticalDragDistance;
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -501,18 +510,33 @@ public sealed class BrowseGallerySurface : FrameworkElement
             _hoveredImageIndex = hovered;
             InvalidateVisual();
         }
+        var now = e.GetPosition(this);
+        if (e.RightButton == MouseButtonState.Pressed &&
+            _rightDragStartingPoint is Point rightOrigin &&
+            _rightDragStartingImageId is long rightImage &&
+            PassedDragThreshold(rightOrigin, now))
+        {
+            // A right-drag is a native drag just like a left-drag. The
+            // thumbnail context menu must NOT open on button-down, or WPF
+            // will consume the drag before it can cross the gallery.
+            _rightDragStartingPoint = null;
+            _rightDragStartingImageId = null;
+            ImagesDragRequested?.Invoke(this,
+                new BrowseImageClickedEventArgs(rightImage, Keyboard.Modifiers,
+                    MouseButton.Right));
+            return;
+        }
         if (e.LeftButton != MouseButtonState.Pressed ||
             _dragStartingPoint is not Point origin ||
-            _dragStartingImageId is not long imageId) return;
-        var now = e.GetPosition(this);
-        if (Math.Abs(now.X - origin.X) < SystemParameters.MinimumHorizontalDragDistance &&
-            Math.Abs(now.Y - origin.Y) < SystemParameters.MinimumVerticalDragDistance)
+            _dragStartingImageId is not long imageId ||
+            !PassedDragThreshold(origin, now))
             return;
         _dragStartingPoint = null;
         _dragStartingImageId = null;
         _pendingSimpleClickImageId = null;
         ImagesDragRequested?.Invoke(this,
-            new BrowseImageClickedEventArgs(imageId, Keyboard.Modifiers));
+            new BrowseImageClickedEventArgs(imageId, Keyboard.Modifiers,
+                MouseButton.Left));
     }
 
     protected override void OnMouseLeave(MouseEventArgs e)
@@ -529,11 +553,37 @@ public sealed class BrowseGallerySurface : FrameworkElement
     {
         base.OnMouseRightButtonDown(e);
         EnsureLayout();
+        _rightDragStartingPoint = null;
+        _rightDragStartingImageId = null;
         var imageIndex = HitTestImageIndex(e.GetPosition(this));
         if (imageIndex is not int index || index < 0 || index >= _index.Count)
             return;
-        ImageContextRequested?.Invoke(this,
-            new BrowseImageClickedEventArgs(_index[index].ImageId, Keyboard.Modifiers));
+
+        var id = _index[index].ImageId;
+        // Windows Explorer keeps the current multi-selection when the
+        // mouse goes down on one of its selected items. An unselected item
+        // becomes the selection BEFORE it is offered for right-dragging.
+        if (!_selectedImageIds.Contains(id))
+            ImageClicked?.Invoke(this,
+                new BrowseImageClickedEventArgs(id, ModifierKeys.None));
+        _rightDragStartingPoint = e.GetPosition(this);
+        _rightDragStartingImageId = id;
+        e.Handled = true;
+    }
+
+    protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+    {
+        base.OnMouseRightButtonUp(e);
+        var imageId = _rightDragStartingImageId;
+        var initial = _rightDragStartingPoint;
+        _rightDragStartingImageId = null;
+        _rightDragStartingPoint = null;
+        if (imageId is not long id || initial is not Point origin)
+            return; // A completed drag must never open a thumbnail menu.
+
+        if (!PassedDragThreshold(origin, e.GetPosition(this)))
+            ImageContextRequested?.Invoke(this,
+                new BrowseImageClickedEventArgs(id, Keyboard.Modifiers));
         e.Handled = true;
     }
 
