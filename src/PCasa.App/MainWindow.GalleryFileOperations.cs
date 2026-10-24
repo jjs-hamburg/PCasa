@@ -426,6 +426,7 @@ public partial class MainWindow
             {
                 package.AddStep(async token =>
                 {
+                    if (userCanceled) return;
                     foreach (var source in new[] { sourcePath })
                     {
                         token.ThrowIfCancellationRequested();
@@ -552,12 +553,25 @@ public partial class MainWindow
                                         indexToken.ThrowIfCancellationRequested();
                                         _scheduler.ReportProgress(key, "Bild katalogisieren",
                                             completed.Count, requested.Length, destination);
-                                        var result = _folderScanner.ScanFile(
-                                            destinationRoot!, destination,
-                                            cancellationToken: indexToken);
-                                        if (result.Failed > 0)
-                                            throw new IOException(
-                                                "Katalogaufnahme fehlgeschlagen: " + destination);
+                                        try
+                                        {
+                                            if (!File.Exists(destination))
+                                                throw new FileNotFoundException(
+                                                    "Übertragene Datei ist nicht mehr vorhanden.", destination);
+                                            var result = _folderScanner.ScanFile(
+                                                destinationRoot!, destination,
+                                                cancellationToken: indexToken);
+                                            if (result.Failed > 0)
+                                                throw new IOException(
+                                                    "Katalogaufnahme fehlgeschlagen: " + destination);
+                                        }
+                                        catch (Exception ex) when (ex is IOException or
+                                            UnauthorizedAccessException or InvalidOperationException)
+                                        {
+                                            failed.Add(Path.GetFileName(destination) +
+                                                ": Katalogaufnahme: " + ex.Message);
+                                            PCasaDiagnostics.Write("Gallery.TransferImport", ex);
+                                        }
                                         return Task.CompletedTask;
                                     });
                                 }
