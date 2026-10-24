@@ -8,6 +8,19 @@ namespace PCasa.App.Data;
 public static class CatalogChanges
 {
     public static event Action? ImageCommitted;
+    public static event Action<string, long>? ImageIndexed;
+
+    public static void PublishImageIndexed(string canonicalPath, long photoFolderId)
+    {
+        var listeners = ImageIndexed;
+        if (listeners is null) return;
+        foreach (Action<string, long> listener in listeners.GetInvocationList())
+        {
+            try { listener(canonicalPath, photoFolderId); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        }
+    }
+
 
     public static void PublishImageCommitted()
     {
