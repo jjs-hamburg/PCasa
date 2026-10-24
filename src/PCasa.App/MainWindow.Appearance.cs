@@ -17,6 +17,10 @@ public partial class MainWindow
     {
         public string Theme { get; set; } = "Dark";
         public string Background { get; set; } = "Auto";
+        // User-approved default: Name ascending, per folder. No per-folder
+        // configuration and no separate sorting persistence mechanism.
+        public string GallerySortBy { get; set; } = "Name";
+        public bool GallerySortDescending { get; set; }
         public string FolderStatusMode { get; set; } = "Problems";
         public bool HideCollapsedFolders { get; set; }
         public double ThumbnailSpacing { get; set; } = 10;
@@ -77,6 +81,7 @@ public partial class MainWindow
             SaveAppearance();
         }
         ApplyAppearance();
+        SyncGallerySortMenu();
         RestoreWindowPlacement();
         SystemEvents.UserPreferenceChanged += AppearanceUserPreferenceChanged;
         Closed += AppearanceWindowClosed;
