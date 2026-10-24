@@ -143,18 +143,21 @@ public sealed class BrowseCacheRepository
         return result;
     }
 
+    // Reuse across large 500k-image index reads; do not allocate an array
+    // of format strings for each catalog row.
+    private static readonly string[] CaptureTimePatterns =
+    [
+        "yyyy:MM:dd HH:mm:ss", "yyyy:MM:dd HH:mm:ss.FFF",
+        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-ddTHH:mm:ss",
+        "yyyy-MM-ddTHH:mm:ss.FFF", "yyyy-MM-ddTHH:mm:ssK"
+    ];
+
     private static long? ParseCaptureTime(string source)
     {
         // Camera EXIF uses YYYY:MM:DD HH:mm:ss. Importers also write ISO.
         // A missing/invalid source date is not an epoch date; the comparer
         // explicitly falls back to file creation then modification.
-        var patterns = new[]
-        {
-            "yyyy:MM:dd HH:mm:ss", "yyyy:MM:dd HH:mm:ss.FFF",
-            "yyyy-MM-dd HH:mm:ss", "yyyy-MM-ddTHH:mm:ss",
-            "yyyy-MM-ddTHH:mm:ss.FFF", "yyyy-MM-ddTHH:mm:ssK"
-        };
-        return DateTime.TryParseExact(source.Trim(), patterns,
+        return DateTime.TryParseExact(source.Trim(), CaptureTimePatterns,
             System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.AllowWhiteSpaces,
             out var timestamp)
