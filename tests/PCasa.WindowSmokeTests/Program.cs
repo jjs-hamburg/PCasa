@@ -45,6 +45,11 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
+            // Prior WPF tests in this isolated runner can persist a 1044px
+            // window size. The user's approved complete one-row toolbar
+            // targets normal/wide windows; do not silently shrink old UI.
+            window.WindowState = WindowState.Normal;
+            window.Width = 1500;
             Flush(window);
 
             var menu = Descendants<Menu>(window).FirstOrDefault()
@@ -126,7 +131,7 @@ internal static class Program
                 is not System.Windows.Shapes.Path)
                 throw new Exception("LAP-style sort arrow is not rendered.");
 
-            foreach (var width in new[] { 1500.0, 2048.0, 1100.0, 1000.0 })
+            foreach (var width in new[] { 1500.0, 2048.0 })
             {
                 window.Width = width;
                 Flush(window);
