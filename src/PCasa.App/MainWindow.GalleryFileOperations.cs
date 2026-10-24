@@ -404,7 +404,21 @@ public partial class MainWindow
             var package = new SchedulerTaskPackage(key);
             var catalog = _imageCatalog;
             MonitoredFolder? destinationRoot = null;
+            IReadOnlyList<MonitoredFolder> monitoredRoots = Array.Empty<MonitoredFolder>();
             var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // A newer package may preempt this transfer between files. Only
+            // the current inventory epoch may authorize a background prune.
+            // Fence at the first mutation of each uninterrupted epoch.
+            var fencedEpochs = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            void FenceInventory(MonitoredFolder root)
+            {
+                var epoch = _folderRepository.GetScanEpoch(root.CanonicalPath);
+                if (fencedEpochs.TryGetValue(root.CanonicalPath, out var fenced) &&
+                    fenced == epoch) return;
+                fencedEpochs[root.CanonicalPath] =
+                    _folderRepository.BeginManualScan(root.CanonicalPath);
+            }
+
             package.AddStep(token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -412,7 +426,8 @@ public partial class MainWindow
                     !IsMonitoredGalleryDestination(targetPath))
                     throw new IOException(
                         "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
-                destinationRoot = _folderRepository.GetAll()
+                monitoredRoots = _folderRepository.GetAll();
+                destinationRoot = monitoredRoots
                     .Where(root => FolderExclusionRules.IsAtOrBelow(
                         targetPath, root.LocalPath))
                     .OrderByDescending(root => root.LocalPath.Length)
@@ -477,6 +492,19 @@ public partial class MainWindow
                             using (SourceFileLocks.Enter(source, token))
                             {
                                 token.ThrowIfCancellationRequested();
+                                // Any in-flight older NAS inventory must not
+                                // prune a newly copied/moved destination.
+                                FenceInventory(destinationRoot!);
+                                if (move)
+                                {
+                                    var sourceRoot = monitoredRoots
+                                        .Where(root => FolderExclusionRules.IsAtOrBelow(
+                                            source, root.LocalPath))
+                                        .OrderByDescending(root => root.LocalPath.Length)
+                                        .FirstOrDefault();
+                                    if (sourceRoot is not null)
+                                        FenceInventory(sourceRoot);
+                                }
 
                                 // Durable intent BEFORE File.Move. Its removal
                                 // is atomic with the catalog location update.
