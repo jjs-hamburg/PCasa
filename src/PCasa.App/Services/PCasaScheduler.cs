@@ -46,6 +46,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private int _catalogManualRunning;
     private int _catalogInteractiveRunning;
     private int _manualSourceProbeRunning;
+    private WorkItem? _runningManualSourceProbe;
     private readonly CancellationTokenSource?[] _runningYield = new CancellationTokenSource?[3];
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
@@ -301,8 +302,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.Interactive));
-                    item = blockedByHigherPriority ? null :
-                        _pending.Where(x => LaneFor(x.Priority, x.Kind) == lane)
+                    var candidate = _pending.Where(x =>
+                            LaneFor(x.Priority, x.Kind) == lane)
                             .OrderBy(x => x.Priority)
                             // Manual mutations are P0 and a resumed scan is
                             // P2 within the shared manual lane. Otherwise an
@@ -312,8 +313,20 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
                             // Manual packages form a stack: newest request
                             // resumes first, older ones retain their cursor.
-                            .ThenBy(x => lane == LaneManual ? -x.Id : x.Id)
+                            .ThenBy(x => lane is LaneManual or LaneManualSourceProbe
+                                ? -x.Id : x.Id)
                             .FirstOrDefault();
+                    // Manual source probes have a separate executor so blocked
+                    // SMB calls do not freeze the manual catalog worker. Yet an
+                    // older yielded manual package must NOT resume while a
+                    // newer manual probe is queued or running.
+                    var newerManualProbe = lane == LaneManual &&
+                        candidate is not null &&
+                        ((_runningManualSourceProbe?.Id ?? 0) > candidate.Id ||
+                         _pending.Any(x => x.Kind == SchedulerWorkKind.SourceProbe &&
+                             x.Priority == SchedulerPriority.ManualAction &&
+                             x.Id > candidate.Id));
+                    item = blockedByHigherPriority || newerManualProbe ? null : candidate;
                     if (item is not null)
                     {
                         _pending.Remove(item);
@@ -333,7 +346,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             }
                         }
                         if (lane == LaneManualSourceProbe)
+                        {
                             _manualSourceProbeRunning++;
+                            _runningManualSourceProbe = item;
+                        }
                         if (lane <= LaneManual)
                         {
                             yieldRequest = new CancellationTokenSource();
@@ -405,7 +421,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 _runningYield[lane] = null;
                             }
                             if (lane == LaneManualSourceProbe)
+                            {
                                 _manualSourceProbeRunning--;
+                                if (ReferenceEquals(_runningManualSourceProbe, item))
+                                    _runningManualSourceProbe = null;
+                            }
                             if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
                             {
                                 if (lane == LaneUserAction) _catalogForegroundRunning--;
