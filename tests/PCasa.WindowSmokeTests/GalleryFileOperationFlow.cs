@@ -2,9 +2,11 @@ using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using PCasa.App.Controls;
 using PCasa.App.Data;
 using PCasa.App.Services;
 
