@@ -132,11 +132,11 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
-            // A P0 user move may preempt the scanner while its durable
-            // initial-import marker remains pending. Re-arm THIS source
-            // for the existing pump after the user operation finishes.
-            if (_manualFileTransferActive)
-                _initialScanAttempted.Remove(folder.Id);
+            // Any newer manual change (move, exclude, remove, rescan) can
+            // supersede the old first-import inventory. Re-arm this request
+            // for the existing pump if its durable pending marker survives;
+            // GetPendingInitialScans prevents retries of removed/completed roots.
+            _initialScanAttempted.Remove(folder.Id);
             StatusText.Text = $"Einlesen unterbrochen: {folder.LocalPath} · wird später fortgesetzt";
             TrackFolderActivity(folder.LocalPath, "Pending", recursive: true);
         }
