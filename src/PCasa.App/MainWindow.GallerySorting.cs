@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -36,16 +37,18 @@ public partial class MainWindow
         GallerySortDimensionsMenu.IsChecked = option.Field == GallerySortField.Dimensions;
         GallerySortAscendingMenu.IsChecked = !option.Descending;
         GallerySortDescendingMenu.IsChecked = option.Descending;
-        // One visible, persisted criterion in the search toolbar. The
-        // direction glyph belongs to this SAME state, not a second toggle.
-        // The arrow follows the progression down the visible image list:
-        // ascending grows downward (↓), descending shrinks downward (↑).
-        GallerySortDirectionGlyph.Text = option.Descending ? "↑" : "↓";
+        // LAP-like bars with the user-approved direction:
+        // ASCENDING grows as you go DOWN the list (↓);
+        // DESCENDING shrinks as you go DOWN the list (↑).
+        // Only the icon's geometry changes, never the sort semantics.
+        GallerySortDirectionIcon.Data = Geometry.Parse(option.Descending
+            ? "M 20,17 L 20,2 M 16,6 L 20,2 L 24,6"
+            : "M 20,2 L 20,17 M 16,13 L 20,17 L 24,13");
         GallerySortSelectedFieldLabel.Text = option.Field switch
         {
-            GallerySortField.Captured => "Aufnahme",
-            GallerySortField.Created => "Erstellt",
-            GallerySortField.Modified => "Geändert",
+            GallerySortField.Captured => "Aufnahmedatum",
+            GallerySortField.Created => "Erstellungsdatum",
+            GallerySortField.Modified => "Änderungsdatum",
             GallerySortField.Size => "Größe",
             GallerySortField.Dimensions => "Dimension",
             _ => "Name"
