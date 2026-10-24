@@ -46,6 +46,15 @@ public partial class BrowseCacheProgressWindow : Window
     private bool _finished;
     private bool _manualPresentationActive;
     private bool _finishRequestedWhileManual;
+
+    // One presentation owner with a temporarily overlaid manual packet.
+    // Scanner/cache progress received during the overlay must remain visible
+    // when the manual job completes; otherwise the old "1 / 1" caption stays
+    // frozen until the next (possibly much later) NAS progress callback.
+    private enum BackgroundView { None, Scan, CachePreparing, CacheBuilding }
+    private BackgroundView _backgroundView;
+    private ScanProgress? _lastScanProgress;
+    private BrowseCacheBuildProgress? _lastCacheProgress;
     // Owned borderless WPF windows can lose their rendered composition when
     // the taskbar minimizes/restores the owner. Restore only an intentionally
     // visible progress window; a user-hidden background window must stay hidden.
@@ -249,18 +258,49 @@ public partial class BrowseCacheProgressWindow : Window
 
     public void EndManualOperation()
     {
+        if (!_manualPresentationActive) return;
         _manualPresentationActive = false;
         if (_finishRequestedWhileManual)
         {
             _finishRequestedWhileManual = false;
             Finish();
+            return;
+        }
+
+        // The window was borrowed from an ongoing NAS scan/cache job. Restore
+        // its last actual progress without waiting for another network event.
+        // This is presentation of its existing data, not a second work queue.
+        switch (_backgroundView)
+        {
+            case BackgroundView.Scan when _lastScanProgress is { } scan:
+                ShowScanProgress(scan);
+                break;
+            case BackgroundView.CachePreparing:
+                ShowCachePreparing();
+                break;
+            case BackgroundView.CacheBuilding when _lastCacheProgress is { } cache:
+                ShowCacheProgress(cache);
+                break;
+            default:
+                PhaseText.Text = "Hintergrundvorgang läuft";
+                Progress.IsIndeterminate = true;
+                CurrentFileText.Text = "Warte auf Hintergrundfortschritt";
+                CurrentThumbnail.Source = null;
+                break;
         }
     }
 
     public void UpdateScan(ScanProgress progress)
     {
-        if (_finished || _manualPresentationActive ||
-            Dispatcher.HasShutdownStarted) return;
+        if (_finished || Dispatcher.HasShutdownStarted) return;
+        _backgroundView = BackgroundView.Scan;
+        _lastScanProgress = progress;
+        if (_manualPresentationActive) return;
+        ShowScanProgress(progress);
+    }
+
+    private void ShowScanProgress(ScanProgress progress)
+    {
         PhaseText.Text = "Bilder werden eingelesen";
         Progress.IsIndeterminate = true;
         var processed = progress.Updated + progress.Unchanged + progress.Failed;
@@ -274,8 +314,15 @@ public partial class BrowseCacheProgressWindow : Window
 
     public void BeginCachePhase()
     {
-        if (_finished || _manualPresentationActive ||
-            Dispatcher.HasShutdownStarted) return;
+        if (_finished || Dispatcher.HasShutdownStarted) return;
+        _backgroundView = BackgroundView.CachePreparing;
+        _lastCacheProgress = null;
+        if (_manualPresentationActive) return;
+        ShowCachePreparing();
+    }
+
+    private void ShowCachePreparing()
+    {
         PhaseText.Text = "Vorschaudaten werden vorbereitet";
         Progress.IsIndeterminate = false;
         Progress.Value = 0;
@@ -285,8 +332,15 @@ public partial class BrowseCacheProgressWindow : Window
 
     public void Update(BrowseCacheBuildProgress progress)
     {
-        if (_finished || _manualPresentationActive ||
-            Dispatcher.HasShutdownStarted) return;
+        if (_finished || Dispatcher.HasShutdownStarted) return;
+        _backgroundView = BackgroundView.CacheBuilding;
+        _lastCacheProgress = progress;
+        if (_manualPresentationActive) return;
+        ShowCacheProgress(progress);
+    }
+
+    private void ShowCacheProgress(BrowseCacheBuildProgress progress)
+    {
         Progress.IsIndeterminate = false;
         Progress.Maximum = Math.Max(1, progress.TotalImages);
         Progress.Value = Math.Min(Progress.Maximum, progress.ProcessedImages);
