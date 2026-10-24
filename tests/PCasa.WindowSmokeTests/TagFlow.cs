@@ -195,17 +195,13 @@ internal static class TagFlow
                 surface.GetFolderOffset(a.Id) is null,
                 "Current-only search included a sibling folder.");
 
-            var invertFilter = (MenuItem?)window.FindName("InvertFilterResultsMenu")
-                ?? throw new Exception("Filter inversion control missing.");
+            var invertFilter = (System.Windows.Controls.Primitives.ToggleButton?)
+                window.FindName("InvertFilterToggle")
+                ?? throw new Exception("Persistent toolbar inversion toggle missing.");
             var filteredIndex = typeof(PCasa.App.MainWindow).GetField(
                 "_displayedBrowseIndex", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
-            var filterClick = typeof(PCasa.App.MainWindow).GetMethod(
-                "FilterResultsInversion_Click",
-                System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Instance)!;
             invertFilter.IsChecked = true;
-            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
             Until(window, () => status.Text.Contains("Bilder ohne Dateiname: topaz") &&
                 ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
                     filteredIndex.GetValue(window)!).Count == 6,
@@ -217,10 +213,26 @@ internal static class TagFlow
                 complement.Any(image => image.PhotoFolderId != b.Id))
                 throw new Exception("Inverted results leaked matching files or other folders.");
             invertFilter.IsChecked = false;
-            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
             Until(window, () => status.Text.Contains("Bilder mit Dateiname: topaz"),
                 "Switching back to matching results failed.");
             Console.WriteLine("PASS: Filter results invert independently within exact folder scope.");
+
+            // NOT is an independent persistent state; clearing the query
+            // must not silently reset a selected inversion toggle.
+            invertFilter.IsChecked = true;
+            search.Clear();
+            Until(window, () => string.IsNullOrWhiteSpace(search.Text) &&
+                ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
+                    filteredIndex.GetValue(window)!).Count > 0,
+                "Clearing an inverted query did not restore normal unfiltered images.");
+            if (invertFilter.IsChecked != true)
+                throw new Exception("Clearing search silently changed the independent NOT toggle.");
+            invertFilter.IsChecked = false;
+            search.Text = "topaz";
+            Until(window, () => status.Text.Contains("Bilder mit Dateiname: topaz"),
+                "Filename filter did not resume after persistent NOT toggle test.");
+            Console.WriteLine("PASS: NOT stays selected until the user explicitly disables it.");
+
 
             var selectedField = typeof(PCasa.App.MainWindow).GetField(
                 "_selectedImageIds", System.Reflection.BindingFlags.NonPublic |
@@ -272,7 +284,6 @@ internal static class TagFlow
             current.IsChecked = true;
             search.Text = "topaz";
             invertFilter.IsChecked = true;
-            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
             Until(window, () => ((IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry>)
                     filteredIndex.GetValue(window)!).Count == 6 &&
                 status.Text.Contains("Bilder ohne Dateiname: topaz"),
@@ -342,7 +353,6 @@ internal static class TagFlow
                 "After moving originals, clicking another folder did not navigate.");
             Console.WriteLine("PASS: Folder tree remains navigable with current-folder inverted filter after move.");
             invertFilter.IsChecked = false;
-            filterClick.Invoke(window, [invertFilter, new RoutedEventArgs()]);
             search.Clear();
 
             tagMode.IsChecked = true;
