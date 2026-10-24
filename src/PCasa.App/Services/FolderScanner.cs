@@ -259,6 +259,7 @@ public sealed class FolderScanner
                     // while a manual removal is waiting for the database.
                     var fileLength = file.Length;
                     var modifiedUtcTicks = file.LastWriteTimeUtc.Ticks;
+                    var createdUtcTicks = file.CreationTimeUtc.Ticks;
                     var canonicalPath = ResolveCanonicalFullPath(folder, localPath);
 
                     var photoFolderLocalPath = Path.GetDirectoryName(localPath)
@@ -310,6 +311,15 @@ public sealed class FolderScanner
                             scanSession.FlushPending();
                         }
 
+                        // Old local catalogs may have no source creation
+                        // time. Backfill on the same ordinary scan, without
+                        // re-reading EXIF or replacing the thumbnail pack.
+                        if (createdUtcTicks > 0 &&
+                            existing.CreatedUtcTicks != createdUtcTicks)
+                        {
+                            scanSession.UpdateCreatedUtc(canonicalPath, createdUtcTicks);
+                            scanSession.FlushPending();
+                        }
                         // Enrich old catalogs without touching their thumbnails.
                         if (!existing.HasCurrentExif)
                         {
@@ -377,7 +387,7 @@ public sealed class FolderScanner
                                 folder.Id, photoFolderId, localPath, canonicalPath,
                                 file.Name, extension.ToLowerInvariant(), fileLength,
                                 modifiedUtcTicks, thumbnail.Width, thumbnail.Height,
-                                thumbnail.Path));
+                                thumbnail.Path, createdUtcTicks));
                             scanSession.SaveExif(canonicalPath, modifiedUtcTicks, fileLength, exif);
                             if (keywords is not null)
                                 scanSession.SaveTags(canonicalPath, modifiedUtcTicks, keywords);
