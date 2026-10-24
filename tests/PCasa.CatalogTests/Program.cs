@@ -81,6 +81,7 @@ internal static class Program
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
+        Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
         Run("Moved images reuse their decoded pixels without blanking unrelated folders", ChangedIndexRetainsUnmodifiedImages, failures);
         Run("Targeted image lookup and folder counts match full catalog", SingleImageCatalogProjectionMatchesFullIndex, failures);
         Run("Exclusion service removes and re-includes folder", ExclusionServiceRoundTrip, failures);
@@ -1819,6 +1820,45 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void GallerySortUsesCatalogMetadata()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "catalog-sort.jpg");
+        WriteJpeg(path);
+        RunExifTool("-overwrite_original",
+            "-EXIF:DateTimeOriginal=2020:01:09 10:11:12", path);
+        var created = new DateTime(2021, 4, 3, 5, 6, 7, DateTimeKind.Utc);
+        File.SetCreationTimeUtc(path, created);
+        var file = new FileInfo(path);
+        var (db, root, scanner) = sandbox.Prepare();
+        if (scanner.Scan(root).Failed != 0)
+            throw new Exception("Sort metadata fixture failed initial scan.");
+
+        var tier = new BrowseThumbnailProfileRepository(db).Get().Tiers[0];
+        var entries = new BrowseCacheRepository(db).GetIndex(tier);
+        if (entries.Count != 1) throw new Exception("Fixture image missing from pack index.");
+        var entry = entries[0];
+        if (entry.TakenUtcTicks !=
+                new DateTime(2020, 1, 9, 10, 11, 12).Ticks ||
+            entry.CreatedUtcTicks != file.CreationTimeUtc.Ticks ||
+            entry.ModifiedUtcTicks != file.LastWriteTimeUtc.Ticks ||
+            entry.FileSize != file.Length ||
+            entry.OriginalWidth < 1 || entry.OriginalHeight < 1)
+            throw new Exception(
+                "Sort key not read from authoritative EXIF/file catalog metadata.");
+
+        // An unchanged scan cannot reprocess a whole photo just to expose
+        // an existing sort key. The image and thumbnail pack identities
+        // remain unchanged across a no-op scan.
+        var imageId = entry.ImageId;
+        var pack = (entry.PackFile, entry.ByteOffset, entry.ByteLength);
+        var second = scanner.Scan(root);
+        var after = new BrowseCacheRepository(db).GetIndex(tier).Single();
+        if (second.Failed != 0 || after.ImageId != imageId ||
+            (after.PackFile, after.ByteOffset, after.ByteLength) != pack)
+            throw new Exception("Sorting metadata created duplicate images or thumbnails.");
     }
 
     private static void PerFolderSortAllFields()
