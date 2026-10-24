@@ -328,6 +328,7 @@ public sealed class CatalogScanSession : IDisposable
     private readonly SqliteCommand _selectPhotoFolder;
     private readonly SqliteCommand _upsertPhotoFolder;
     private readonly SqliteCommand _updateLocation;
+    private readonly SqliteCommand _updateCreatedUtc;
     private readonly SqliteCommand _upsert;
     private SqliteTransaction? _transaction;
     private int _pendingWrites;
@@ -414,6 +415,15 @@ public sealed class CatalogScanSession : IDisposable
         _updateLocation.Parameters.Add("$localPath", SqliteType.Text);
         _updateLocation.Parameters.Add("$canonicalPath", SqliteType.Text);
 
+        _updateCreatedUtc = connection.CreateCommand();
+        _updateCreatedUtc.CommandText = """
+            UPDATE images SET created_utc_ticks = $created
+            WHERE canonical_path = $path
+              AND (created_utc_ticks IS NULL OR created_utc_ticks != $created);
+            """;
+        _updateCreatedUtc.Parameters.Add("$created", SqliteType.Integer);
+        _updateCreatedUtc.Parameters.Add("$path", SqliteType.Text);
+
         _upsert = connection.CreateCommand();
         _upsert.CommandText =
             """
@@ -426,6 +436,7 @@ public sealed class CatalogScanSession : IDisposable
                 extension,
                 file_size,
                 modified_utc_ticks,
+                created_utc_ticks,
                 width,
                 height,
                 thumbnail_path,
@@ -440,6 +451,7 @@ public sealed class CatalogScanSession : IDisposable
                 $extension,
                 $fileSize,
                 $modifiedUtcTicks,
+                $createdUtcTicks,
                 $width,
                 $height,
                 $thumbnailPath,
@@ -453,6 +465,7 @@ public sealed class CatalogScanSession : IDisposable
                 extension = excluded.extension,
                 file_size = excluded.file_size,
                 modified_utc_ticks = excluded.modified_utc_ticks,
+                created_utc_ticks = excluded.created_utc_ticks,
                 width = excluded.width,
                 height = excluded.height,
                 thumbnail_path = excluded.thumbnail_path,
@@ -467,6 +480,7 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters.Add("$extension", SqliteType.Text);
         _upsert.Parameters.Add("$fileSize", SqliteType.Integer);
         _upsert.Parameters.Add("$modifiedUtcTicks", SqliteType.Integer);
+        _upsert.Parameters.Add("$createdUtcTicks", SqliteType.Integer);
         _upsert.Parameters.Add("$width", SqliteType.Integer);
         _upsert.Parameters.Add("$height", SqliteType.Integer);
         _upsert.Parameters.Add("$thumbnailPath", SqliteType.Text);
@@ -673,6 +687,19 @@ public sealed class CatalogScanSession : IDisposable
         RegisterWrite();
     }
 
+    // Old databases get their missing creation dates during ordinary scans,
+    // without image decoding, EXIF reads or thumbnail re-generation.
+    public void UpdateCreatedUtc(string canonicalPath, long? ticks)
+    {
+        if (ticks is not long created || created <= 0) return;
+        ThrowIfDisposed();
+        EnsureTransaction();
+        _updateCreatedUtc.Parameters["$created"].Value = created;
+        _updateCreatedUtc.Parameters["$path"].Value = canonicalPath;
+        _updateCreatedUtc.ExecuteNonQuery();
+        RegisterWrite();
+    }
+
     public void Upsert(CatalogImageData image)
     {
         ThrowIfDisposed();
@@ -686,6 +713,9 @@ public sealed class CatalogScanSession : IDisposable
         _upsert.Parameters["$extension"].Value = image.Extension;
         _upsert.Parameters["$fileSize"].Value = image.FileSize;
         _upsert.Parameters["$modifiedUtcTicks"].Value = image.ModifiedUtcTicks;
+        _upsert.Parameters["$createdUtcTicks"].Value =
+            image.CreatedUtcTicks is long created && created > 0
+                ? created : DBNull.Value;
         _upsert.Parameters["$width"].Value = image.Width;
         _upsert.Parameters["$height"].Value = image.Height;
         _upsert.Parameters["$thumbnailPath"].Value = image.ThumbnailPath;
