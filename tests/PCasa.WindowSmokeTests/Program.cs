@@ -52,7 +52,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] { "Datei", "Bearbeiten",
-                    "Ordner", "Sortieren", "Optionen", "Hilfe" }))
+                    "Ordner", "Optionen", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
@@ -79,6 +79,13 @@ internal static class Program
             // Opening the REAL submenu must install the configured rightward
             // placement callback, not fall back to WPF's alternating default.
             var options = items.Single(item => Equals(item.Header, "Optionen"));
+            var sortingSubmenu = options.Items.OfType<MenuItem>().SingleOrDefault(
+                item => Equals(item.Header, "Sortieren"))
+                ?? throw new Exception("Sortieren submenu missing from Options.");
+            if (sortingSubmenu.Items.OfType<MenuItem>().Count(item =>
+                    item.IsCheckable) != 8)
+                throw new Exception(
+                    "Sortieren submenu must contain six keys and two directions.");
             options.IsSubmenuOpen = true;
             Flush(window);
             var popup = options.Template.FindName("PART_Popup", options) as Popup
