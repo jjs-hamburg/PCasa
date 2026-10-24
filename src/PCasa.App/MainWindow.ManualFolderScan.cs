@@ -214,6 +214,22 @@ public partial class MainWindow
             // cache, catalog, and safe reconciliation transitions.
             Result = owner._folderScanner.ScanDirectory(
                 folder, directory, recursive: true, progress, token, _resume);
+            if (Result.Failed == 0)
+            {
+                var noLongerExisting = owner._folderRepository
+                    .PruneMissingCreatedDirectories(folder.Id, directory, token);
+                if (noLongerExisting.Count > 0 && !owner.Dispatcher.HasShutdownStarted)
+                {
+                    // Tree changes are a projection of the scanner's confirmed
+                    // physical inventory, not a second filesystem job.
+                    _ = owner.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        foreach (var path in noLongerExisting)
+                            owner._createdEmptyFolderPaths.Remove(path);
+                        owner.RefreshFolderTree(preserveGalleryAnchor: true);
+                    }));
+                }
+            }
             return Task.CompletedTask;
         }
 
