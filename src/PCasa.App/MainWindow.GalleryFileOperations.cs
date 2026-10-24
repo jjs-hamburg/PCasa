@@ -467,7 +467,9 @@ public partial class MainWindow
                                 else destination = UniqueCopyPath(
                                     destination, reserved);
                             }
-                            reserved.Add(destination);
+                            // A preempted step must not reserve a name it has
+                            // NOT yet materialized. Only a successfully
+                            // completed file mutation can claim this target.
                             var sourceId = move ? CatalogImageIdAtPath(source) : null;
                             var replacedId = replace
                                 ? CatalogImageIdAtPath(destination) : null;
@@ -565,6 +567,7 @@ public partial class MainWindow
                                 }
                             }
                             completed.Add(destination);
+                            reserved.Add(destination);
                         }
                         catch (Exception ex) when (ex is IOException or
                             UnauthorizedAccessException or InvalidOperationException)
