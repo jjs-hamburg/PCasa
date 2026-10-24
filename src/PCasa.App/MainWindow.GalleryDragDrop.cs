@@ -382,7 +382,9 @@ public partial class MainWindow
         var menu = new ContextMenu
         {
             PlacementTarget = targetElement,
-            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            // The target may be a large gallery surface; the choice belongs
+            // at the DROP POINTER, not at the bottom of that surface.
+            Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint,
         };
         menu.SetResourceReference(Control.BackgroundProperty, "PcasaPanelBrush");
         var copy = new MenuItem { Header = "Kopieren" };
