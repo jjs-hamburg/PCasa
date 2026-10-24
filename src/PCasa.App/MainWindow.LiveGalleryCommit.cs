@@ -103,8 +103,17 @@ public partial class MainWindow
         // right ordinal within the target folder, not be inserted by name.
         // Binary search avoids a linear comparison scan over 500k photos.
         var treeOrder = CaptureGalleryFolderOrder();
-        var comparer = GalleryFolderOrdering.CreateComparer(
-            treeOrder, CurrentGallerySort);
+        var chosen = CurrentGallerySort;
+        if (_publishedGallerySort != chosen)
+        {
+            // Only needed if the user changed the sort while a file-transfer
+            // package was running. Reconcile once, then all subsequent file
+            // commits use inexpensive binary insertion.
+            updated = GalleryFolderOrdering.Order(updated, treeOrder, chosen)
+                .ToList();
+            _publishedGallerySort = chosen;
+        }
+        var comparer = GalleryFolderOrdering.CreateComparer(treeOrder, chosen);
         var insertion = updated.BinarySearch(change.Image, comparer);
         if (insertion < 0) insertion = ~insertion;
         updated.Insert(insertion, change.Image);
