@@ -20,8 +20,10 @@ public partial class MainWindow
         slider.ApplyTemplate();
         var track = slider.Template.FindName("PART_Track", slider) as Track;
         if (track?.Thumb is not Thumb thumb) return;
-        thumb.Width = 11;
-        thumb.Height = 16;
+        // Preserve a comfortable invisible hit target around the new
+        // 12px visual grip, without restoring the old bulky capsule.
+        thumb.Width = 20;
+        thumb.Height = 24;
         thumb.Template = (ControlTemplate)FindResource("PcasaCompactSliderThumbTemplate");
 
         if (ReferenceEquals(slider, ThumbnailSpacingSlider))
