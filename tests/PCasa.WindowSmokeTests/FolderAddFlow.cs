@@ -207,10 +207,11 @@ internal static class FolderAddFlow
                     job.State == SchedulerJobState.Queued),
                     "New folder creation was not scheduled immediately.");
                 releaseCreateProbe.TrySetResult();
-                Until(window, () => Directory.Exists(newFolderPath),
-                    "New folder was never created on disk.");
+                Until(window, () => Directory.Exists(newFolderPath) &&
+                    roots.GetCreatedDirectories().Any(path => SamePath(path, newFolderPath)),
+                    "New folder was not durably registered with its physical creation.");
                 Console.WriteLine(
-                    "PASS: Empty folder name, immediate tree entry, manual priority and real directory creation.");
+                    "PASS: Empty folder name, immediate tree entry, manual priority and durable directory creation.");
             }
             finally
             {
@@ -244,6 +245,10 @@ internal static class FolderAddFlow
             window.Show();
             tree = (TreeView)window.FindName("FoldersTree");
             surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
+            Until(window, () =>
+                Walk(tree).Any(item => SamePath(PathOf(item), newFolderPath)),
+                "Empty folder created in PCasa vanished from the tree after restart.");
+            Console.WriteLine("PASS: Empty NAS directory survives PCasa restart without any images.");
             Until(window, () =>
                 Walk(tree).Any(item => SamePath(PathOf(item), afterRestart)),
                 "Pending root was missing from tree after restart.");
