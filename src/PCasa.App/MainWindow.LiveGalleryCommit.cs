@@ -19,6 +19,47 @@ public partial class MainWindow
         PhotoFolderSummary TargetFolder,
         int CatalogImageCount);
 
+    // Scanner publishes only a committed identity. The UI decides whether it
+    // belongs to the currently selected photo folder; unrelated NAS progress
+    // never rebuilds or moves the user's gallery.
+    private void OnCatalogImageIndexed(string canonicalPath, long photoFolderId)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_browseInitialized || _folderManagerOpen ||
+                _folderRemovalPending || _activePhotoFolderId != photoFolderId ||
+                _activeBrowseTier is not int tier)
+                return;
+            _ = InsertIndexedGalleryImageAsync(canonicalPath, photoFolderId, tier);
+        }), DispatcherPriority.Background);
+    }
+
+    private async Task InsertIndexedGalleryImageAsync(
+        string canonicalPath, long photoFolderId, int tier)
+    {
+        try
+        {
+            await _scheduler.RunAsync(
+                $"gallery:committed-image:{Guid.NewGuid():N}",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    var id = _imageCatalog.GetImageId(canonicalPath);
+                    if (id is long imageId &&
+                        _imageCatalog.GetImagePhotoFolderId(imageId) == photoFolderId)
+                        PublishCommittedGalleryImage(tier, imageId, null);
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.CatalogRead);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.LiveScannerCommit", ex);
+        }
+    }
+
     private void PublishCommittedGalleryImage(
         int? activeTier, long imageId, long? previousFolderId,
         long? replacedImageId = null)
