@@ -294,7 +294,7 @@
                                          DockPanel.Dock="Right" Margin="3,0,8,0"
                                          VerticalAlignment="Center"
                                          Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="Nicht"
+                                         Content="NOT"
                                          ToolTip="Treffer im gewählten Suchbereich umkehren"
                                          Checked="FilterResultsInversion_Changed"
                                          Unchecked="FilterResultsInversion_Changed"/>
