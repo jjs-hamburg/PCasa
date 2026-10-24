@@ -237,11 +237,14 @@ public partial class MainWindow
                     continue;
                 }
 
-                if (_backgroundKnownFolderIds.Add(folder.Id) &&
-                    !userInitialScanIds.Contains(folder.Id))
+                // Do not start ANY routine root rescan while a first import is
+                // outstanding. It would re-enumerate the NAS ahead of folders
+                // that the user has not seen yet. Keep the root unregistered so
+                // the next monitor refresh can schedule its normal rescan once
+                // first-import requests have all completed.
+                if (userInitialScanIds.Count > 0) continue;
+                if (_backgroundKnownFolderIds.Add(folder.Id))
                 {
-                    // User-selected roots are owned by the durable initial
-                    // scan scheduler, never queued a second time by watcher.
                     QueueBackgroundChange(new BackgroundFolderChange(
                         folder.Id,
                         folder.LocalPath,
