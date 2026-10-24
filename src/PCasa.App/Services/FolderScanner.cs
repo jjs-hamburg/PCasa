@@ -466,7 +466,10 @@ public sealed class FolderScanner
                         // progress, tree state or scan completion. Publication
                         // occurs only after the SQLite image+cache index commit.
                         if (publishCatalogChange)
+                        {
+                            CatalogChanges.PublishImageIndexed(canonicalPath, photoFolderId);
                             CatalogChanges.PublishImageCommitted();
+                        }
                         if (firstFileInThisScanFolder)
                         {
                             discoveredFolderId = photoFolderId;
