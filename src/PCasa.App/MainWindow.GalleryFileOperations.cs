@@ -390,6 +390,7 @@ public partial class MainWindow
         // successful step can publish one immutable catalog projection;
         // a later thumb-size change will fall back to the final full read.
         var presentationTier = _activeBrowseTier;
+        var navigationAtStart = _explicitGalleryNavigationVersion;
 
         _outstandingGalleryMutations++;
         _outstandingFileTransfers++;
@@ -680,7 +681,11 @@ public partial class MainWindow
                         ApplyGallerySelection();
                         var first = _displayedBrowseIndex.FirstOrDefault(
                             entry => _selectedImageIds.Contains(entry.ImageId));
-                        if (first is not null)
+                        // A later user's folder click outranks this older
+                        // package's automatic target scroll. Do not pull the
+                        // viewport away from the chosen source/other folder.
+                        if (first is not null &&
+                            navigationAtStart == _explicitGalleryNavigationVersion)
                             ScrollGalleryImageIntoView(first.ImageId);
                         StatusText.Text = $"{completed.Count:N0} Datei(en) " +
                             (move ? "verschoben" : "kopiert") +
