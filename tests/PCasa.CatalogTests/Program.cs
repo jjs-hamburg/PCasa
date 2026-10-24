@@ -29,6 +29,8 @@ internal static class Program
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
+        Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
+        Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
@@ -177,6 +179,118 @@ internal static class Program
                 throw new Exception("Resumed operation was not recorded as completed.");
         }
         Check().GetAwaiter().GetResult();
+    }
+
+    private static void DynamicPackagesResumeLifo()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var trace = new List<string>();
+            var firstRunning = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondRunning = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var firstAttempts = 0;
+            var secondAttempts = 0;
+
+            var oldest = new SchedulerTaskPackage("test:package:oldest");
+            oldest.AddStep(_ =>
+            {
+                trace.Add("oldest:first-step");
+                return Task.CompletedTask;
+            });
+            oldest.AddStep(async token =>
+            {
+                if (Interlocked.Increment(ref firstAttempts) == 1)
+                {
+                    firstRunning.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                trace.Add("oldest:resumed");
+            });
+            var first = scheduler.EnqueuePackageAsync(
+                oldest, SchedulerPriority.ManualAction);
+            await firstRunning.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var second = new SchedulerTaskPackage("test:package:second");
+            second.AddStep(async token =>
+            {
+                if (Interlocked.Increment(ref secondAttempts) == 1)
+                {
+                    secondRunning.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                trace.Add("second:resumed");
+            });
+            var middle = scheduler.EnqueuePackageAsync(
+                second, SchedulerPriority.ManualAction);
+            await secondRunning.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var latest = new SchedulerTaskPackage("test:package:latest");
+            latest.AddStep(_ =>
+            {
+                trace.Add("latest");
+                return Task.CompletedTask;
+            });
+            var last = scheduler.EnqueuePackageAsync(
+                latest, SchedulerPriority.ManualAction);
+
+            await Task.WhenAll(first, middle, last).WaitAsync(TimeSpan.FromSeconds(10));
+            var expected = new[]
+            {
+                "oldest:first-step", "latest",
+                "second:resumed", "oldest:resumed"
+            };
+            if (!trace.SequenceEqual(expected) ||
+                oldest.CompletedSteps != 2 ||
+                second.CompletedSteps != 1 || latest.CompletedSteps != 1)
+                throw new Exception(
+                    "Manual LIFO order or completed-step checkpoint violated: " +
+                    string.Join(", ", trace));
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void ScannerCheckpointRetainsEnumeration()
+    {
+        using var sandbox = new Sandbox();
+        for (var i = 0; i < 3; i++)
+        {
+            var dir = Path.Combine(sandbox.Images, $"Folder-{i:D2}");
+            Directory.CreateDirectory(dir);
+            WriteJpeg(Path.Combine(dir, $"photo-{i:D2}.jpg"));
+        }
+        var (db, root, scanner) = sandbox.Prepare();
+        using var resume = new FolderScanner.ScanResumeState();
+        using var cancellation = new CancellationTokenSource();
+        var interrupted = false;
+        var callback = new InlineProgress<ScanProgress>(progress =>
+        {
+            if (interrupted || progress.DiscoveredPhotoFolderId is null) return;
+            interrupted = true;
+            cancellation.Cancel();
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, recursive: true,
+                progress: callback, cancellationToken: cancellation.Token,
+                resume: resume);
+            throw new Exception("A scan ignored the explicit yield.");
+        }
+        catch (OperationCanceledException) when (interrupted) { }
+
+        if (resume.CommittedFiles != 1 ||
+            new ImageCatalogRepository(db).CountAll() != 1)
+            throw new Exception("First image/scan cursor was not committed before yield.");
+
+        var result = scanner.ScanDirectory(root, root.LocalPath, recursive: true,
+            resume: resume);
+        if (result.ImageFilesSeen != 3 ||
+            new ImageCatalogRepository(db).CountAll() != 3)
+            throw new Exception(
+                "Resumed scan did not continue at its previous file; counted " +
+                result.ImageFilesSeen);
     }
 
     private static void ManualMutationOvertakesYieldingManualScan()
