@@ -309,18 +309,18 @@ internal static class Program
         File.Delete(obsolete);
 
         using var resume = new FolderScanner.ScanResumeState();
-        using var yield = new CancellationTokenSource();
+        using var interruption = new CancellationTokenSource();
         var paused = false;
         var progress = new InlineProgress<ScanProgress>(scan =>
         {
             if (paused || scan.CurrentFile is null) return;
             paused = true;
-            yield.Cancel();
+            interruption.Cancel();
         });
         try
         {
             scanner.ScanDirectory(root, root.LocalPath, recursive: true,
-                progress: progress, cancellationToken: yield.Token, resume: resume);
+                progress: progress, cancellationToken: interruption.Token, resume: resume);
             throw new Exception("Scanner ignored the requested checkpoint.");
         }
         catch (OperationCanceledException) when (paused) { }
