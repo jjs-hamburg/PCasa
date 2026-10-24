@@ -17,10 +17,11 @@ public partial class MainWindow
     {
         get
         {
-            var field = Enum.TryParse<GallerySortField>(_appearance.GallerySortBy,
-                ignoreCase: true, out var parsed) && Enum.IsDefined(parsed)
-                ? parsed : GallerySortField.Name;
-            return new GallerySortOptions(field, _appearance.GallerySortDescending);
+            var sortField = Enum.TryParse<GallerySortField>(_appearance.GallerySortBy,
+                ignoreCase: true, out var parsedSortField) &&
+                Enum.IsDefined(parsedSortField)
+                ? parsedSortField : GallerySortField.Name;
+            return new GallerySortOptions(sortField, _appearance.GallerySortDescending);
         }
     }
 
