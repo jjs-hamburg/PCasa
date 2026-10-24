@@ -189,6 +189,44 @@ public sealed class ImageCatalogRepository
         return found;
     }
 
+    public long? GetImagePhotoFolderId(long imageId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT photo_folder_id FROM images WHERE id = $imageId;";
+        command.Parameters.AddWithValue("$imageId", imageId);
+        var result = command.ExecuteScalar();
+        return result is null or DBNull ? null : Convert.ToInt64(result);
+    }
+
+    // One source/target folder counter after a committed transfer step. This
+    // intentionally shares the COUNT/HAVING semantics of GetPhotoFolders;
+    // an emptied folder disappears from the gallery, never from the disk.
+    public PhotoFolderSummary? GetPhotoFolderSummary(long photoFolderId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                pf.id, pf.monitored_folder_id, pf.local_path,
+                pf.canonical_path, pf.display_name, COUNT(i.id) AS image_count
+            FROM photo_folders pf
+            LEFT JOIN images i ON i.photo_folder_id = pf.id
+            WHERE pf.id = $photoFolderId
+            GROUP BY pf.id, pf.monitored_folder_id, pf.local_path,
+                     pf.canonical_path, pf.display_name
+            HAVING image_count > 0;
+            """;
+        command.Parameters.AddWithValue("$photoFolderId", photoFolderId);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new PhotoFolderSummary(reader.GetInt64(0), reader.GetInt64(1),
+                reader.GetString(2), reader.GetString(3), reader.GetString(4),
+                reader.GetInt32(5))
+            : null;
+    }
+
     public IReadOnlyList<PhotoFolderSummary> GetPhotoFolders()
     {
         using var connection = _database.OpenConnection();
