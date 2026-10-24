@@ -248,6 +248,25 @@ public sealed class LocalDatabase
         EnsureColumn(connection, "scheduler_sources", "scan_epoch",
             "INTEGER NOT NULL DEFAULT 0");
 
+        // Durable directory checkpoints belong only to an unfinished first import.
+        // Existing images and monitored folders are never modified by this migration.
+        using (var checkpoints = connection.CreateCommand())
+        {
+            checkpoints.CommandText = """
+                CREATE TABLE IF NOT EXISTS initial_scan_directories (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL COLLATE NOCASE,
+                    source_generation INTEGER NOT NULL,
+                    scan_epoch INTEGER NOT NULL,
+                    completed_utc TEXT NOT NULL,
+                    PRIMARY KEY (monitored_folder_id, local_path),
+                    FOREIGN KEY (monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+                """;
+            checkpoints.ExecuteNonQuery();
+        }
+
         // One-time upgrade for folders added by older builds that never
         // initiated their first scan: do not strand an empty monitored root.
         // Completed (including intentionally empty) scans are not repeatedly
