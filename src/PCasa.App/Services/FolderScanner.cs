@@ -165,9 +165,12 @@ public sealed class FolderScanner
         if (resume?.SourceGeneration is long previousGeneration &&
             previousGeneration != generation)
         {
-            // A user changed the monitoring generation while paused. The old
-            // inventory cannot authorize deletion in the new generation.
+            // Monitoring/exclusion changed while this scan was paused.
+            // The old package must not silently restart from image zero;
+            // a new source request owns the replacement inventory.
             resume.Reset();
+            throw new OperationCanceledException(
+                "The scan source configuration changed during a paused inventory.");
         }
         if (resume is not null) resume.SourceGeneration = generation;
         // Capture the inventory epoch only once per resumable enumeration.
