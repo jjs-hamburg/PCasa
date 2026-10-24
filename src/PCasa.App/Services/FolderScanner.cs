@@ -57,6 +57,7 @@ public sealed class FolderScanner
             new(StringComparer.OrdinalIgnoreCase);
         internal readonly HashSet<string> FailedDirectories =
             new(StringComparer.OrdinalIgnoreCase);
+        internal HashSet<string>? CompletedInitialDirectories;
         internal Action<string>? DirectoryCompletionHandler;
         internal int ImageFilesSeen, Updated, Unchanged, Added, Changed,
             CacheRepaired, MetadataUpdated, Failed;
@@ -75,6 +76,7 @@ public sealed class FolderScanner
             PhotoFolderIds.Clear();
             ObservedPaths.Clear();
             FailedDirectories.Clear();
+            CompletedInitialDirectories = null;
             DirectoryCompletionHandler = null;
             ImageFilesSeen = Updated = Unchanged = Added = Changed =
                 CacheRepaired = MetadataUpdated = Failed = 0;
@@ -213,9 +215,12 @@ public sealed class FolderScanner
         // Directory checkpoints are a first-import optimization only; manual
         // rescans retain their established full-inventory semantics.
         var completedDirectories = durableInitialImport
-            ? _folderRepository.GetCompletedInitialScanDirectories(
-                folder.Id, generation, scanEpoch)
+            ? resume?.CompletedInitialDirectories ??
+                _folderRepository.GetCompletedInitialScanDirectories(
+                    folder.Id, generation, scanEpoch)
             : null;
+        if (durableInitialImport && resume is not null)
+            resume.CompletedInitialDirectories = completedDirectories;
         var failedDirectories = resume?.FailedDirectories ??
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void DirectoryCompleted(string directory)
