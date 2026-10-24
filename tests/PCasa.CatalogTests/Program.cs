@@ -30,6 +30,7 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
+        Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
@@ -250,6 +251,59 @@ internal static class Program
                 throw new Exception(
                     "Manual LIFO order or completed-step checkpoint violated: " +
                     string.Join(", ", trace));
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void NewerManualProbeSuspendsOlderPackage()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var olderStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var probeStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseProbe = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var trace = new List<string>();
+            var attempts = 0;
+
+            var older = new SchedulerTaskPackage("test:older-manual");
+            older.AddStep(async token =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    olderStarted.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                trace.Add("older resumed");
+            });
+            var olderTask = scheduler.EnqueuePackageAsync(
+                older, SchedulerPriority.ManualAction);
+            await olderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var newerTask = scheduler.EnqueueAsync(
+                "test:newer-manual-probe", SchedulerPriority.ManualAction,
+                async token =>
+                {
+                    probeStarted.TrySetResult();
+                    await releaseProbe.Task.WaitAsync(token);
+                    trace.Add("newer completed");
+                }, workKind: SchedulerWorkKind.SourceProbe);
+            try
+            {
+                await probeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.Delay(100);
+                if (trace.Count != 0 || olderTask.IsCompleted)
+                    throw new Exception("Older manual package resumed during newer source probe.");
+            }
+            finally { releaseProbe.TrySetResult(); }
+
+            await Task.WhenAll(newerTask, olderTask).WaitAsync(TimeSpan.FromSeconds(10));
+            if (!trace.SequenceEqual(["newer completed", "older resumed"]) ||
+                attempts != 2)
+                throw new Exception("Manual LIFO order crossed scheduler lane boundaries.");
         }
         Check().GetAwaiter().GetResult();
     }
