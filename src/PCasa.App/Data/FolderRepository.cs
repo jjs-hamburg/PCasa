@@ -42,6 +42,48 @@ public sealed class FolderRepository
         return result;
     }
 
+    // File creation and durable folder-tree registration are one scheduled
+    // operation. A client restart must not erase an empty NAS directory from
+    // the tree merely because no image has been indexed there yet.
+    public void RegisterCreatedDirectory(long monitoredFolderId, string localPath)
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO created_photo_directories
+                (monitored_folder_id, local_path, created_utc)
+            VALUES ($id, $path, $now);
+            """;
+        command.Parameters.AddWithValue("$id", monitoredFolderId);
+        command.Parameters.AddWithValue("$path", FolderExclusionRules.Normalize(localPath));
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    // Read on the scheduler catalog lane, then publish into the UI's
+    // already-existing folder-tree snapshot. Never probe SMB from WPF.
+    public IReadOnlyList<string> GetCreatedDirectories()
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            SELECT c.local_path FROM created_photo_directories c
+            JOIN monitored_folders m ON m.id = c.monitored_folder_id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM excluded_folders e
+                WHERE e.monitored_folder_id = c.monitored_folder_id
+                  AND (c.local_path = e.local_path COLLATE NOCASE
+                    OR substr(c.local_path, 1, length(e.local_path) + 1) =
+                        e.local_path || char(92) COLLATE NOCASE)
+            )
+            ORDER BY c.local_path COLLATE NOCASE;
+            """;
+        using var reader = command.ExecuteReader();
+        var result = new List<string>();
+        while (reader.Read()) result.Add(reader.GetString(0));
+        return result;
+    }
+
     public void Add(string path)
     {
         var classification = PathClassifier.Classify(path);
