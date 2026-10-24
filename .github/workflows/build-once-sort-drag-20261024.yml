@@ -3,7 +3,8 @@ name: PCasa Sort and Right-Drag Acceptance
 # User-approved, one-time Windows build.
 # Retry after C# 14 contextual keyword fix in sort preference accessor.
 # Retry 3: updated full WPF window-menu assertions for Sortieren.
-# Retry 4: sort under Options avoids genuine 1100px menu overlap. Only changes to this workflow
+# Retry 4: sort under Options avoids genuine 1100px menu overlap.
+# Final exact-commit acceptance: right-drop menu positioned at drop pointer. Only changes to this workflow
 # file trigger it; regular CI remains manual. Remove after completion.
 on:
   push:
