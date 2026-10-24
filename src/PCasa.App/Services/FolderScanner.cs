@@ -55,6 +55,9 @@ public sealed class FolderScanner
             new(StringComparer.OrdinalIgnoreCase);
         internal readonly HashSet<string> ObservedPaths =
             new(StringComparer.OrdinalIgnoreCase);
+        internal readonly HashSet<string> FailedDirectories =
+            new(StringComparer.OrdinalIgnoreCase);
+        internal Action<string>? DirectoryCompletionHandler;
         internal int ImageFilesSeen, Updated, Unchanged, Added, Changed,
             CacheRepaired, MetadataUpdated, Failed;
         internal Exception? FirstFailure;
@@ -71,6 +74,8 @@ public sealed class FolderScanner
             ScanEpoch = null;
             PhotoFolderIds.Clear();
             ObservedPaths.Clear();
+            FailedDirectories.Clear();
+            DirectoryCompletionHandler = null;
             ImageFilesSeen = Updated = Unchanged = Added = Changed =
                 CacheRepaired = MetadataUpdated = Failed = 0;
             FirstFailure = null;
@@ -211,7 +216,8 @@ public sealed class FolderScanner
             ? _folderRepository.GetCompletedInitialScanDirectories(
                 folder.Id, generation, scanEpoch)
             : null;
-        var failedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var failedDirectories = resume?.FailedDirectories ??
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void DirectoryCompleted(string directory)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -241,6 +247,12 @@ public sealed class FolderScanner
                 StringComparison.OrdinalIgnoreCase));
         }
 
+        // A scheduler yield re-enters ScanDirectoryLocked with a new cancellation
+        // token. The persistent iterator must dispatch into THIS invocation,
+        // never the first invocation's cancelled token or stale cleanup context.
+        if (resume is not null)
+            resume.DirectoryCompletionHandler = durableInitialImport
+                ? DirectoryCompleted : null;
         var profile = _browseProfile.Get();
         var scanSession = _catalog.CreateScanSession(
             folder.CanonicalPath, folder.Id, generation, cancellationToken);
@@ -250,7 +262,10 @@ public sealed class FolderScanner
             (specificFile is null
                 ? EnumerateIncludedFiles(
                     scanRoot, recursive, exclusions, CancellationToken.None,
-                    completedDirectories, durableInitialImport ? DirectoryCompleted : null)
+                    completedDirectories,
+                    durableInitialImport
+                        ? directory => resume!.DirectoryCompletionHandler?.Invoke(directory)
+                        : null)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
         var enumerationComplete = resume?.EnumerationComplete ?? false;
