@@ -206,15 +206,19 @@ public partial class MainWindow
                     $"Der Ordner ist nicht erreichbar: {directory}");
             if (!_manualGenerationStarted)
             {
-                owner._folderRepository.BeginManualScan(folder.CanonicalPath);
+                // An automatic first import must retain its durable scan epoch
+                // after restart; explicit manual rescans still supersede it.
+                if (!requirePendingInitialImport)
+                    owner._folderRepository.BeginManualScan(folder.CanonicalPath);
                 _manualGenerationStarted = true;
             }
 
             // No duplicate import or cleanup path. The scanner owns all EXIF,
             // cache, catalog, and safe reconciliation transitions.
             Result = owner._folderScanner.ScanDirectory(
-                folder, directory, recursive: true, progress, token, _resume);
-            if (Result.Failed == 0)
+                folder, directory, recursive: true, progress, token, _resume,
+                durableInitialImport: requirePendingInitialImport);
+            if (Result.Failed == 0 && !requirePendingInitialImport)
             {
                 var noLongerExisting = owner._folderRepository
                     .PruneMissingCreatedDirectories(folder.Id, directory, token);
