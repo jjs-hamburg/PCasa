@@ -80,6 +80,7 @@ internal static class Program
         Run("Unavailable root never deletes catalog", UnavailableRootKeepsCatalog, failures);
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
+        Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Moved images reuse their decoded pixels without blanking unrelated folders", ChangedIndexRetainsUnmodifiedImages, failures);
         Run("Targeted image lookup and folder counts match full catalog", SingleImageCatalogProjectionMatchesFullIndex, failures);
         Run("Exclusion service removes and re-includes folder", ExclusionServiceRoundTrip, failures);
@@ -1818,6 +1819,73 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void PerFolderSortAllFields()
+    {
+        // Tree order intentionally differs from both numeric folder ID and
+        // each image key: no sort mode may interleave photo-folder sections.
+        var entries = new[]
+        {
+            new BrowseThumbnailIndexEntry(1, 30, 96, "test.pack", 0, 100, 96, 96,
+                "Zed.jpg", FileSize: 100, ModifiedUtcTicks: 200,
+                CreatedUtcTicks: 500, TakenUtcTicks: 900,
+                OriginalWidth: 4000, OriginalHeight: 2000),
+            new BrowseThumbnailIndexEntry(2, 30, 96, "test.pack", 100, 100, 96, 96,
+                "Alpha.jpg", FileSize: 300, ModifiedUtcTicks: 300,
+                CreatedUtcTicks: 100, TakenUtcTicks: null,
+                OriginalWidth: 1000, OriginalHeight: 1000),
+            new BrowseThumbnailIndexEntry(3, 30, 96, "test.pack", 200, 100, 96, 96,
+                "Middle.jpg", FileSize: 200, ModifiedUtcTicks: 100,
+                CreatedUtcTicks: 300, TakenUtcTicks: 800,
+                OriginalWidth: 2000, OriginalHeight: 1500),
+            new BrowseThumbnailIndexEntry(4, 20, 96, "test.pack", 300, 100, 96, 96,
+                "Beta.jpg", FileSize: 200, ModifiedUtcTicks: 300,
+                CreatedUtcTicks: 100, TakenUtcTicks: 600,
+                OriginalWidth: 500, OriginalHeight: 500),
+            new BrowseThumbnailIndexEntry(5, 20, 96, "test.pack", 400, 100, 96, 96,
+                "Able.jpg", FileSize: 100, ModifiedUtcTicks: 100,
+                CreatedUtcTicks: 300, TakenUtcTicks: null,
+                OriginalWidth: 800, OriginalHeight: 800)
+        };
+        var positions = new Dictionary<long, int> { [20] = 0, [30] = 1 };
+        static long[] Ids(IReadOnlyList<BrowseThumbnailIndexEntry> images)
+            => images.Select(item => item.ImageId).ToArray();
+        void Expect(GallerySortField field, bool descending, params long[] expected)
+        {
+            var actual = Ids(GalleryFolderOrdering.Order(entries, positions,
+                new GallerySortOptions(field, descending)));
+            if (!actual.SequenceEqual(expected))
+                throw new Exception(
+                    $"Sort {field} desc={descending}: expected " +
+                    string.Join(",", expected) + " found " +
+                    string.Join(",", actual));
+        }
+        // Folder 20 ALWAYS precedes folder 30, even when descending.
+        Expect(GallerySortField.Name, false, 5, 4, 2, 3, 1);
+        Expect(GallerySortField.Name, true, 4, 5, 1, 3, 2);
+        Expect(GallerySortField.Size, false, 5, 4, 1, 3, 2);
+        Expect(GallerySortField.Modified, false, 5, 4, 3, 1, 2);
+        Expect(GallerySortField.Created, false, 4, 5, 2, 3, 1);
+        // Missing EXIF capture time uses creation, not a fake epoch.
+        Expect(GallerySortField.Captured, false, 5, 4, 2, 3, 1);
+        Expect(GallerySortField.Dimensions, false, 4, 5, 2, 3, 1);
+        Expect(GallerySortField.Size, true, 4, 5, 2, 3, 1);
+        // Repeated sorting with the same rule must keep index identity.
+        var preordered = GalleryFolderOrdering.Order(entries, positions,
+            GallerySortOptions.Default);
+        if (!ReferenceEquals(preordered, GalleryFolderOrdering.Order(
+                preordered, positions, GallerySortOptions.Default)))
+            throw new Exception("Identical gallery sort invalidated stable cached index.");
+        // Two newly discovered folders with no tree projection yet must
+        // still form separate photo sections.
+        var unknownPositions = new Dictionary<long, int>();
+        var unknown = GalleryFolderOrdering.Order(entries, unknownPositions,
+            GallerySortOptions.Default);
+        if (unknown.Select(x => x.PhotoFolderId).Distinct().Count() != 2 ||
+            unknown.Select(x => x.PhotoFolderId).ToArray()
+                .SequenceEqual(new long[] { 20, 20, 30, 30, 30 }) == false)
+            throw new Exception("Unknown folder positions mixed image sections.");
     }
 
     private static void ChangedIndexRetainsUnmodifiedImages()
