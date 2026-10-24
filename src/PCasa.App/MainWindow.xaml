@@ -124,25 +124,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!-- Fine footer tracks and small, easy-to-grab thumbs. Do not touch
-             the proven drag-start/drag-completed behavior or sidebar buttons. -->
+        <!-- Approved filigree slider: hairline rail and a small flat round
+             grip. A 20x24 transparent hit area keeps it comfortable to drag.
+             The existing thumb event handlers and right-hand icons are
+             intentionally untouched. -->
         <ControlTemplate x:Key="PcasaCompactSliderThumbTemplate"
                          TargetType="{x:Type primitives:Thumb}">
-            <Border Width="11" Height="16" CornerRadius="5"
-                    BorderBrush="#9DA2A7" BorderThickness="1"
-                    Background="#E0E2E4">
-                <Border Margin="2" CornerRadius="3" Background="#F1F2F3"/>
-            </Border>
+            <Grid Width="20" Height="24" Background="Transparent"
+                  SnapsToDevicePixels="True">
+                <Ellipse Width="12" Height="12"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Stroke="#737A81" StrokeThickness="1"
+                         Fill="#C1C6CA"/>
+            </Grid>
         </ControlTemplate>
         <Style x:Key="PcasaNeutralSliderStyle" TargetType="Slider">
             <Setter Property="Height" Value="26"/>
             <Setter Property="Focusable" Value="True"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Slider">
-                        <Grid Height="26" Background="Transparent">
-                            <Border Height="3" CornerRadius="1.5" VerticalAlignment="Center"
-                                    BorderThickness="0" Background="#858B91"/>
+                        <Grid Height="26" Background="Transparent"
+                              SnapsToDevicePixels="True">
+                            <Border Height="2" CornerRadius="1"
+                                    VerticalAlignment="Center"
+                                    Background="#767D84"/>
                             <primitives:Track x:Name="PART_Track" VerticalAlignment="Center"
                                               IsDirectionReversed="False">
                                 <primitives:Track.DecreaseRepeatButton>
@@ -150,7 +157,7 @@
                                                   IsTabStop="False" Opacity="0"/>
                                 </primitives:Track.DecreaseRepeatButton>
                                 <primitives:Track.Thumb>
-                                    <primitives:Thumb Width="11" Height="16"
+                                    <primitives:Thumb Width="20" Height="24"
                                         Template="{StaticResource PcasaCompactSliderThumbTemplate}" />
                                 </primitives:Track.Thumb>
                                 <primitives:Track.IncreaseRepeatButton>
