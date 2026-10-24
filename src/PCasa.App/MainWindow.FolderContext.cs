@@ -109,11 +109,28 @@ public partial class MainWindow
                 token.ThrowIfCancellationRequested();
                 _scheduler.ReportProgress(key, "Ordner auf Datenträger anlegen", 0, 1,
                     destination);
-                if (!IsMonitoredGalleryDestination(destination))
+                var owner = FolderExclusionRules.FindOwner(
+                    destination, _folderRepository.GetAll());
+                if (owner is null || FolderExclusionRules.IsExcluded(
+                    destination, _folderRepository.GetExcludedPaths(owner.Id)))
                     throw new IOException("Zielordner wird nicht überwacht.");
                 if (Directory.Exists(destination) || File.Exists(destination))
                     throw new IOException("Der Ordner existiert bereits.");
                 Directory.CreateDirectory(destination);
+                try
+                {
+                    _folderRepository.RegisterCreatedDirectory(owner.Id, destination);
+                }
+                catch
+                {
+                    // Either both the new empty directory and its durable
+                    // tree registration exist, or neither does. Never report
+                    // a successful NAS mutation which vanishes on restart.
+                    if (Directory.Exists(destination) &&
+                        !Directory.EnumerateFileSystemEntries(destination).Any())
+                        Directory.Delete(destination);
+                    throw;
+                }
                 _scheduler.ReportProgress(key, "Ordner angelegt", 1, 1, destination);
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.SourceProbe);
