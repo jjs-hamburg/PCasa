@@ -13,6 +13,10 @@ public partial class MainWindow
 {
     // Optional origin metadata; FileDrop remains the native shell format.
     private const string InternalGalleryDragFormat = "PCasa.InternalGalleryDrag";
+    // Set only for a right-button gesture. Left drops preserve the established
+    // Move / Ctrl+Copy behavior; right drops show Copy/Move/Cancel.
+    private const string InternalGalleryRightDragFormat =
+        "PCasa.InternalGalleryRightDrag";
     // OLE reports Move for both an accepted in-app drop and a move to
     // Explorer. Only the latter needs physical-source reconciliation.
     // These two flags describe ONE synchronous native drag lifetime; they
@@ -93,6 +97,8 @@ public partial class MainWindow
                 return;
             var data = new DataObject(DataFormats.FileDrop, files);
             data.SetData(InternalGalleryDragFormat, true);
+            if (e.DragButton == MouseButton.Right)
+                data.SetData(InternalGalleryRightDragFormat, true);
             DragDropEffects effect;
             _nativeGalleryDragInProgress = true;
             _internalGalleryDropAccepted = false;
@@ -167,6 +173,11 @@ public partial class MainWindow
             ? paths.Where(FolderScanner.IsSupportedImagePath).ToArray()
             : [];
     }
+
+    private static bool RightDragNeedsChoice(
+        IDataObject data, bool acceptedInternalDrop)
+        => acceptedInternalDrop && data.GetDataPresent(
+            InternalGalleryRightDragFormat, autoConvert: false);
 
     private static bool TryResolveDropEffect(
         DragEventArgs e, string[] paths, string target,
@@ -264,8 +275,17 @@ public partial class MainWindow
         e.Handled = true;
         RecordAcceptedInternalGalleryDrop(e);
         _dragTargetValidity.Clear();
-        _ = TransferGalleryFilesAsync(files, target,
-            effect.HasFlag(DragDropEffects.Move));
+        if (RightDragNeedsChoice(e.Data, _nativeGalleryDragInProgress))
+        {
+            // Show the decision AFTER the native drag releases the mouse.
+            // Merely hovering a target never mutates the catalog.
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+                ShowGalleryTreeDropChoice(BrowseSurface, files, target)),
+                System.Windows.Threading.DispatcherPriority.Input);
+        }
+        else
+            _ = TransferGalleryFilesAsync(files, target,
+                effect.HasFlag(DragDropEffects.Move));
     }
 
     private string? TreeDropTargetFromElement(DependencyObject? element)
@@ -330,22 +350,20 @@ public partial class MainWindow
         e.Handled = true;
         RecordAcceptedInternalGalleryDrop(e);
         _dragTargetValidity.Clear();
-        if (e.Data.GetDataPresent(InternalGalleryDragFormat, autoConvert: false))
+        if (RightDragNeedsChoice(e.Data, _nativeGalleryDragInProgress))
         {
-            // A thumbnail dragged onto the TREE is an explicit destination
-            // request, not an implicit move. Offer both actions *after* the
-            // native OLE drag unwinds; otherwise it can reenter drag handlers.
+            // Right-drag shows the three choices. Left-drag still moves
+            // directly (Ctrl copies), as agreed, and an external Explorer
+            // drop retains native Windows modifier semantics.
             var dropItem = FindFolderTreeItemByPath(FoldersTree, target);
             _ = Dispatcher.BeginInvoke(new Action(() =>
-                ShowGalleryTreeDropChoice((FrameworkElement?)dropItem ?? FoldersTree, files, target)),
+                ShowGalleryTreeDropChoice(
+                    (FrameworkElement?)dropItem ?? FoldersTree, files, target)),
                 System.Windows.Threading.DispatcherPriority.Input);
         }
         else
-        {
-            // Native Explorer drops retain Windows modifier conventions.
             _ = TransferGalleryFilesAsync(files, target,
                 effect.HasFlag(DragDropEffects.Move));
-        }
     }
 
     private void ShowGalleryTreeDropChoice(
