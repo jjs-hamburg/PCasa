@@ -330,7 +330,45 @@ public partial class MainWindow
         e.Handled = true;
         RecordAcceptedInternalGalleryDrop(e);
         _dragTargetValidity.Clear();
-        _ = TransferGalleryFilesAsync(files, target,
-            effect.HasFlag(DragDropEffects.Move));
+        if (e.Data.GetDataPresent(InternalGalleryDragFormat, autoConvert: false))
+        {
+            // A thumbnail dragged onto the TREE is an explicit destination
+            // request, not an implicit move. Offer both actions *after* the
+            // native OLE drag unwinds; otherwise it can reenter drag handlers.
+            var dropItem = FindFolderTreeItemByPath(FoldersTree, target);
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+                ShowGalleryTreeDropChoice(dropItem ?? FoldersTree, files, target)),
+                System.Windows.Threading.DispatcherPriority.Input);
+        }
+        else
+        {
+            // Native Explorer drops retain Windows modifier conventions.
+            _ = TransferGalleryFilesAsync(files, target,
+                effect.HasFlag(DragDropEffects.Move));
+        }
+    }
+
+    private void ShowGalleryTreeDropChoice(
+        FrameworkElement targetElement, string[] files, string destination)
+    {
+        var menu = new ContextMenu
+        {
+            PlacementTarget = targetElement,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+        };
+        menu.SetResourceReference(Control.BackgroundProperty, "PcasaPanelBrush");
+        var copy = new MenuItem { Header = "Kopieren" };
+        var move = new MenuItem { Header = "Verschieben" };
+        var cancel = new MenuItem { Header = "Abbrechen" };
+        copy.Click += (_, _) => _ = TransferGalleryFilesAsync(
+            files, destination, move: false);
+        move.Click += (_, _) => _ = TransferGalleryFilesAsync(
+            files, destination, move: true);
+        cancel.Click += (_, _) => menu.IsOpen = false;
+        menu.Items.Add(copy);
+        menu.Items.Add(move);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(cancel);
+        menu.IsOpen = true;
     }
 }
