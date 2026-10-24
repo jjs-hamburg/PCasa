@@ -478,9 +478,27 @@ internal static class GalleryFileOperationFlow
                         job.State == SchedulerJobState.Queued),
                     "The second manual move was silently discarded before the scheduler.");
             }
-            Until(window, () => firstQueuedTransfer.IsCompleted &&
-                secondQueuedTransfer.IsCompleted,
-                "Two manual moves did not drain the scheduler queue.");
+            try
+            {
+                Until(window, () => firstQueuedTransfer.IsCompleted &&
+                    secondQueuedTransfer.IsCompleted,
+                    "Two manual moves did not drain the scheduler queue.");
+            }
+            catch (TimeoutException ex)
+            {
+                var outstanding = string.Join(" | ", scheduler.Snapshot()
+                    .Where(job => job.Key.StartsWith("gallery:file-transfer:",
+                        StringComparison.Ordinal))
+                    .TakeLast(6)
+                    .Select(job => $"{job.Key}: {job.State} / {job.Phase} / " +
+                        $"{job.Error} / {job.Processed}/{job.Total}"));
+                throw new TimeoutException("Manual LIFO stalled. " +
+                    $"First={firstQueuedTransfer.Status}, " +
+                    $"Second={secondQueuedTransfer.Status}; " +
+                    $"A={File.Exists(firstQueuedSource)}->{File.Exists(firstQueuedTarget)}, " +
+                    $"B={File.Exists(secondQueuedSource)}->{File.Exists(secondQueuedTarget)}; " +
+                    outstanding, ex);
+            }
             firstQueuedTransfer.GetAwaiter().GetResult();
             secondQueuedTransfer.GetAwaiter().GetResult();
             if (File.Exists(firstQueuedSource) || File.Exists(secondQueuedSource) ||

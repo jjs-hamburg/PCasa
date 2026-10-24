@@ -28,6 +28,7 @@ public partial class MainWindow
     }
 
     private bool _manualContextScanActive;
+    private int _manualContextScanCount;
     private CancellationTokenSource? _manualContextCancellation;
 
     private async void BrowseScanCurrentFolder_Click(object sender, RoutedEventArgs e)
@@ -49,9 +50,9 @@ public partial class MainWindow
         // outside the scheduler. Even an unreachable SMB path is checked by
         // the priority worker, not by the UI event handler.
         var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
-        // A new valid manual request supersedes its predecessor. Scheduler
-        // cancellation and source-generation fences own the transition.
-        _manualContextCancellation?.Cancel();
+        // Manual requests form a LIFO stack. Do NOT cancel the predecessor:
+        // its scanner cursor and progress remain valid for later resumption.
+        _manualContextScanCount++;
         _manualContextScanActive = true;
         _manualScanRunning = true;
         _manualFolderScanWaiting = true;
@@ -132,16 +133,18 @@ public partial class MainWindow
                 _activeScanCancellation = null;
                 _activeScanFolderId = null;
             }
+            // Only the last outstanding context scan may clear the busy
+            // flags. A newer scan may finish while this older scan is paused.
+            _manualContextScanCount--;
             if (ReferenceEquals(_manualContextCancellation, cancellation))
-            {
                 _manualContextCancellation = null;
-                _manualContextScanActive = false;
-                _manualScanRunning = _initialScanActive || _manualScanAllActive;
-                _manualFolderScanWaiting = _initialScanActive || _manualScanAllActive;
-                _isScanning = _backgroundWorkerRunning || _manualScanRunning;
-                UpdateManualScanControls();
-                QueuePendingInitialScans();
-            }
+            _manualContextScanActive = _manualContextScanCount > 0;
+            _manualScanRunning = _manualContextScanActive ||
+                _initialScanActive || _manualScanAllActive;
+            _manualFolderScanWaiting = _manualScanRunning;
+            _isScanning = _backgroundWorkerRunning || _manualScanRunning;
+            UpdateManualScanControls();
+            QueuePendingInitialScans();
         }
     }
 

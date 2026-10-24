@@ -48,6 +48,7 @@ public sealed class FolderScanner
     {
         internal IEnumerator<string>? Enumerator;
         internal string? CurrentFile;
+        internal bool EnumerationComplete;
         internal long? SourceGeneration;
         internal readonly Dictionary<string, long> PhotoFolderIds =
             new(StringComparer.OrdinalIgnoreCase);
@@ -64,6 +65,7 @@ public sealed class FolderScanner
             Enumerator?.Dispose();
             Enumerator = null;
             CurrentFile = null;
+            EnumerationComplete = false;
             SourceGeneration = null;
             PhotoFolderIds.Clear();
             ObservedPaths.Clear();
@@ -198,10 +200,10 @@ public sealed class FolderScanner
                     scanRoot, recursive, exclusions, CancellationToken.None)
                 : new[] { specificFile }).GetEnumerator();
         if (resume is not null) resume.Enumerator = enumerator;
-        var enumerationComplete = false;
+        var enumerationComplete = resume?.EnumerationComplete ?? false;
         try
         {
-            while (true)
+            while (!enumerationComplete)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string localPath;
@@ -455,7 +457,10 @@ public sealed class FolderScanner
             if (resume is null || enumerationComplete)
                 enumerator.Dispose();
             if (enumerationComplete && resume is not null)
+            {
                 resume.Enumerator = null;
+                resume.EnumerationComplete = true;
+            }
         }
 
         ReportProgress(null, force: true);
