@@ -208,7 +208,10 @@ public partial class MainWindow : Window
         // Targets created through the context menu stay in the folder tree
         // while empty. Scan work still owns their eventual photo catalog.
         foreach (var empty in _createdEmptyFolderPaths
-            .Where(path => !IsPendingFolderRemovalHidden(path)))
+            .Where(path => !IsPendingFolderRemovalHidden(path) &&
+                rootsWithExclusions.Any(root =>
+                    FolderExclusionRules.IsAtOrBelow(path, root.Folder.LocalPath) &&
+                    !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths))))
             AddFolderTreePath(roots, nodesByPath, empty, empty, null, 0);
 
         foreach (var root in roots.Values)
