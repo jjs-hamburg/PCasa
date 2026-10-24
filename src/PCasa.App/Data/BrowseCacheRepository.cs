@@ -87,7 +87,13 @@ public sealed class BrowseCacheRepository
                 CASE WHEN x.gps_latitude IS NOT NULL AND x.gps_longitude IS NOT NULL THEN 1 ELSE 0 END,
                 CASE WHEN t.keywords IS NOT NULL AND LENGTH(TRIM(t.keywords)) > 0 THEN 1 ELSE 0 END,
                 CASE WHEN LOWER(i.extension) IN ('.arw','.nef','.nrw','.cr2','.cr3','.dng',
-                   '.raf','.rw2','.orf','.pef','.srw','.crw') THEN 1 ELSE 0 END
+                   '.raf','.rw2','.orf','.pef','.srw','.crw') THEN 1 ELSE 0 END,
+                i.file_size,
+                i.modified_utc_ticks,
+                i.created_utc_ticks,
+                x.date_time_original,
+                i.width,
+                i.height
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
             INNER JOIN thumbnail_entries te ON te.image_id = i.id
@@ -124,10 +130,35 @@ public sealed class BrowseCacheRepository
                 reader.GetString(8),
                 reader.GetInt32(9) != 0,
                 reader.GetInt32(10) != 0,
-                reader.GetInt32(11) != 0));
+                reader.GetInt32(11) != 0,
+                reader.GetInt64(12),
+                reader.GetInt64(13),
+                reader.IsDBNull(14) ? null : reader.GetInt64(14),
+                reader.IsDBNull(15)
+                    ? null : ParseCaptureTime(reader.GetString(15)),
+                reader.GetInt32(16),
+                reader.GetInt32(17)));
         }
 
         return result;
+    }
+
+    private static long? ParseCaptureTime(string source)
+    {
+        // Camera EXIF uses YYYY:MM:DD HH:mm:ss. Importers also write ISO.
+        // A missing/invalid source date is not an epoch date; the comparer
+        // explicitly falls back to file creation then modification.
+        var patterns = new[]
+        {
+            "yyyy:MM:dd HH:mm:ss", "yyyy:MM:dd HH:mm:ss.FFF",
+            "yyyy-MM-dd HH:mm:ss", "yyyy-MM-ddTHH:mm:ss",
+            "yyyy-MM-ddTHH:mm:ss.FFF", "yyyy-MM-ddTHH:mm:ssK"
+        };
+        return DateTime.TryParseExact(source.Trim(), patterns,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AllowWhiteSpaces,
+            out var timestamp)
+            ? timestamp.Ticks : null;
     }
 
     public BrowseCacheWriteSession CreateWriteSession()
