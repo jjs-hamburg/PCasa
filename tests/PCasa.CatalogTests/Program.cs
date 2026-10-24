@@ -3143,7 +3143,28 @@ internal static class Program
         WriteJpeg(Path.Combine(first, "photo1.jpg"));
         WriteJpeg(Path.Combine(second, "photo2.jpg"));
         var (db, root, scanner) = sandbox.Prepare();
+        var committedImages = new List<(string Path, long FolderId)>();
+        void OnIndexed(string path, long folderId)
+        {
+            if (new ImageCatalogRepository(db).GetImageId(path) is null)
+                throw new Exception("Targeted gallery notification preceded durable image commit.");
+            committedImages.Add((path, folderId));
+        }
+        CatalogChanges.ImageIndexed += OnIndexed;
+        try
+        {
+            TestScan();
+        }
+        finally
+        {
+            CatalogChanges.ImageIndexed -= OnIndexed;
+        }
+        if (committedImages.Count != 2 ||
+            committedImages.Select(entry => entry.FolderId).Distinct().Count() != 2)
+            throw new Exception("Targeted gallery notifications did not identify both committed images.");
 
+        void TestScan()
+        {
         using var cancel = new CancellationTokenSource();
         ScanProgress? discovered = null;
         var callback = new InlineProgress<ScanProgress>(progress =>
@@ -3185,6 +3206,7 @@ internal static class Program
         if (new ImageCatalogRepository(db).CountAll() != 2 ||
             !subsequent.Contains(second, StringComparer.OrdinalIgnoreCase))
             throw new Exception("Subsequent scan did not publish newly discovered sibling.");
+        }
     }
 
     private static void ViewerDecodedGeometry()
