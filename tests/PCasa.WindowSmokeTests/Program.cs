@@ -79,13 +79,22 @@ internal static class Program
             // Opening the REAL submenu must install the configured rightward
             // placement callback, not fall back to WPF's alternating default.
             var options = items.Single(item => Equals(item.Header, "Optionen"));
-            var sortingSubmenu = options.Items.OfType<MenuItem>().SingleOrDefault(
-                item => Equals(item.Header, "Sortieren"))
-                ?? throw new Exception("Sortieren submenu missing from Options.");
-            if (sortingSubmenu.Items.OfType<MenuItem>().Count(item =>
-                    item.IsCheckable) != 8)
-                throw new Exception(
-                    "Sortieren submenu must contain six keys and two directions.");
+            if (options.Items.OfType<MenuItem>().Any(item =>
+                    Equals(item.Header, "Sortieren")))
+                throw new Exception("Obsolete sorting submenu remains under Options.");
+            var sortButton = window.FindName("GallerySortSelectorButton") as Button
+                ?? throw new Exception("Search toolbar sort selector is missing.");
+            var sortItems = sortButton.ContextMenu?.Items.OfType<MenuItem>().ToArray()
+                ?? throw new Exception("Search toolbar sorting choices are missing.");
+            if (sortItems.Count(item => item.IsCheckable) != 8 ||
+                !sortItems.Any(item => Equals(item.Header, "Name")) ||
+                !sortItems.Any(item => Equals(item.Header, "Aufnahmedatum")))
+                throw new Exception("Search toolbar must offer six sort keys and two directions.");
+            var notToggle = window.FindName("InvertFilterToggle") as ToggleButton
+                ?? throw new Exception("Search inversion toggle is missing.");
+            if (!Equals(notToggle.Content, "NOT"))
+                throw new Exception("Search inversion toggle is not labelled NOT.");
+            Console.WriteLine("PASS: Sort selector lives only in the search toolbar beside NOT.");
             options.IsSubmenuOpen = true;
             Flush(window);
             var popup = options.Template.FindName("PART_Popup", options) as Popup
