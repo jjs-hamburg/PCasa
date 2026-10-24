@@ -211,19 +211,128 @@
         <Border Grid.Row="0"
                 Background="{DynamicResource PcasaTopBrush}"
                 MinHeight="42">
-            <!-- One agreed row: main menu | search | WAS | WO | NOT | sort.
-                 Only the search-width column flexes; none of the established
-                 controls or their events are duplicated or replaced. -->
-            <Grid Margin="0,0,4,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*" MinWidth="68"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Menu Grid.Column="0" Background="Transparent"
+            <DockPanel LastChildFill="True">
+
+
+                <!-- The search bar has exactly two exclusive selections:
+                     WAS (Tags/Name), WO (all/tree/current) and a separate
+                     NOT toggle. Keep existing control names and event paths. -->
+                <Grid DockPanel.Dock="Right" Width="180" Height="27"
+                      Margin="4,0,10,0" VerticalAlignment="Center">
+                    <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
+                             Padding="8,0,27,0" ToolTip="Tags oder Dateinamen suchen"
+                             TextChanged="TagSearchBox_TextChanged" />
+                    <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
+                            HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Margin="0,0,2,0" Cursor="Hand"
+                            ToolTip="Suchfilter löschen" Visibility="Collapsed"
+                            Click="ClearTagSearch_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="ClearBackground" Background="Transparent" CornerRadius="3">
+                                    <TextBlock Text="✕" FontFamily="Segoe UI Symbol"
+                                               FontSize="17" FontWeight="Bold"
+                                               Foreground="#E34848"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="ClearBackground" Property="Background"
+                                                Value="{DynamicResource PcasaHoverBrush}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter Property="Opacity" Value="0.5"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+                <primitives:ToggleButton x:Name="InvertFilterToggle"
+                                         DockPanel.Dock="Right" Margin="3,0,8,0"
+                                         VerticalAlignment="Center"
+                                         Style="{StaticResource PcasaSearchInvertStyle}"
+                                         Content="NOT"
+                                         ToolTip="Treffer im gewählten Suchbereich umkehren"
+                                         Checked="FilterResultsInversion_Changed"
+                                         Unchecked="FilterResultsInversion_Changed"/>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,6,0">
+                    <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
+                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
+                    <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 IsChecked="True" Checked="TagSearchScope_Changed"
+                                 Content="Alle" ToolTip="Alle überwachten Ordner"/>
+                    <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 Checked="TagSearchScope_Changed"
+                                 Content="Ab hier" ToolTip="Ausgewählter Ordnerbaum einschließlich Unterordner"/>
+                    <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 Checked="TagSearchScope_Changed"
+                                 Content="Ordner" ToolTip="Nur aktueller Ordner ohne Unterordner"/>
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                            VerticalAlignment="Center" Margin="0,0,10,0">
+                    <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
+                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
+                    <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 IsChecked="True" Checked="SearchMode_Changed"
+                                 Content="Tags" ToolTip="Nach Tags filtern"/>
+                    <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode"
+                                 Style="{StaticResource PcasaSearchChoiceStyle}"
+                                 Checked="SearchMode_Changed"
+                                 Content="Name" ToolTip="Nach Dateinamen filtern"/>
+                </StackPanel>
+                <Button x:Name="GallerySortSelectorButton"
+                        DockPanel.Dock="Right" Width="191" Height="27"
+                        Margin="2,0,8,0" VerticalAlignment="Center"
+                        Style="{StaticResource PcasaSearchSortButtonStyle}"
+                        ToolTip="Bilder innerhalb jedes Ordners sortieren"
+                        Click="GallerySortSelector_Click">
+                    <Button.Content>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <!-- LAP-like graded lines with flow-direction arrow; no extra triangle -->
+                            <Grid Width="29" Height="20" Margin="0,0,7,0">
+                                <Path Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Data="M 1,4 L 11,4 M 1,9 L 8,9 M 1,14 L 5,14"/>
+                                <Path x:Name="GallerySortDirectionIcon"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round"
+                                      Data="M 20,2 L 20,17 M 16,13 L 20,17 L 24,13"/>
+                            </Grid>
+                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name"
+                                       VerticalAlignment="Center" FontSize="12"/>
+                        </StackPanel>
+                    </Button.Content>
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem x:Name="GallerySortNameMenu" Header="Name"
+                                      Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
+                            <MenuItem x:Name="GallerySortCapturedMenu" Header="Aufnahmedatum"
+                                      Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
+                            <MenuItem x:Name="GallerySortCreatedMenu" Header="Erstellungsdatum"
+                                      Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
+                            <MenuItem x:Name="GallerySortModifiedMenu" Header="Änderungsdatum"
+                                      Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
+                            <MenuItem x:Name="GallerySortSizeMenu" Header="Größe"
+                                      Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
+                            <MenuItem x:Name="GallerySortDimensionsMenu" Header="Dimension"
+                                      Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/>
+                            <Separator/>
+                            <MenuItem x:Name="GallerySortAscendingMenu" Header="Aufsteigend"
+                                      Tag="Ascending" IsCheckable="True" Click="GallerySort_Click"/>
+                            <MenuItem x:Name="GallerySortDescendingMenu" Header="Absteigend"
+                                      Tag="Descending" IsCheckable="True" Click="GallerySort_Click"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <Menu Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
                       VerticalAlignment="Center"
                       Padding="0">
@@ -306,7 +415,31 @@
                                   Header="Alle überwachten Ordner einlesen"
                                   Click="BrowseScanAll_Click" />
                     </MenuItem>
+                    <!-- Keep the established five top-level menus readable
+                         at 1100px while the independent search toolbar occupies
+                         the right side. Sorting remains a full submenu. -->
                     <MenuItem Header="Optionen" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <!-- Sorting changes only image order WITHIN each folder.
+                             Folder traversal is unchanged; grouping is separate. -->
+                        <MenuItem Header="Sortieren">
+                        <MenuItem x:Name="GallerySortNameMenu" Header="Name"
+                                  Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
+                        <MenuItem x:Name="GallerySortCapturedMenu" Header="Aufnahmedatum"
+                                  Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
+                        <MenuItem x:Name="GallerySortCreatedMenu" Header="Erstellungsdatum"
+                                  Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
+                        <MenuItem x:Name="GallerySortModifiedMenu" Header="Änderungsdatum"
+                                  Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
+                        <MenuItem x:Name="GallerySortSizeMenu" Header="Größe"
+                                  Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
+                        <MenuItem x:Name="GallerySortDimensionsMenu" Header="Dimension"
+                                  Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/>
+                        <Separator/>
+                        <MenuItem x:Name="GallerySortAscendingMenu" Header="Aufsteigend"
+                                  Tag="Ascending" IsCheckable="True" Click="GallerySort_Click"/>
+                        <MenuItem x:Name="GallerySortDescendingMenu" Header="Absteigend"
+                                  Tag="Descending" IsCheckable="True" Click="GallerySort_Click"/>
+                        </MenuItem>
                         <MenuItem Header="Darstellung">
                             <MenuItem Header="Design">
                                 <MenuItem x:Name="ThemeLightMenu" Header="Hell" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />
@@ -339,115 +472,7 @@
                     </MenuItem>
                     <MenuItem Header="Hilfe" Margin="0,0,20,0" HorizontalAlignment="Left" />
                 </Menu>
-                <Grid Grid.Column="1" Height="27" HorizontalAlignment="Stretch"
-                      Margin="2,0,3,0" VerticalAlignment="Center">
-                    <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
-                             Padding="8,0,27,0" ToolTip="Tags oder Dateinamen suchen"
-                             TextChanged="TagSearchBox_TextChanged" />
-                    <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
-                            HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,2,0" Cursor="Hand"
-                            ToolTip="Suchfilter löschen" Visibility="Collapsed"
-                            Click="ClearTagSearch_Click">
-                        <Button.Template>
-                            <ControlTemplate TargetType="Button">
-                                <Border x:Name="ClearBackground" Background="Transparent" CornerRadius="3">
-                                    <TextBlock Text="✕" FontFamily="Segoe UI Symbol"
-                                               FontSize="17" FontWeight="Bold"
-                                               Foreground="#E34848"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"/>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="ClearBackground" Property="Background"
-                                                Value="{DynamicResource PcasaHoverBrush}"/>
-                                    </Trigger>
-                                    <Trigger Property="IsEnabled" Value="False">
-                                        <Setter Property="Opacity" Value="0.5"/>
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
-                        </Button.Template>
-                    </Button>
-                </Grid>
-                <StackPanel Grid.Column="2" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="0,0,2,0">
-                    <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
-                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
-                    <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 IsChecked="True" Checked="SearchMode_Changed"
-                                 Content="Tags" ToolTip="Nach Tags filtern"/>
-                    <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="SearchMode_Changed"
-                                 Content="Name" ToolTip="Nach Dateinamen filtern"/>
-                </StackPanel>
-                <StackPanel Grid.Column="3" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="0,0,2,0">
-                    <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
-                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
-                    <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 IsChecked="True" Checked="TagSearchScope_Changed"
-                                 Content="Alle" ToolTip="Alle überwachten Ordner"/>
-                    <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="TagSearchScope_Changed"
-                                 Content="Ab hier" ToolTip="Ausgewählter Ordnerbaum einschließlich Unterordner"/>
-                    <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="TagSearchScope_Changed"
-                                 Content="Ordner" ToolTip="Nur aktueller Ordner ohne Unterordner"/>
-                </StackPanel>
-                <primitives:ToggleButton x:Name="InvertFilterToggle"
-                                         Grid.Column="4" Margin="1,0,1,0"
-                                         VerticalAlignment="Center"
-                                         Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="NOT"
-                                         ToolTip="Treffer im gewählten Suchbereich umkehren"
-                                         Checked="FilterResultsInversion_Changed"
-                                         Unchecked="FilterResultsInversion_Changed"/>
-                <Button x:Name="GallerySortSelectorButton"
-                        Grid.Column="5" Width="112" Height="27"
-                        Margin="1,0,0,0" VerticalAlignment="Center"
-                        Style="{StaticResource PcasaSearchSortButtonStyle}"
-                        ToolTip="Bilder innerhalb jedes Ordners sortieren"
-                        Click="GallerySortSelector_Click">
-                    <Button.Content>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock x:Name="GallerySortDirectionGlyph" Text="↓" FontSize="12"
-                                       VerticalAlignment="Center" Margin="0,0,6,0"/>
-                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name"
-                                       VerticalAlignment="Center" FontSize="12"/>
-                            <TextBlock Text="⌄" FontSize="13" VerticalAlignment="Center"
-                                       Margin="5,0,0,0" Opacity="0.7"/>
-                        </StackPanel>
-                    </Button.Content>
-                    <Button.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem x:Name="GallerySortNameMenu" Header="Name"
-                                      Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCapturedMenu" Header="Aufnahmedatum"
-                                      Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCreatedMenu" Header="Erstellungsdatum"
-                                      Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortModifiedMenu" Header="Änderungsdatum"
-                                      Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortSizeMenu" Header="Größe"
-                                      Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDimensionsMenu" Header="Dimension"
-                                      Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/>
-                            <Separator/>
-                            <MenuItem x:Name="GallerySortAscendingMenu" Header="Aufsteigend"
-                                      Tag="Ascending" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDescendingMenu" Header="Absteigend"
-                                      Tag="Descending" IsCheckable="True" Click="GallerySort_Click"/>
-                        </ContextMenu>
-                    </Button.ContextMenu>
-                </Button>
-            </Grid>
+            </DockPanel>
         </Border>
 
         <Border Grid.Row="1" Visibility="{Binding Visibility, ElementName=ViewerToolbar}"
