@@ -32,6 +32,7 @@ internal static class Program
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
+        Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
@@ -398,6 +399,50 @@ internal static class Program
         if (latest.Removed != 1) 
             throw new Exception("Newest complete inventory failed to reconcile missing paths.");
         Require(db, 3);
+    }
+
+    private static void ScannerYieldBeforeSourceLockDoesNotDoubleCount()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var photo = Path.Combine(sandbox.Images, "blocked-source.jpg");
+            WriteJpeg(photo);
+            var (db, root, scanner) = sandbox.Prepare();
+            using var checkpoint = new FolderScanner.ScanResumeState();
+            using var cancel = new CancellationTokenSource();
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Task worker;
+            lock (SourceFileLocks.ForPath(photo))
+            {
+                worker = Task.Run(() =>
+                {
+                    entered.TrySetResult();
+                    scanner.ScanDirectory(root, root.LocalPath, recursive: true,
+                        cancellationToken: cancel.Token, resume: checkpoint);
+                });
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                // The worker may still be enumerating. Cancellation before or
+                // during Enter must preserve CurrentFile without counting it.
+                await Task.Delay(50);
+                cancel.Cancel();
+                try
+                {
+                    await worker.WaitAsync(TimeSpan.FromSeconds(5));
+                    throw new Exception("Scanner ignored an interrupted source lock.");
+                }
+                catch (OperationCanceledException) { }
+            }
+            if (checkpoint.CommittedFiles != 0)
+                throw new Exception("Interrupted source was counted before commit.");
+            var result = scanner.ScanDirectory(root, root.LocalPath, true,
+                resume: checkpoint);
+            if (result.ImageFilesSeen != 1 || result.Updated != 1)
+                throw new Exception("Resumed source was skipped or counted twice.");
+            Require(db, 1);
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void SourceLockWaitCanYield()
