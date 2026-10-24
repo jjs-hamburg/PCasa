@@ -84,6 +84,76 @@ public sealed class FolderRepository
         return result;
     }
 
+    // The file system owns existence. A directory made through PCasa is
+    // only a persistent tree projection while it actually exists. An
+    // authoritative, successful manual inventory may prune absent paths.
+    // Do NOT prune an unavailable NAS root: the user could simply be offline.
+    // Disk probes remain in the scheduler's source worker, never in WPF.
+    public IReadOnlyList<string> PruneMissingCreatedDirectories(
+        long monitoredFolderId, string scannedDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!Directory.Exists(scannedDirectory))
+            return Array.Empty<string>();
+
+        using var db = _database.OpenConnection();
+        using var read = db.CreateCommand();
+        read.CommandText = """
+            SELECT local_path FROM created_photo_directories
+            WHERE monitored_folder_id = $owner;
+            """;
+        read.Parameters.AddWithValue("$owner", monitoredFolderId);
+        var candidates = new List<string>();
+        using (var reader = read.ExecuteReader())
+            while (reader.Read()) candidates.Add(reader.GetString(0));
+
+        var missing = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!FolderExclusionRules.IsAtOrBelow(candidate, scannedDirectory) ||
+                Directory.Exists(candidate))
+                continue;
+            // Never conclude an entire SMB subtree is deleted solely from
+            // an unresponsive path. Require a reachable surviving ancestor
+            // inside the successfully scanned directory.
+            var ancestor = Path.GetDirectoryName(candidate);
+            while (!string.IsNullOrWhiteSpace(ancestor) &&
+                   FolderExclusionRules.IsAtOrBelow(ancestor, scannedDirectory) &&
+                   !Directory.Exists(ancestor))
+                ancestor = Path.GetDirectoryName(ancestor);
+            if (string.IsNullOrWhiteSpace(ancestor) ||
+                !FolderExclusionRules.IsAtOrBelow(ancestor, scannedDirectory) ||
+                !Directory.Exists(ancestor))
+                continue;
+            missing.Add(candidate);
+        }
+        if (missing.Count == 0) return Array.Empty<string>();
+
+        using var transaction = db.BeginTransaction();
+        using var remove = db.CreateCommand();
+        remove.Transaction = transaction;
+        remove.CommandText = """
+            DELETE FROM created_photo_directories
+            WHERE monitored_folder_id = $owner
+              AND local_path = $path COLLATE NOCASE;
+            """;
+        remove.Parameters.AddWithValue("$owner", monitoredFolderId);
+        var pathParam = remove.Parameters.Add("$path", SqliteType.Text);
+        foreach (var candidate in missing)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            // Recheck immediately before deletion, in case another manual
+            // packet recreated the path between the scan and this commit.
+            if (Directory.Exists(candidate)) continue;
+            pathParam.Value = candidate;
+            remove.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return missing.Where(path => !Directory.Exists(path)).ToArray();
+    }
+
     public void Add(string path)
     {
         var classification = PathClassifier.Classify(path);
