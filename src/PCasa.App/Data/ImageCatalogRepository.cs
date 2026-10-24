@@ -189,6 +189,15 @@ public sealed class ImageCatalogRepository
         return found;
     }
 
+    public long? GetImageId(string canonicalPath)
+    {
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT id FROM images WHERE canonical_path = $path;";
+        cmd.Parameters.AddWithValue("$path", canonicalPath);
+        return cmd.ExecuteScalar() is { } id ? Convert.ToInt64(id) : null;
+    }
+
     public long? GetImagePhotoFolderId(long imageId)
     {
         using var connection = _database.OpenConnection();
