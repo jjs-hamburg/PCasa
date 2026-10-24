@@ -228,9 +228,15 @@ internal static class TagFlow
             if (invertFilter.IsChecked != true)
                 throw new Exception("Clearing search silently changed the independent NOT toggle.");
             invertFilter.IsChecked = false;
+            // Clearing search intentionally restores the pre-search tree
+            // focus. Re-select the exact album before testing Current scope.
+            albumBItem.IsSelected = true;
+            Until(window, () => ReferenceEquals(tree.SelectedItem, albumBItem),
+                "Could not reselect current album after clearing search.");
             search.Text = "topaz";
-            Until(window, () => status.Text.Contains("Bilder mit Dateiname: topaz"),
-                "Filename filter did not resume after persistent NOT toggle test.");
+            Until(window, () => status.Text.Contains("Bilder mit Dateiname: topaz") &&
+                surface.GetFolderOffset(b.Id) is not null,
+                "Filename filter did not resume in the current album after persistent NOT toggle test.");
             Console.WriteLine("PASS: NOT stays selected until the user explicitly disables it.");
 
 
