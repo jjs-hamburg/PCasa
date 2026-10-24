@@ -237,7 +237,6 @@ public sealed class FolderScanner
                     continue;
                 }
 
-                imageFilesSeen++;
                 long? discoveredFolderId = null;
                 string? discoveredFolderPath = null;
 
@@ -421,19 +420,10 @@ public sealed class FolderScanner
                     }
                 }
 
-                if (catalogCommitClock.ElapsedMilliseconds >= 1000)
-                {
-                    scanSession.Dispose();
-                    scanSession = _catalog.CreateScanSession(
-                        folder.CanonicalPath, folder.Id, generation, cancellationToken);
-                    catalogCommitClock.Restart();
-                }
-
-                // Report once for the first successfully committed image in
-                // each directory. The UI can insert its tree node without
-                // reflowing the entire gallery or interrupting the scan.
-                ReportProgress(localPath, force: discoveredFolderId is not null,
-                    discoveredFolderId, discoveredFolderPath);
+                // Advance only after the image's processing has completed or
+                // its failure has been recorded. A scheduler yield while
+                // waiting for a file lock must not double-count this file.
+                imageFilesSeen++;
                 if (resume is not null)
                 {
                     resume.ImageFilesSeen = imageFilesSeen;
@@ -448,6 +438,21 @@ public sealed class FolderScanner
                     resume.FirstFailurePath = firstFailurePath;
                     resume.CurrentFile = null;
                 }
+
+                // The checkpoint is authoritative before any subsequent
+                // cancellation boundary, connection rollover or UI callback.
+                if (catalogCommitClock.ElapsedMilliseconds >= 1000)
+                {
+                    scanSession.Dispose();
+                    scanSession = _catalog.CreateScanSession(
+                        folder.CanonicalPath, folder.Id, generation, cancellationToken);
+                    catalogCommitClock.Restart();
+                }
+
+                // Show each newly discovered folder and regularly refresh
+                // progress; presentation cannot own the scanner cursor.
+                ReportProgress(localPath, force: discoveredFolderId is not null,
+                    discoveredFolderId, discoveredFolderPath);
             }
         }
         catch (OperationCanceledException)
