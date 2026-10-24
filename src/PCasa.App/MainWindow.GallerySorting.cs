@@ -8,6 +8,28 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    // At narrower window widths only the NEW sort selector becomes
+    // icon-only; the existing main menu and search controls never move.
+    // The full criterion remains available via tooltip and dropdown.
+    private void GallerySortWindow_SizeChanged(
+        object sender, SizeChangedEventArgs e)
+    {
+        if (!IsInitialized || GallerySortSelectorButton is null) return;
+        var width = e.NewSize.Width > 0 ? e.NewSize.Width : ActualWidth;
+        var compact = width < 1680;
+        GallerySortSelectorButton.Width = compact ? 35 : 191;
+        GallerySortSelectorButton.Margin = compact
+            ? new Thickness(0, 0, 1, 0)
+            : new Thickness(2, 0, 8, 0);
+        GallerySortSelectorButton.Padding = compact
+            ? new Thickness(1, 0, 1, 0)
+            : new Thickness(8, 0, 8, 0);
+        GallerySortSelectedFieldLabel.Visibility = compact
+            ? Visibility.Collapsed : Visibility.Visible;
+        GallerySortIconPanel.Margin = compact
+            ? new Thickness(0) : new Thickness(0, 0, 7, 0);
+    }
+
     private long _gallerySortRequestVersion;
     // Describes the ordering of the CURRENT published index. It is not a
     // second user preference; it protects against a sort-menu change while
@@ -53,6 +75,9 @@ public partial class MainWindow
             GallerySortField.Dimensions => "Dimension",
             _ => "Name"
         };
+        GallerySortSelectorButton.ToolTip =
+            $"Sortierung: {GallerySortSelectedFieldLabel.Text}, " +
+            (option.Descending ? "absteigend" : "aufsteigend");
     }
 
     private void GallerySortSelector_Click(object sender, RoutedEventArgs e)
