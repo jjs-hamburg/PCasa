@@ -1,6 +1,7 @@
 name: PCasa RAW Portrait Verification
 
 # Explicit one-off acceptance of the reported RAW portrait regression.
+# Retry after fixing FolderRepository import and TreeView drop menu typing.
 # No general CI triggers. Remove this workflow after acceptance.
 on:
   push:
