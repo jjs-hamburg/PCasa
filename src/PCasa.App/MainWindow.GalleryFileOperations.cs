@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.VisualBasic.FileIO;
+using PCasa.App.Data;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -381,7 +382,6 @@ public partial class MainWindow
         var transferPhase = move ? "Bilder verschieben" : "Bilder kopieren";
         var completed = new List<string>();
         var retainedIds = new HashSet<long>();
-        var needsIndex = new List<string>();
         var failed = new List<string>();
         var userCanceled = false;
         var serverRenames = 0;
@@ -397,31 +397,35 @@ public partial class MainWindow
         try
         {
             BeginVisibleManualOperation(key, transferPhase, requested.Length);
-            // This ONE scheduler job owns physical operations, catalog
-            // commits, and the subsequent visible gallery publication.
-            // It must not become Completed before the view has caught up.
-            await _scheduler.EnqueueAsync(
-                key, SchedulerPriority.ManualAction, async token =>
+            // Build a single operation from reusable steps. The first step
+            // validates the destination; each requested file becomes one
+            // independently resumable step and may discover an additional
+            // image-import step. No work is scheduled at lower priority.
+            var package = new SchedulerTaskPackage(key);
+            MonitoredFolder? destinationRoot = null;
+            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (!Directory.Exists(targetPath) ||
+                    !IsMonitoredGalleryDestination(targetPath))
+                    throw new IOException(
+                        "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
+                destinationRoot = _folderRepository.GetAll()
+                    .Where(root => FolderExclusionRules.IsAtOrBelow(
+                        targetPath, root.LocalPath))
+                    .OrderByDescending(root => root.LocalPath.Length)
+                    .FirstOrDefault() ?? throw new IOException(
+                        "Der Zielordner ist nicht überwacht.");
+                _scheduler.ReportProgress(key, transferPhase, 0, requested.Length);
+                return Task.CompletedTask;
+            });
+
+            foreach (var sourcePath in requested)
+            {
+                package.AddStep(async token =>
                 {
-                    token.ThrowIfCancellationRequested();
-                    if (!Directory.Exists(targetPath) ||
-                        !IsMonitoredGalleryDestination(targetPath))
-                        throw new IOException(
-                            "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
-
-                    var roots = _folderRepository.GetAll();
-                    var destinationRoot = roots
-                        .Where(root => FolderExclusionRules.IsAtOrBelow(
-                            targetPath, root.LocalPath))
-                        .OrderByDescending(root => root.LocalPath.Length)
-                        .FirstOrDefault() ?? throw new IOException(
-                            "Der Zielordner ist nicht überwacht.");
-                    var catalog = _imageCatalog;
-                    var reserved = new HashSet<string>(
-                        StringComparer.OrdinalIgnoreCase);
-                    _scheduler.ReportProgress(key, transferPhase, 0, requested.Length);
-
-                    foreach (var source in requested)
+                    foreach (var source in new[] { sourcePath })
                     {
                         token.ThrowIfCancellationRequested();
                         if (!File.Exists(source))
@@ -526,19 +530,34 @@ public partial class MainWindow
                                 if (move && sourceId is long imageId)
                                 {
                                     if (!catalog.RelocateImage(imageId, source,
-                                        destination, destinationRoot, token,
+                                        destination, destinationRoot!, CancellationToken.None,
                                         intentId))
                                         throw new InvalidOperationException(
                                             "Verschiebung erfolgt, Katalogzustand " +
                                             "nicht bestätigt; Wiederherstellung vorgemerkt.");
                                     retainedIds.Add(imageId);
+                                    CatalogChanges.PublishImageCommitted();
                                 }
                                 else
                                 {
                                     if (replace && replacedId is long oldId)
                                         new CatalogRemovalService(_database)
                                             .DetachImage(oldId, destination);
-                                    needsIndex.Add(destination);
+                                    // Attach only the work this file actually needs.
+                                    // The package's cursor survives preemption.
+                                    package.InsertNext(indexToken =>
+                                    {
+                                        indexToken.ThrowIfCancellationRequested();
+                                        _scheduler.ReportProgress(key, "Bild katalogisieren",
+                                            completed.Count, requested.Length, destination);
+                                        var result = _folderScanner.ScanFile(
+                                            destinationRoot!, destination,
+                                            cancellationToken: indexToken);
+                                        if (result.Failed > 0)
+                                            throw new IOException(
+                                                "Katalogaufnahme fehlgeschlagen: " + destination);
+                                        return Task.CompletedTask;
+                                    });
                                 }
                             }
                             completed.Add(destination);
@@ -552,13 +571,20 @@ public partial class MainWindow
                         _scheduler.ReportProgress(key, transferPhase,
                             completed.Count + failed.Count, requested.Length, source);
                     }
+                    // A copy/relocation and its DB identity update are now
+                    // one safe step. Scanner ingestion, when necessary, is
+                    // inserted immediately AFTER it in this package.
+                });
+            }
 
+            package.AddStep(async token =>
+            {
+                token.ThrowIfCancellationRequested();
                     _scheduler.ReportProgress(key, "Galerie aktualisieren",
                         completed.Count, Math.Max(1, requested.Length));
 
-                    // Only this UI publication decides when the manual job
-                    // is allowed to report Completed. The coalescing gallery
-                    // refresh does not discard committed catalog changes.
+                    // Final publication belongs to the SAME package as all
+                    // file changes and image ingestion; no orphaned followup.
                     await Dispatcher.InvokeAsync(async () =>
                     {
                         await RefreshBrowseGalleryAsync(
@@ -587,39 +613,6 @@ public partial class MainWindow
                     _scheduler.ReportProgress(key, "Galerie aktualisiert",
                         completed.Count, Math.Max(1, requested.Length));
 
-                    // New/copied, genuinely uncatalogued images are a separate
-                    // import operation in the existing scanner pathway; they
-                    // never delay completion of the physical transfer.
-                    if (needsIndex.Count > 0)
-                    {
-                        var pathsToIndex = needsIndex.ToArray();
-                        _ = _scheduler.EnqueueAsync(
-                            $"catalog:transfer-import:{Guid.NewGuid():N}",
-                            SchedulerPriority.UserAction,
-                            async followupToken =>
-                            {
-                                foreach (var destination in pathsToIndex)
-                                {
-                                    followupToken.ThrowIfCancellationRequested();
-                                    try
-                                    {
-                                        _folderScanner.ScanFile(
-                                            destinationRoot, destination,
-                                            cancellationToken: followupToken);
-                                    }
-                                    catch (Exception ex) when (ex is IOException or
-                                        UnauthorizedAccessException or
-                                        InvalidOperationException)
-                                    {
-                                        PCasaDiagnostics.Write(
-                                            "Gallery.TransferImport", ex);
-                                    }
-                                }
-                                await Dispatcher.InvokeAsync(async () =>
-                                    await RefreshBrowseGalleryAsync(true))
-                                    .Task.Unwrap();
-                            }, workKind: SchedulerWorkKind.CatalogScan);
-                    }
 
                     // Scheduler state reflects the outcome, not merely that
                     // this delegate returned: partial failure is FAILED and
@@ -633,9 +626,10 @@ public partial class MainWindow
                     if (userCanceled)
                         throw new OperationCanceledException(
                             "Dateiübertragung vom Benutzer abgebrochen.");
-                });
-        }
-        catch (OperationCanceledException)
+
+            });
+            await _scheduler.EnqueuePackageAsync(
+                package, SchedulerPriority.ManualAction);atch (OperationCanceledException)
         {
             StatusText.Text = $"{completed.Count:N0} Datei(en) übertragen · " +
                 "weitere Übertragung abgebrochen";
