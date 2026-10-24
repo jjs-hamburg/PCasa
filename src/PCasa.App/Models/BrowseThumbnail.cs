@@ -65,7 +65,7 @@ public sealed record BrowseThumbnailIndexEntry(
     long FileSize = 0,
     long ModifiedUtcTicks = 0,
     long? CreatedUtcTicks = null,
-    string? DateTimeOriginal = null,
+    long? TakenUtcTicks = null,
     int OriginalWidth = 0,
     int OriginalHeight = 0);
 
