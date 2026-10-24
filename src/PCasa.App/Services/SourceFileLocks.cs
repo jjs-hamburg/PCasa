@@ -18,8 +18,50 @@ public static class SourceFileLocks
     // the lock is released; a short bounded wait makes the same lock preemptible.
     // This lease is ONLY for synchronous work on its acquiring worker thread.
     public static IDisposable Enter(string path, CancellationToken token)
+        => EnterGate(ForPath(path), token);
+
+    private sealed class Lease(object gate) : IDisposable
     {
-        var gate = ForPath(path);
+        public void Dispose() => Monitor.Exit(gate);
+    }
+
+    // A transfer changes TWO paths. A still-running scanner or metadata
+    // writer must not read the destination while it is being replaced.
+    // Always acquire stripes in the same index order; opposite-direction
+    // moves cannot deadlock, including hash-stripe collisions.
+    public static IDisposable EnterPair(string source, string destination,
+        CancellationToken token)
+    {
+        var firstIndex = GateIndex(source);
+        var secondIndex = GateIndex(destination);
+        if (firstIndex == secondIndex)
+            return EnterGate(Gates[firstIndex], token);
+        var lower = Math.Min(firstIndex, secondIndex);
+        var upper = Math.Max(firstIndex, secondIndex);
+        var first = EnterGate(Gates[lower], token);
+        try
+        {
+            var second = EnterGate(Gates[upper], token);
+            return new PairLease(first, second);
+        }
+        catch
+        {
+            first.Dispose();
+            throw;
+        }
+    }
+
+    private sealed class PairLease(IDisposable first, IDisposable second) : IDisposable
+    {
+        public void Dispose()
+        {
+            second.Dispose();
+            first.Dispose();
+        }
+    }
+
+    private static IDisposable EnterGate(object gate, CancellationToken token)
+    {
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -34,15 +76,12 @@ public static class SourceFileLocks
         }
     }
 
-    private sealed class Lease(object gate) : IDisposable
-    {
-        public void Dispose() => Monitor.Exit(gate);
-    }
-
-    public static object ForPath(string path)
+    private static int GateIndex(string path)
     {
         var canonical = Path.GetFullPath(path).Replace('/', '\\');
         var hash = StringComparer.OrdinalIgnoreCase.GetHashCode(canonical) & int.MaxValue;
-        return Gates[hash % Gates.Length];
+        return hash % Gates.Length;
     }
+
+    public static object ForPath(string path) => Gates[GateIndex(path)];
 }
