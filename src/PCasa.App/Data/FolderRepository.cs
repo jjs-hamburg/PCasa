@@ -285,7 +285,9 @@ public sealed class FolderRepository
         long? expectedScanEpoch = null)
     {
         using var connection = _database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
         using var update = connection.CreateCommand();
+        update.Transaction = transaction;
         update.CommandText = """
             UPDATE monitored_folders SET initial_scan_pending = 0
             WHERE id = $id AND initial_scan_pending = 1
@@ -298,7 +300,20 @@ public sealed class FolderRepository
         update.Parameters.AddWithValue("$id", folderId);
         update.Parameters.AddWithValue("$generation", expectedGeneration);
         update.Parameters.AddWithValue("$scanEpoch", (object?)expectedScanEpoch ?? DBNull.Value);
-        return update.ExecuteNonQuery() == 1;
+        var completed = update.ExecuteNonQuery() == 1;
+        if (completed)
+        {
+            // Checkpoints have no purpose once the initial import is done.
+            // Remove them atomically with the durable completion marker.
+            using var cleanup = connection.CreateCommand();
+            cleanup.Transaction = transaction;
+            cleanup.CommandText =
+                "DELETE FROM initial_scan_directories WHERE monitored_folder_id = $id;";
+            cleanup.Parameters.AddWithValue("$id", folderId);
+            cleanup.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return completed;
     }
 
     public void Remove(long id, IProgress<string>? progress = null)
