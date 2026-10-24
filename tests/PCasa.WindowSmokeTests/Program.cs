@@ -72,7 +72,9 @@ internal static class Program
                 gaps.Any(gap => gap < 0 || gap > 80) ||
                 gaps.Max() - gaps.Min() > 2)
                 throw new Exception("Inconsistent top-level menu spacing: " +
-                    string.Join(", ", gaps.Select(gap => gap.ToString("F1"))));
+                    string.Join(", ", gaps.Select(gap => gap.ToString("F1"))) +
+                    $"; window={window.ActualWidth:F0}, menu={menu.ActualWidth:F0}," +
+                    $" sort={((Button?)window.FindName("GallerySortSelectorButton"))?.ActualWidth:F0}");
             Console.WriteLine("PASS: Menu label gaps are consistent: " +
                 string.Join(", ", gaps.Select(gap => gap.ToString("F1"))));
 
