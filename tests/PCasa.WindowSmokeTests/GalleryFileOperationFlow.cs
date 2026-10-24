@@ -411,6 +411,11 @@ internal static class GalleryFileOperationFlow
             Directory.CreateDirectory(midFlightTarget);
             var firstMidFlight = renamed;
             var secondMidFlight = Path.Combine(batch, "test - Kopie.jpg");
+            var firstMovingImageId = CatalogIdAt(db, firstMidFlight);
+            var sourceMovingFolderId = new ImageCatalogRepository(db)
+                .GetPhotoFolders().Single(folder =>
+                    string.Equals(folder.LocalPath, batch,
+                        StringComparison.OrdinalIgnoreCase)).Id;
             var unrelatedId = CatalogIdAt(db, duplicate);
             var indexField = typeof(PCasa.App.MainWindow).GetField(
                 "_displayedBrowseIndex",
@@ -430,6 +435,28 @@ internal static class GalleryFileOperationFlow
                         Path.GetFileName(firstMidFlight))) &&
                     File.Exists(secondMidFlight) && !midFlightTransfer.IsCompleted,
                     "First image did not move independently before the second locked source.");
+
+                // A completed file step must publish its two affected folders
+                // immediately, without waiting for the next blocked step or
+                // running a wholesale NAS/gallery catalog refresh.
+                Until(window, () =>
+                {
+                    var targetFolder = new ImageCatalogRepository(db)
+                        .GetPhotoFolders().FirstOrDefault(folder =>
+                            string.Equals(folder.LocalPath, midFlightTarget,
+                                StringComparison.OrdinalIgnoreCase));
+                    return targetFolder is not null &&
+                        Displayed().Any(image =>
+                            image.ImageId == firstMovingImageId &&
+                            image.PhotoFolderId == targetFolder.Id) &&
+                        !Displayed().Any(image =>
+                            image.ImageId == firstMovingImageId &&
+                            image.PhotoFolderId == sourceMovingFolderId) &&
+                        surface.GetFolderOffset(targetFolder.Id) is not null;
+                }, "Source and target remained frozen until manual package completion.");
+                Console.WriteLine(
+                    "PASS: Source loses and destination gains each committed image while move remains active.");
+
                 // Pump WPF beyond the publication-debounce interval while the
                 // manual package remains incomplete and source image B blocked.
                 var observeUntil = DateTime.UtcNow.AddMilliseconds(1400);
