@@ -114,7 +114,7 @@ internal static class TagFlow
             var sortLabel = (TextBlock?)window.FindName("GallerySortSelectedFieldLabel")
                 ?? throw new Exception("Current sorting criterion not visible.");
             if (!sortName.IsChecked || !sortAscending.IsChecked ||
-                sortDescending.IsChecked || sortDirection.Text != "↑" ||
+                sortDescending.IsChecked || sortDirection.Text != "↓" ||
                 sortLabel.Text != "Name")
                 throw new Exception("PCasa did not show Name ascending in the search bar.");
 
@@ -132,7 +132,7 @@ internal static class TagFlow
                 var bImages = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
                 return sortDescending.IsChecked && sortName.IsChecked &&
-                    sortDirection.Text == "↓" && sortLabel.Text == "Name" &&
+                    sortDirection.Text == "↑" && sortLabel.Text == "Name" &&
                     images.Count == 24 && bImages.Length == 12 &&
                     bImages.SequenceEqual(bImages.OrderByDescending(
                         name => name, StringComparer.OrdinalIgnoreCase)) &&
@@ -146,7 +146,7 @@ internal static class TagFlow
                 var names = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
                 return sortAscending.IsChecked &&
-                    sortDirection.Text == "↑" && names.Length == 12 &&
+                    sortDirection.Text == "↓" && names.Length == 12 &&
                     names.SequenceEqual(names.OrderBy(
                         name => name, StringComparer.OrdinalIgnoreCase));
             }, "Ascending Name sort did not restore default order.");
