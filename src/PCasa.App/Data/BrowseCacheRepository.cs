@@ -98,7 +98,7 @@ public sealed class BrowseCacheRepository
                 AND t.source_modified_utc_ticks = i.modified_utc_ticks
             WHERE te.tier = $tier
               AND te.source_modified_utc_ticks = i.modified_utc_ticks
-            """ + (imageId is long ? " AND i.id = $imageId " : "") + """
+            """ + (imageId is long ? " AND i.id = $imageId " : " ") + """
             ORDER BY
                 pf.canonical_path COLLATE NOCASE,
                 i.file_name COLLATE NOCASE,
