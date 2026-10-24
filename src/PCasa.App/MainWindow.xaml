@@ -340,7 +340,7 @@
                     <MenuItem Header="Hilfe" Margin="0,0,20,0" HorizontalAlignment="Left" />
                 </Menu>
                 <Grid Grid.Column="1" MinWidth="68" Height="27" HorizontalAlignment="Stretch"
-                      Margin="5,0,7,0" VerticalAlignment="Center">
+                      Margin="2,0,3,0" VerticalAlignment="Center">
                     <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
                              Padding="8,0,27,0" ToolTip="Tags oder Dateinamen suchen"
                              TextChanged="TagSearchBox_TextChanged" />
@@ -372,7 +372,7 @@
                     </Button>
                 </Grid>
                 <StackPanel Grid.Column="2" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="0,0,6,0">
+                            VerticalAlignment="Center" Margin="0,0,2,0">
                     <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
                                FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                     <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
@@ -385,7 +385,7 @@
                                  Content="Name" ToolTip="Nach Dateinamen filtern"/>
                 </StackPanel>
                 <StackPanel Grid.Column="3" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="0,0,5,0">
+                            VerticalAlignment="Center" Margin="0,0,2,0">
                     <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
                                FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                     <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
@@ -402,7 +402,7 @@
                                  Content="Ordner" ToolTip="Nur aktueller Ordner ohne Unterordner"/>
                 </StackPanel>
                 <primitives:ToggleButton x:Name="InvertFilterToggle"
-                                         Grid.Column="4" Margin="3,0,3,0"
+                                         Grid.Column="4" Margin="1,0,1,0"
                                          VerticalAlignment="Center"
                                          Style="{StaticResource PcasaSearchInvertStyle}"
                                          Content="NOT"
@@ -411,7 +411,7 @@
                                          Unchecked="FilterResultsInversion_Changed"/>
                 <Button x:Name="GallerySortSelectorButton"
                         Grid.Column="5" Width="120" Height="27"
-                        Margin="4,0,0,0" VerticalAlignment="Center"
+                        Margin="1,0,0,0" VerticalAlignment="Center"
                         Style="{StaticResource PcasaSearchSortButtonStyle}"
                         ToolTip="Bilder innerhalb jedes Ordners sortieren"
                         Click="GallerySortSelector_Click">
