@@ -569,7 +569,10 @@ public partial class MainWindow
                                             "Verschiebung erfolgt, Katalogzustand " +
                                             "nicht bestätigt; Wiederherstellung vorgemerkt.");
                                     retainedIds.Add(imageId);
-                                    CatalogChanges.PublishImageCommitted();
+                                    // The parent package publishes the final
+                                    // gallery once, after all moves/imports.
+                                    // Per-file notifications used to reflow it
+                                    // every 750 ms during a large transfer.
                                 }
                                 else
                                 {
@@ -590,7 +593,8 @@ public partial class MainWindow
                                                     "Übertragene Datei ist nicht mehr vorhanden.", destination);
                                             var result = _folderScanner.ScanFile(
                                                 destinationRoot!, destination,
-                                                cancellationToken: indexToken);
+                                                cancellationToken: indexToken,
+                                                publishCatalogChange: false);
                                             if (result.Failed > 0)
                                                 throw new IOException(
                                                     "Katalogaufnahme fehlgeschlagen: " + destination);
