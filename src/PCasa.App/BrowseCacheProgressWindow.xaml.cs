@@ -221,13 +221,24 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || !_manualPresentationActive ||
             Dispatcher.HasShutdownStarted) return;
-        PhaseText.Text = progress.Phase ?? "Dateioperation läuft";
+        var phase = progress.Phase ?? "Dateioperation läuft";
+        PhaseText.Text = progress.State switch
+        {
+            SchedulerJobState.Queued => phase + " · wartet",
+            SchedulerJobState.YieldRequested => phase + " · pausiert",
+            _ => phase
+        };
         Progress.IsIndeterminate = progress.Total == 0;
         if (progress.Total > 0)
         {
             Progress.Maximum = progress.Total;
             Progress.Value = Math.Min(progress.Total, progress.Processed);
             CountText.Text = $"{progress.Processed:N0} / {progress.Total:N0}";
+        }
+        else
+        {
+            // A recursive NAS scan has no known total until enumeration ends.
+            CountText.Text = $"{progress.Processed:N0} geprüft";
         }
         if (progress.CurrentPath is { Length: > 0 })
         {
