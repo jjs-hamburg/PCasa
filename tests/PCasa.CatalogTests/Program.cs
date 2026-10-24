@@ -35,6 +35,7 @@ internal static class Program
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
+        Run("Two-endpoint source locks serialize opposite transfers", PairedSourceLocksAreOrdered, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
@@ -452,6 +453,52 @@ internal static class Program
             if (result.ImageFilesSeen != 1 || result.Updated != 1)
                 throw new Exception("Resumed source was skipped or counted twice.");
             Require(db, 1);
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void PairedSourceLocksAreOrdered()
+    {
+        static async Task Check()
+        {
+            var source = Path.Combine(Path.GetTempPath(), "pcasa-pair-" +
+                Guid.NewGuid().ToString("N") + "-source.jpg");
+            var target = source + "-target.jpg";
+            using var token = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var firstReady = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseFirst = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = Task.Run(() =>
+            {
+                using (SourceFileLocks.EnterPair(source, target, token.Token))
+                {
+                    firstReady.TrySetResult();
+                    releaseFirst.Task.GetAwaiter().GetResult();
+                }
+            });
+            try
+            {
+                await firstReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var secondAcquired = false;
+                var second = Task.Run(() =>
+                {
+                    using (SourceFileLocks.EnterPair(target, source, token.Token))
+                        secondAcquired = true;
+                });
+                await Task.Delay(100);
+                if (secondAcquired)
+                    throw new Exception("Destination was not locked with the source.");
+                releaseFirst.TrySetResult();
+                await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+                if (!secondAcquired)
+                    throw new Exception("Paired gate acquisition did not resume.");
+            }
+            finally
+            {
+                releaseFirst.TrySetResult();
+                await first.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         Check().GetAwaiter().GetResult();
     }
