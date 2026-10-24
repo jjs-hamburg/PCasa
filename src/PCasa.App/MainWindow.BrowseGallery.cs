@@ -619,7 +619,9 @@ public partial class MainWindow
         if (_manualScanAllActive || _folderRemovalPending)
             return;
 
-        if (_dropTargetProjection.Count == 0)
+        var roots = _dropTargetProjection.Select(entry => entry.Folder)
+            .DistinctBy(folder => folder.Id).ToArray();
+        if (roots.Length == 0)
         {
             MessageBox.Show(
                 this,
@@ -630,79 +632,96 @@ public partial class MainWindow
             return;
         }
 
-        // Do not await background pack maintenance before submitting a
-        // foreground operation. The scheduler preempts its idle lane.
-        _cacheMaintenanceCancellation?.Cancel();
-        // A manual scan is not a permanent cancellation of the NAS scan.
-        _browseCacheCancellation?.Cancel();
+        // Scan All is ONE manual package, not a chain of independent priority
+        // jobs. Every directory keeps its own resumable scanner checkpoint;
+        // the package cursor advances only after that directory is complete.
+        var key = $"catalog:scan-all:{Guid.NewGuid():N}";
+        using var cancellation = new CancellationTokenSource();
+        var scans = new List<CompleteFolderScanStep>();
+        var failures = new List<string>();
+        var package = new SchedulerTaskPackage(key);
         _manualScanAllActive = true;
         _manualScanRunning = true;
         _manualFolderScanWaiting = true;
         _isScanning = true;
+        _activeScanCancellation = cancellation;
+        _activeScanFolderId = null;
+        _cacheMaintenanceCancellation?.Cancel();
+        _browseCacheCancellation?.Cancel();
         UpdateManualScanControls();
-        var failures = new List<string>();
-        var processedFolderIds = new HashSet<long>();
-        CancellationTokenSource? ownedScanCancellation = null;
+        BeginVisibleManualOperation(key, "Alle Ordner einlesen", 0);
 
         try
         {
-            while (!_folderRemovalPending)
+            for (var index = 0; index < roots.Length; index++)
             {
-                // Scan-all chooses from the published folder configuration.
-                // The scheduled scanner revalidates the source ID, generation
-                // and exclusions against SQLite before accessing any files.
-                var currentFolders = _dropTargetProjection.Select(root => root.Folder);
-                var folder = currentFolders.FirstOrDefault(
-                    candidate => !processedFolderIds.Contains(candidate.Id));
-                if (folder is null)
-                {
-                    break;
-                }
-
-                processedFolderIds.Add(folder.Id);
-                using var cancellation = new CancellationTokenSource();
-                ownedScanCancellation = cancellation;
-                _activeScanCancellation = cancellation;
-                _activeScanFolderId = folder.Id;
-                StatusText.Text = $"Einlesen: {folder.LocalPath}";
-
-                var progress = new Progress<ScanProgress>(scan =>
+                var root = roots[index];
+                var position = index + 1;
+                var display = new Progress<ScanProgress>(scan =>
                 {
                     ShowScannedPhotoFolder(scan);
-                    StatusText.Text =
-                        $"Einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} Bilder · {scan.Failed:N0} Fehler";
+                    if (_visibleManualActiveKey == key)
+                        StatusText.Text = $"Einlesen {position}/{roots.Length}: " +
+                            $"{root.LocalPath} · {scan.ImageFilesSeen:N0} geprüft";
                 });
-
-                try
+                var report = new ScanJobProgress(_scheduler, key, display);
+                var step = new CompleteFolderScanStep(this,
+                    root.LocalPath, report, root.Id);
+                scans.Add(step);
+                package.AddStep(async token =>
                 {
-                    await ScheduleCompleteFolderScanAsync(
-                        folder.LocalPath, SchedulerPriority.ManualAction,
-                        progress, cancellation.Token, folder.Id);
-                }
-                catch (OperationCanceledException)
-                    when (_folderRemovalPending ||
-                          !_dropTargetProjection.Any(candidate => candidate.Folder.Id == folder.Id))
-                {
-                }
-                catch (Exception ex)
-                {
-                    if (!_folderRemovalPending)
-                        failures.Add($"{folder.LocalPath}: {ex.Message}");
-                }
-                finally
-                {
-                    if (ReferenceEquals(_activeScanCancellation, cancellation))
+                    // The root may have been removed while this manual packet
+                    // was paused beneath a newer one. Skip only that root.
+                    if (!_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
                     {
-                        _activeScanCancellation = null;
-                        _activeScanFolderId = null;
+                        step.Dispose();
+                        return;
                     }
-                }
+
+                    try
+                    {
+                        await step.ExecuteAsync(token);
+                        step.Dispose();
+                    }
+                    catch (OperationCanceledException) when (
+                        !_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
+                    {
+                        step.Dispose();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Scheduler yield: retain the SAME scanner enumerator.
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Add($"{root.LocalPath}: {ex.Message}");
+                        PCasaDiagnostics.Write("Catalog.ScanAll", ex);
+                        step.Dispose();
+                    }
+                });
             }
+
+            await _scheduler.EnqueuePackageAsync(package,
+                SchedulerPriority.ManualAction, cancellation.Token,
+                workKind: SchedulerWorkKind.CatalogScan);
+        }
+        catch (OperationCanceledException) when (_folderRemovalPending ||
+            cancellation.IsCancellationRequested)
+        {
+            StatusText.Text = "Gesamtscan abgebrochen · abgeschlossene Ordner bleiben katalogisiert";
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Catalog.ScanAll", ex);
+            failures.Add(ex.Message);
         }
         finally
         {
-            // Never clear an overlapping job's cancellation token.
-            if (ReferenceEquals(_activeScanCancellation, ownedScanCancellation))
+            foreach (var scan in scans)
+                scan.Dispose();
+            EndVisibleManualOperation(key);
+            if (ReferenceEquals(_activeScanCancellation, cancellation))
             {
                 _activeScanCancellation = null;
                 _activeScanFolderId = null;
@@ -712,18 +731,22 @@ public partial class MainWindow
             _manualFolderScanWaiting = _manualScanRunning;
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
             UpdateManualScanControls();
+            QueuePendingInitialScans();
+            if (_backgroundPending.Count > 0 &&
+                _backgroundScanSettings?.Enabled == true)
+                _backgroundDebounceTimer?.Start();
         }
 
         if (_folderRemovalPending)
             return;
-
         await EnsureBrowseCacheAndRefreshAsync();
 
         if (failures.Count > 0)
         {
             MessageBox.Show(
                 this,
-                "Einige Ordner konnten nicht eingelesen werden:\n\n" + string.Join("\n", failures),
+                "Einige Ordner konnten nicht eingelesen werden:\n\n" +
+                    string.Join("\n", failures),
                 "PCasa",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
