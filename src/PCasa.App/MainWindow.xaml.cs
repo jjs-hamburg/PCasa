@@ -66,8 +66,10 @@ public partial class MainWindow : Window
         _backgroundDebounceTimer?.Stop();
         try
         {
-            _activeScanCancellation?.Cancel();
-            _backgroundCurrentScanCancellation?.Cancel();
+            // Removing one source must not permanently cancel an entire
+            // older Scan All / manual package. The scheduler yields its worker;
+            // source-generation and exclusion guards invalidate only the
+            // affected scan step. Other root steps resume afterward.
             _browseCacheCancellation?.Cancel();
             _cacheMaintenanceCancellation?.Cancel();
 
