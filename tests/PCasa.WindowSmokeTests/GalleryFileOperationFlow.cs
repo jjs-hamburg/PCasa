@@ -108,28 +108,27 @@ internal static class GalleryFileOperationFlow
             var previousMetadata = MetadataIdentity(db, preservedId);
             var originalIndexCount = new BrowseCacheRepository(db).CountEntries();
 
-            // This lock blocks scanner reconstruction of the destination.
-            // A true catalog relocation must finish without ever needing it.
-            lock (SourceFileLocks.ForPath(moved))
-            {
-                Transfer(window, [copied], third, move: true);
-                if (!File.Exists(moved) || File.Exists(copied))
-                    throw new Exception("Physical move failed.");
-                if (CatalogIdAt(db, moved) != preservedId)
-                    throw new Exception("Move replaced the original image ID.");
-                if (!beforeCache.SequenceEqual(ThumbnailIdentities(db, preservedId)))
-                    throw new Exception("Move re-created or discarded thumbnail cache tiers.");
-                if (MetadataIdentity(db, preservedId) != previousMetadata)
-                    throw new Exception("Move lost original EXIF or tag references.");
-                if (new BrowseCacheRepository(db).CountEntries() != originalIndexCount)
-                    throw new Exception("Move scheduled a duplicate thumbnail import.");
-                var cachedTarget = new BrowseCacheRepository(db).GetIndex(96)
-                    .FirstOrDefault(entry => entry.ImageId == preservedId);
-                if (cachedTarget is null ||
-                    !string.Equals(cachedTarget.FileName, "test.jpg",
-                        StringComparison.OrdinalIgnoreCase))
-                    throw new Exception("Immediate browse index still shows old location.");
-            }
+            // A transfer takes BOTH source and destination locks so it cannot
+            // race with a concurrent scanner reading the target. Never hold a
+            // destination lock on the WPF test thread while waiting for the
+            // transfer itself: that would deadlock the test, not the app.
+            Transfer(window, [copied], third, move: true);
+            if (!File.Exists(moved) || File.Exists(copied))
+                throw new Exception("Physical move failed.");
+            if (CatalogIdAt(db, moved) != preservedId)
+                throw new Exception("Move replaced the original image ID.");
+            if (!beforeCache.SequenceEqual(ThumbnailIdentities(db, preservedId)))
+                throw new Exception("Move re-created or discarded thumbnail cache tiers.");
+            if (MetadataIdentity(db, preservedId) != previousMetadata)
+                throw new Exception("Move lost original EXIF or tag references.");
+            if (new BrowseCacheRepository(db).CountEntries() != originalIndexCount)
+                throw new Exception("Move scheduled a duplicate thumbnail import.");
+            var cachedTarget = new BrowseCacheRepository(db).GetIndex(96)
+                .FirstOrDefault(entry => entry.ImageId == preservedId);
+            if (cachedTarget is null ||
+                !string.Equals(cachedTarget.FileName, "test.jpg",
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Immediate browse index still shows old location.");
             Until(window, () => !File.Exists(copied) && File.Exists(moved) &&
                 CountInRoot(db, root) == 2,
                 "Move did not commit target catalog location.");
@@ -423,9 +422,10 @@ internal static class GalleryFileOperationFlow
             actualBackgroundScan.GetAwaiter().GetResult();
             Console.WriteLine("PASS: Manual move completes ahead of real in-flight image scanning.");
 
-            // Next block just the destination's EXIF/thumbnail source lock.
-            // The actual move must already be committed while its indexing
-            // continuation is blocked, proving physical work runs FIRST.
+            // Unknown destinations require import AFTER physical relocation,
+            // but neither step may race a decoder holding the destination lock.
+            // Verify that the transfer yields at the shared source gate and
+            // completes ingestion under the SAME manual package once released.
             var uncachedSource = Path.Combine(first, "physical-first.jpg");
             var uncachedDestination = Path.Combine(third, "physical-first.jpg");
             WriteJpeg(uncachedSource);
@@ -433,22 +433,25 @@ internal static class GalleryFileOperationFlow
             lock (SourceFileLocks.ForPath(uncachedDestination))
             {
                 deferredIndexing = StartTransfer(window, [uncachedSource], third, move: true);
-                Until(window, () => !File.Exists(uncachedSource) &&
-                    File.Exists(uncachedDestination),
-                    "Physical move waited for the destination image decoder.");
-                // Physical movement is committed but the SAME manual
-                // package must remain running until the image's EXIF, pack
-                // cache and catalog have been committed and published.
-                if (deferredIndexing.IsCompleted)
+                Until(window, () => scheduler.Snapshot().Any(job =>
+                        job.Key.StartsWith("gallery:file-transfer:") &&
+                        job.State == SchedulerJobState.Running &&
+                        string.Equals(job.CurrentPath, uncachedSource,
+                            StringComparison.OrdinalIgnoreCase)),
+                    "Uncatalogued move never reached destination lock.");
+                // A scanner cannot read a partially moved/replaced destination.
+                if (deferredIndexing.IsCompleted ||
+                    !File.Exists(uncachedSource) || File.Exists(uncachedDestination))
                     throw new Exception(
-                        "Manual package completed before its mandatory image indexing.");
+                        "Transfer ignored the destination-image lock.");
             }
             Until(window, () => deferredIndexing.IsCompleted,
-                "Deferred image indexing did not complete.");
+                "Deferred physical move and image indexing did not complete.");
             deferredIndexing.GetAwaiter().GetResult();
-            if (!CatalogContains(db, uncachedDestination))
-                throw new Exception("Package finished without indexed destination image.");
-            Console.WriteLine("PASS: Uncatalogued move waits for the same-package EXIF, cache and catalog import.");
+            if (File.Exists(uncachedSource) || !File.Exists(uncachedDestination) ||
+                !CatalogContains(db, uncachedDestination))
+                throw new Exception("Package finished without physical move and indexed destination image.");
+            Console.WriteLine("PASS: Uncatalogued move honors destination lock and finishes same-package EXIF, cache and catalog import.");
 
             // An earlier manual file move may be stuck in a source lock.
             // The user's next manual drop must become a QUEUED scheduler job,
