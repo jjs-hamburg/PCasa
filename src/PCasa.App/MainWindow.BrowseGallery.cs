@@ -483,6 +483,8 @@ public partial class MainWindow
         // folder list paired with the previous gallery index.
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
         PublishPhotoFolderSnapshot(nextFolders, imageCount);
+        if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
+            nextIndex = _browseIndex;
         if (nextIndex is not null)
         {
             IReadOnlyList<BrowseThumbnailIndexEntry> ordered = nextIndex;
@@ -502,6 +504,7 @@ public partial class MainWindow
                 _dragSelectionPathCache.Clear();
             }
             _activeBrowseTier = tier;
+            _publishedGallerySort = CurrentGallerySort;
         }
         System.Threading.Volatile.Write(ref _galleryHasIndexedImages,
             _browseIndex.Count > 0 ? 1 : 0);
