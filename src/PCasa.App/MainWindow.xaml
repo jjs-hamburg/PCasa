@@ -13,7 +13,8 @@
         WindowStartupLocation="CenterScreen"
         Loaded="BackgroundScan_WindowLoaded"
         Closed="BackgroundScan_WindowClosed"
-        PreviewKeyDown="PhotoViewerWindow_PreviewKeyDown">
+        PreviewKeyDown="PhotoViewerWindow_PreviewKeyDown"
+        SizeChanged="GallerySortWindow_SizeChanged">
     <Window.Resources>
         <Style x:Key="PcasaLogicSymbolStyle" TargetType="RadioButton">
             <Setter Property="Width" Value="26"/>
@@ -296,7 +297,7 @@
                     <Button.Content>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <!-- LAP-like graded lines with flow-direction arrow; no extra triangle -->
-                            <Grid Width="29" Height="20" Margin="0,0,7,0">
+                            <Grid x:Name="GallerySortIconPanel" Width="29" Height="20" Margin="0,0,7,0">
                                 <Path Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                       Data="M 1,4 L 11,4 M 1,9 L 8,9 M 1,14 L 5,14"/>
