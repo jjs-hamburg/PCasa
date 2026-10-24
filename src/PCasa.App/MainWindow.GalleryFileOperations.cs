@@ -402,6 +402,7 @@ public partial class MainWindow
             // independently resumable step and may discover an additional
             // image-import step. No work is scheduled at lower priority.
             var package = new SchedulerTaskPackage(key);
+            var catalog = _imageCatalog;
             MonitoredFolder? destinationRoot = null;
             var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             package.AddStep(token =>
@@ -485,7 +486,7 @@ public partial class MainWindow
                                     intentId = Guid.NewGuid().ToString("N");
                                     catalog.BeginRelocationIntent(intentId,
                                         indexed, source, destination,
-                                        destinationRoot.Id);
+                                        destinationRoot!.Id);
                                 }
 
                                 if (move)
@@ -629,7 +630,9 @@ public partial class MainWindow
 
             });
             await _scheduler.EnqueuePackageAsync(
-                package, SchedulerPriority.ManualAction);atch (OperationCanceledException)
+                package, SchedulerPriority.ManualAction);
+        }
+        catch (OperationCanceledException)
         {
             StatusText.Text = $"{completed.Count:N0} Datei(en) übertragen · " +
                 "weitere Übertragung abgebrochen";
