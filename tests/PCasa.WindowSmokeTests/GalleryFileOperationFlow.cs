@@ -504,7 +504,15 @@ internal static class GalleryFileOperationFlow
             if (File.Exists(firstQueuedSource) || File.Exists(secondQueuedSource) ||
                 !File.Exists(firstQueuedTarget) || !File.Exists(secondQueuedTarget))
                 throw new Exception(
-                    "Queued manual moves did not physically relocate both source files.");
+                    "Queued manual moves did not physically relocate both source files. " +
+                    $"A source={File.Exists(firstQueuedSource)}, target={File.Exists(firstQueuedTarget)}; " +
+                    $"B source={File.Exists(secondQueuedSource)}, target={File.Exists(secondQueuedTarget)}; " +
+                    $"Task A={firstQueuedTransfer.Status}, B={secondQueuedTransfer.Status}; " +
+                    $"UI={(window.FindName("StatusText") as TextBlock)?.Text}; " +
+                    "Jobs=" + string.Join(" | ", scheduler.Snapshot()
+                        .Where(job => job.Key.StartsWith("gallery:file-transfer:",
+                            StringComparison.Ordinal)).TakeLast(5)
+                        .Select(job => $"{job.Key}:{job.State}/{job.Phase}/{job.Error}")));
             Console.WriteLine(
                 "PASS: Overlapping manual drops are queued, executed and visible without losing files.");
 

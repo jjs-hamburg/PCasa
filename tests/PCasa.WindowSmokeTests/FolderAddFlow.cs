@@ -97,10 +97,13 @@ internal static class FolderAddFlow
                     surface.GetFolderOffset(firstFolder.Id).HasValue &&
                     roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, initialRoot)),
                 "Gallery stayed empty while first JPEG was committed and the scan remained active.");
+            Until(window, () =>
+                    (initialTreeRoot.Header as string)?.Contains("(1)") == true,
+                "The folder counter did not increment while the second image was blocked.");
             if (!ReferenceEquals(initialTreeRoot,
                 Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))))
                 throw new Exception("Gallery catalog refresh destroyed the independent folder tree.");
-            Console.WriteLine("PASS: First image visible while scan blocks; gallery refresh did not rebuild tree.");
+            Console.WriteLine("PASS: First image and folder counter visible during blocked ongoing scan; tree identity preserved.");
 
             releaseDelayedPhoto.Set();
             blockedFile.GetAwaiter().GetResult();
@@ -110,9 +113,10 @@ internal static class FolderAddFlow
                 "Priority initial scan did not finish or clear its durable request.");
             var later = new ImageCatalogRepository(db).GetPhotoFolders()
                 .Single(folder => SamePath(folder.LocalPath, laterFolder));
-            Until(window, () => surface.GetFolderOffset(later.Id).HasValue,
-                "Completed scan did not expose later JPEG in gallery.");
-            Console.WriteLine("PASS: Full catalog/gallery completes without background monitoring.");
+            Until(window, () => surface.GetFolderOffset(later.Id).HasValue &&
+                    (initialTreeRoot.Header as string)?.Contains("(2)") == true,
+                "Completed scan did not expose its second JPEG and updated folder count.");
+            Console.WriteLine("PASS: Full catalog/gallery and parent count complete without background monitoring.");
 
             // A manually created folder is published on the WPF tree before
             // the actual I/O can start. Occupy the one Manual SourceProbe
