@@ -38,7 +38,9 @@ public partial class MainWindow
         GallerySortDescendingMenu.IsChecked = option.Descending;
         // One visible, persisted criterion in the search toolbar. The
         // direction glyph belongs to this SAME state, not a second toggle.
-        GallerySortDirectionGlyph.Text = option.Descending ? "↓" : "↑";
+        // The arrow follows the progression down the visible image list:
+        // ascending grows downward (↓), descending shrinks downward (↑).
+        GallerySortDirectionGlyph.Text = option.Descending ? "↑" : "↓";
         GallerySortSelectedFieldLabel.Text = option.Field switch
         {
             GallerySortField.Captured => "Aufnahme",
