@@ -1,4 +1,4 @@
-name: Scheduler LIFO Diagnostic
+name: Scheduler Consistency Tests
 
 # Windows CI is intentionally manual: no run on every development push.
 # A deliberately dispatched acceptance run also publishes the test package.
@@ -18,7 +18,6 @@ env:
 jobs:
   catalog-regressions:
     runs-on: windows-latest
-    timeout-minutes: 15
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v5
@@ -29,13 +28,41 @@ jobs:
       - name: Install verified lossless metadata tool
         shell: pwsh
         run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
+      - name: Probe EXIF reader, GPS fields and legacy backfill
+        env:
+          PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --exif-probe
+      - name: Run catalog regression executable
+        env:
+          PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release
+      - name: Run WPF window smoke tests
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
+      - name: Exercise real WPF context-menu folder removal under active cache lock
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-removal
+      - name: Exercise real WPF priority folder add and restart
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-add
+      - name: Exercise real WPF tag search and folder-anchor round trip
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --tag-flow
       - name: Exercise real WPF gallery copy and move on monitored folders
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
 
       - name: Publish self-contained Windows x64 acceptance package
-        if: github.ref == 'refs/heads/scheduler-acceptance-20261023' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
@@ -44,7 +71,7 @@ jobs:
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
           if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
       - name: Upload scheduler acceptance test package
-        if: github.ref == 'refs/heads/scheduler-acceptance-20261023' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: PCasa-win-x64
