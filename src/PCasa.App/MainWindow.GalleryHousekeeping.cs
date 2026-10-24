@@ -20,8 +20,8 @@ public partial class MainWindow
         slider.ApplyTemplate();
         var track = slider.Template.FindName("PART_Track", slider) as Track;
         if (track?.Thumb is not Thumb thumb) return;
-        thumb.Width = 13;
-        thumb.Height = 21;
+        thumb.Width = 11;
+        thumb.Height = 16;
         thumb.Template = (ControlTemplate)FindResource("PcasaCompactSliderThumbTemplate");
 
         if (ReferenceEquals(slider, ThumbnailSpacingSlider))
