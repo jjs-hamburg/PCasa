@@ -210,8 +210,17 @@
 
         <Border Grid.Row="0"
                 Background="{DynamicResource PcasaTopBrush}"
-                MinHeight="42">
-            <DockPanel LastChildFill="True">
+                MinHeight="70">
+            <!-- The menu and the complete search/sort toolbar need separate
+                 layout rows. A sixth right-side control otherwise overlaps
+                 the main menu at minimum desktop window width. -->
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="32"/>
+                    <RowDefinition Height="38"/>
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="1" LastChildFill="False"
+                           HorizontalAlignment="Right" Margin="6,0,8,0">
 
 
                 <!-- The search bar has exactly two exclusive selections:
@@ -328,6 +337,8 @@
                                  Checked="SearchMode_Changed"
                                  Content="Name" ToolTip="Nach Dateinamen filtern"/>
                 </StackPanel>
+                </DockPanel>
+                <DockPanel Grid.Row="0" LastChildFill="True">
                 <Menu Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
                       VerticalAlignment="Center"
@@ -444,7 +455,8 @@
                     </MenuItem>
                     <MenuItem Header="Hilfe" Margin="0,0,20,0" HorizontalAlignment="Left" />
                 </Menu>
-            </DockPanel>
+                </DockPanel>
+            </Grid>
         </Border>
 
         <Border Grid.Row="1" Visibility="{Binding Visibility, ElementName=ViewerToolbar}"
