@@ -32,6 +32,7 @@ internal static class Program
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
+        Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
@@ -399,6 +400,43 @@ internal static class Program
         var latest = scanner.Scan(root);
         if (latest.Removed != 1) 
             throw new Exception("Newest complete inventory failed to reconcile missing paths.");
+        Require(db, 3);
+    }
+
+    private static void SourceChangeRejectsOldScanCheckpoint()
+    {
+        using var sandbox = new Sandbox();
+        for (var i = 0; i < 3; i++)
+            WriteJpeg(Path.Combine(sandbox.Images, $"source-{i}.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        using var resume = new FolderScanner.ScanResumeState();
+        using var cancellation = new CancellationTokenSource();
+        var interrupted = false;
+        var callback = new InlineProgress<ScanProgress>(scan =>
+        {
+            if (interrupted || scan.CurrentFile is null) return;
+            interrupted = true;
+            cancellation.Cancel();
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, true, callback,
+                cancellation.Token, resume);
+            throw new Exception("Scanner ignored the yield checkpoint.");
+        }
+        catch (OperationCanceledException) when (interrupted) { }
+        if (resume.CommittedFiles != 1)
+            throw new Exception("Expected one committed file before source change.");
+
+        var excluded = Path.Combine(root.LocalPath, "excluded-later");
+        Directory.CreateDirectory(excluded);
+        new FolderRepository(db).SetExcluded(root.Id, excluded, true);
+        var rejected = false;
+        try { scanner.ScanDirectory(root, root.LocalPath, true, resume: resume); }
+        catch (OperationCanceledException) { rejected = true; }
+        if (!rejected || resume.CommittedFiles != 0)
+            throw new Exception("Old source generation silently rescanned from zero.");
+        scanner.Scan(root);
         Require(db, 3);
     }
 
