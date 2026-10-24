@@ -386,6 +386,10 @@ public partial class MainWindow
         var userCanceled = false;
         var serverRenames = 0;
         var crossVolumeCopies = 0;
+        // The tier is captured on WPF before the scheduler begins. Each
+        // successful step can publish one immutable catalog projection;
+        // a later thumb-size change will fall back to the final full read.
+        var presentationTier = _activeBrowseTier;
 
         _outstandingGalleryMutations++;
         _outstandingFileTransfers++;
@@ -464,6 +468,9 @@ public partial class MainWindow
                                 completed.Count + failed.Count,
                                 requested.Length, source);
                             var replace = false;
+                            long? movedImageId = null;
+                            long? movedFromFolderId = null;
+                            long? removedTargetId = null;
                             if (reserved.Contains(destination))
                                 destination = UniqueCopyPath(destination, reserved);
                             else if (samePath || File.Exists(destination))
@@ -494,6 +501,10 @@ public partial class MainWindow
                                 var sourceId = move ? CatalogImageIdAtPath(source) : null;
                                 var replacedId = replace
                                     ? CatalogImageIdAtPath(destination) : null;
+                                removedTargetId = replacedId;
+                                if (move && sourceId is long knownId)
+                                    movedFromFolderId =
+                                        catalog.GetImagePhotoFolderId(knownId);
                                 // Any in-flight older NAS inventory must not
                                 // prune a newly copied/moved destination.
                                 FenceInventory(destinationRoot!);
@@ -569,6 +580,7 @@ public partial class MainWindow
                                             "Verschiebung erfolgt, Katalogzustand " +
                                             "nicht bestätigt; Wiederherstellung vorgemerkt.");
                                     retainedIds.Add(imageId);
+                                    movedImageId = imageId;
                                     // The parent package publishes the final
                                     // gallery once, after all moves/imports.
                                     // Per-file notifications used to reflow it
@@ -598,6 +610,15 @@ public partial class MainWindow
                                             if (result.Failed > 0)
                                                 throw new IOException(
                                                     "Katalogaufnahme fehlgeschlagen: " + destination);
+                                            // A newly decoded source is now
+                                            // durably in the same catalog as
+                                            // any relocated image. Publish via
+                                            // the SAME gallery delta path.
+                                            if (CatalogImageIdAtPath(destination) is long newId)
+                                                PublishCommittedGalleryImage(
+                                                    presentationTier, newId,
+                                                    previousFolderId: null,
+                                                    replacedImageId: removedTargetId);
                                         }
                                         catch (Exception ex) when (ex is IOException or
                                             UnauthorizedAccessException or InvalidOperationException)
@@ -610,6 +631,14 @@ public partial class MainWindow
                                     });
                                 }
                             }
+                            // The physical move and SQLite relocation are
+                            // already committed. Never wait for WPF while
+                            // holding the two file gates or the scheduler.
+                            // Unrelated folders retain their displayed index.
+                            if (movedImageId is long committedImageId)
+                                PublishCommittedGalleryImage(presentationTier,
+                                    committedImageId, movedFromFolderId,
+                                    removedTargetId);
                             completed.Add(destination);
                             reserved.Add(destination);
                         }
