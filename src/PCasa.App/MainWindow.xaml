@@ -214,7 +214,7 @@
             <!-- One agreed row: main menu | search | WAS | WO | NOT | sort.
                  Only the search-width column flexes; none of the established
                  controls or their events are duplicated or replaced. -->
-            <Grid Margin="0,0,8,0">
+            <Grid Margin="0,0,4,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*" MinWidth="68"/>
@@ -410,7 +410,7 @@
                                          Checked="FilterResultsInversion_Changed"
                                          Unchecked="FilterResultsInversion_Changed"/>
                 <Button x:Name="GallerySortSelectorButton"
-                        Grid.Column="5" Width="120" Height="27"
+                        Grid.Column="5" Width="112" Height="27"
                         Margin="1,0,0,0" VerticalAlignment="Center"
                         Style="{StaticResource PcasaSearchSortButtonStyle}"
                         ToolTip="Bilder innerhalb jedes Ordners sortieren"
