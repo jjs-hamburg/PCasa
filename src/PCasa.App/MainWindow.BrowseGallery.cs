@@ -956,6 +956,7 @@ public partial class MainWindow
             return;
         }
 
+        MarkExplicitGalleryNavigation();
         _appearance.SelectedTreePath = tag.FullPath;
         SaveAppearance();
 
@@ -996,7 +997,10 @@ public partial class MainWindow
             return;
         var item = FindAncestor<TreeViewItem>(source);
         if (item?.IsSelected == true && item.Tag is FolderTreeTag { PhotoFolderId: long folderId })
+        {
+            MarkExplicitGalleryNavigation();
             _ = NavigateToPhotoFolderAsync(item, folderId);
+        }
     }
 
     private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
