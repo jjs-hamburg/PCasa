@@ -128,13 +128,15 @@ public sealed class FolderScanner
         MonitoredFolder folder,
         string localFile,
         IProgress<ScanProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool publishCatalogChange = true)
     {
         if (!IsSupportedImagePath(localFile) || !File.Exists(localFile))
             return new ScanResult(0, 0, 0, 0);
         return ScanDirectoryLocked(
             folder, Path.GetDirectoryName(localFile)!, false,
-            progress, cancellationToken, localFile);
+            progress, cancellationToken, localFile,
+            publishCatalogChange: publishCatalogChange);
     }
 
     private ScanResult ScanDirectoryLocked(
@@ -144,7 +146,8 @@ public sealed class FolderScanner
         IProgress<ScanProgress>? progress,
         CancellationToken cancellationToken,
         string? specificFile = null,
-        ScanResumeState? resume = null)
+        ScanResumeState? resume = null,
+        bool publishCatalogChange = true)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -391,7 +394,8 @@ public sealed class FolderScanner
                         // The gallery observes catalog commits, not scanner
                         // progress, tree state or scan completion. Publication
                         // occurs only after the SQLite image+cache index commit.
-                        CatalogChanges.PublishImageCommitted();
+                        if (publishCatalogChange)
+                            CatalogChanges.PublishImageCommitted();
                         if (firstFileInThisScanFolder)
                         {
                             discoveredFolderId = photoFolderId;
