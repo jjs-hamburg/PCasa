@@ -14,8 +14,15 @@ public partial class MainWindow
     private void GallerySortWindow_SizeChanged(
         object sender, SizeChangedEventArgs e)
     {
-        if (!IsInitialized || GallerySortSelectorButton is null) return;
-        var width = e.NewSize.Width > 0 ? e.NewSize.Width : ActualWidth;
+        if (GallerySortSelectorButton is not { IsLoaded: true }) return;
+        ApplyGallerySortResponsive(e.NewSize.Width);
+    }
+
+    private void GallerySortSelector_Loaded(object sender, RoutedEventArgs e)
+        => ApplyGallerySortResponsive(ActualWidth > 0 ? ActualWidth : Width);
+
+    private void ApplyGallerySortResponsive(double width)
+    {
         var compact = width < 1680;
         GallerySortSelectorButton.Width = compact ? 35 : 191;
         GallerySortSelectorButton.Margin = compact
