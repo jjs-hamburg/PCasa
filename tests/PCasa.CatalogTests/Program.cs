@@ -3043,18 +3043,24 @@ internal static class Program
     private static void RawPreviewOrientation()
     {
         using var sandbox = new Sandbox();
-        // Rotation is pixel geometry. Use a valid JPEG as a reproducible
-        // unrotated preview, then apply the very same transform used for RAW.
-        // A true Sony/Nikon binary is still needed to verify camera tags.
+        // The historical test merely checked metadata width/height. A lazy
+        // 90-degree libvips rotation may report correct dimensions but fail
+        // at the first real PNG/JPEG encode with "out of order read".
+        //
+        // Use a JPEG-sized *embedded RAW preview*, not a tiny 96x48 icon,
+        // because the sequential JPEG reader must cross several line-cache
+        // boundaries before the backward/column-wise failure is observable.
         var original = Path.Combine(sandbox.Images, "embedded-preview.jpg");
-        const int width = 96, height = 48;
+        const int width = 1600, height = 900;
         var pixels = new byte[width * height * 4];
-        for (var i = 0; i < pixels.Length; i += 4)
+        for (var y = 0; y < height; y++)
+        for (var x = 0; x < width; x++)
         {
-            pixels[i] = 50;
-            pixels[i + 1] = 100;
-            pixels[i + 2] = 180;
-            pixels[i + 3] = 255;
+            var p = (y * width + x) * 4;
+            pixels[p] = (byte)(x % 255);
+            pixels[p + 1] = (byte)(y % 255);
+            pixels[p + 2] = 180;
+            pixels[p + 3] = 255;
         }
         var bitmap = BitmapSource.Create(width, height, 96, 96,
             PixelFormats.Bgr32, null, pixels, width * 4);
@@ -3062,16 +3068,28 @@ internal static class Program
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using (var output = File.Create(original)) encoder.Save(output);
         var sha = SHA256.HashData(File.ReadAllBytes(original));
-        foreach (var orientation in new[] { 1, 3, 6, 8 })
+
+        foreach (var size in new[] { 512, 1280 })
+        foreach (var orientation in new[] { 1, 2, 3, 4, 5, 6, 7, 8 })
         {
-            using var unrotated = NetVips.Image.Thumbnail(original, 256,
-                height: 256, size: NetVips.Enums.Size.Down, noRotate: true);
+            using var unrotated = NetVips.Image.Thumbnail(original, size,
+                height: size, size: NetVips.Enums.Size.Down, noRotate: true);
+            var expectedWidth = unrotated.Width;
+            var expectedHeight = unrotated.Height;
             using var oriented = RawImageSource.ApplyOrientation(unrotated, orientation);
-            var swap = orientation is 6 or 8;
-            if (oriented.Width != (swap ? height : width) ||
-                oriented.Height != (swap ? width : height))
+            var swapsAxes = orientation is 5 or 6 or 7 or 8;
+            expectedWidth = swapsAxes ? unrotated.Height : unrotated.Width;
+            expectedHeight = swapsAxes ? unrotated.Width : unrotated.Height;
+
+            // Require actual pixel evaluation, not just lazy dimensions.
+            // This is precisely the point where the former code failed.
+            var png = oriented.PngsaveBuffer(compression: 1);
+            using var decoded = NetVips.Image.NewFromBuffer(png);
+            if (decoded.Width != expectedWidth ||
+                decoded.Height != expectedHeight)
                 throw new Exception(
-                    $"RAW preview EXIF {orientation}: {oriented.Width}x{oriented.Height} was not correctly rotated.");
+                    $"RAW preview {size}px EXIF {orientation}: " +
+                    $"{decoded.Width}x{decoded.Height} != {expectedWidth}x{expectedHeight}.");
             if (!sha.SequenceEqual(SHA256.HashData(File.ReadAllBytes(original))))
                 throw new Exception("RAW preview orientation modified its source.");
         }
