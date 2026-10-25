@@ -332,6 +332,143 @@ public sealed class ImageTagRepository
         }
     }
 
+    // Execute one source read and at most one write per image, regardless of
+    // the number of pending tag changes. The SQLite intent table remains the
+    // sole durable backlog; it is never copied into another persistent queue.
+    public void ApplyPendingImageEdits(long imageId,
+        IReadOnlyList<(long Id, long ImageId, string Tag, bool Present, long Revision)> edits,
+        ExifToolKeywordWriter.Session writer, CancellationToken token)
+    {
+        if (edits.Count == 0) return;
+        token.ThrowIfCancellationRequested();
+        using var db = _database.OpenConnection();
+        using var pathCommand = db.CreateCommand();
+        pathCommand.CommandText =
+            "SELECT local_path,file_size,modified_utc_ticks FROM images WHERE id=$id";
+        pathCommand.Parameters.AddWithValue("$id", imageId);
+        string path;
+        long indexedSize, indexedTicks;
+        using (var reader = pathCommand.ExecuteReader())
+        {
+            if (!reader.Read()) return; // Deleted images cascade their pending work.
+            path = reader.GetString(0);
+            indexedSize = reader.GetInt64(1);
+            indexedTicks = reader.GetInt64(2);
+        }
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
+            throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
+        using (SourceFileLocks.Enter(path, token))
+        {
+            // Validate snapshot revisions BEFORE touching a potentially slow NAS.
+            using (var check = db.CreateCommand())
+            {
+                check.CommandText = """
+                    SELECT revision,desired_present FROM pending_tag_edits
+                    WHERE image_id=$id AND tag=$tag;
+                    """;
+                check.Parameters.AddWithValue("$id", imageId);
+                var tagParameter = check.Parameters.Add("$tag", SqliteType.Text);
+                foreach (var edit in edits)
+                {
+                    tagParameter.Value = edit.Tag;
+                    using var row = check.ExecuteReader();
+                    if (!row.Read() || row.GetInt64(0) != edit.Revision ||
+                        (row.GetInt64(1) != 0) != edit.Present)
+                        return; // Newer user intent: re-read the backlog.
+                }
+            }
+            token.ThrowIfCancellationRequested();
+            var before = new FileInfo(path);
+            var oldSize = before.Length;
+            var oldTicks = before.LastWriteTimeUtc.Ticks;
+            var tags = writer.Read(path, token)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Select(t => t.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var changed = false;
+            foreach (var edit in edits)
+            {
+                if (edit.Present)
+                {
+                    if (!tags.Contains(edit.Tag, StringComparer.OrdinalIgnoreCase))
+                    {
+                        tags.Add(edit.Tag);
+                        changed = true;
+                    }
+                }
+                else if (tags.RemoveAll(t =>
+                    t.Equals(edit.Tag, StringComparison.OrdinalIgnoreCase)) > 0)
+                    changed = true;
+            }
+            if (changed)
+            {
+                token.ThrowIfCancellationRequested();
+                writer.Write(path, tags, token);
+                if (File.GetLastWriteTimeUtc(path).Ticks != oldTicks)
+                    File.SetLastWriteTimeUtc(path,
+                        new DateTime(oldTicks, DateTimeKind.Utc));
+            }
+            token.ThrowIfCancellationRequested();
+            var after = new FileInfo(path);
+            var newSize = after.Length;
+            var newTicks = after.LastWriteTimeUtc.Ticks;
+            using var tx = db.BeginTransaction();
+            // Preserve the optimistic projection: newer edits may have landed
+            // while the source write was in progress.
+            using (var done = db.CreateCommand())
+            {
+                done.Transaction = tx;
+                done.CommandText = """
+                    DELETE FROM pending_tag_edits
+                    WHERE image_id=$id AND tag=$tag AND revision=$revision;
+                    """;
+                done.Parameters.AddWithValue("$id", imageId);
+                var tagParam = done.Parameters.Add("$tag", SqliteType.Text);
+                var revisionParam = done.Parameters.Add("$revision", SqliteType.Integer);
+                foreach (var edit in edits)
+                {
+                    tagParam.Value = edit.Tag;
+                    revisionParam.Value = edit.Revision;
+                    done.ExecuteNonQuery();
+                }
+            }
+            // A keyword-only edit preserves the original timestamp. Update
+            // the cached byte length so scans do not rebuild pixel caches.
+            if (oldSize == indexedSize && oldTicks == indexedTicks &&
+                newTicks == oldTicks && newSize != oldSize)
+            {
+                using var size = db.CreateCommand();
+                size.Transaction = tx;
+                size.CommandText = """
+                    UPDATE images SET file_size=$newSize
+                    WHERE id=$id AND file_size=$oldSize
+                      AND modified_utc_ticks=$ticks;
+                    """;
+                size.Parameters.AddWithValue("$newSize", newSize);
+                size.Parameters.AddWithValue("$id", imageId);
+                size.Parameters.AddWithValue("$oldSize", oldSize);
+                size.Parameters.AddWithValue("$ticks", oldTicks);
+                if (size.ExecuteNonQuery() == 1)
+                {
+                    using var exif = db.CreateCommand();
+                    exif.Transaction = tx;
+                    exif.CommandText = """
+                        UPDATE image_exif SET source_file_size=$newSize
+                        WHERE image_id=$id AND source_file_size=$oldSize
+                          AND source_modified_utc_ticks=$ticks;
+                        """;
+                    exif.Parameters.AddWithValue("$newSize", newSize);
+                    exif.Parameters.AddWithValue("$id", imageId);
+                    exif.Parameters.AddWithValue("$oldSize", oldSize);
+                    exif.Parameters.AddWithValue("$ticks", oldTicks);
+                    exif.ExecuteNonQuery();
+                }
+            }
+            tx.Commit();
+        }
+    }
+
     public HashSet<long> SearchImageIds(string text)
     {
         var tokens = Regex.Matches(text, @"[\p{L}\p{N}_]+")
