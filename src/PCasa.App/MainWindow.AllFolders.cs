@@ -81,7 +81,12 @@ public partial class MainWindow
             // the selected subtree, never an unrelated NAS or drive root.
             var paths = await _scheduler.RunAsync(
                 $"folder-tree:scope:{Guid.NewGuid():N}",
-                SchedulerPriority.ManualAction,
+                // This is a read-only tree projection, not a user mutation.
+                // ManualAction would suspend the background catalog lane for
+                // the ENTIRE NAS walk and stall durable first imports.
+                // Interactive SourceProbe has its own scheduler worker and
+                // does not preempt or block the image scanner.
+                SchedulerPriority.Interactive,
                 token =>
                 {
                     var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
