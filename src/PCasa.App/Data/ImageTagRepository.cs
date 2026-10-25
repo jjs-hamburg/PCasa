@@ -287,51 +287,6 @@ public sealed class ImageTagRepository
         return result;
     }
 
-    // The file mutation reuses the established single ExifTool read/write
-    // path, but SQLite must keep the newer optimistic projection.
-    public void ApplyPendingEdit(long imageId, string tag, bool present,
-        long revision, ExifToolKeywordWriter.Session writer,
-        CancellationToken token)
-    {
-        using var db = _database.OpenConnection();
-        using var pathCommand = db.CreateCommand();
-        pathCommand.CommandText = "SELECT local_path FROM images WHERE id=$id";
-        pathCommand.Parameters.AddWithValue("$id",imageId);
-        var path = pathCommand.ExecuteScalar() as string;
-        if (path is null) return;
-        using (SourceFileLocks.Enter(path, token))
-        {
-            var originalTicks = File.GetLastWriteTimeUtc(path).Ticks;
-            var tags = writer.Read(path, token).Where(t => !string.IsNullOrWhiteSpace(t))
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var changed = present
-                ? !tags.Contains(tag, StringComparer.OrdinalIgnoreCase)
-                : tags.RemoveAll(t => t.Equals(tag,StringComparison.OrdinalIgnoreCase)) > 0;
-            if (changed)
-            {
-                if (present) tags.Add(tag);
-                writer.Write(path,tags,token);
-                if (File.GetLastWriteTimeUtc(path).Ticks != originalTicks)
-                    File.SetLastWriteTimeUtc(path,
-                        new DateTime(originalTicks, DateTimeKind.Utc));
-            }
-            // Remove only the exact revision that was written. A newer user
-            // edit stays pending for a subsequent scheduler pass.
-            using var tx = db.BeginTransaction();
-            using var done = db.CreateCommand();
-            done.Transaction = tx;
-            done.CommandText = """
-                DELETE FROM pending_tag_edits
-                WHERE image_id=$id AND tag=$tag AND revision=$revision;
-                """;
-            done.Parameters.AddWithValue("$id",imageId);
-            done.Parameters.AddWithValue("$tag",tag);
-            done.Parameters.AddWithValue("$revision",revision);
-            done.ExecuteNonQuery();
-            tx.Commit();
-        }
-    }
-
     // Execute one source read and at most one write per image, regardless of
     // the number of pending tag changes. The SQLite intent table remains the
     // sole durable backlog; it is never copied into another persistent queue.
