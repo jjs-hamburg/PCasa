@@ -276,7 +276,9 @@ public partial class BrowseCacheProgressWindow : Window
                 ShowScanProgress(scan);
                 break;
             case BackgroundView.CachePreparing:
-                ShowCachePreparing();
+                // No cache image has been processed yet. Do not resurrect a
+                // meaningless permanent "0 / 0" window after manual work.
+                if (IsVisible) Hide();
                 break;
             case BackgroundView.CacheBuilding when _lastCacheProgress is { } cache:
                 ShowCacheProgress(cache);
@@ -318,16 +320,10 @@ public partial class BrowseCacheProgressWindow : Window
         _backgroundView = BackgroundView.CachePreparing;
         _lastCacheProgress = null;
         if (_manualPresentationActive) return;
-        ShowCachePreparing();
-    }
-
-    private void ShowCachePreparing()
-    {
-        PhaseText.Text = "Vorschaudaten werden vorbereitet";
-        Progress.IsIndeterminate = false;
-        Progress.Value = 0;
-        CountText.Text = "0 / 0";
-        CurrentFileText.Text = "Vorbereitung …";
+        // Cache work can be queued or blocked behind an unrelated NAS read.
+        // A 0/0 popup is NOT a running-job progress indicator; reveal the
+        // existing window only on the first real cache progress event.
+        if (IsVisible) Hide();
     }
 
     public void Update(BrowseCacheBuildProgress progress)
@@ -337,6 +333,9 @@ public partial class BrowseCacheProgressWindow : Window
         _lastCacheProgress = progress;
         if (_manualPresentationActive) return;
         ShowCacheProgress(progress);
+        if (!_hiddenByUser && !IsVisible &&
+            Owner?.WindowState != WindowState.Minimized)
+            Show();
     }
 
     private void ShowCacheProgress(BrowseCacheBuildProgress progress)
