@@ -299,13 +299,43 @@ internal static class FolderAddFlow
                 roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, afterRestart)),
                 "Existing thumbnails vanished while another folder's scan was blocked.");
             Console.WriteLine("PASS: Existing thumbnails stay accessible while a separate pending root is blocked.");
+
+            // Regression: a pending first import on one root MUST NOT prevent
+            // automatic discovery on a fully imported, independent root.
+            // This reproduces the real Pictures-pending / S:-completed case.
+            var missedPhoto = Path.Combine(initialRoot, "previously-unseen.jpg");
+            WriteJpeg(missedPhoto);
+            new BackgroundScanSettings { Enabled = true }.Save();
+            Until(window, () =>
+                    new ImageCatalogRepository(db).CountAll() == 3 &&
+                    roots.GetPendingInitialScans().Any(root =>
+                        SamePath(root.LocalPath, afterRestart)),
+                "A separate pending first import disabled the other root's automatic inventory.");
+            Console.WriteLine(
+                "PASS: Unindexed images on a completed root are discovered while another root's first import is blocked.");
+
+            // Verify an actual NEW file notification, not just startup/root
+            // reconciliation. Rename a complete JPEG into place to ensure
+            // the watcher never reads a partially written file.
+            var incomingTemp = Path.Combine(initialRoot, "incoming-temporary.bin");
+            var incomingPhoto = Path.Combine(initialRoot, "incoming-during-import.jpg");
+            WriteJpeg(incomingTemp);
+            File.Move(incomingTemp, incomingPhoto);
+            Until(window, () =>
+                    new ImageCatalogRepository(db).CountAll() == 4 &&
+                    roots.GetPendingInitialScans().Any(root =>
+                        SamePath(root.LocalPath, afterRestart)),
+                "Live file-system notification was blocked by a different pending first import.");
+            Console.WriteLine(
+                "PASS: New file notifications are indexed while a separate first import is blocked.");
+
             releaseRestartPhoto.Set();
             blockedRestart.GetAwaiter().GetResult();
             Until(window, () =>
-                new ImageCatalogRepository(db).CountAll() == 3 &&
+                new ImageCatalogRepository(db).CountAll() == 5 &&
                 roots.GetPendingInitialScans().Count == 0,
-                "Restart failed to execute the durable first-import request.");
-            Console.WriteLine("PASS: Restart resumes persisted user import without background monitoring.");
+                "Restarted durable first import failed to resume after independent automatic scans.");
+            Console.WriteLine("PASS: Background image discovery and durable first-import resume coexist.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");
@@ -323,6 +353,9 @@ internal static class FolderAddFlow
             try { blockedFile?.GetAwaiter().GetResult(); } catch { }
             try { blockedRestart?.GetAwaiter().GetResult(); } catch { }
             try { window?.Close(); } catch { }
+            // This smoke test temporarily enables automatic discovery.
+            // Restore the existing isolated test expectation for later suites.
+            try { new BackgroundScanSettings { Enabled = false }.Save(); } catch { }
             // The Windows workflow executes several independent WPF processes
             // against the runner's local test catalog. Never leave synthetic
             // monitored roots/images for the following tag-search test.
