@@ -55,7 +55,9 @@ public static class ExifToolKeywordWriter
                 process.StandardInput.WriteLine("-XMP-dc:Subject=");
             foreach (var keyword in keywords)
                 process.StandardInput.WriteLine("-XMP-dc:Subject=" + keyword);
-            process.StandardInput.WriteLine("--");
+            // The executable receives absolute paths from the catalogue.
+            // Do not send '--' in stay-open mode: the subsequent -executeN
+            // must remain recognizable as a control command.
             process.StandardInput.WriteLine(imagePath);
             process.StandardInput.WriteLine("-execute" + request);
             process.StandardInput.Flush();
