@@ -464,9 +464,9 @@ internal static class TagFlow
             Until(window, () => editorIds.All(id =>
                 (new ImageTagRepository(db).GetKeywords(id) ?? "")
                     .Contains(editableTag, StringComparison.Ordinal)) &&
-                editorIds.All((_, index) =>
+                new[] { "a-00-topaz.jpg", "a-01-topaz.jpg" }.All(name =>
                     (ImageTagRepository.ReadKeywords(Path.Combine(
-                        albumA, $"a-{index:00}-topaz.jpg")) ?? "")
+                        albumA, name)) ?? "")
                     .Contains(editableTag, StringComparison.Ordinal)),
                 "Tag UI did not persist Unicode keyword to both ORIGINAL JPEG files.");
             Until(window, () => tagRows.Children.OfType<DockPanel>()
