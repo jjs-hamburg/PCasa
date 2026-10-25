@@ -47,6 +47,8 @@
         </Style>
         <Style x:Key="PcasaFolderIconButtonStyle" TargetType="Button"
                BasedOn="{StaticResource PcasaFooterIconButtonStyle}">
+            <Setter Property="Width" Value="31"/>
+            <Setter Property="Height" Value="29"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -257,7 +259,17 @@
                       Margin="4,0,10,0" VerticalAlignment="Center">
                     <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
                              Padding="8,0,27,0" ToolTip="Tags oder Dateinamen suchen"
-                             TextChanged="TagSearchBox_TextChanged" />
+                             TextChanged="TagSearchBox_TextChanged">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsChecked, ElementName=InvertFilterToggle}" Value="True">
+                                        <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
                     <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
                             HorizontalAlignment="Right" VerticalAlignment="Center"
                             Margin="0,0,2,0" Cursor="Hand"
@@ -293,10 +305,12 @@
                                          ToolTip="Treffer im gewählten Suchbereich umkehren"
                                          Checked="FilterResultsInversion_Changed"
                                          Unchecked="FilterResultsInversion_Changed"/>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="0,0,6,0">
-                    <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
-                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
+                <Border DockPanel.Dock="Right" VerticalAlignment="Center"
+                        BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
+                        CornerRadius="5" Padding="4,2" Margin="0,0,6,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
+                                   FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
                     <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  IsChecked="True" Checked="TagSearchScope_Changed"
@@ -309,11 +323,14 @@
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  Checked="TagSearchScope_Changed"
                                  Content="Ordner" ToolTip="Nur aktueller Ordner ohne Unterordner"/>
-                </StackPanel>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                            VerticalAlignment="Center" Margin="0,0,10,0">
-                    <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
-                               FontSize="11" Foreground="{DynamicResource PcasaMutedTextBrush}"/>
+                    </StackPanel>
+                </Border>
+                <Border DockPanel.Dock="Right" VerticalAlignment="Center"
+                        BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
+                        CornerRadius="5" Padding="4,2" Margin="0,0,10,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
+                                   FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
                     <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  IsChecked="True" Checked="SearchMode_Changed"
@@ -322,7 +339,8 @@
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  Checked="SearchMode_Changed"
                                  Content="Name" ToolTip="Nach Dateinamen filtern"/>
-                </StackPanel>
+                    </StackPanel>
+                </Border>
                 <Button x:Name="GallerySortSelectorButton"
                         DockPanel.Dock="Right" Width="191" Height="27"
                         Margin="2,0,8,0" VerticalAlignment="Center"
@@ -584,7 +602,7 @@
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center" Margin="0,0,7,0">
                             <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner aufklappen" Click="FolderExpandAll_Click">
-                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round" />
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
@@ -592,7 +610,7 @@
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="FolderCollapseAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner zuklappen" Click="FolderCollapseAll_Click">
-                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
@@ -602,14 +620,14 @@
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Expand / Compress" Click="FolderTreeToggle_Click">
-                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
                                     <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="#F0F0F0" StrokeThickness="1.9" Fill="Transparent"/>
                                     <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner anzeigen, auch ohne Bilder" Click="ShowAllFilesystemFolders_Click">
-                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Path Data="M 2,6 L 9,6 L 11,9 L 22,9 L 22,21 L 2,21 Z" Fill="#FFCB4B" Stroke="#F5B43D" StrokeThickness="0.8"/>
                                     <Ellipse Canvas.Left="10" Canvas.Top="10" Width="7" Height="7" Stroke="#20252C" StrokeThickness="2" Fill="Transparent"/>
                                     <Path Data="M 16,16 L 20,20" Stroke="#20252C" StrokeThickness="2.2" StrokeStartLineCap="Round"/>
