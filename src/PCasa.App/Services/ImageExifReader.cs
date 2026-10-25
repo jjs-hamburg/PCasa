@@ -44,6 +44,13 @@ public sealed class ImageExifReader : IDisposable
             }
             catch (InvalidOperationException) { }
             catch (System.ComponentModel.Win32Exception) { }
+            catch (AggregateException ex) when (ex.Flatten().InnerExceptions.All(
+                inner => inner is System.ComponentModel.Win32Exception))
+            {
+                // Kill(entireProcessTree: true) can terminate ExifTool while
+                // Windows refuses access to an already-exiting descendant.
+                // Shutdown must not fail after the owned child was stopped.
+            }
         }
     }
 
