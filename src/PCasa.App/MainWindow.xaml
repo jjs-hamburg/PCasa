@@ -577,15 +577,17 @@
                             <ContextMenu>
                                 <MenuItem Header="Aktuellen Ordner einlesen / aktualisieren"
                                           Click="BrowseScanCurrentFolder_Click" />
-                                <MenuItem Header="Neuen Unterordner anlegen …" Click="FolderContext_CreateDirectory_Click"/>
-                                <Separator />
-                                <MenuItem Header="In Windows Explorer öffnen"
-                                          Click="FolderContext_OpenExplorer_Click" />
                                 <MenuItem Header="Ordnerinformationen"
                                           Click="FolderContext_Info_Click" />
-                                <Separator />
                                 <MenuItem Header="Aus PCasa entfernen"
                                           Click="FolderContext_Exclude_Click" />
+                                <Separator />
+                                <MenuItem Header="Neuen Unterordner anlegen …"
+                                          Click="FolderContext_CreateDirectory_Click"/>
+                                <MenuItem Header="In Windows Explorer öffnen"
+                                          Click="FolderContext_OpenExplorer_Click" />
+                                <MenuItem Header="Ordner auf Datenträger löschen …"
+                                          Click="FolderContext_DeletePhysicalDirectory_Click" />
                             </ContextMenu>
                         </TreeView.ContextMenu>
                     </TreeView>
