@@ -726,7 +726,6 @@ public sealed class FolderScanner
                 // Directory.GetFiles has no stable order. Persisted filename
                 // cursors require deterministic ordering across restarts.
                 Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-                fileCursors?.TryGetValue(directory, out var ignored);
                 var last = fileCursors is not null &&
                     fileCursors.TryGetValue(directory, out var cursor)
                     ? cursor : null;
