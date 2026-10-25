@@ -583,7 +583,7 @@
                         <StackPanel Grid.Column="1" Orientation="Horizontal"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center" Margin="0,0,7,0">
-                            <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner auf- oder zuklappen" Click="FolderExpansionToggle_Click" ToolTip="Alle Ordner auf- oder zuklappen">
+                            <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner auf- oder zuklappen" Click="FolderExpansionToggle_Click">
                                 <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round" />
