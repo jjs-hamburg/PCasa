@@ -23,7 +23,6 @@ public partial class MainWindow
         public bool GallerySortDescending { get; set; }
         public string FolderStatusMode { get; set; } = "Problems";
         public bool HideCollapsedFolders { get; set; }
-        public bool ShowAllFilesystemFolders { get; set; }
         public bool TooltipsEnabled { get; set; } = true;
         public double ThumbnailSpacing { get; set; } = 10;
         public double ThumbnailWidth { get; set; } = 190;
