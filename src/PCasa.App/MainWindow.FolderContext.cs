@@ -201,8 +201,31 @@ public partial class MainWindow
                                 driveRoot.TrimEnd('\\'),
                                 StringComparison.OrdinalIgnoreCase))
                             throw new IOException("Laufwerks- und Freigabewurzeln dürfen nicht gelöscht werden.");
-                        if (Directory.Exists(path))
-                            Directory.Delete(path, recursive: true);
+                        if (!Directory.Exists(path))
+                            throw new DirectoryNotFoundException(
+                                "Der Ordner ist nicht erreichbar; er wurde nicht gelöscht: " + path);
+                        // Never traverse a junction, symbolic link or mount
+                        // point while performing an irreversible recursive delete.
+                        var stack = new Stack<string>();
+                        stack.Push(path);
+                        while (stack.Count > 0)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var current = stack.Pop();
+                            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                                throw new IOException("Verknüpfter Ordner wird nicht gelöscht: " + current);
+                            foreach (var child in Directory.EnumerateFileSystemEntries(current))
+                            {
+                                var attrs = File.GetAttributes(child);
+                                if ((attrs & FileAttributes.ReparsePoint) != 0)
+                                    throw new IOException(
+                                        "Ordner enthält eine Dateisystem-Verknüpfung: " + child);
+                                if ((attrs & FileAttributes.Directory) != 0)
+                                    stack.Push(child);
+                            }
+                        }
+                        token.ThrowIfCancellationRequested();
+                        Directory.Delete(path, recursive: true);
                         _scheduler.ReportProgress(key, "Datenträgerordner gelöscht", 1, 1, path);
                         return Task.CompletedTask;
                     }, workKind: SchedulerWorkKind.SourceProbe);
