@@ -398,6 +398,7 @@ public sealed class ImageTagRepository
                     FROM images i
                     LEFT JOIN image_tags t ON t.image_id = i.id
                     WHERE i.id > $after
+                      AND NOT EXISTS (SELECT 1 FROM pending_tag_edits p WHERE p.image_id=i.id)
                       AND (t.image_id IS NULL OR
                            t.source_modified_utc_ticks != i.modified_utc_ticks)
                     ORDER BY i.id LIMIT 32;
@@ -449,9 +450,11 @@ public sealed class ImageTagRepository
                     INSERT INTO image_tags(image_id, keywords, source_modified_utc_ticks)
                     SELECT id, $words, $ticks FROM images
                     WHERE id = $id AND modified_utc_ticks = $ticks
+                      AND NOT EXISTS (SELECT 1 FROM pending_tag_edits p WHERE p.image_id=images.id)
                     ON CONFLICT(image_id) DO UPDATE SET
                         keywords = excluded.keywords,
-                        source_modified_utc_ticks = excluded.source_modified_utc_ticks;
+                        source_modified_utc_ticks = excluded.source_modified_utc_ticks
+                    WHERE NOT EXISTS (SELECT 1 FROM pending_tag_edits p WHERE p.image_id=image_tags.image_id);
                     """;
                 cmd.Parameters.Add("$id", SqliteType.Integer);
                 cmd.Parameters.Add("$words", SqliteType.Text);
