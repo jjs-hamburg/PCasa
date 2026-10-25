@@ -301,6 +301,7 @@ public sealed class ImageTagRepository
         if (path is null) return;
         using (SourceFileLocks.Enter(path, token))
         {
+            var originalTicks = File.GetLastWriteTimeUtc(path).Ticks;
             var tags = writer.Read(path, token).Where(t => !string.IsNullOrWhiteSpace(t))
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var changed = present
@@ -310,6 +311,9 @@ public sealed class ImageTagRepository
             {
                 if (present) tags.Add(tag);
                 writer.Write(path,tags,token);
+                if (File.GetLastWriteTimeUtc(path).Ticks != originalTicks)
+                    File.SetLastWriteTimeUtc(path,
+                        new DateTime(originalTicks, DateTimeKind.Utc));
             }
             // Remove only the exact revision that was written. A newer user
             // edit stays pending for a subsequent scheduler pass.
