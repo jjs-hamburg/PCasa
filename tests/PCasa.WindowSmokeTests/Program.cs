@@ -140,12 +140,20 @@ internal static class Program
             if (menu.Parent is not DockPanel header ||
                 !header.LastChildFill)
                 throw new Exception("Original single-row DockPanel was replaced.");
+            if (whereLabel.Parent is not StackPanel whereChoices ||
+                whereChoices.Parent is not Border whereGroup ||
+                whatLabel.Parent is not StackPanel whatChoices ||
+                whatChoices.Parent is not Border whatGroup)
+                throw new Exception("WAS and WO choices must each have their own visible group border.");
+            if (Math.Abs(whereLabel.FontSize - where.FontSize) > 0.01 ||
+                Math.Abs(whatLabel.FontSize - what.FontSize) > 0.01)
+                throw new Exception("WAS/WO captions must match the choices' font size.");
             var expectedChildren = new UIElement[]
             {
                 (UIElement)searchField.Parent,
                 notToggle,
-                (UIElement)whereLabel.Parent,
-                (UIElement)whatLabel.Parent,
+                whereGroup,
+                whatGroup,
                 sortButton,
                 menu
             };
@@ -160,6 +168,15 @@ internal static class Program
                 throw new Exception("Original search width or new sort width changed.");
             if (items.Any(item => Math.Abs(item.Margin.Right - 20) > 0.01))
                 throw new Exception("Existing menu spacing margins changed.");
+            notToggle.IsChecked = true;
+            Flush(window);
+            if (searchField.TextDecorations.Count != 1 ||
+                searchField.TextDecorations[0].Location != TextDecorationLocation.Strikethrough)
+                throw new Exception("NOT does not strike through the actual editable search text.");
+            notToggle.IsChecked = false;
+            Flush(window);
+            if (searchField.TextDecorations.Count != 0)
+                throw new Exception("Disabling NOT did not restore normal search text.");
 
             foreach (var requestedWidth in new[] { 1500.0, 2048.0 })
             {
@@ -188,6 +205,8 @@ internal static class Program
             Flush(window);
             Console.WriteLine(
                 "PASS: Original one-row menu | sort | WAS | WO | NOT | search DockPanel order.");
+            Console.WriteLine(
+                "PASS: WAS and WO are framed with equal caption sizes; NOT toggles search strikethrough.");
             if (window.ActualWidth < 1450)
                 Console.WriteLine(
                     "INFO: Runner desktop is too narrow for visual wide-window validation.");
