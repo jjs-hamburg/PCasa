@@ -182,7 +182,7 @@ public partial class MainWindow
         _appearance.FolderStatusMode = mode;
         ApplyFolderStatusMode();
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
-        ShowAllFilesystemFoldersMenu.IsChecked = _appearance.ShowAllFilesystemFolders;
+        UpdateAllFoldersButtonState();
         SaveAppearance();
     }
 
@@ -231,7 +231,7 @@ public partial class MainWindow
         GalleryBackgroundCanvasDarkMenu.IsChecked = _appearance.Background == "CanvasDark";
         RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
-        ShowAllFilesystemFoldersMenu.IsChecked = _appearance.ShowAllFilesystemFolders;
+        UpdateAllFoldersButtonState();
         ThumbnailFileNamesMenu.IsChecked = _appearance.ShowThumbnailFileNames;
         ThumbnailIconsMenu.IsChecked = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
