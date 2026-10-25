@@ -119,6 +119,28 @@ public sealed class PCasaScheduler : IAsyncDisposable
             cancellationToken: cancellationToken, workKind: workKind);
     }
 
+    // A dismissed read-only projection must leave no queued scheduler work.
+    // The owner cancels its token first; a worker already blocked in native
+    // filesystem I/O cannot be forcibly aborted and finishes at its next
+    // cancellation boundary. Queued work, however, is retired immediately.
+    public void CancelPending(string key, SchedulerWorkKind kind)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        lock (_gate)
+        {
+            for (var index = _pending.Count - 1; index >= 0; index--)
+            {
+                var item = _pending[index];
+                if (item.Kind != kind ||
+                    !string.Equals(item.Key, key, StringComparison.Ordinal))
+                    continue;
+                _pending.RemoveAt(index);
+                SetStateUnsafe(item, SchedulerJobState.Canceled);
+                item.Completion.TrySetCanceled();
+            }
+        }
+    }
+
     // Typed scheduler results use exactly the same queue, priority,
     // cancellation and lifetime bookkeeping as catalog mutations.
     public async Task<TResult> RunAsync<TResult>(
