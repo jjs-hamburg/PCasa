@@ -332,6 +332,10 @@ public partial class BrowseCacheProgressWindow : Window
         _backgroundView = BackgroundView.CacheBuilding;
         _lastCacheProgress = progress;
         if (_manualPresentationActive) return;
+        // A startup notification without any counted images is not work
+        // progress and must not open a misleading 0 / 0 dialog.
+        if (progress.TotalImages == 0 && progress.ProcessedImages == 0)
+            return;
         ShowCacheProgress(progress);
         if (!_hiddenByUser && !IsVisible &&
             Owner?.WindowState != WindowState.Minimized)
