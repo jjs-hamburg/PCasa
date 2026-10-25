@@ -310,19 +310,19 @@ public partial class MainWindow
                 {
                     Data = System.Windows.Media.Geometry.Parse("M 4,4 L 16,16 M 16,4 L 4,16"),
                     Stroke = System.Windows.Media.Brushes.IndianRed,
-                    StrokeThickness = 2.4,
+                    StrokeThickness = 1.8,
                     StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
                     StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
-                    Width = 20,
-                    Height = 20,
+                    Width = 12,
+                    Height = 12,
                     Stretch = System.Windows.Media.Stretch.Uniform
                 };
                 var remove = new Button
                 {
                     Content = deleteGlyph,
                     ToolTip = "Tag aus allen ausgewählten Bildern entfernen",
-                    Width = 28,
-                    Height = 28,
+                    Width = 22,
+                    Height = 22,
                     Background = System.Windows.Media.Brushes.Transparent,
                     BorderThickness = new Thickness(0),
                     Cursor = System.Windows.Input.Cursors.Hand,
