@@ -131,6 +131,12 @@ public sealed class ImageTagRepository
         cancellationToken.ThrowIfCancellationRequested();
         if (writer is null) ExifToolKeywordWriter.Write(path, original);
         else writer.Write(path, original, cancellationToken);
+        // Even ExifTool -P may round a subsecond file timestamp on Windows.
+        // Restore the EXACT source timestamp under the per-image write lock.
+        // Otherwise the existing file scanner needlessly decodes the same
+        // pixels again and rebuilds all thumbnail tiers after a tag edit.
+        if (File.GetLastWriteTimeUtc(path).Ticks != oldTicks)
+            File.SetLastWriteTimeUtc(path, new DateTime(oldTicks, DateTimeKind.Utc));
         // The real JPEG/TIFF metadata must match the requested edit before
         // the SQLite search index or UI can report it as saved.
         var confirmed = ReadKeywords(path)
