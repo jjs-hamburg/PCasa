@@ -228,6 +228,12 @@ public partial class MainWindow
 
             var userInitialScanIds = _folderRepository.GetPendingInitialScans()
                 .Select(root => root.Id).ToHashSet();
+            // Prioritize FIRST imports that can still make progress. A failed or
+            // offline import may remain durable across restarts, but it must
+            // never permanently suppress reconciliation of unrelated roots.
+            var hasRunnableFirstImport = userInitialScanIds.Any(id =>
+                !_initialScanAttempted.Contains(id) &&
+                availability.TryGetValue(id, out var online) && online);
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
@@ -237,12 +243,14 @@ public partial class MainWindow
                     continue;
                 }
 
-                // Do not start ANY routine root rescan while a first import is
-                // outstanding. It would re-enumerate the NAS ahead of folders
-                // that the user has not seen yet. Keep the root unregistered so
-                // the next monitor refresh can schedule its normal rescan once
-                // first-import requests have all completed.
-                if (userInitialScanIds.Count > 0) continue;
+                // A root's own durable first import owns that root. While
+                // another reachable first import is active or not yet attempted,
+                // defer routine rescans to prioritize discovering new pictures.
+                // A FAILED/OFFLINE first import is NOT a global stop switch:
+                // healthy, already imported roots must keep reconciling.
+                if (userInitialScanIds.Contains(folder.Id) ||
+                    _initialScanActive || hasRunnableFirstImport)
+                    continue;
                 if (_backgroundKnownFolderIds.Add(folder.Id))
                 {
                     QueueBackgroundChange(new BackgroundFolderChange(
