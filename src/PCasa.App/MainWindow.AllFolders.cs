@@ -15,10 +15,8 @@ public partial class MainWindow
         if (ShowAllFilesystemFoldersButton is null) return;
         // A visible pressed outline (not merely a color change) for the
         // persistent all-folders toggle, identical size to footer icons.
-        ShowAllFilesystemFoldersButton.BorderThickness =
-            _appearance.ShowAllFilesystemFolders ? new Thickness(2) : new Thickness(1);
-        ShowAllFilesystemFoldersButton.Opacity =
-            _appearance.ShowAllFilesystemFolders ? 1.0 : 0.72;
+        ShowAllFilesystemFoldersButton.Tag =
+            _appearance.ShowAllFilesystemFolders ? "Active" : null;
         ShowAllFilesystemFoldersButton.ToolTip =
             _appearance.ShowAllFilesystemFolders
                 ? "Alle Ordner anzeigen: aktiv"
