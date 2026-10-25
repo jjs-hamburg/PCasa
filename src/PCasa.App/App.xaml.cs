@@ -9,8 +9,27 @@ namespace PCasa.App;
 
 public partial class App : Application
 {
+    private static bool _tooltipsEnabled = true;
+
+    // A single application-wide gate, including dynamically created folder
+    // tree elements, context menus and independently owned dialogs.
+    public static void SetTooltipsEnabled(bool enabled)
+        => _tooltipsEnabled = enabled;
+
+    private static void GlobalToolTipOpening(object sender, RoutedEventArgs e)
+    {
+        if (!_tooltipsEnabled)
+            e.Handled = true;
+    }
+
     public App()
     {
+        EventManager.RegisterClassHandler(typeof(FrameworkElement),
+            ToolTipService.ToolTipOpeningEvent,
+            new RoutedEventHandler(GlobalToolTipOpening), true);
+        EventManager.RegisterClassHandler(typeof(FrameworkContentElement),
+            ToolTipService.ToolTipOpeningEvent,
+            new RoutedEventHandler(GlobalToolTipOpening), true);
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
