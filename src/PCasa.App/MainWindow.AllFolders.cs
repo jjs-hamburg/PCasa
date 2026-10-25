@@ -50,7 +50,7 @@ public partial class MainWindow
             // catalog image state.
             var paths = await _scheduler.RunAsync(
                 $"folder-tree:all-directories:{Guid.NewGuid():N}",
-                SchedulerPriority.Background,
+                SchedulerPriority.ManualAction,
                 token =>
                 {
                     var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
