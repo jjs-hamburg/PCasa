@@ -422,6 +422,89 @@ internal static class TagFlow
             search.Clear();
 
             tagMode.IsChecked = true;
+
+            // Real end-to-end metadata editing: the prior search tests seed
+            // SQLite directly and therefore cannot prove the actual UI writer.
+            // Select two original JPEGs, write one Unicode tag through the
+            // sidebar and verify BOTH originals and the catalog index.
+            var editorIds = new[] { "a-00-topaz.jpg", "a-01-topaz.jpg" }
+                .Select(name =>
+                {
+                    using var connection = db.OpenConnection();
+                    using var lookup = connection.CreateCommand();
+                    lookup.CommandText =
+                        "SELECT id FROM images WHERE local_path = $path COLLATE NOCASE;";
+                    lookup.Parameters.AddWithValue("$path", Path.Combine(albumA, name));
+                    return Convert.ToInt64(lookup.ExecuteScalar()
+                        ?? throw new Exception("JPEG missing for tag-writing UI test: " + name));
+                }).ToArray();
+            var sidebarButton = (Button?)window.FindName("TagSidebarButton")
+                ?? throw new Exception("Tag sidebar toggle missing.");
+            var tagInput = (TextBox?)window.FindName("TagEntryBox")
+                ?? throw new Exception("Tag entry missing.");
+            var addTag = (Button?)window.FindName("TagAddButton")
+                ?? throw new Exception("Tag addition button missing.");
+            var tagRows = (StackPanel?)window.FindName("TagRowsPanel")
+                ?? throw new Exception("Tag rows panel missing.");
+            var quickTags = (WrapPanel?)window.FindName("TagQuickPanel")
+                ?? throw new Exception("Quick tags panel missing.");
+            var tagAnd = (RadioButton?)window.FindName("TagLogicAnd")
+                ?? throw new Exception("Tag AND selector missing.");
+            var tagOr = (RadioButton?)window.FindName("TagLogicOr")
+                ?? throw new Exception("Tag OR selector missing.");
+            const string editableTag = "PCasa UI München";
+            selected.Clear();
+            foreach (var imageId in editorIds) selected.Add(imageId);
+            surface.SetSelection(selected);
+            sidebarButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, sidebarButton));
+            Until(window, () => window.FindName("TagSidebar") is Grid sidebar &&
+                sidebar.IsVisible, "Tag sidebar did not open.");
+            tagInput.Text = editableTag;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            Until(window, () => editorIds.All(id =>
+                (new ImageTagRepository(db).GetKeywords(id) ?? "")
+                    .Contains(editableTag, StringComparison.Ordinal)) &&
+                editorIds.All((_, index) =>
+                    (ImageTagRepository.ReadKeywords(Path.Combine(
+                        albumA, $"a-{index:00}-topaz.jpg")) ?? "")
+                    .Contains(editableTag, StringComparison.Ordinal)),
+                "Tag UI did not persist Unicode keyword to both ORIGINAL JPEG files.");
+            Until(window, () => tagRows.Children.OfType<DockPanel>()
+                    .Any(row => row.Children.OfType<TextBlock>().Any(label =>
+                        label.Text.Contains(editableTag, StringComparison.Ordinal) &&
+                        label.Text.Contains("[2]", StringComparison.Ordinal))) &&
+                quickTags.Children.OfType<Button>().Any(button =>
+                    string.Equals(button.Content?.ToString(), editableTag,
+                        StringComparison.Ordinal)),
+                "New tag was not immediately shown with multi-image frequency and quick tag.");
+            tagAnd.IsChecked = true;
+            Until(window, () => tagRows.Children.OfType<DockPanel>()
+                .Any(row => row.Children.OfType<TextBlock>().Any(label =>
+                    label.Text.Contains(editableTag, StringComparison.Ordinal))),
+                "Tag AND failed to show a tag shared by both selected images.");
+            tagOr.IsChecked = true;
+
+            // Remove through the actual RED-X row button; verify that BOTH
+            // originals lost the keyword and the SQLite search is refreshed.
+            var keywordRow = tagRows.Children.OfType<DockPanel>()
+                .Single(row => row.Children.OfType<TextBlock>()
+                    .Any(label => label.Text.Contains(editableTag,
+                        StringComparison.Ordinal)));
+            var removeTag = keywordRow.Children.OfType<Button>().Single();
+            removeTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, removeTag));
+            Until(window, () => editorIds.All(id =>
+                    !(new ImageTagRepository(db).GetKeywords(id) ?? "")
+                        .Contains(editableTag, StringComparison.Ordinal)) &&
+                editorIds.Select((_, index) => Path.Combine(
+                        albumA, $"a-{index:00}-topaz.jpg"))
+                    .All(path => !(ImageTagRepository.ReadKeywords(path) ?? "")
+                        .Contains(editableTag, StringComparison.Ordinal)) &&
+                !tagRows.Children.OfType<DockPanel>()
+                    .Any(row => row.Children.OfType<TextBlock>().Any(label =>
+                        label.Text.Contains(editableTag, StringComparison.Ordinal))),
+                "Red-X tag removal did not update original files and visible tag list.");
+            Console.WriteLine(
+                "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Live WPF tag-search round trip passed.");
