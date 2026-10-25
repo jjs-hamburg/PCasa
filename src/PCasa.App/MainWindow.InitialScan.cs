@@ -23,6 +23,7 @@ public partial class MainWindow
     {
         if (_initialScanPumpRunning) return;
         _initialScanPumpRunning = true;
+        var processedAny = false;
         try
         {
             while (!Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
@@ -51,6 +52,7 @@ public partial class MainWindow
                     _manualFileTransferActive || Dispatcher.HasShutdownStarted)
                     return;
                 if (next is null) break;
+                processedAny = true;
                 _initialScanAttempted.Add(next.Id);
                 await RunPendingInitialScanAsync(next);
             }
@@ -63,6 +65,14 @@ public partial class MainWindow
         finally
         {
             _initialScanPumpRunning = false;
+            // Re-evaluate the ordinary monitor once after an import batch.
+            // Failure or temporary unreachability must not strand other,
+            // already-imported folders until a restart or watcher event.
+            // This remains the ONE existing monitor/scheduler entry point.
+            if (processedAny && _backgroundScanInitialized &&
+                _backgroundScanSettings?.Enabled == true &&
+                !Dispatcher.HasShutdownStarted)
+                RefreshBackgroundMonitor();
         }
     }
 
