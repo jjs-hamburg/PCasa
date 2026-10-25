@@ -50,10 +50,6 @@ public partial class MainWindow
         CatalogChanges.ImageCommitted += OnCatalogImageCommitted;
         CatalogChanges.ImageIndexed += OnCatalogImageIndexed;
         Closed += BrowseWindow_Closed;
-        // Rehydrate optional filesystem-only folder nodes after restart.
-        if (_appearance.ShowAllFilesystemFolders)
-            _ = RefreshAllFilesystemFolderPathsAsync();
-
         // Recovery is a scheduler operation, not an alternative scanner.
         // It may perform slow SMB probes without blocking WPF startup.
         // If any durable move is recovered, the SAME gallery publication
