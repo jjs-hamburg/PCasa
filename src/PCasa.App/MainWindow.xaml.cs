@@ -209,12 +209,12 @@ public partial class MainWindow : Window
         // They never create image catalog rows or start another indexer.
         if (_appearance.ShowAllFilesystemFolders)
         {
-            foreach (var path in _allFilesystemFolderPaths)
+            foreach (var directoryPath in _allFilesystemFolderPaths)
             {
                 if (rootsWithExclusions.Any(root =>
-                    FolderExclusionRules.IsAtOrBelow(path, root.Folder.LocalPath) &&
-                    !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths)))
-                    AddFolderTreePath(roots, nodesByPath, path, path, null, 0);
+                    FolderExclusionRules.IsAtOrBelow(directoryPath, root.Folder.LocalPath) &&
+                    !FolderExclusionRules.IsExcluded(directoryPath, root.ExcludedPaths)))
+                    AddFolderTreePath(roots, nodesByPath, directoryPath, directoryPath, null, 0);
             }
         }
 
