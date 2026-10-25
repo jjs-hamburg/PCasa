@@ -64,6 +64,11 @@
                                 <Setter TargetName="Outline" Property="BorderBrush" Value="#32B1FF"/>
                                 <Setter TargetName="Outline" Property="BorderThickness" Value="2"/>
                             </Trigger>
+                            <Trigger Property="Tag" Value="ActiveGold">
+                                <Setter TargetName="Outline" Property="Background" Value="#554414"/>
+                                <Setter TargetName="Outline" Property="BorderBrush" Value="#FFD24C"/>
+                                <Setter TargetName="Outline" Property="BorderThickness" Value="2"/>
+                            </Trigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="IsMouseOver" Value="True"/>
