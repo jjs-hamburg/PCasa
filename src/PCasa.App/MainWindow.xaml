@@ -597,8 +597,8 @@
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                    <Path Data="M 17,11 L 22,15 M 22,11 L 17,15 M 17,18 L 22,22 M 22,18 L 17,22"
-                                          Stroke="#F04444" StrokeThickness="2.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    <Path Data="M 15.8,10 L 23.2,22 M 23.2,10 L 15.8,22"
+                                          Stroke="#F04444" StrokeThickness="3.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Expand / Compress" Click="FolderTreeToggle_Click">
