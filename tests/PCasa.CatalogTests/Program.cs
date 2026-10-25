@@ -46,6 +46,7 @@ internal static class Program
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
         Run("Read-only folder-tree probe does not stop durable background image import", ReadOnlyFolderProjectionNeverBlocksInitialImport, failures);
+        Run("Canceled all-folders toggle immediately retires queued scheduler probe", CanceledAllFoldersScopeRetiresQueuedProbe, failures);
         Run("Manual folder creation preempts and safely resumes network scan", SchedulerManualFolderCreateYieldsScan, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
@@ -1102,6 +1103,72 @@ internal static class Program
             {
                 finishFolderProbe.TrySetResult();
                 await projection.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void CanceledAllFoldersScopeRetiresQueuedProbe()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            using var scopeCancellation = new CancellationTokenSource();
+            var blockingProbeStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseBlockingProbe = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var busy = scheduler.EnqueueAsync(
+                "test:older-directory-probe", SchedulerPriority.Interactive,
+                async _ =>
+                {
+                    blockingProbeStarted.TrySetResult();
+                    await releaseBlockingProbe.Task;
+                }, workKind: SchedulerWorkKind.SourceProbe);
+            try
+            {
+                await blockingProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                const string scopedKey = "folder-tree:scope:disabled";
+                var unexpectedlyExecuted = false;
+                var queued = scheduler.EnqueueAsync(
+                    scopedKey, SchedulerPriority.Interactive,
+                    _ =>
+                    {
+                        unexpectedlyExecuted = true;
+                        return Task.CompletedTask;
+                    },
+                    cancellationToken: scopeCancellation.Token,
+                    workKind: SchedulerWorkKind.SourceProbe);
+                if (!scheduler.Snapshot().Any(x =>
+                    x.Key == scopedKey && x.State == SchedulerJobState.Queued))
+                    throw new Exception("Dismissed folder probe was not queued.");
+
+                scopeCancellation.Cancel();
+                scheduler.CancelPending(scopedKey, SchedulerWorkKind.SourceProbe);
+                try
+                {
+                    await queued.WaitAsync(TimeSpan.FromSeconds(5));
+                    throw new Exception("Canceled folder visibility job completed instead of being retired.");
+                }
+                catch (TaskCanceledException) { }
+
+                if (unexpectedlyExecuted || scheduler.Snapshot().Any(x =>
+                    x.Key == scopedKey && x.State != SchedulerJobState.Canceled))
+                    throw new Exception("Dismissed folder projection stayed active in scheduler.");
+
+                var importRan = false;
+                await scheduler.EnqueueAsync(
+                    "test:background-image-import", SchedulerPriority.Background,
+                    _ => { importRan = true; return Task.CompletedTask; },
+                    workKind: SchedulerWorkKind.CatalogScan)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!importRan)
+                    throw new Exception("Image import stalled behind abandoned folder visibility job.");
+            }
+            finally
+            {
+                releaseBlockingProbe.TrySetResult();
+                await busy.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();
