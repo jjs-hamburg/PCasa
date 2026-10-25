@@ -429,15 +429,14 @@ public partial class MainWindow
                         var pending = repo.PendingEdits();
                         if (pending.Count == 0) break;
                         var processed = 0;
-                        foreach (var edit in pending)
+                        foreach (var group in pending.GroupBy(item => item.ImageId))
                         {
                             token.ThrowIfCancellationRequested();
-                            var identity = edit.ImageId + ":" + edit.Tag;
+                            var identity = group.Key.ToString();
                             if (_tagDrainFailures.Contains(identity)) continue;
                             try
                             {
-                                repo.ApplyPendingEdit(edit.ImageId, edit.Tag,
-                                    edit.Present, edit.Revision, writer, token);
+                                repo.ApplyPendingImageEdits(group.Key, group.ToArray(), writer, token);
                                 processed++;
                             }
                             catch (OperationCanceledException) { throw; }
