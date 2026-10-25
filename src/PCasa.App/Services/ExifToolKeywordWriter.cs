@@ -47,7 +47,7 @@ public static class ExifToolKeywordWriter
             process.StandardInput.WriteLine(imagePath);
             process.StandardInput.WriteLine("-execute" + request);
             process.StandardInput.Flush();
-            var response = ReadResponse(process, request, cancellationToken);
+            var response = ReadResponseOrReset(process, request, cancellationToken);
             using var document = System.Text.Json.JsonDocument.Parse(response);
             var entry = document.RootElement.EnumerateArray().FirstOrDefault();
             if (entry.ValueKind != System.Text.Json.JsonValueKind.Object)
@@ -62,6 +62,34 @@ public static class ExifToolKeywordWriter
             if (subject.ValueKind == System.Text.Json.JsonValueKind.String)
                 return new[] { subject.GetString()! };
             return Array.Empty<string>();
+        }
+
+        // A timeout leaves ReadLineAsync outstanding. Never reuse that stream.
+        private string ReadResponseOrReset(Process process, int request,
+            CancellationToken token)
+        {
+            try { return ReadResponse(process, request, token); }
+            catch
+            {
+                ResetFailedProcess(process);
+                throw;
+            }
+        }
+
+        private void ResetFailedProcess(Process failed)
+        {
+            if (ReferenceEquals(_process, failed)) _process = null;
+            try
+            {
+                if (!failed.HasExited) failed.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            finally
+            {
+                failed.Dispose();
+                _errorDrain = null;
+            }
         }
 
         private static string ReadResponse(Process process, int request,
@@ -125,7 +153,7 @@ public static class ExifToolKeywordWriter
             process.StandardInput.WriteLine("-execute" + request);
             process.StandardInput.Flush();
 
-            var response = ReadResponse(process, request, cancellationToken);
+            var response = ReadResponseOrReset(process, request, cancellationToken);
 
             // Stay-open mode does not return a separate exit code per request.
             // The response acknowledges the write; uncertain results remain errors.
