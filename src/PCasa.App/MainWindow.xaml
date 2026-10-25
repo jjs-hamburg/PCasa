@@ -440,6 +440,7 @@
                                 <MenuItem x:Name="FolderStatusProblemsMenu" Header="Nur Aktivität und Probleme" IsCheckable="True" Tag="Problems" Click="FolderStatusMode_Click"/>
                                 <MenuItem x:Name="FolderStatusNeverMenu" Header="Nie anzeigen" IsCheckable="True" Tag="None" Click="FolderStatusMode_Click"/>
                             </MenuItem>
+                            <MenuItem Header="Alle Ordner anzeigen (auch ohne Bilder)" x:Name="ShowAllFilesystemFoldersMenu" IsCheckable="True" Click="ShowAllFilesystemFolders_Click" />
                             <MenuItem Header="Eingeklappte Ordner in Galerie ausblenden" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
                             <MenuItem Header="Dateinamen unter Thumbnails" x:Name="ThumbnailFileNamesMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
