@@ -175,7 +175,7 @@ public partial class MainWindow
         {
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
-            var (folders, availability, exclusions) = await _scheduler.RunAsync(
+            var (folders, availability, exclusions, pendingInitialIds) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -186,7 +186,11 @@ public partial class MainWindow
                         folder => folder.Id,
                         folder => _folderRepository.GetExcludedPaths(folder.Id));
                     var states = monitor.Refresh(roots, enabled);
-                    return (roots, states, rules);
+                    // Capture pending first imports in this SAME scheduled
+                    // monitor snapshot, not by a second SQLite read on WPF.
+                    var pending = _folderRepository.GetPendingInitialScans()
+                        .Select(root => root.Id).ToHashSet();
+                    return (roots, states, rules, pending);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -226,8 +230,7 @@ public partial class MainWindow
             var currentIds = folders.Select(folder => folder.Id).ToHashSet();
             _backgroundKnownFolderIds.RemoveWhere(id => !currentIds.Contains(id));
 
-            var userInitialScanIds = _folderRepository.GetPendingInitialScans()
-                .Select(root => root.Id).ToHashSet();
+            var userInitialScanIds = pendingInitialIds;
             // Prioritize FIRST imports that can still make progress. A failed or
             // offline import may remain durable across restarts, but it must
             // never permanently suppress reconciliation of unrelated roots.
