@@ -205,6 +205,19 @@ public partial class MainWindow : Window
                 folder.ImageCount);
         }
 
+        // Optional filesystem-only nodes are a read-only tree projection.
+        // They never create image catalog rows or start another indexer.
+        if (_appearance.ShowAllFilesystemFolders)
+        {
+            foreach (var path in _allFilesystemFolderPaths)
+            {
+                if (rootsWithExclusions.Any(root =>
+                    FolderExclusionRules.IsAtOrBelow(path, root.Folder.LocalPath) &&
+                    !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths)))
+                    AddFolderTreePath(roots, nodesByPath, path, path, null, 0);
+            }
+        }
+
         // Targets created through the context menu stay in the folder tree
         // while empty. Scan work still owns their eventual photo catalog.
         foreach (var empty in _createdEmptyFolderPaths
