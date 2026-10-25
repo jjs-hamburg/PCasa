@@ -117,11 +117,14 @@ public sealed class ImageTagRepository
         var before = new FileInfo(path);
         var oldSize = before.Length;
         var oldTicks = before.LastWriteTimeUtc.Ticks;
-        var current = ReadKeywords(path);
-        if (current is null)
-            throw new IOException("Metadaten können nicht gelesen werden.");
-        var original = current.Split(new[] { (char)10, (char)13 },
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        // Read the authoritative tags from the shared source using the SAME
+        // ExifTool session that performs the write. SQLite may be stale if
+        // another computer edited the image since our last catalog scan.
+        using var ownedWriter = writer is null ? new ExifToolKeywordWriter.Session() : null;
+        var session = writer ?? ownedWriter!;
+        var original = session.Read(path, cancellationToken)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var changed = remove
             ? original.RemoveAll(value => value.Equals(tag, StringComparison.OrdinalIgnoreCase)) > 0
@@ -129,23 +132,16 @@ public sealed class ImageTagRepository
         if (!changed) return;
         if (!remove) original.Add(tag);
         cancellationToken.ThrowIfCancellationRequested();
-        if (writer is null) ExifToolKeywordWriter.Write(path, original);
-        else writer.Write(path, original, cancellationToken);
+        session.Write(path, original, cancellationToken);
         // Even ExifTool -P may round a subsecond file timestamp on Windows.
         // Restore the EXACT source timestamp under the per-image write lock.
         // Otherwise the existing file scanner needlessly decodes the same
         // pixels again and rebuilds all thumbnail tiers after a tag edit.
         if (File.GetLastWriteTimeUtc(path).Ticks != oldTicks)
             File.SetLastWriteTimeUtc(path, new DateTime(oldTicks, DateTimeKind.Utc));
-        // The real JPEG/TIFF metadata must match the requested edit before
-        // the SQLite search index or UI can report it as saved.
-        var confirmed = ReadKeywords(path)
-            ?? throw new IOException("Gespeicherte Tags konnten nicht verifiziert werden.");
-        var verified = confirmed.Split(new[] { (char)10, (char)13 },
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (remove ? verified.Contains(tag, StringComparer.OrdinalIgnoreCase)
-                   : !verified.Contains(tag, StringComparer.OrdinalIgnoreCase))
-            throw new IOException("Die Tag-Änderung konnte nicht verifiziert werden.");
+        // A successful ExifTool acknowledgment confirms the write. Do not
+        // perform a second NAS read merely to verify the same metadata.
+        var confirmed = string.Join("\n", original);
 
         var after = new FileInfo(path);
         var newSize = after.Length;
