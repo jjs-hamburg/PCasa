@@ -46,6 +46,11 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --exif-probe
+      - name: Verify persistent ExifTool tag-writing protocol
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --tag-write-probe
       - name: Run catalog regression executable
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
