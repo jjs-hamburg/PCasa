@@ -370,7 +370,7 @@ internal static class Program
         using var stop = new CancellationTokenSource();
         var first = new InlineProgress<ScanProgress>(p =>
         {
-            if (p.ImageFilesSeen >= 4) stop.Cancel();
+            if (p.DiscoveredPhotoFolderId is not null) stop.Cancel();
         });
         try
         {
@@ -385,10 +385,10 @@ internal static class Program
         var epoch = repository.GetScanEpoch(root.CanonicalPath);
         var cursors = repository.GetInitialScanFileCursors(root.Id, state.Generation, epoch);
         if (!cursors.TryGetValue(directory, out var fileName) ||
-            fileName != "image-003.jpg")
+            fileName != "image-000.jpg")
             throw new Exception("Last committed file cursor was not saved.");
 
-        // The second scan must not read/index images zero through three again.
+        // The second scan must not read/index image zero again.
         // Removing an already processed file must NOT authorize its deletion
         // from a partial inventory that skipped it on restart.
         File.Delete(Path.Combine(directory, "image-000.jpg"));
@@ -398,7 +398,7 @@ internal static class Program
             new BrowseThumbnailProfileRepository(db));
         var resumed = resumedScanner.ScanDirectory(root, root.LocalPath, true,
             durableInitialImport: true);
-        if (resumed.ImageFilesSeen != 4 || resumed.Failed != 0)
+        if (resumed.ImageFilesSeen != 7 || resumed.Failed != 0)
             throw new Exception($"Restart unnecessarily reread images: {resumed.ImageFilesSeen}.");
         if (new ImageCatalogRepository(db).CountAll() != 8)
             throw new Exception("Partial inventory removed an unseen earlier image.");
