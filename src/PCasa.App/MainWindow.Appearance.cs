@@ -23,6 +23,7 @@ public partial class MainWindow
         public bool GallerySortDescending { get; set; }
         public string FolderStatusMode { get; set; } = "Problems";
         public bool HideCollapsedFolders { get; set; }
+        public bool ShowAllFilesystemFolders { get; set; }
         public double ThumbnailSpacing { get; set; } = 10;
         public double ThumbnailWidth { get; set; } = 190;
         public bool? ShowThumbnailShadows { get; set; }
@@ -181,6 +182,7 @@ public partial class MainWindow
         _appearance.FolderStatusMode = mode;
         ApplyFolderStatusMode();
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
+        ShowAllFilesystemFoldersMenu.IsChecked = _appearance.ShowAllFilesystemFolders;
         SaveAppearance();
     }
 
@@ -229,6 +231,7 @@ public partial class MainWindow
         GalleryBackgroundCanvasDarkMenu.IsChecked = _appearance.Background == "CanvasDark";
         RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
+        ShowAllFilesystemFoldersMenu.IsChecked = _appearance.ShowAllFilesystemFolders;
         ThumbnailFileNamesMenu.IsChecked = _appearance.ShowThumbnailFileNames;
         ThumbnailIconsMenu.IsChecked = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
