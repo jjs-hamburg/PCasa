@@ -10,9 +10,25 @@ public partial class MainWindow
         new(StringComparer.OrdinalIgnoreCase);
     private bool _allFolderProjectionRunning;
 
+    private void UpdateAllFoldersButtonState()
+    {
+        if (ShowAllFilesystemFoldersButton is null) return;
+        // A visible pressed outline (not merely a color change) for the
+        // persistent all-folders toggle, identical size to footer icons.
+        ShowAllFilesystemFoldersButton.BorderThickness =
+            _appearance.ShowAllFilesystemFolders ? new Thickness(2) : new Thickness(1);
+        ShowAllFilesystemFoldersButton.Opacity =
+            _appearance.ShowAllFilesystemFolders ? 1.0 : 0.72;
+        ShowAllFilesystemFoldersButton.ToolTip =
+            _appearance.ShowAllFilesystemFolders
+                ? "Alle Ordner anzeigen: aktiv"
+                : "Alle Ordner anzeigen, auch ohne Bilder";
+    }
+
     private async void ShowAllFilesystemFolders_Click(object sender, RoutedEventArgs e)
     {
-        _appearance.ShowAllFilesystemFolders = ShowAllFilesystemFoldersMenu.IsChecked;
+        _appearance.ShowAllFilesystemFolders = !_appearance.ShowAllFilesystemFolders;
+        UpdateAllFoldersButtonState();
         SaveAppearance();
         if (!_appearance.ShowAllFilesystemFolders)
         {
