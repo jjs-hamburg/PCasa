@@ -847,7 +847,7 @@
                         </Grid.RowDefinitions>
                         <TextBlock Text="Tag hinzufügen" FontSize="12" Margin="3,0,0,5"/>
                         <DockPanel Grid.Row="1" Margin="2,0,2,10">
-                            <Button DockPanel.Dock="Right" Content="+" Width="30" Height="27"
+                            <Button x:Name="TagAddButton" DockPanel.Dock="Right" Content="+" Width="30" Height="27"
                                     Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="Tag zu ausgewählten Bildern hinzufügen"
                                     Click="TagAdd_Click"/>
                             <TextBox x:Name="TagEntryBox" Margin="0,0,4,0"
