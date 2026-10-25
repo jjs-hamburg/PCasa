@@ -135,6 +135,94 @@ public partial class MainWindow
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.SourceProbe);
 
+    private async void FolderContext_DeletePhysicalDirectory_Click(
+        object sender, RoutedEventArgs e)
+    {
+        var tag = ContextFolder();
+        if (tag is null) return;
+        var path = FolderExclusionRules.Normalize(tag.FullPath);
+        var owner = DisplayedMonitoredRoot(path);
+        if (owner is null ||
+            !FolderExclusionRules.IsAtOrBelow(path, owner.LocalPath))
+        {
+            MessageBox.Show(this, "Nur überwachte Ordner können hier gelöscht werden.",
+                "PCasa", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // A monitored root can contain another independently monitored root.
+        // Never delete a tree that crosses such a boundary.
+        if (_dropTargetProjection.Any(entry => entry.Folder.Id != owner.Id &&
+            FolderExclusionRules.IsAtOrBelow(entry.Folder.LocalPath, path)))
+        {
+            MessageBox.Show(this,
+                "Dieser Ordner enthält einen weiteren überwachten Stammordner. " +
+                "Die Ordner müssen zuerst getrennt werden.",
+                "PCasa", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var count = _photoFolders.Where(f =>
+            FolderExclusionRules.IsAtOrBelow(f.LocalPath, path))
+            .Sum(f => f.ImageCount);
+        if (MessageBox.Show(this,
+            "Ordner einschließlich sämtlicher Unterordner und Dateien " +
+            "DAUERHAFT auf dem Datenträger löschen?\n\n" +
+            path + "\n\n" +
+            $"{count:N0} katalogisierte Bilder sind betroffen. " +
+            "Zusätzlich werden alle anderen Dateien in diesem Ordner gelöscht.\n\n" +
+            "Dies ist NICHT nur ein Entfernen aus PCasa. " +
+            "Auf Netzlaufwerken ist möglicherweise kein Papierkorb verfügbar.",
+            "Ordner endgültig löschen", MessageBoxButton.YesNo,
+            MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
+
+        var root = string.Equals(path,
+            FolderExclusionRules.Normalize(owner.LocalPath),
+            StringComparison.OrdinalIgnoreCase);
+        var key = $"folder:filesystem-delete:{Guid.NewGuid():N}";
+        try
+        {
+            // The existing removal owner invalidates ongoing catalog scans,
+            // detaches the catalog and publishes the change. Never create
+            // a parallel SQLite deletion implementation.
+            await RemoveFolderFromPcasaAsync(owner.Id, path, root);
+            BeginVisibleManualOperation(key, "Ordner auf Datenträger löschen", 1);
+            try
+            {
+                await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        _scheduler.ReportProgress(key, "Dateisystemordner löschen", 0, 1, path);
+                        // Recheck without trusting a stale TreeView selection.
+                        if (Path.GetPathRoot(path) is string driveRoot &&
+                            string.Equals(path.TrimEnd('\\'),
+                                driveRoot.TrimEnd('\\'),
+                                StringComparison.OrdinalIgnoreCase))
+                            throw new IOException("Laufwerks- und Freigabewurzeln dürfen nicht gelöscht werden.");
+                        if (Directory.Exists(path))
+                            Directory.Delete(path, recursive: true);
+                        _scheduler.ReportProgress(key, "Datenträgerordner gelöscht", 1, 1, path);
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.SourceProbe);
+            }
+            finally
+            {
+                EndVisibleManualOperation(key);
+            }
+            StatusText.Text = "Ordner dauerhaft gelöscht: " + path;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("FolderContext.PhysicalDelete", ex);
+            MessageBox.Show(this,
+                "Der Dateisystemordner konnte nicht vollständig gelöscht werden. " +
+                "Die PCasa-Katalogentfernung wurde möglicherweise bereits durchgeführt.\n\n" +
+                ex.Message, "Ordner löschen", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void FolderContext_OpenExplorer_Click(object sender, RoutedEventArgs e)
     {
         var tag = ContextFolder();
