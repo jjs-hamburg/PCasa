@@ -61,6 +61,7 @@ public partial class MainWindow
         QueuePendingInitialScans();
         _ = ReconcilePersistedExclusionsAsync();
         await EnsureBrowseCacheAndRefreshAsync();
+        StartPendingTagDrain();
         StartTagBackfill();
     }
 
