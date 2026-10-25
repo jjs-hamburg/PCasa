@@ -20,6 +20,21 @@ internal static class Program
             try { ExifCatalogRoundTrip(); Console.WriteLine("EXIF PROBE PASS"); return 0; }
             catch (Exception ex) { Console.Error.WriteLine("EXIF PROBE FAIL: " + ex); return 1; }
         }
+        if (args.Contains("--tag-write-probe"))
+        {
+            try
+            {
+                JpegTagRoundTrip();
+                JpegUnicodeTagPreservesPixels();
+                Console.WriteLine("TAG WRITE PROBE PASS");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("TAG WRITE PROBE FAIL: " + ex);
+                return 1;
+            }
+        }
         var failures = new List<string>();
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
