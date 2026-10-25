@@ -78,7 +78,7 @@ public partial class MainWindow
             // All filesystem enumeration belongs to the existing scheduler.
             // Each registered source contributes only its intersection with
             // the selected subtree, never an unrelated NAS or drive root.
-            await _scheduler.RunAsync(
+            var paths = await _scheduler.RunAsync(
                 $"folder-tree:scope:{Guid.NewGuid():N}",
                 SchedulerPriority.ManualAction,
                 token =>
@@ -145,10 +145,19 @@ public partial class MainWindow
                     token.ThrowIfCancellationRequested();
                     if (pendingBatch.Count > 0)
                         ((IProgress<string[]>)progress).Report(pendingBatch.ToArray());
-                    return true;
+                    return known;
                 },
                 cancellationToken: cancellation.Token,
                 workKind: SchedulerWorkKind.SourceProbe);
+
+            // Progress callbacks are advisory and may arrive after the awaited
+            // job's completion. The final scheduler result is authoritative.
+            if (ReferenceEquals(_allFolderProjectionCancellation, cancellation) &&
+                !Dispatcher.HasShutdownStarted)
+            {
+                _allFilesystemFolderPaths.UnionWith(paths);
+                RefreshFolderTree(preserveGalleryAnchor: true);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
