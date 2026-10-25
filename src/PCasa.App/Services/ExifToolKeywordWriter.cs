@@ -31,7 +31,7 @@ public static class ExifToolKeywordWriter
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
-            if (imagePath.Contains('\\r') || imagePath.Contains('\\n'))
+            if (imagePath.Contains('\r') || imagePath.Contains('\n'))
                 throw new ArgumentException("Dateipfade dürfen keine Zeilenumbrüche enthalten.");
             StartIfNeeded();
             var process = _process!;
