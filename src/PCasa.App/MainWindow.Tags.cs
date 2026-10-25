@@ -402,97 +402,92 @@ public partial class MainWindow
         }
     }
 
+    private bool _tagDrainActive;
+    private readonly HashSet<string> _tagDrainFailures = new(StringComparer.Ordinal);
+
+    // The durable table is the ONLY backlog. Scheduler executes it; the UI
+    // never waits for a source file to be copied across a VPN.
+    private void StartPendingTagDrain()
+    {
+        if (_tagDrainActive || Dispatcher.HasShutdownStarted) return;
+        _tagDrainActive = true;
+        _ = DrainPendingTagsAsync();
+    }
+
+    private async Task DrainPendingTagsAsync()
+    {
+        try
+        {
+            await _scheduler.EnqueueAsync("tags:durable-drain",
+                SchedulerPriority.Background, token =>
+                {
+                    var repo = new ImageTagRepository(_database);
+                    using var writer = new ExifToolKeywordWriter.Session();
+                    foreach (var edit in repo.PendingEdits())
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var identity = edit.ImageId + ":" + edit.Tag;
+                        if (_tagDrainFailures.Contains(identity)) continue;
+                        try
+                        {
+                            repo.ApplyPendingEdit(edit.ImageId, edit.Tag,
+                                edit.Present, edit.Revision, writer, token);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            _tagDrainFailures.Add(identity);
+                            PCasaDiagnostics.Write("Tags.DurableWrite", ex);
+                        }
+                    }
+                    return Task.CompletedTask;
+                });
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Tags.Drain", ex); }
+        finally
+        {
+            _tagDrainActive = false;
+            // Failed records stay durable and are retried after restart or
+            // the next user edit, not in an unbounded hot retry loop.
+        }
+    }
+
     private async Task ChangeSelectedTagsAsync(string tag, bool remove)
     {
         tag = tag.Trim();
         if (tag.Length == 0 || _tagWriteActive) return;
-        if (_selectedImageIds.Count == 0)
+        var ids = _selectedImageIds.ToArray();
+        if (ids.Length == 0)
         {
             StatusText.Text = "Zuerst Bilder auswählen.";
             return;
         }
-        var ids = _selectedImageIds.ToArray();
         _tagWriteActive = true;
-        StatusText.Text = $"Tag '{tag}': 0/{ids.Length} Bilder werden {(remove ? "aktualisiert" : "gespeichert")} …";
-        // Completion must reflect actual physical writes, not optimistic
-        // entries in SQLite. Show intermediate commits for large selections.
-        var progress = new Progress<(int Done, int Saved)>(state =>
-        {
-            if (_tagWriteActive && !Dispatcher.HasShutdownStarted)
-                StatusText.Text = $"Tag '{tag}': {state.Done}/{ids.Length} geprüft · " +
-                    $"{state.Saved} gespeichert";
-        });
         try
         {
-            var succeeded = 0;
-            var errors = new List<string>();
-            await _scheduler.EnqueueAsync(
-                // Writing original metadata is a P0 manual mutation.
-                $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.ManualAction,
+            var changed = await _scheduler.RunAsync(
+                "tags:queue:" + Guid.NewGuid().ToString("N"),
+                SchedulerPriority.ManualAction,
                 token =>
                 {
-                    var repo = new ImageTagRepository(_database);
-                    // One ExifTool process for the WHOLE selection, disposed
-                    // on success, cancellation or an unexpected failure.
-                    using var writer = new ExifToolKeywordWriter.Session();
-                    var clock = System.Diagnostics.Stopwatch.StartNew();
-                    var done = 0;
-                    foreach (var id in ids)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        try
-                        {
-                            repo.ChangeKeywords(id, tag, remove, writer, token);
-                            succeeded++;
-                            // Every committed image is already visible in SQLite.
-                            // Refresh the sidebar in bounded intervals while
-                            // the remaining selection continues in this job.
-                            if (clock.ElapsedMilliseconds >= 250)
-                                _ = Dispatcher.BeginInvoke(new Action(() =>
-                                {
-                                    if (_tagWriteActive && _sidebarMode == "Tags")
-                                        _ = RefreshTagSidebarAsync();
-                                }));
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex) { errors.Add($"Bild {id}: {ex.Message}"); }
-                        done++;
-                        if (done == ids.Length || clock.ElapsedMilliseconds >= 250)
-                        {
-                            ((IProgress<(int Done, int Saved)>)progress).Report((done, succeeded));
-                            clock.Restart();
-                        }
-                    }
-                    if (!remove && succeeded > 0)
-                        repo.RememberTag(tag);
-                    return Task.CompletedTask;
-                });
-            var result = (succeeded, errors);
-            if (!remove && result.succeeded > 0)
-            {
-                TagEntryBox.Clear();
-            }
+                    token.ThrowIfCancellationRequested();
+                    return new ImageTagRepository(_database).QueueTagEdit(ids, tag, remove);
+                }, workKind: SchedulerWorkKind.Catalog);
+            if (!remove) TagEntryBox.Clear();
+            StatusText.Text = $"Tag '{tag}': {changed} Änderungen lokal gesichert · Dateischreiben im Hintergrund";
             RefreshQuickTags();
             await RefreshTagSidebarAsync();
-            // Writing the originals also updates the FTS index. Keep any
-            // active gallery search in sync with that index immediately.
-            if (result.succeeded > 0 && _browseInitialized &&
-                _browsePageCache is not null &&
+            if (_browseInitialized && _browsePageCache is not null &&
                 !string.IsNullOrWhiteSpace(TagSearchBox.Text))
                 await ApplyTagFilterAsync();
-            StatusText.Text = result.errors.Count == 0
-                ? $"Tag '{tag}' in {result.succeeded} Bildern {(remove ? "entfernt" : "gespeichert")}."
-                : $"{result.succeeded} Bilder bearbeitet, {result.errors.Count} fehlgeschlagen.";
-            if (result.errors.Count > 0)
-                MessageBox.Show(this, string.Join("\n", result.errors.Take(8)),
-                    "Tag-Metadaten nicht geschrieben", MessageBoxButton.OK, MessageBoxImage.Warning);
+            _tagDrainFailures.Clear();
+            StartPendingTagDrain();
         }
         catch (Exception ex)
         {
-            // Exceptions outside the per-image writer (e.g. SQLite failure
-            // while loading recent tags) must not escape async void handlers.
-            PCasaDiagnostics.Write("Tags.ChangeSelected", ex);
-            StatusText.Text = "Tag-Änderung fehlgeschlagen";
+            PCasaDiagnostics.Write("Tags.Queue", ex);
+            StatusText.Text = "Tag-Änderung konnte nicht gespeichert werden";
             MessageBox.Show(this, ex.Message, "Tag-Änderung fehlgeschlagen",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
