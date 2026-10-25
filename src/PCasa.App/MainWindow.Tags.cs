@@ -420,7 +420,20 @@ public partial class MainWindow
                     foreach (var id in ids)
                     {
                         token.ThrowIfCancellationRequested();
-                        try { repo.ChangeKeywords(id, tag, remove, writer, token); succeeded++; }
+                        try
+                        {
+                            repo.ChangeKeywords(id, tag, remove, writer, token);
+                            succeeded++;
+                            // Every committed image is already visible in SQLite.
+                            // Refresh the sidebar in bounded intervals while
+                            // the remaining selection continues in this job.
+                            if (clock.ElapsedMilliseconds >= 250)
+                                _ = Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    if (_tagWriteActive && _sidebarMode == "Tags")
+                                        _ = RefreshTagSidebarAsync();
+                                }));
+                        }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex) { errors.Add($"Bild {id}: {ex.Message}"); }
                         done++;
