@@ -510,6 +510,29 @@ internal static class TagFlow
                     .Any(row => row.Children.OfType<TextBlock>().Any(label =>
                         label.Text.Contains(editableTag, StringComparison.Ordinal))),
                 "Red-X tag removal did not update original files and visible tag list.");
+            // Durable intent is committed locally before touching the image,
+            // and restarted repositories can replay several tags in ONE write.
+            var restartedTags = new ImageTagRepository(db);
+            const string pendingA = "Durable A";
+            const string pendingB = "Durable B";
+            if (restartedTags.QueueTagEdit(new[] { editorIds[0] }, pendingA, false) != 1 ||
+                restartedTags.QueueTagEdit(new[] { editorIds[0] }, pendingB, false) != 1)
+                throw new Exception("Durable tag intents were not inserted.");
+            var durableEdits = new ImageTagRepository(db).PendingEdits()
+                .Where(edit => edit.ImageId == editorIds[0]).ToArray();
+            if (durableEdits.Length != 2)
+                throw new Exception("Restart-safe tag backlog lost one of two intents.");
+            using (var durableWriter = new ExifToolKeywordWriter.Session())
+                new ImageTagRepository(db).ApplyPendingImageEdits(
+                    editorIds[0], durableEdits, durableWriter, CancellationToken.None);
+            var firstOriginal = Path.Combine(albumA, "a-00-topaz.jpg");
+            var persisted = ImageTagRepository.ReadKeywords(firstOriginal) ?? "";
+            if (!persisted.Contains(pendingA, StringComparison.Ordinal) ||
+                !persisted.Contains(pendingB, StringComparison.Ordinal) ||
+                new ImageTagRepository(db).PendingEdits()
+                    .Any(edit => edit.ImageId == editorIds[0]))
+                throw new Exception("Grouped durable keyword replay did not finish.");
+            Console.WriteLine("PASS: Two durable intents replay once per image and clear after acknowledgment.");
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
             window.Close();
