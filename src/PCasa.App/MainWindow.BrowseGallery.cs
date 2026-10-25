@@ -190,8 +190,9 @@ public partial class MainWindow
             _browseProgressWindow?.Finish();
             var progressWindow = new BrowseCacheProgressWindow { Owner = this };
             _browseProgressWindow = progressWindow;
-            progressWindow.Show();
-            StatusText.Text = $"Vorschaudaten vorbereiten: 0 / {missing:N0}";
+            // A queued background task has not started. Show the existing
+            // presenter only when real cache-build progress arrives.
+            StatusText.Text = $"Vorschaudaten vorgemerkt: {missing:N0}";
 
             var progress = new Progress<BrowseCacheBuildProgress>(value =>
             {
