@@ -58,6 +58,8 @@ public sealed class FolderScanner
         internal readonly HashSet<string> FailedDirectories =
             new(StringComparer.OrdinalIgnoreCase);
         internal HashSet<string>? CompletedInitialDirectories;
+        internal Dictionary<string, string>? InitialFileCursors;
+        internal HashSet<string>? RestartedPartialDirectories;
         internal Action<string>? DirectoryCompletionHandler;
         internal int ImageFilesSeen, Updated, Unchanged, Added, Changed,
             CacheRepaired, MetadataUpdated, Failed;
@@ -77,6 +79,8 @@ public sealed class FolderScanner
             ObservedPaths.Clear();
             FailedDirectories.Clear();
             CompletedInitialDirectories = null;
+            InitialFileCursors = null;
+            RestartedPartialDirectories = null;
             DirectoryCompletionHandler = null;
             ImageFilesSeen = Updated = Unchanged = Added = Changed =
                 CacheRepaired = MetadataUpdated = Failed = 0;
@@ -221,6 +225,20 @@ public sealed class FolderScanner
             : null;
         if (durableInitialImport && resume is not null)
             resume.CompletedInitialDirectories = completedDirectories;
+        var fileCursors = durableInitialImport
+            ? resume?.InitialFileCursors ??
+                _folderRepository.GetInitialScanFileCursors(folder.Id, generation, scanEpoch)
+            : null;
+        if (durableInitialImport && resume is not null)
+            resume.InitialFileCursors = fileCursors;
+        // Remember which directories had an incomplete inventory BEFORE the
+        // current enumerator began. Only those directories lack a full seen set.
+        var restartedPartialDirectories = durableInitialImport
+            ? resume?.RestartedPartialDirectories ??
+                new HashSet<string>(fileCursors!.Keys, StringComparer.OrdinalIgnoreCase)
+            : null;
+        if (durableInitialImport && resume is not null)
+            resume.RestartedPartialDirectories = restartedPartialDirectories;
         var failedDirectories = resume?.FailedDirectories ??
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void DirectoryCompleted(string directory)
@@ -235,11 +253,16 @@ public sealed class FolderScanner
                     Path.GetDirectoryName(path), directory,
                     StringComparison.OrdinalIgnoreCase)),
                 StringComparer.OrdinalIgnoreCase);
-            var cleanup = new CatalogRemovalService(_catalog.Database);
-            cleanup.RemoveMissing(folder.Id, directory, seen,
-                recursive: false, cancellationToken: cancellationToken,
-                sourceCanonicalPath: folder.CanonicalPath,
-                expectedGeneration: generation, expectedScanEpoch: scanEpoch);
+            // A restarted partial directory did not revisit earlier files.
+            // Its observed set is incomplete and must NEVER authorize deletes.
+            if (restartedPartialDirectories?.Contains(directory) != true)
+            {
+                var cleanup = new CatalogRemovalService(_catalog.Database);
+                cleanup.RemoveMissing(folder.Id, directory, seen,
+                    recursive: false, cancellationToken: cancellationToken,
+                    sourceCanonicalPath: folder.CanonicalPath,
+                    expectedGeneration: generation, expectedScanEpoch: scanEpoch);
+            }
             cancellationToken.ThrowIfCancellationRequested();
             if (!_folderRepository.CompleteInitialScanDirectory(
                     folder.Id, directory, generation, scanEpoch))
@@ -268,6 +291,7 @@ public sealed class FolderScanner
                 ? EnumerateIncludedFiles(
                     scanRoot, recursive, exclusions, CancellationToken.None,
                     completedDirectories,
+                    fileCursors,
                     durableInitialImport
                         ? resume is null
                             ? DirectoryCompleted
@@ -521,6 +545,26 @@ public sealed class FolderScanner
                     resume.CurrentFile = null;
                 }
 
+                // Persist after the file's SQLite commit, never in advance of
+                // indexing. An interruption therefore retries at most one
+                // uncommitted file. Do not move past a failed file.
+                if (durableInitialImport &&
+                    !failedDirectories.Contains(Path.GetDirectoryName(localPath) ?? scanRoot))
+                {
+                    var directory = Path.GetDirectoryName(localPath) ?? scanRoot;
+                    var fileName = Path.GetFileName(localPath);
+                    if (fileCursors is not null &&
+                        (!fileCursors.TryGetValue(directory, out var previous) ||
+                         StringComparer.OrdinalIgnoreCase.Compare(fileName, previous) > 0))
+                    {
+                        if (!_folderRepository.SaveInitialScanFileCursor(
+                                folder.Id, directory, fileName, generation, scanEpoch))
+                            throw new OperationCanceledException(
+                                "Initial import source superseded.");
+                        fileCursors[directory] = fileName;
+                    }
+                }
+
                 // The checkpoint is authoritative before any subsequent
                 // cancellation boundary, connection rollover or UI callback.
                 if (catalogCommitClock.ElapsedMilliseconds >= 1000)
@@ -645,6 +689,7 @@ public sealed class FolderScanner
         IReadOnlyCollection<string> exclusions,
         CancellationToken token,
         IReadOnlySet<string>? completedDirectories = null,
+        IReadOnlyDictionary<string, string>? fileCursors = null,
         Action<string>? onDirectoryComplete = null)
     {
         var pending = new Stack<string>();
@@ -678,9 +723,20 @@ public sealed class FolderScanner
                     throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
                 }
 
+                // Directory.GetFiles has no stable order. Persisted filename
+                // cursors require deterministic ordering across restarts.
+                Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                fileCursors?.TryGetValue(directory, out var ignored);
+                var last = fileCursors is not null &&
+                    fileCursors.TryGetValue(directory, out var cursor)
+                    ? cursor : null;
                 foreach (var file in files)
                 {
                     token.ThrowIfCancellationRequested();
+                    if (last is not null &&
+                        StringComparer.OrdinalIgnoreCase.Compare(
+                            Path.GetFileName(file), last) <= 0)
+                        continue;
                     yield return file;
                 }
             }
