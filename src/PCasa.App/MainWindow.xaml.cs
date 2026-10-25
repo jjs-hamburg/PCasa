@@ -248,6 +248,7 @@ public partial class MainWindow : Window
                 StringComparer.OrdinalIgnoreCase);
         }
 
+        FolderTreeToggleButton.Tag = _folderTreeSettings.Compressed ? null : "Active";
         FolderTreeToggleButton.ToolTip = _folderTreeSettings.Compressed
             ? "Expand: vollständige Pfade anzeigen"
             : "Compress: Pfade verkürzt anzeigen";
