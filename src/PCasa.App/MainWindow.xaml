@@ -440,7 +440,6 @@
                                 <MenuItem x:Name="FolderStatusProblemsMenu" Header="Nur Aktivität und Probleme" IsCheckable="True" Tag="Problems" Click="FolderStatusMode_Click"/>
                                 <MenuItem x:Name="FolderStatusNeverMenu" Header="Nie anzeigen" IsCheckable="True" Tag="None" Click="FolderStatusMode_Click"/>
                             </MenuItem>
-                            <MenuItem Header="Alle Ordner anzeigen (auch ohne Bilder)" x:Name="ShowAllFilesystemFoldersMenu" IsCheckable="True" Click="ShowAllFilesystemFolders_Click" />
                             <MenuItem Header="Eingeklappte Ordner in Galerie ausblenden" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
                             <MenuItem Header="Dateinamen unter Thumbnails" x:Name="ThumbnailFileNamesMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
@@ -546,15 +545,54 @@
                         <StackPanel Grid.Column="1" Orientation="Horizontal"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center" Margin="0,0,7,0">
-                            <StackPanel.Resources>
-                                <Style TargetType="Button" BasedOn="{StaticResource PcasaStatusButtonStyle}"/>
-                            </StackPanel.Resources>
-                            <Button x:Name="FolderExpandAllButton" Content="Alle auf" Padding="6,2" Margin="0,0,4,0" Click="FolderExpandAll_Click" />
-                            <Button x:Name="FolderCollapseAllButton" Content="Alle zu" Padding="6,2" Margin="0,0,4,0" Click="FolderCollapseAll_Click" />
+                            <Button x:Name="FolderExpandAllButton"
+                                    Style="{StaticResource PcasaFooterIconButtonStyle}"
+                                    ToolTip="Alle Ordner aufklappen" Click="FolderExpandAll_Click">
+                                <Viewbox Width="18" Height="18">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 2,6 L 9,6 L 11,9 L 22,9 L 22,20 L 2,20 Z"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/>
+                                        <Path Data="M 8,4 L 12,0 L 16,4 M 12,0 L 12,11"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
+                            <Button x:Name="FolderCollapseAllButton"
+                                    Style="{StaticResource PcasaFooterIconButtonStyle}"
+                                    ToolTip="Alle Ordner zuklappen" Click="FolderCollapseAll_Click">
+                                <Viewbox Width="18" Height="18">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 2,6 L 9,6 L 11,9 L 22,9 L 22,20 L 2,20 Z"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/>
+                                        <Path Data="M 8,11 L 12,15 L 16,11 M 12,4 L 12,15"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
                             <Button x:Name="FolderTreeToggleButton"
-                                    Content="Compress" Padding="9,2"
-                                    ToolTip="Pfadansicht verkürzen oder vollständig zeigen"
-                                    Click="FolderTreeToggle_Click" />
+                                    Style="{StaticResource PcasaFooterIconButtonStyle}"
+                                    ToolTip="Expand / Compress: Pfade vollständig oder verkürzt zeigen"
+                                    Click="FolderTreeToggle_Click">
+                                <Viewbox Width="18" Height="18">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 3,5 L 10,5 L 10,12 M 3,19 L 10,19 L 10,12 M 10,12 L 21,12 M 17,8 L 21,12 L 17,16"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
+                            <Button x:Name="ShowAllFilesystemFoldersButton"
+                                    Style="{StaticResource PcasaFooterIconButtonStyle}"
+                                    ToolTip="Alle Ordner anzeigen, auch ohne Bilder"
+                                    Click="ShowAllFilesystemFolders_Click">
+                                <Viewbox Width="18" Height="18">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 2,5 L 9,5 L 11,8 L 22,8 L 22,20 L 2,20 Z"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/>
+                                        <Path Data="M 12,11 L 12,17 M 9,14 L 15,14"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
                         </StackPanel>
                     </Grid>
                     <TreeView x:Name="FoldersTree"
