@@ -21,7 +21,19 @@ jobs:
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v5
-      - name: Setup .NET 10
+      # Prefer the .NET 10 SDK already present on windows-latest. The
+      # setup-dotnet CDN currently returns HTTP 409 for both LTS runtime
+      # and SDK downloads; use it only if the runner lacks a 10.x SDK.
+      - name: Check installed .NET 10 SDK
+        id: installed-dotnet
+        shell: pwsh
+        run: |
+          $sdks = @(dotnet --list-sdks)
+          $has10 = @($sdks | Where-Object { $_ -match '^10\.' }).Count -gt 0
+          Write-Host ($sdks -join "`n")
+          "has10=$($has10.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Setup .NET 10 if absent
+        if: steps.installed-dotnet.outputs.has10 != 'true'
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
