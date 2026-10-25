@@ -12,6 +12,7 @@ public partial class MainWindow
     // Selection changes never silently move the scope while images are copied.
     private string? _allFolderProjectionRootPath;
     private CancellationTokenSource? _allFolderProjectionCancellation;
+    private string? _allFolderProjectionJobKey;
     private readonly HashSet<string> _allFilesystemFolderPaths =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -35,6 +36,9 @@ public partial class MainWindow
             // any late progress/result from restoring hidden tree nodes.
             _allFolderProjectionRootPath = null;
             _allFolderProjectionCancellation?.Cancel();
+            if (_allFolderProjectionJobKey is string abandonedKey)
+                _scheduler.CancelPending(abandonedKey, SchedulerWorkKind.SourceProbe);
+            _allFolderProjectionJobKey = null;
             _allFolderProjectionCancellation = null;
             _allFilesystemFolderPaths.Clear();
             UpdateAllFoldersButtonState();
@@ -52,14 +56,16 @@ public partial class MainWindow
         var cancellation = new CancellationTokenSource();
         _allFolderProjectionRootPath = scope;
         _allFolderProjectionCancellation = cancellation;
+        var jobKey = $"folder-tree:scope:{Guid.NewGuid():N}";
+        _allFolderProjectionJobKey = jobKey;
         _allFilesystemFolderPaths.Clear();
         selected.IsExpanded = true;
         UpdateAllFoldersButtonState();
-        await RefreshAllFilesystemFolderPathsAsync(scope, cancellation);
+        await RefreshAllFilesystemFolderPathsAsync(scope, cancellation, jobKey);
     }
 
     private async Task RefreshAllFilesystemFolderPathsAsync(
-        string scope, CancellationTokenSource cancellation)
+        string scope, CancellationTokenSource cancellation, string jobKey)
     {
         var progress = new Progress<string[]>(batch =>
         {
@@ -80,7 +86,7 @@ public partial class MainWindow
             // Each registered source contributes only its intersection with
             // the selected subtree, never an unrelated NAS or drive root.
             var paths = await _scheduler.RunAsync(
-                $"folder-tree:scope:{Guid.NewGuid():N}",
+                jobKey,
                 // This is a read-only tree projection, not a user mutation.
                 // ManualAction would suspend the background catalog lane for
                 // the ENTIRE NAS walk and stall durable first imports.
@@ -176,7 +182,10 @@ public partial class MainWindow
         finally
         {
             if (ReferenceEquals(_allFolderProjectionCancellation, cancellation))
+            {
                 _allFolderProjectionCancellation = null;
+                _allFolderProjectionJobKey = null;
+            }
             cancellation.Dispose();
         }
     }
