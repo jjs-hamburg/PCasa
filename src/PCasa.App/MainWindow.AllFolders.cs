@@ -42,13 +42,13 @@ public partial class MainWindow
             return;
         }
 
-        if (FoldersTree.SelectedItem is not TreeViewItem
-            { Tag: FolderTreeTag selected })
+        if (FoldersTree.SelectedItem is not TreeViewItem selected ||
+            selected.Tag is not FolderTreeTag selectedTag)
             return;
 
         // The path is captured exactly once on activation, including if the
         // selection later changes to a newly exposed destination directory.
-        var scope = FolderExclusionRules.Normalize(selected.FullPath);
+        var scope = FolderExclusionRules.Normalize(selectedTag.FullPath);
         var cancellation = new CancellationTokenSource();
         _allFolderProjectionRootPath = scope;
         _allFolderProjectionCancellation = cancellation;
