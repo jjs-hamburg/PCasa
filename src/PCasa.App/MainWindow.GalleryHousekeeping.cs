@@ -139,11 +139,17 @@ public partial class MainWindow
             UpdateGalleryFolderVisibility();
     }
 
-    private void FolderExpandAll_Click(object sender, RoutedEventArgs e)
-        => SetAllFolderExpansion(true);
+    private bool _folderExpansionToggleActive;
 
-    private void FolderCollapseAll_Click(object sender, RoutedEventArgs e)
-        => SetAllFolderExpansion(false);
+    private void FolderExpansionToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _folderExpansionToggleActive = !_folderExpansionToggleActive;
+        SetAllFolderExpansion(_folderExpansionToggleActive);
+        FolderExpandAllButton.Tag = _folderExpansionToggleActive ? "Active" : null;
+        FolderExpandAllButton.ToolTip = _folderExpansionToggleActive
+            ? "Alle Ordner zuklappen"
+            : "Alle Ordner aufklappen";
+    }
 
     private void SetAllFolderExpansion(bool expanded)
     {
