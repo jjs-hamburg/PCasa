@@ -423,22 +423,33 @@ public partial class MainWindow
                 {
                     var repo = new ImageTagRepository(_database);
                     using var writer = new ExifToolKeywordWriter.Session();
-                    foreach (var edit in repo.PendingEdits())
+                    while (true)
                     {
                         token.ThrowIfCancellationRequested();
-                        var identity = edit.ImageId + ":" + edit.Tag;
-                        if (_tagDrainFailures.Contains(identity)) continue;
-                        try
+                        var pending = repo.PendingEdits();
+                        if (pending.Count == 0) break;
+                        var processed = 0;
+                        foreach (var edit in pending)
                         {
-                            repo.ApplyPendingEdit(edit.ImageId, edit.Tag,
-                                edit.Present, edit.Revision, writer, token);
+                            token.ThrowIfCancellationRequested();
+                            var identity = edit.ImageId + ":" + edit.Tag;
+                            if (_tagDrainFailures.Contains(identity)) continue;
+                            try
+                            {
+                                repo.ApplyPendingEdit(edit.ImageId, edit.Tag,
+                                    edit.Present, edit.Revision, writer, token);
+                                processed++;
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                _tagDrainFailures.Add(identity);
+                                PCasaDiagnostics.Write("Tags.DurableWrite", ex);
+                            }
                         }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            _tagDrainFailures.Add(identity);
-                            PCasaDiagnostics.Write("Tags.DurableWrite", ex);
-                        }
+                        // Every failed record stays on disk. Do not spin forever
+                        // against an unavailable NAS or a permanently bad file.
+                        if (processed == 0) break;
                     }
                     return Task.CompletedTask;
                 });
