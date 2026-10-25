@@ -200,6 +200,134 @@ public sealed class ImageTagRepository
         }
     }
 
+    // Immediate, durable user intent. No remote file I/O and no separate work queue.
+    // Existing index and pending intent are committed atomically.
+    public int QueueTagEdit(IReadOnlyList<long> imageIds, string tag, bool remove)
+    {
+        tag = tag.Trim();
+        if (tag.Length == 0) throw new ArgumentException("Tag fehlt.");
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        var count = 0;
+        foreach (var id in imageIds)
+        {
+            using var read = db.CreateCommand();
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT i.modified_utc_ticks, COALESCE(t.keywords, '')
+                FROM images i LEFT JOIN image_tags t ON t.image_id=i.id
+                WHERE i.id=$id;
+                """;
+            read.Parameters.AddWithValue("$id", id);
+            long ticks;
+            string words;
+            using (var reader = read.ExecuteReader())
+            {
+                if (!reader.Read()) continue;
+                ticks = reader.GetInt64(0);
+                words = reader.GetString(1);
+            }
+            var tags = words.Split(new[] { '\n', '\r' },
+                StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var changed = remove
+                ? tags.RemoveAll(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase)) > 0
+                : !tags.Contains(tag, StringComparer.OrdinalIgnoreCase);
+            if (!changed) continue;
+            if (!remove) tags.Add(tag);
+            using var upsert = db.CreateCommand();
+            upsert.Transaction = tx;
+            upsert.CommandText = """
+                INSERT INTO image_tags(image_id,keywords,source_modified_utc_ticks)
+                VALUES($id,$words,$ticks)
+                ON CONFLICT(image_id) DO UPDATE SET keywords=excluded.keywords,
+                    source_modified_utc_ticks=excluded.source_modified_utc_ticks;
+                """;
+            upsert.Parameters.AddWithValue("$id", id);
+            upsert.Parameters.AddWithValue("$words", string.Join("\n", tags));
+            upsert.Parameters.AddWithValue("$ticks", ticks);
+            upsert.ExecuteNonQuery();
+            using var pending = db.CreateCommand();
+            pending.Transaction = tx;
+            pending.CommandText = """
+                INSERT INTO pending_tag_edits(image_id,tag,desired_present,updated_utc)
+                VALUES($id,$tag,$desired,$now)
+                ON CONFLICT(image_id,tag) DO UPDATE SET
+                    desired_present=excluded.desired_present,
+                    revision=pending_tag_edits.revision+1,
+                    updated_utc=excluded.updated_utc;
+                """;
+            pending.Parameters.AddWithValue("$id", id);
+            pending.Parameters.AddWithValue("$tag", tag);
+            pending.Parameters.AddWithValue("$desired", remove ? 0 : 1);
+            pending.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            pending.ExecuteNonQuery();
+            count++;
+        }
+        tx.Commit();
+        if (!remove && count > 0) RememberTag(tag);
+        return count;
+    }
+
+    public IReadOnlyList<(long Id, long ImageId, string Tag, bool Present, long Revision)>
+        PendingEdits(int maximum = 512)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT rowid,image_id,tag,desired_present,revision
+            FROM pending_tag_edits ORDER BY updated_utc LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$limit", maximum);
+        using var reader = cmd.ExecuteReader();
+        var result = new List<(long,long,string,bool,long)>();
+        while (reader.Read())
+            result.Add((reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),
+                reader.GetInt64(3)!=0,reader.GetInt64(4)));
+        return result;
+    }
+
+    // The file mutation reuses the established single ExifTool read/write
+    // path, but SQLite must keep the newer optimistic projection.
+    public void ApplyPendingEdit(long imageId, string tag, bool present,
+        long revision, ExifToolKeywordWriter.Session writer,
+        CancellationToken token)
+    {
+        using var db = _database.OpenConnection();
+        using var pathCommand = db.CreateCommand();
+        pathCommand.CommandText = "SELECT local_path FROM images WHERE id=$id";
+        pathCommand.Parameters.AddWithValue("$id",imageId);
+        var path = pathCommand.ExecuteScalar() as string;
+        if (path is null) return;
+        using (SourceFileLocks.Enter(path, token))
+        {
+            var tags = writer.Read(path, token).Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var changed = present
+                ? !tags.Contains(tag, StringComparer.OrdinalIgnoreCase)
+                : tags.RemoveAll(t => t.Equals(tag,StringComparison.OrdinalIgnoreCase)) > 0;
+            if (changed)
+            {
+                if (present) tags.Add(tag);
+                writer.Write(path,tags,token);
+            }
+            // Remove only the exact revision that was written. A newer user
+            // edit stays pending for a subsequent scheduler pass.
+            using var tx = db.BeginTransaction();
+            using var done = db.CreateCommand();
+            done.Transaction = tx;
+            done.CommandText = """
+                DELETE FROM pending_tag_edits
+                WHERE image_id=$id AND tag=$tag AND revision=$revision;
+                """;
+            done.Parameters.AddWithValue("$id",imageId);
+            done.Parameters.AddWithValue("$tag",tag);
+            done.Parameters.AddWithValue("$revision",revision);
+            done.ExecuteNonQuery();
+            tx.Commit();
+        }
+    }
+
     public HashSet<long> SearchImageIds(string text)
     {
         var tokens = Regex.Matches(text, @"[\p{L}\p{N}_]+")
