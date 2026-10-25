@@ -254,6 +254,61 @@ public sealed class FolderRepository
         return completed;
     }
 
+    public Dictionary<string, string> GetInitialScanFileCursors(
+        long folderId, long generation, long epoch)
+    {
+        var cursors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT c.local_directory, c.last_file_name
+            FROM initial_scan_file_cursors c
+            JOIN monitored_folders m ON m.id = c.monitored_folder_id
+            JOIN scheduler_sources s ON s.canonical_path = m.canonical_path
+            WHERE c.monitored_folder_id = $id AND m.initial_scan_pending = 1
+              AND c.source_generation = $generation AND c.scan_epoch = $epoch
+              AND s.generation = $generation AND s.scan_epoch = $epoch
+              AND s.desired_present = 1;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$epoch", epoch);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) cursors[reader.GetString(0)] = reader.GetString(1);
+        return cursors;
+    }
+
+    public bool SaveInitialScanFileCursor(
+        long folderId, string directory, string fileName,
+        long generation, long epoch)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO initial_scan_file_cursors
+                (monitored_folder_id, local_directory, last_file_name,
+                 source_generation, scan_epoch, updated_utc)
+            SELECT m.id, $directory, $file, $generation, $epoch, $now
+            FROM monitored_folders m
+            JOIN scheduler_sources s ON s.canonical_path = m.canonical_path
+            WHERE m.id = $id AND m.initial_scan_pending = 1
+              AND s.generation = $generation AND s.scan_epoch = $epoch
+              AND s.desired_present = 1
+            ON CONFLICT(monitored_folder_id, local_directory) DO UPDATE SET
+                last_file_name = excluded.last_file_name,
+                source_generation = excluded.source_generation,
+                scan_epoch = excluded.scan_epoch,
+                updated_utc = excluded.updated_utc;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$directory", directory);
+        cmd.Parameters.AddWithValue("$file", fileName);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$epoch", epoch);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
     public bool CompleteInitialScanDirectory(
         long folderId, string path, long generation, long epoch)
     {
@@ -311,6 +366,12 @@ public sealed class FolderRepository
                 "DELETE FROM initial_scan_directories WHERE monitored_folder_id = $id;";
             cleanup.Parameters.AddWithValue("$id", folderId);
             cleanup.ExecuteNonQuery();
+            using var clearCursors = connection.CreateCommand();
+            clearCursors.Transaction = transaction;
+            clearCursors.CommandText =
+                "DELETE FROM initial_scan_file_cursors WHERE monitored_folder_id = $id;";
+            clearCursors.Parameters.AddWithValue("$id", folderId);
+            clearCursors.ExecuteNonQuery();
         }
         transaction.Commit();
         return completed;
