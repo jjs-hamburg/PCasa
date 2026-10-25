@@ -483,6 +483,13 @@ internal static class TagFlow
                     label.Text.Contains(editableTag, StringComparison.Ordinal))),
                 "Tag AND failed to show a tag shared by both selected images.");
             tagOr.IsChecked = true;
+            // RefreshTagSidebarAsync clears the panel before its asynchronous
+            // scheduler read. Wait for the OR projection to be republished
+            // rather than clicking an ephemeral empty panel.
+            Until(window, () => tagRows.Children.OfType<DockPanel>()
+                .Any(row => row.Children.OfType<TextBlock>().Any(label =>
+                    label.Text.Contains(editableTag, StringComparison.Ordinal))),
+                "Tag OR refresh did not republish the common keyword.");
 
             // Remove through the actual RED-X row button; verify that BOTH
             // originals lost the keyword and the SQLite search is refreshed.
