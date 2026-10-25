@@ -50,6 +50,9 @@ public static class ExifToolKeywordWriter
             // ExifTool -stay_open consumes one argument per line. -executeNN
             // delimits each complete write and its {readyNN} acknowledgment.
             var request = ++_nextRequestId;
+            // A keyword-only edit must not change the file's modification
+            // timestamp and trigger another full thumbnail/EXIF scan.
+            process.StandardInput.WriteLine("-P");
             process.StandardInput.WriteLine("-overwrite_original");
             if (keywords.Count == 0)
                 process.StandardInput.WriteLine("-XMP-dc:Subject=");
