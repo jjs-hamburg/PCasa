@@ -958,6 +958,14 @@ public partial class MainWindow
             return;
         }
 
+        // Explicit navigation to a different folder ends the previous
+        // thumbnail selection. Scrolling does not alter the selection.
+        if (_selectedImageIds.Count > 0)
+        {
+            _selectedImageIds.Clear();
+            _gallerySelection.Reset();
+            ApplyGallerySelection();
+        }
         MarkExplicitGalleryNavigation();
         _appearance.SelectedTreePath = tag.FullPath;
         SaveAppearance();
