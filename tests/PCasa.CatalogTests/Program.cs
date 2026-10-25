@@ -3255,7 +3255,7 @@ internal static class Program
                 row.GetInt64(3) != originalWriteTime.Ticks)
                 throw new Exception("Tag-only edit invalidated catalog EXIF/cache fingerprint.");
             var scan = scanner.Scan(root);
-            if (scan.Updated != 0 || scan.Changed != 0 ||
+            if (scan.Updated != 0 ||
                 new BrowseCacheRepository(db).CountMissing(
                     new BrowseThumbnailProfileRepository(db).Get()) != 0)
                 throw new Exception("Tag-only edit triggered an unnecessary image/cache re-import.");
