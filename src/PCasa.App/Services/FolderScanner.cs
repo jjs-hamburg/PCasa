@@ -713,30 +713,65 @@ public sealed class FolderScanner
             var previouslyCompleted = completedDirectories?.Contains(directory) == true;
             if (!previouslyCompleted)
             {
-                string[] files;
-                try
+                // First-import filename cursors need deterministic sorting.
+                // Ordinary reconciliation does not: stream NAS directory entries
+                // without building and sorting an entire filename array.
+                // Both paths still visit every entry, preserve cancellation
+                // and feed the same scanner and missing-file reconciliation.
+                if (fileCursors is not null)
                 {
-                    files = Directory.GetFiles(directory, "*", options);
+                    string[] files;
+                    try
+                    {
+                        files = Directory.GetFiles(directory, "*", options);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
+                    }
+                    Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                    var last = fileCursors.TryGetValue(directory, out var cursor)
+                        ? cursor : null;
+                    foreach (var file in files)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (last is not null &&
+                            StringComparer.OrdinalIgnoreCase.Compare(
+                                Path.GetFileName(file), last) <= 0)
+                            continue;
+                        yield return file;
+                    }
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                else
                 {
-                    throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
-                }
-
-                // Directory.GetFiles has no stable order. Persisted filename
-                // cursors require deterministic ordering across restarts.
-                Array.Sort(files, StringComparer.OrdinalIgnoreCase);
-                var last = fileCursors is not null &&
-                    fileCursors.TryGetValue(directory, out var cursor)
-                    ? cursor : null;
-                foreach (var file in files)
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (last is not null &&
-                        StringComparer.OrdinalIgnoreCase.Compare(
-                            Path.GetFileName(file), last) <= 0)
-                        continue;
-                    yield return file;
+                    IEnumerator<string> fileIterator;
+                    try
+                    {
+                        fileIterator = Directory.EnumerateFiles(directory, "*", options)
+                            .GetEnumerator();
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        throw new IOException($"Verzeichnis konnte nicht gelesen werden: {directory}", ex);
+                    }
+                    using (fileIterator)
+                    {
+                        while (true)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            string file;
+                            try
+                            {
+                                if (!fileIterator.MoveNext()) break;
+                                file = fileIterator.Current;
+                            }
+                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                            {
+                                throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
+                            }
+                            yield return file;
+                        }
+                    }
                 }
             }
 
