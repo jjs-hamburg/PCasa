@@ -24,6 +24,66 @@ public static class ExifToolKeywordWriter
         private int _nextRequestId;
         private bool _disposed;
 
+        // Read only the current XMP keyword field, never decode image pixels.
+        // JSON preserves list items (including commas) without guesswork.
+        public IReadOnlyList<string> Read(string imagePath,
+            CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (imagePath.Contains('\\r') || imagePath.Contains('\\n'))
+                throw new ArgumentException("Dateipfade dürfen keine Zeilenumbrüche enthalten.");
+            StartIfNeeded();
+            var process = _process!;
+            using var cancellation = cancellationToken.Register(() =>
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+            });
+            var request = ++_nextRequestId;
+            process.StandardInput.WriteLine("-j");
+            process.StandardInput.WriteLine("-XMP-dc:Subject");
+            process.StandardInput.WriteLine(imagePath);
+            process.StandardInput.WriteLine("-execute" + request);
+            process.StandardInput.Flush();
+            var response = ReadResponse(process, request, cancellationToken);
+            using var document = System.Text.Json.JsonDocument.Parse(response);
+            var entry = document.RootElement.EnumerateArray().FirstOrDefault();
+            if (entry.ValueKind != System.Text.Json.JsonValueKind.Object)
+                throw new IOException("ExifTool lieferte keine lesbaren Metadaten.");
+            if (entry.TryGetProperty("Error", out var error))
+                throw new IOException("ExifTool: " + error.ToString());
+            if (!entry.TryGetProperty("Subject", out var subject))
+                return Array.Empty<string>();
+            if (subject.ValueKind == System.Text.Json.JsonValueKind.Array)
+                return subject.EnumerateArray().Select(x => x.GetString() ?? "")
+                    .Where(x => x.Length > 0).ToArray();
+            if (subject.ValueKind == System.Text.Json.JsonValueKind.String)
+                return new[] { subject.GetString()! };
+            return Array.Empty<string>();
+        }
+
+        private static string ReadResponse(Process process, int request,
+            CancellationToken cancellationToken)
+        {
+            var response = new StringBuilder();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var line = process.StandardOutput.ReadLineAsync(cancellationToken)
+                    .AsTask().WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
+                    .GetAwaiter().GetResult();
+                if (line is null)
+                    throw new IOException("ExifTool wurde vor der Bestätigung beendet.");
+                if (line.Trim() == "{ready" + request + "}") break;
+                response.AppendLine(line);
+                if (response.Length > 64_000)
+                    throw new InvalidDataException("Unerwartet große ExifTool-Antwort.");
+            }
+            return response.ToString();
+        }
+
         public void Write(string imagePath, IReadOnlyList<string> keywords,
             CancellationToken cancellationToken = default)
         {
@@ -65,25 +125,10 @@ public static class ExifToolKeywordWriter
             process.StandardInput.WriteLine("-execute" + request);
             process.StandardInput.Flush();
 
-            var response = new StringBuilder();
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var line = process.StandardOutput.ReadLineAsync(cancellationToken)
-                    .AsTask()
-                    .WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
-                    .GetAwaiter().GetResult();
-                if (line is null)
-                    throw new IOException("ExifTool wurde vor der Bestätigung beendet.");
-                if (line.Trim() == "{ready" + request + "}") break;
-                response.AppendLine(line);
-                if (response.Length > 64_000)
-                    throw new InvalidDataException("Unerwartet große ExifTool-Antwort.");
-            }
+            var response = ReadResponse(process, request, cancellationToken);
 
             // Stay-open mode does not return a separate exit code per request.
-            // Its native summary is checked here and the actual metadata are
-            // independently read and verified by ImageTagRepository afterwards.
+            // The response acknowledges the write; uncertain results remain errors.
             if (!response.ToString().Contains("1 image files updated",
                 StringComparison.Ordinal))
                 throw new IOException("ExifTool konnte die Datei nicht aktualisieren: " +
