@@ -398,7 +398,10 @@ public partial class MainWindow
             var succeeded = 0;
             var errors = new List<string>();
             await _scheduler.EnqueueAsync(
-                $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
+                // Writing tags to originals is an explicit user mutation,
+                // not a low-priority UI read. Let the central scheduler
+                // preempt background imports instead of waiting behind them.
+                $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.ManualAction,
                 token =>
                 {
                     var repo = new ImageTagRepository(_database);
