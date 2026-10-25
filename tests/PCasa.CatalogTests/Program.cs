@@ -3233,11 +3233,40 @@ internal static class Program
         cmd.CommandText = "SELECT id FROM images LIMIT 1";
         var id = Convert.ToInt64(cmd.ExecuteScalar());
         var tags = new ImageTagRepository(db);
+        var originalWriteTime = File.GetLastWriteTimeUtc(path);
+        void AssertMetadataOnlyWrite()
+        {
+            if (File.GetLastWriteTimeUtc(path) != originalWriteTime)
+                throw new Exception("Tag write changed source mtime and will retrigger thumbnail import.");
+            using var stateDb = db.OpenConnection();
+            using var state = stateDb.CreateCommand();
+            state.CommandText = """
+                SELECT i.file_size, i.modified_utc_ticks,
+                       x.source_file_size, x.source_modified_utc_ticks
+                FROM images i LEFT JOIN image_exif x ON x.image_id = i.id
+                WHERE i.id = $id;
+                """;
+            state.Parameters.AddWithValue("$id", id);
+            using var row = state.ExecuteReader();
+            if (!row.Read() ||
+                row.GetInt64(0) != new FileInfo(path).Length ||
+                row.GetInt64(1) != originalWriteTime.Ticks ||
+                row.IsDBNull(2) || row.GetInt64(2) != row.GetInt64(0) ||
+                row.GetInt64(3) != originalWriteTime.Ticks)
+                throw new Exception("Tag-only edit invalidated catalog EXIF/cache fingerprint.");
+            var scan = scanner.Scan(root);
+            if (scan.Updated != 0 || scan.Changed != 0 ||
+                new BrowseCacheRepository(db).CountMissing(
+                    new BrowseThumbnailProfileRepository(db).Get()) != 0)
+                throw new Exception("Tag-only edit triggered an unnecessary image/cache re-import.");
+        }
         tags.ChangeKeywords(id, "PCasaRegressionKeyword", remove: false);
+        AssertMetadataOnlyWrite();
         var value = ImageTagRepository.ReadKeywords(path);
         if (value is null || !value.Contains("PCasaRegressionKeyword", StringComparison.Ordinal))
             throw new Exception("JPEG metadata tag was not saved in the original.");
         tags.ChangeKeywords(id, "PCasaRegressionKeyword", remove: true);
+        AssertMetadataOnlyWrite();
         value = ImageTagRepository.ReadKeywords(path);
         if (value is null || value.Contains("PCasaRegressionKeyword", StringComparison.Ordinal))
             throw new Exception("Removing a tag did not update original JPEG metadata.");
