@@ -267,6 +267,27 @@ public sealed class LocalDatabase
             checkpoints.ExecuteNonQuery();
         }
 
+        // Last successfully committed file in the currently unfinished directory.
+        // A stable filename ordering permits restart without re-decoding prior
+        // images. This is a progress hint, never authorization for pruning.
+        using (var fileCursor = connection.CreateCommand())
+        {
+            fileCursor.CommandText = """
+                CREATE TABLE IF NOT EXISTS initial_scan_file_cursors (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_directory TEXT NOT NULL COLLATE NOCASE,
+                    last_file_name TEXT NOT NULL,
+                    source_generation INTEGER NOT NULL,
+                    scan_epoch INTEGER NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    PRIMARY KEY(monitored_folder_id, local_directory),
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+                """;
+            fileCursor.ExecuteNonQuery();
+        }
+
         // One-time upgrade for folders added by older builds that never
         // initiated their first scan: do not strand an empty monitored root.
         // Completed (including intentionally empty) scans are not repeatedly
