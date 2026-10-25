@@ -207,7 +207,7 @@ public partial class MainWindow : Window
 
         // Optional filesystem-only nodes are a read-only tree projection.
         // They never create image catalog rows or start another indexer.
-        if (_appearance.ShowAllFilesystemFolders)
+        if (_allFolderProjectionRootPath is not null)
         {
             foreach (var directoryPath in _allFilesystemFolderPaths)
             {
