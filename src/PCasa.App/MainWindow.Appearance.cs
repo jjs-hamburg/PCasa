@@ -173,8 +173,9 @@ public partial class MainWindow
     {
         if (TooltipsEnabledMenu is null) return;
         TooltipsEnabledMenu.IsChecked = _appearance.TooltipsEnabled;
-        // WPF TooltipService inheritable dependency property: all descendants
-        // honor this without mutating or overwriting their individual ToolTips.
+        // One shared application-wide gate handles dynamically created folder
+        // labels, context menus and independently opened WPF windows too.
+        App.SetTooltipsEnabled(_appearance.TooltipsEnabled);
         System.Windows.Controls.ToolTipService.SetIsEnabled(this, _appearance.TooltipsEnabled);
     }
 
