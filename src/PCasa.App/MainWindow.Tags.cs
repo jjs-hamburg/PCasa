@@ -426,7 +426,7 @@ public partial class MainWindow
                         done++;
                         if (done == ids.Length || clock.ElapsedMilliseconds >= 250)
                         {
-                            progress.Report((done, succeeded));
+                            ((IProgress<(int Done, int Saved)>)progress).Report((done, succeeded));
                             clock.Restart();
                         }
                     }
