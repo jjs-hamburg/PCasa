@@ -45,6 +45,7 @@ internal static class Program
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
+        Run("Read-only folder-tree probe does not stop durable background image import", ReadOnlyFolderProjectionNeverBlocksInitialImport, failures);
         Run("Manual folder creation preempts and safely resumes network scan", SchedulerManualFolderCreateYieldsScan, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
@@ -1052,6 +1053,55 @@ internal static class Program
             {
                 release.TrySetResult();
                 await Task.WhenAll(blocked).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void ReadOnlyFolderProjectionNeverBlocksInitialImport()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var folderProbeStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var finishFolderProbe = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            // Model the user's optional folder-tree projection enumerating a
+            // slow NAS. SourceProbe remains scheduler-owned but has NO authority
+            // to interrupt the durable background catalog scanner.
+            var projection = scheduler.RunAsync(
+                "folder-tree:scope:readonly",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    folderProbeStarted.TrySetResult();
+                    finishFolderProbe.Task.GetAwaiter().GetResult();
+                    token.ThrowIfCancellationRequested();
+                    return true;
+                }, workKind: SchedulerWorkKind.SourceProbe);
+            try
+            {
+                await folderProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var scanRan = false;
+                await scheduler.EnqueueAsync(
+                    "catalog:durable-first-import",
+                    SchedulerPriority.Background,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        scanRan = true;
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.CatalogScan)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!scanRan || projection.IsCompleted)
+                    throw new Exception(
+                        "Read-only folder visibility scan blocked catalog import.");
+            }
+            finally
+            {
+                finishFolderProbe.TrySetResult();
+                await projection.WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
         Check().GetAwaiter().GetResult();
