@@ -88,41 +88,22 @@ public sealed class ImageTagRepository
         if (string.IsNullOrWhiteSpace(tag)) throw new ArgumentException("Tag fehlt.");
         cancellationToken.ThrowIfCancellationRequested();
         using var db = _database.OpenConnection();
-        string path;
-        string? cached;
-        long modifiedTicks;
-        long? indexedTicks;
-        using (var pathCommand = db.CreateCommand())
-        {
-            pathCommand.CommandText = """
-                SELECT i.local_path, i.modified_utc_ticks, t.keywords,
-                       t.source_modified_utc_ticks
-                FROM images i LEFT JOIN image_tags t ON t.image_id = i.id
-                WHERE i.id = $id;
-                """;
-            pathCommand.Parameters.AddWithValue("$id", imageId);
-            using var reader = pathCommand.ExecuteReader();
-            if (!reader.Read())
-                throw new IOException("Bild ist nicht mehr im Katalog.");
-            path = reader.GetString(0);
-            modifiedTicks = reader.GetInt64(1);
-            cached = reader.IsDBNull(2) ? null : reader.GetString(2);
-            indexedTicks = reader.IsDBNull(3) ? null : reader.GetInt64(3);
-        }
+        using var pathCommand = db.CreateCommand();
+        pathCommand.CommandText = "SELECT local_path FROM images WHERE id = $id";
+        pathCommand.Parameters.AddWithValue("$id", imageId);
+        var path = pathCommand.ExecuteScalar() as string
+            ?? throw new IOException("Bild ist nicht mehr im Katalog.");
         // A scheduler yield or source transfer must not race a metadata write.
-        // The lock covers the complete write + physical verification, but no
-        // global cache/index lock is held across slow network I/O.
+        // The lock covers write + verification; never hold a global cache
+        // lock across slow SMB I/O.
         using (SourceFileLocks.Enter(path, cancellationToken))
         {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
-        // The scanner already imported these keywords. Reuse the indexed
-        // value ONLY if the actual source mtime still matches the indexed
-        // version. Otherwise reread the original and preserve external tags.
-        var current = cached is not null && indexedTicks == modifiedTicks &&
-            File.GetLastWriteTimeUtc(path).Ticks == modifiedTicks
-                ? cached : ReadKeywords(path);
+        // The ORIGINAL is authoritative. A cached database keyword value may
+        // be incomplete or stale even with identical file timestamps.
+        var current = ReadKeywords(path);
         if (current is null)
             throw new IOException("Metadaten können nicht gelesen werden.");
         var original = current.Split(new[] { (char)10, (char)13 },
