@@ -304,22 +304,42 @@ public partial class MainWindow
             foreach (var pair in filtered)
             {
                 var row = new DockPanel { Margin = new Thickness(3, 5, 3, 5) };
-                var remove = new Button {
-                    // Use geometry rather than a font glyph. The dark WPF
-                    // control template may not render the previous red glyph.
-                    Content = new System.Windows.Shapes.Path {
-                        Data = System.Windows.Media.Geometry.Parse("M 3,3 L 13,13 M 13,3 L 3,13"),
-                        Stroke = new System.Windows.Media.SolidColorBrush(
-                            System.Windows.Media.Color.FromRgb(221, 61, 61)),
-                        StrokeThickness = 2,
-                        Width = 16,
-                        Height = 16,
-                        Stretch = System.Windows.Media.Stretch.Uniform
-                    },
-                    ToolTip = "Tag aus allen ausgewählten Bildern entfernen",
-                    Width = 23, Height = 23, Background = System.Windows.Media.Brushes.Transparent,
-                    BorderThickness = new Thickness(0)
+                // Use a self-contained template so global button styles cannot
+                // hide the delete glyph in either light or dark appearance.
+                var deleteGlyph = new System.Windows.Shapes.Path
+                {
+                    Data = System.Windows.Media.Geometry.Parse("M 4,4 L 16,16 M 16,4 L 4,16"),
+                    Stroke = System.Windows.Media.Brushes.IndianRed,
+                    StrokeThickness = 2.4,
+                    StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
+                    StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
+                    Width = 20,
+                    Height = 20,
+                    Stretch = System.Windows.Media.Stretch.Uniform
                 };
+                var remove = new Button
+                {
+                    Content = deleteGlyph,
+                    ToolTip = "Tag aus allen ausgewählten Bildern entfernen",
+                    Width = 28,
+                    Height = 28,
+                    Background = System.Windows.Media.Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                var template = new ControlTemplate(typeof(Button));
+                var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+                presenter.SetValue(ContentPresenter.ContentProperty,
+                    new System.Windows.TemplateBindingExtension(
+                        System.Windows.Controls.ContentControl.ContentProperty));
+                presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                    HorizontalAlignment.Center);
+                presenter.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                    VerticalAlignment.Center);
+                template.VisualTree = presenter;
+                remove.Template = template;
                 remove.Click += async (_, _) => await ChangeSelectedTagsAsync(pair.Key, remove: true);
                 DockPanel.SetDock(remove, Dock.Right);
                 row.Children.Add(remove);
