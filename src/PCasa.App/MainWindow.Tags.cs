@@ -393,23 +393,42 @@ public partial class MainWindow
         }
         var ids = _selectedImageIds.ToArray();
         _tagWriteActive = true;
+        StatusText.Text = $"Tag '{tag}': 0/{ids.Length} Bilder werden {(remove ? "aktualisiert" : "gespeichert")} …";
+        // Completion must reflect actual physical writes, not optimistic
+        // entries in SQLite. Show intermediate commits for large selections.
+        var progress = new Progress<(int Done, int Saved)>(state =>
+        {
+            if (_tagWriteActive && !Dispatcher.HasShutdownStarted)
+                StatusText.Text = $"Tag '{tag}': {state.Done}/{ids.Length} geprüft · " +
+                    $"{state.Saved} gespeichert";
+        });
         try
         {
             var succeeded = 0;
             var errors = new List<string>();
             await _scheduler.EnqueueAsync(
-                // Writing tags to originals is an explicit user mutation,
-                // not a low-priority UI read. Let the central scheduler
-                // preempt background imports instead of waiting behind them.
+                // Writing original metadata is a P0 manual mutation.
                 $"tags:write:{Guid.NewGuid():N}", SchedulerPriority.ManualAction,
                 token =>
                 {
                     var repo = new ImageTagRepository(_database);
+                    // One ExifTool process for the WHOLE selection, disposed
+                    // on success, cancellation or an unexpected failure.
+                    using var writer = new ExifToolKeywordWriter.Session();
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    var done = 0;
                     foreach (var id in ids)
                     {
                         token.ThrowIfCancellationRequested();
-                        try { repo.ChangeKeywords(id, tag, remove); succeeded++; }
+                        try { repo.ChangeKeywords(id, tag, remove, writer, token); succeeded++; }
+                        catch (OperationCanceledException) { throw; }
                         catch (Exception ex) { errors.Add($"Bild {id}: {ex.Message}"); }
+                        done++;
+                        if (done == ids.Length || clock.ElapsedMilliseconds >= 250)
+                        {
+                            progress.Report((done, succeeded));
+                            clock.Restart();
+                        }
                     }
                     if (!remove && succeeded > 0)
                         repo.RememberTag(tag);
