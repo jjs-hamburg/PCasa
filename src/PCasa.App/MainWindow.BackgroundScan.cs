@@ -231,12 +231,9 @@ public partial class MainWindow
             _backgroundKnownFolderIds.RemoveWhere(id => !currentIds.Contains(id));
 
             var userInitialScanIds = pendingInitialIds;
-            // Prioritize FIRST imports that can still make progress. A failed or
-            // offline import may remain durable across restarts, but it must
-            // never permanently suppress reconciliation of unrelated roots.
-            var hasRunnableFirstImport = userInitialScanIds.Any(id =>
-                !_initialScanAttempted.Contains(id) &&
-                availability.TryGetValue(id, out var online) && online);
+            // A durable first import owns only ITS OWN root. Never gate
+            // unrelated root reconciliation on another root's unfinished
+            // import; that global gate broke automatic NAS discovery.
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
@@ -246,13 +243,9 @@ public partial class MainWindow
                     continue;
                 }
 
-                // A root's own durable first import owns that root. While
-                // another reachable first import is active or not yet attempted,
-                // defer routine rescans to prioritize discovering new pictures.
-                // A FAILED/OFFLINE first import is NOT a global stop switch:
-                // healthy, already imported roots must keep reconciling.
-                if (userInitialScanIds.Contains(folder.Id) ||
-                    _initialScanActive || hasRunnableFirstImport)
+                // No duplicate root inventory during its own first import.
+                // Other monitored roots must reconcile independently.
+                if (userInitialScanIds.Contains(folder.Id))
                     continue;
                 if (_backgroundKnownFolderIds.Add(folder.Id))
                 {
@@ -404,7 +397,8 @@ public partial class MainWindow
             !_browseInitialized ||
             _browseCacheBuilding ||
             _manualFileTransferActive ||
-            _isScanning)
+            _manualContextScanActive ||
+            _manualScanAllActive)
         {
             if (!_folderRemovalPending && _backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
             {
@@ -442,8 +436,8 @@ public partial class MainWindow
             {
                 var request = requests[nextRequestIndex];
                 _backgroundLifetime.Token.ThrowIfCancellationRequested();
-                if (_manualFolderScanWaiting || _manualFileTransferActive ||
-                    _folderRemovalPending)
+                if (_manualContextScanActive || _manualScanAllActive ||
+                    _manualFileTransferActive || _folderRemovalPending)
                     throw new OperationCanceledException("User-requested folder operation has priority.");
 
                 var folder = _folderRepository.GetAll()
@@ -590,7 +584,8 @@ public partial class MainWindow
                 // Directory.Exists can outlive cancellation on a dead NAS.
                 // A manual request that arrived during the probe must still
                 // supersede this background request before it gets scheduled.
-                if (_manualFolderScanWaiting || _folderRemovalPending)
+                if (_manualContextScanActive || _manualScanAllActive ||
+                    _manualFileTransferActive || _folderRemovalPending)
                     throw new OperationCanceledException("Manual folder action has priority.");
 
                 TrackFolderActivity(
@@ -637,7 +632,9 @@ public partial class MainWindow
                     using var resume = new FolderScanner.ScanResumeState();
                     await _scheduler.EnqueueAsync(
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}",
-                        SchedulerPriority.Background,
+                        // Automatic discovery must make progress even during
+                        // a long first import. Manual actions stay higher.
+                        SchedulerPriority.UserAction,
                         token =>
                         {
                             scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
@@ -663,8 +660,8 @@ public partial class MainWindow
                 catch (OperationCanceledException)
                 {
                     if (_backgroundLifetime.IsCancellationRequested ||
-                        _manualFolderScanWaiting || _manualFileTransferActive ||
-                        _folderRemovalPending)
+                        _manualContextScanActive || _manualScanAllActive ||
+                        _manualFileTransferActive || _folderRemovalPending)
                     {
                         throw;
                     }
@@ -695,8 +692,8 @@ public partial class MainWindow
                 }
             }
 
-            if (catalogChanged && !_manualFolderScanWaiting &&
-                !_manualFileTransferActive)
+            if (catalogChanged && !_manualContextScanActive &&
+                !_manualScanAllActive && !_manualFileTransferActive)
             {
                 using var recovery = CancellationTokenSource.CreateLinkedTokenSource(
                     _backgroundLifetime.Token);
@@ -750,8 +747,8 @@ public partial class MainWindow
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
-            if (_manualFolderScanWaiting || _manualFileTransferActive ||
-                _folderRemovalPending)
+            if (_manualContextScanActive || _manualScanAllActive ||
+                _manualFileTransferActive || _folderRemovalPending)
             {
                 foreach (var remaining in requests.Skip(nextRequestIndex))
                     QueueBackgroundChange(new BackgroundFolderChange(
