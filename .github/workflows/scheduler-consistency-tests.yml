@@ -1,8 +1,11 @@
 name: Scheduler Consistency Tests
 
-# Windows CI is intentionally manual: no run on every development push.
-# A deliberately dispatched acceptance run also publishes the test package.
+# Public repository: build and test every change to the development branch.
+# Manual dispatch remains available for explicit acceptance runs.
 on:
+  push:
+    branches:
+      - scheduler-consistency
   workflow_dispatch:
 
 permissions:
