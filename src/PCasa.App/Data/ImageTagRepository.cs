@@ -88,11 +88,21 @@ public sealed class ImageTagRepository
         if (string.IsNullOrWhiteSpace(tag)) throw new ArgumentException("Tag fehlt.");
         cancellationToken.ThrowIfCancellationRequested();
         using var db = _database.OpenConnection();
-        using var pathCommand = db.CreateCommand();
-        pathCommand.CommandText = "SELECT local_path FROM images WHERE id = $id";
-        pathCommand.Parameters.AddWithValue("$id", imageId);
-        var path = pathCommand.ExecuteScalar() as string
-            ?? throw new IOException("Bild ist nicht mehr im Katalog.");
+        string path;
+        long indexedSize;
+        long indexedTicks;
+        using (var pathCommand = db.CreateCommand())
+        {
+            pathCommand.CommandText =
+                "SELECT local_path, file_size, modified_utc_ticks FROM images WHERE id = $id";
+            pathCommand.Parameters.AddWithValue("$id", imageId);
+            using var reader = pathCommand.ExecuteReader();
+            if (!reader.Read())
+                throw new IOException("Bild ist nicht mehr im Katalog.");
+            path = reader.GetString(0);
+            indexedSize = reader.GetInt64(1);
+            indexedTicks = reader.GetInt64(2);
+        }
         // A scheduler yield or source transfer must not race a metadata write.
         // The lock covers write + verification; never hold a global cache
         // lock across slow SMB I/O.
@@ -101,8 +111,12 @@ public sealed class ImageTagRepository
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
-        // The ORIGINAL is authoritative. A cached database keyword value may
-        // be incomplete or stale even with identical file timestamps.
+        // A tag edit must not invalidate pixels, EXIF or packed thumbnails.
+        // Retain their cache identity only when the original file matched
+        // the catalog BEFORE the edit and ExifTool preserved its mtime.
+        var before = new FileInfo(path);
+        var oldSize = before.Length;
+        var oldTicks = before.LastWriteTimeUtc.Ticks;
         var current = ReadKeywords(path);
         if (current is null)
             throw new IOException("Metadaten können nicht gelesen werden.");
@@ -127,19 +141,60 @@ public sealed class ImageTagRepository
                    : !verified.Contains(tag, StringComparer.OrdinalIgnoreCase))
             throw new IOException("Die Tag-Änderung konnte nicht verifiziert werden.");
 
-        // File metadata is the authority. Cache the reread result only after
-        // the in-place write and verification succeeded.
-        using var update = db.CreateCommand();
-        update.CommandText = """
-            INSERT INTO image_tags (image_id, keywords, source_modified_utc_ticks)
-            SELECT id, $words, modified_utc_ticks FROM images WHERE id = $id
-            ON CONFLICT(image_id) DO UPDATE SET
-                keywords = excluded.keywords,
-                source_modified_utc_ticks = excluded.source_modified_utc_ticks;
-            """;
-        update.Parameters.AddWithValue("$id", imageId);
-        update.Parameters.AddWithValue("$words", confirmed);
-        update.ExecuteNonQuery();
+        var after = new FileInfo(path);
+        var newSize = after.Length;
+        var newTicks = after.LastWriteTimeUtc.Ticks;
+        var metadataOnly = oldSize == indexedSize && oldTicks == indexedTicks &&
+                           newTicks == oldTicks;
+        // One SQLite transaction publishes the verified keywords and, only
+        // for a known metadata-only edit, the changed byte size. This keeps
+        // the EXISTING EXIF and thumbnail cache valid without starting a
+        // redundant NAS decode/pack rebuild on a watcher notification.
+        using var transaction = db.BeginTransaction();
+        if (metadataOnly && newSize != oldSize)
+        {
+            using var size = db.CreateCommand();
+            size.Transaction = transaction;
+            size.CommandText = """
+                UPDATE images SET file_size = $newSize
+                WHERE id = $id AND file_size = $oldSize
+                  AND modified_utc_ticks = $ticks;
+                """;
+            size.Parameters.AddWithValue("$id", imageId);
+            size.Parameters.AddWithValue("$newSize", newSize);
+            size.Parameters.AddWithValue("$oldSize", oldSize);
+            size.Parameters.AddWithValue("$ticks", oldTicks);
+            if (size.ExecuteNonQuery() == 1)
+            {
+                using var exif = db.CreateCommand();
+                exif.Transaction = transaction;
+                exif.CommandText = """
+                    UPDATE image_exif SET source_file_size = $newSize
+                    WHERE image_id = $id AND source_file_size = $oldSize
+                      AND source_modified_utc_ticks = $ticks;
+                    """;
+                exif.Parameters.AddWithValue("$id", imageId);
+                exif.Parameters.AddWithValue("$newSize", newSize);
+                exif.Parameters.AddWithValue("$oldSize", oldSize);
+                exif.Parameters.AddWithValue("$ticks", oldTicks);
+                exif.ExecuteNonQuery();
+            }
+        }
+        using (var update = db.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = """
+                INSERT INTO image_tags (image_id, keywords, source_modified_utc_ticks)
+                SELECT id, $words, modified_utc_ticks FROM images WHERE id = $id
+                ON CONFLICT(image_id) DO UPDATE SET
+                    keywords = excluded.keywords,
+                    source_modified_utc_ticks = excluded.source_modified_utc_ticks;
+                """;
+            update.Parameters.AddWithValue("$id", imageId);
+            update.Parameters.AddWithValue("$words", confirmed);
+            update.ExecuteNonQuery();
+        }
+        transaction.Commit();
         }
     }
 
