@@ -33,6 +33,7 @@ internal static class Program
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Durable first-import checkpoints survive restart without unsafe pruning", DurableInitialImportRestartSafe, failures);
+        Run("Restart resumes within unfinished directory after last committed image", DurableFileCursorRestartSafe, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
@@ -357,6 +358,56 @@ internal static class Program
                 result.ImageFilesSeen);
     }
 
+
+    private static void DurableFileCursorRestartSafe()
+    {
+        using var sandbox = new Sandbox();
+        var directory = Path.Combine(sandbox.Images, "LongFolder");
+        Directory.CreateDirectory(directory);
+        for (var i = 0; i < 8; i++)
+            WriteJpeg(Path.Combine(directory, $"image-{i:D3}.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        using var stop = new CancellationTokenSource();
+        var first = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.ImageFilesSeen >= 4) stop.Cancel();
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, true, first,
+                stop.Token, durableInitialImport: true);
+            throw new Exception("Test scan did not interrupt mid-folder.");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+
+        var repository = new FolderRepository(db);
+        var state = repository.GetSourceState(root.CanonicalPath)!.Value;
+        var epoch = repository.GetScanEpoch(root.CanonicalPath);
+        var cursors = repository.GetInitialScanFileCursors(root.Id, state.Generation, epoch);
+        if (!cursors.TryGetValue(directory, out var fileName) ||
+            fileName != "image-003.jpg")
+            throw new Exception("Last committed file cursor was not saved.");
+
+        // The second scan must not read/index images zero through three again.
+        // Removing an already processed file must NOT authorize its deletion
+        // from a partial inventory that skipped it on restart.
+        File.Delete(Path.Combine(directory, "image-000.jpg"));
+        db.Initialize();
+        var resumedScanner = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
+        var resumed = resumedScanner.ScanDirectory(root, root.LocalPath, true,
+            durableInitialImport: true);
+        if (resumed.ImageFilesSeen != 4 || resumed.Failed != 0)
+            throw new Exception($"Restart unnecessarily reread images: {resumed.ImageFilesSeen}.");
+        if (new ImageCatalogRepository(db).CountAll() != 8)
+            throw new Exception("Partial inventory removed an unseen earlier image.");
+        if (repository.GetPendingInitialScans().Any(f => f.Id == root.Id))
+            throw new Exception("Restarted first import remained pending.");
+        resumedScanner.Scan(root);
+        if (new ImageCatalogRepository(db).CountAll() != 7)
+            throw new Exception("Later full inventory did not reconcile deleted image.");
+    }
 
     private static void DurableInitialImportRestartSafe()
     {
