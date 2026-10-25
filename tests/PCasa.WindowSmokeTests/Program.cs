@@ -545,6 +545,22 @@ internal static class Program
                             "Status click did not reopen hidden progress window.");
                     Console.WriteLine(
                         "PASS: Taskbar restore reconstructs progress window while respecting user Hide.");
+
+                    // A queued background cache pass must not display a
+                    // permanent 'Vorschaudaten werden vorbereitet 0/0'.
+                    progressWindow.BeginCachePhase();
+                    Flush(window);
+                    if (progressWindow.IsVisible)
+                        throw new Exception(
+                            "Idle cache preparation left a visible 0/0 progress window.");
+                    progressWindow.Update(new BrowseCacheBuildProgress(
+                        3, 1, 0, "image.jpg", null));
+                    Flush(window);
+                    if (!progressWindow.IsVisible)
+                        throw new Exception(
+                            "Actual cache progress did not restore the progress window.");
+                    Console.WriteLine(
+                        "PASS: Cache progress remains hidden until real work produces a result.");
                 }
                 finally
                 {
