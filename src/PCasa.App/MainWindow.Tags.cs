@@ -416,6 +416,7 @@ public partial class MainWindow
 
     private async Task DrainPendingTagsAsync()
     {
+        var interrupted = false;
         try
         {
             await _scheduler.EnqueueAsync("tags:durable-drain",
@@ -453,13 +454,16 @@ public partial class MainWindow
                     return Task.CompletedTask;
                 });
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { interrupted = true; }
         catch (Exception ex) { PCasaDiagnostics.Write("Tags.Drain", ex); }
         finally
         {
             _tagDrainActive = false;
-            // Failed records stay durable and are retried after restart or
-            // the next user edit, not in an unbounded hot retry loop.
+            // A higher-priority scheduler job may yield the background drain.
+            // Resume from SQLite when the scheduler permits; failed source
+            // writes, by contrast, do not trigger a tight retry loop.
+            if (interrupted && !Dispatcher.HasShutdownStarted)
+                _ = Dispatcher.BeginInvoke(new Action(StartPendingTagDrain));
         }
     }
 
