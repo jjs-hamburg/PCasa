@@ -211,6 +211,23 @@ public sealed class LocalDatabase
         EnsureColumn(connection, "cache_maintenance", "request_generation",
             "INTEGER NOT NULL DEFAULT 0");
 
+        // Durable tag intentions. SQLite is the immediate UI projection;
+        // this table is the restart-safe record of edits not yet in the file.
+        using (var pendingTags = connection.CreateCommand())
+        {
+            pendingTags.CommandText = """
+                CREATE TABLE IF NOT EXISTS pending_tag_edits (
+                    image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                    tag TEXT NOT NULL COLLATE NOCASE,
+                    desired_present INTEGER NOT NULL CHECK(desired_present IN (0,1)),
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    updated_utc TEXT NOT NULL,
+                    PRIMARY KEY (image_id, tag)
+                );
+                """;
+            pendingTags.ExecuteNonQuery();
+        }
+
         // The last used tags are shared by every sidebar opening in this local
         // catalogue, rather than being lost with the window's in-memory state.
         using (var recent = connection.CreateCommand())
