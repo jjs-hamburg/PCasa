@@ -71,32 +71,60 @@ public sealed class ImageTagRepository
 
 
     /// <summary>
-    /// Write keywords in place via WIC. No image encoder is used, so photo pixels
-    /// are not recompressed. Unsupported formats fail without changing SQLite.
+    /// Update original XMP through the single ExifTool writer. A selection may
+    /// pass one reusable process session; single-image callers use the same
+    /// writer path. The original file remains authoritative.
     /// </summary>
-    public void ChangeKeywords(long imageId, string tag, bool remove)
+    public void ChangeKeywords(long imageId, string tag, bool remove,
+        ExifToolKeywordWriter.Session? writer = null,
+        CancellationToken cancellationToken = default)
     {
-        // The scanner and viewer share the source-file gate. A slow
-        // ExifTool call on NAS must not stall unrelated catalog mutations.
-        ChangeKeywordsLocked(imageId, tag, remove);
+        ChangeKeywordsLocked(imageId, tag, remove, writer, cancellationToken);
     }
 
-    private void ChangeKeywordsLocked(long imageId, string tag, bool remove)
+    private void ChangeKeywordsLocked(long imageId, string tag, bool remove,
+        ExifToolKeywordWriter.Session? writer, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(tag)) throw new ArgumentException("Tag fehlt.");
+        cancellationToken.ThrowIfCancellationRequested();
         using var db = _database.OpenConnection();
-        using var pathCommand = db.CreateCommand();
-        pathCommand.CommandText = "SELECT local_path FROM images WHERE id = $id";
-        pathCommand.Parameters.AddWithValue("$id", imageId);
-        var path = pathCommand.ExecuteScalar() as string
-            ?? throw new IOException("Bild ist nicht mehr im Katalog.");
-        lock (SourceFileLocks.ForPath(path))
+        string path;
+        string? cached;
+        long modifiedTicks;
+        long? indexedTicks;
+        using (var pathCommand = db.CreateCommand())
+        {
+            pathCommand.CommandText = """
+                SELECT i.local_path, i.modified_utc_ticks, t.keywords,
+                       t.source_modified_utc_ticks
+                FROM images i LEFT JOIN image_tags t ON t.image_id = i.id
+                WHERE i.id = $id;
+                """;
+            pathCommand.Parameters.AddWithValue("$id", imageId);
+            using var reader = pathCommand.ExecuteReader();
+            if (!reader.Read())
+                throw new IOException("Bild ist nicht mehr im Katalog.");
+            path = reader.GetString(0);
+            modifiedTicks = reader.GetInt64(1);
+            cached = reader.IsDBNull(2) ? null : reader.GetString(2);
+            indexedTicks = reader.IsDBNull(3) ? null : reader.GetInt64(3);
+        }
+        // A scheduler yield or source transfer must not race a metadata write.
+        // The lock covers the complete write + physical verification, but no
+        // global cache/index lock is held across slow network I/O.
+        using (SourceFileLocks.Enter(path, cancellationToken))
         {
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
-        var current = ReadKeywords(path)
-            ?? throw new IOException("Metadaten können nicht gelesen werden.");
+        // The scanner already imported these keywords. Reuse the indexed
+        // value ONLY if the actual source mtime still matches the indexed
+        // version. Otherwise reread the original and preserve external tags.
+        var current = cached is not null && indexedTicks == modifiedTicks &&
+            File.GetLastWriteTimeUtc(path).Ticks == modifiedTicks
+                ? cached : ReadKeywords(path);
+        if (current is null)
+            throw new IOException("Metadaten können nicht gelesen werden.");
         var original = current.Split(new[] { (char)10, (char)13 },
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -105,7 +133,11 @@ public sealed class ImageTagRepository
             : !original.Contains(tag, StringComparer.OrdinalIgnoreCase);
         if (!changed) return;
         if (!remove) original.Add(tag);
-        ExifToolKeywordWriter.Write(path, original);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (writer is null) ExifToolKeywordWriter.Write(path, original);
+        else writer.Write(path, original, cancellationToken);
+        // The real JPEG/TIFF metadata must match the requested edit before
+        // the SQLite search index or UI can report it as saved.
         var confirmed = ReadKeywords(path)
             ?? throw new IOException("Gespeicherte Tags konnten nicht verifiziert werden.");
         var verified = confirmed.Split(new[] { (char)10, (char)13 },
