@@ -892,11 +892,117 @@ public partial class MainWindow
         }
     }
 
-    private void TagAdd_Click(object sender, RoutedEventArgs e)
-        => StageTagChange(TagEntryBox.Text, remove: false);
+    private CancellationTokenSource? _tagSuggestionCancellation;
+    private int _tagSuggestionVersion;
+    private bool _acceptingTagSuggestion;
 
-    private void TagEntry_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private async void TagEntry_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (_acceptingTagSuggestion || TagSuggestionsPopup is null ||
+            _scheduler is null || _database is null) return;
+        var query = TagEntryBox.Text.Trim();
+        var version = ++_tagSuggestionVersion;
+        _tagSuggestionCancellation?.Cancel();
+        _tagSuggestionCancellation?.Dispose();
+        _tagSuggestionCancellation = null;
+        TagSuggestionsPopup.IsOpen = false;
+        TagSuggestionsList.ItemsSource = null;
+        if (query.Length == 0 || _selectedImageIds.Count == 0) return;
+        var cancellation = new CancellationTokenSource();
+        _tagSuggestionCancellation = cancellation;
+        try
+        {
+            await Task.Delay(150, cancellation.Token);
+            var suggestions = await _scheduler.RunAsync(
+                "catalog:tag-suggest:" + version, SchedulerPriority.Interactive,
+                token => new ImageTagRepository(_database)
+                    .SuggestExistingTags(query, 8, token),
+                () => version == _tagSuggestionVersion,
+                cancellationToken: cancellation.Token,
+                workKind: SchedulerWorkKind.CatalogRead);
+            if (cancellation.IsCancellationRequested ||
+                version != _tagSuggestionVersion ||
+                !string.Equals(TagEntryBox.Text.Trim(), query,
+                    StringComparison.Ordinal)) return;
+            TagSuggestionsList.ItemsSource = suggestions;
+            TagSuggestionsList.SelectedIndex = suggestions.Count > 0 ? 0 : -1;
+            TagSuggestionsPopup.IsOpen = suggestions.Count > 0 &&
+                TagEntryBox.IsKeyboardFocusWithin;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Tags.Suggestions", ex);
+        }
+    }
+
+    private void AcceptTagSuggestion(string value)
+    {
+        _acceptingTagSuggestion = true;
+        try
+        {
+            TagSuggestionsPopup.IsOpen = false;
+            TagEntryBox.Text = value;
+            TagEntryBox.CaretIndex = value.Length;
+            TagEntryBox.Focus();
+        }
+        finally { _acceptingTagSuggestion = false; }
+    }
+
+    private void TagSuggestion_MouseUp(object sender,
+        System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (TagSuggestionsList.SelectedItem is string suggestion)
+        {
+            AcceptTagSuggestion(suggestion);
+            e.Handled = true;
+        }
+    }
+
+    private void TagSuggestionsPopup_Closed(object? sender, EventArgs e)
+    {
+        // An older async query must not reopen the popup after the user
+        // clicked elsewhere, accepted a word, or dismissed suggestions.
+        _tagSuggestionVersion++;
+        _tagSuggestionCancellation?.Cancel();
+    }
+
+    private void TagAdd_Click(object sender, RoutedEventArgs e)
+    {
+        TagSuggestionsPopup.IsOpen = false;
+        StageTagChange(TagEntryBox.Text, remove: false);
+    }
+
+    private void TagEntry_KeyDown(object sender,
+        System.Windows.Input.KeyEventArgs e)
+    {
+        if (TagSuggestionsPopup.IsOpen && TagSuggestionsList.Items.Count > 0)
+        {
+            if (e.Key is System.Windows.Input.Key.Down or
+                System.Windows.Input.Key.Up)
+            {
+                var direction = e.Key == System.Windows.Input.Key.Down ? 1 : -1;
+                TagSuggestionsList.SelectedIndex = Math.Clamp(
+                    TagSuggestionsList.SelectedIndex + direction, 0,
+                    TagSuggestionsList.Items.Count - 1);
+                TagSuggestionsList.ScrollIntoView(TagSuggestionsList.SelectedItem);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == System.Windows.Input.Key.Escape)
+            {
+                TagSuggestionsPopup.IsOpen = false;
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == System.Windows.Input.Key.Enter &&
+                TagSuggestionsList.SelectedItem is string selected)
+            {
+                AcceptTagSuggestion(selected);
+                e.Handled = true;
+                return;
+            }
+        }
         if (e.Key == System.Windows.Input.Key.Enter)
         {
             e.Handled = true;
@@ -910,6 +1016,9 @@ public partial class MainWindow
         _tagSearchCancellation?.Dispose();
         _tagSearchCancellation = null;
         _tagBackfillCancellation?.Cancel();
+        _tagSuggestionCancellation?.Cancel();
+        _tagSuggestionCancellation?.Dispose();
+        _tagSuggestionCancellation = null;
         // The backfill worker owns its token until it exits; avoid disposing
         // the cancellation source while WaitHandle is still in use.
     }
