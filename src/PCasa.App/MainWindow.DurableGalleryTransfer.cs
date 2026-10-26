@@ -29,6 +29,8 @@ public partial class MainWindow
         var journal = new DurableGalleryTransferJournal(_database);
         var package = new SchedulerTaskPackage(key);
         var phase = recipe.Move ? "Bilder verschieben" : "Bilder kopieren";
+        var presentationTier = _activeBrowseTier;
+        var navigationAtStart = _explicitGalleryNavigationVersion;
         var fencedEpochs = new Dictionary<string, long>(
             StringComparer.OrdinalIgnoreCase);
 
@@ -243,12 +245,15 @@ public partial class MainWindow
                     throw new IOException(
                         "Zieldatei nicht sicher erreichbar: " + receipt.Destination);
 
+                long? previousFolderId = null;
                 using (SourceFileLocks.EnterPair(
                     receipt.Source, receipt.Destination, token))
                 {
                     token.ThrowIfCancellationRequested();
                     if (receipt.Move && receipt.SourceImageId is long imageId)
                     {
+                        if (CatalogImageIdAtPath(receipt.Source) == imageId)
+                            previousFolderId = _imageCatalog.GetImagePhotoFolderId(imageId);
                         if (CatalogImageIdAtPath(receipt.Destination) != imageId &&
                             !_imageCatalog.RelocateImage(imageId,
                                 receipt.Source, receipt.Destination, root,
@@ -277,6 +282,10 @@ public partial class MainWindow
                     }
                     journal.Advance(key, ordinal, "materialized", "indexed");
                 }
+                if (!recovered &&
+                    CatalogImageIdAtPath(receipt.Destination) is long committedId)
+                    PublishCommittedGalleryImage(presentationTier, committedId,
+                        previousFolderId, receipt.ReplacedImageId);
                 _scheduler.ReportProgress(key, "Bild katalogisiert",
                     ordinal + 1, recipe.Sources.Length, receipt.Destination);
                 return Task.CompletedTask;
@@ -304,7 +313,8 @@ public partial class MainWindow
                     ApplyGallerySelection();
                     var first = _displayedBrowseIndex.FirstOrDefault(
                         entry => movedIds.Contains(entry.ImageId));
-                    if (first is not null)
+                    if (first is not null &&
+                        navigationAtStart == _explicitGalleryNavigationVersion)
                         ScrollGalleryImageIntoView(first.ImageId);
                 }
                 StatusText.Text = recipe.Sources.Length.ToString("N0") +
