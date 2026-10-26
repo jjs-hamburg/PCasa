@@ -249,6 +249,13 @@ internal static class Program
                 if (unresolved.Count != 0)
                     throw new Exception("Registered durable package was not restored.");
                 await finished.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                // The step's signal fires before the scheduler writes its
+                // final durable completion record. Wait for that commit before
+                // disposing the database-backed worker.
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+                while (new DurablePackageJournal(database).Pending().Count > 0 &&
+                       DateTime.UtcNow < deadline)
+                    await Task.Delay(30);
                 if (firstStepCalls != 1)
                     throw new Exception("Completed step was repeated after restart.");
             }
