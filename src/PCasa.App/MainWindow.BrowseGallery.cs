@@ -62,7 +62,9 @@ public partial class MainWindow
         // Recovered user edits must be queued BEFORE background folder scans.
         var unresolvedPackages = _scheduler.RecoverDurablePackages();
         StartPendingTagDrain();
-        _ = RecoverPendingFileTransfersAsync();
+        // Register all persistent relocation intents before any automatic scan
+        // is queued, so recovered manual work keeps precedence on startup.
+        await RecoverPendingFileTransfersAsync();
         // A persistent but unrecognised P0 recipe cannot be silently
         // demoted beneath a background scan.
         if (unresolvedPackages.Count == 0)
