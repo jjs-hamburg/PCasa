@@ -151,6 +151,18 @@ public sealed class DurableGalleryTransferJournal
         return ids;
     }
 
+    public bool OwnsRelocationIntent(string intentId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT 1 FROM gallery_transfer_receipts
+             WHERE relocation_id=$intent LIMIT 1;
+            """;
+        cmd.Parameters.AddWithValue("$intent", intentId);
+        return cmd.ExecuteScalar() is not null;
+    }
+
     // Preserve the existing image relocation intent contract. The deterministic
     // ID makes a repeated invocation idempotent and validates its exact recipe.
     public void EnsureRelocationIntent(GalleryTransferReceipt item)
