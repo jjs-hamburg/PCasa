@@ -182,7 +182,7 @@ public partial class MainWindow
                 new ManualScanRecipe(directory, expectedMonitoredFolderId));
             await _scheduler.EnqueueDurablePackageAsync(package,
                 "manual-folder-scan-v1", payload, priority,
-                SchedulerWorkKind.CatalogScan);
+                SchedulerWorkKind.CatalogScan, cancellationToken);
         }
         else
         {

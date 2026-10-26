@@ -785,7 +785,7 @@ public partial class MainWindow
         {
             await _scheduler.EnqueueDurablePackageAsync(package,
                 "manual-scan-all-v1", payload, SchedulerPriority.ManualAction,
-                SchedulerWorkKind.CatalogScan);
+                SchedulerWorkKind.CatalogScan, cancellation.Token);
         }
         catch (OperationCanceledException) when (_folderRemovalPending ||
             cancellation.IsCancellationRequested)

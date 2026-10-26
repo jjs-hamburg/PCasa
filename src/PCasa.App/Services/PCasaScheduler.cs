@@ -137,7 +137,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     public Task EnqueueDurablePackageAsync(SchedulerTaskPackage package,
         string type, string payload, SchedulerPriority priority,
-        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog)
+        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
+        CancellationToken cancellationToken = default)
     {
         var journal = _durableJournal ??
             throw new InvalidOperationException("Paketjournal nicht aktiviert.");
@@ -147,11 +148,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (record.State is "completed" or "failed")
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
         package.RestoreCursor(record.CompletedSteps);
-        return QueueDurableExisting(package, record);
+        return QueueDurableExisting(package, record, cancellationToken);
     }
 
     private async Task QueueDurableExisting(SchedulerTaskPackage package,
-        DurablePackageRecord record)
+        DurablePackageRecord record, CancellationToken cancellationToken = default)
     {
         var journal = _durableJournal!;
         package.OnStepCompleted = step => journal.SetState(record.Key, "running", step);
@@ -160,13 +161,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // Durable identity/priority come only from the journal; never
             // substitute a default background priority on restart.
             await EnqueuePackageAsync(package, record.Priority,
-                workKind: record.WorkKind);
+                cancellationToken, workKind: record.WorkKind);
             journal.SetState(record.Key, "completed", package.CompletedSteps);
         }
         catch (OperationCanceledException)
         {
-            // During shutdown retain the checkpoint and original priority.
-            journal.SetState(record.Key, "queued", package.CompletedSteps);
+            // Shutdown is a yield, user cancellation is final. Never
+            // resurrect a deliberately canceled destructive operation.
+            journal.SetState(record.Key,
+                _shutdown.IsCancellationRequested ? "queued" : "canceled",
+                package.CompletedSteps);
             throw;
         }
         catch (Exception ex)
