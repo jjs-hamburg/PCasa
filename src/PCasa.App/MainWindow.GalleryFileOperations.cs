@@ -460,6 +460,8 @@ public partial class MainWindow
         {
             if (_visibleManualActiveKey == key)
                 DisplayManualOperation(_visibleManualOrder[^1]);
+            else
+                RenderVisibleTagSeries();
             return;
         }
 
