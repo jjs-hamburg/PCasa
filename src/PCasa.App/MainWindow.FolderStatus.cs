@@ -33,6 +33,46 @@ public partial class MainWindow
         return tag;
     }
 
+    private int _pendingTagDisplayVersion;
+
+    private async Task RefreshPendingTagDotsAsync()
+    {
+        if (Dispatcher.HasShutdownStarted || FoldersTree is null) return;
+        var version = ++_pendingTagDisplayVersion;
+        IReadOnlyList<string> paths;
+        try
+        {
+            paths = await _scheduler.RunAsync(
+                "catalog:pending-tag-dots:" + version,
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return new ImageTagRepository(_database).PendingTagPaths();
+                },
+                () => version == _pendingTagDisplayVersion,
+                workKind: SchedulerWorkKind.CatalogRead);
+        }
+        catch (OperationCanceledException) { return; }
+        catch (Exception ex) { PCasaDiagnostics.Write("Tags.PendingDots", ex); return; }
+        if (version != _pendingTagDisplayVersion || Dispatcher.HasShutdownStarted) return;
+        foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
+            SetPendingTagDot(root, paths);
+    }
+
+    private static void SetPendingTagDot(TreeViewItem item, IReadOnlyList<string> paths)
+    {
+        if (item.Tag is FolderTreeTag folder)
+        {
+            var directory = folder.FullPath.Replace('/', '\\').TrimEnd('\\') + "\\";
+            folder.HasPendingTagWrites = paths.Any(path =>
+                path.Replace('/', '\\').StartsWith(directory,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        foreach (var child in item.Items.OfType<TreeViewItem>())
+            SetPendingTagDot(child, paths);
+    }
+
     private void ApplyFolderStatusMode()
     {
         FolderStatusAlwaysMenu.IsChecked = _appearance.FolderStatusMode == "Always";
