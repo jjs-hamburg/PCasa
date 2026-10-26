@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         _database.Initialize();
         _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
         _scheduler.EnableDurablePackages(_database);
+        _durableGalleryTransfers.PruneCompleted();
         _scheduler.RegisterDurablePackageType("tag-recovery-v1", BuildTagRecoveryPackage);
         _scheduler.RegisterDurablePackageType("tag-edit-v1", BuildTagEditPackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
