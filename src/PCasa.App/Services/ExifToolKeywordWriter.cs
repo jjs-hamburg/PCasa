@@ -24,9 +24,19 @@ public static class ExifToolKeywordWriter
         private int _nextRequestId;
         private bool _disposed;
 
-        // Read only the current XMP keyword field, never decode image pixels.
+        public sealed record KeywordSnapshot(IReadOnlyList<string> Xmp, IReadOnlyList<string> Iptc)
+        {
+            public IReadOnlyList<string> Combined => Xmp.Concat(Iptc)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        // Read both keyword fields without decoding image pixels.
         // JSON preserves list items (including commas) without guesswork.
         public IReadOnlyList<string> Read(string imagePath,
+            CancellationToken cancellationToken = default)
+            => ReadSnapshot(imagePath, cancellationToken).Combined;
+
+        public KeywordSnapshot ReadSnapshot(string imagePath,
             CancellationToken cancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -55,20 +65,25 @@ public static class ExifToolKeywordWriter
                 throw new IOException("ExifTool lieferte keine lesbaren Metadaten.");
             if (entry.TryGetProperty("Error", out var error))
                 throw new IOException("ExifTool: " + error.ToString());
-            var combined = new List<string>();
-            foreach (var field in new[] { "Subject", "Keywords" })
+            static IReadOnlyList<string> Extract(
+                System.Text.Json.JsonElement entry, string field)
             {
-                if (!entry.TryGetProperty(field, out var value)) continue;
-                if (value.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    combined.AddRange(value.EnumerateArray()
+                if (!entry.TryGetProperty(field, out var value))
+                    return Array.Empty<string>();
+                var values = value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.Array => value.EnumerateArray()
                         .Where(v => v.ValueKind == System.Text.Json.JsonValueKind.String)
-                        .Select(v => v.GetString() ?? ""));
-                else if (value.ValueKind == System.Text.Json.JsonValueKind.String)
-                    combined.Add(value.GetString() ?? "");
+                        .Select(v => v.GetString() ?? "").ToArray(),
+                    System.Text.Json.JsonValueKind.String =>
+                        new[] { value.GetString() ?? "" },
+                    _ => Array.Empty<string>()
+                };
+                return values.Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Select(v => v.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             }
-            return combined.Where(v => !string.IsNullOrWhiteSpace(v))
-                .Select(v => v.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            return new KeywordSnapshot(Extract(entry, "Subject"), Extract(entry, "Keywords"));
         }
 
         // A timeout leaves ReadLineAsync outstanding. Never reuse that stream.
