@@ -45,6 +45,7 @@ public partial class BrowseCacheProgressWindow : Window
     private bool _previewBusy;
     private bool _finished;
     private bool _manualPresentationActive;
+    private string? _manualCurrentImagePath;
     private bool _finishRequestedWhileManual;
 
     // One presentation owner with a temporarily overlaid manual packet.
@@ -225,6 +226,7 @@ public partial class BrowseCacheProgressWindow : Window
         CurrentFileText.ToolTip = null;
         FolderPathText.Text = string.Empty;
         FolderPathText.ToolTip = null;
+        _manualCurrentImagePath = null;
         CurrentThumbnail.Source = null;
         if (!IsVisible) Show();
     }
@@ -254,6 +256,13 @@ public partial class BrowseCacheProgressWindow : Window
         }
         if (progress.CurrentPath is { Length: > 0 })
         {
+            if (!string.Equals(_manualCurrentImagePath, progress.CurrentPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _manualCurrentImagePath = progress.CurrentPath;
+                // Never label the previous photo as the new original.
+                CurrentThumbnail.Source = null;
+            }
             CurrentFileText.Text = Path.GetFileName(progress.CurrentPath);
             CurrentFileText.ToolTip = progress.CurrentPath;
             FolderPathText.Text = Path.GetDirectoryName(progress.CurrentPath) ?? string.Empty;
@@ -261,10 +270,22 @@ public partial class BrowseCacheProgressWindow : Window
         }
     }
 
+    // A thumbnail from PCasa's local browse-cache may arrive after the
+    // original has advanced. Never display a preview for a different file.
+    public void ShowManualThumbnail(string originalPath,
+        System.Windows.Media.Imaging.BitmapSource? thumbnail)
+    {
+        if (!_manualPresentationActive || _finished ||
+            !string.Equals(_manualCurrentImagePath, originalPath,
+                StringComparison.OrdinalIgnoreCase)) return;
+        CurrentThumbnail.Source = thumbnail;
+    }
+
     public void EndManualOperation()
     {
         if (!_manualPresentationActive) return;
         _manualPresentationActive = false;
+        _manualCurrentImagePath = null;
         if (_finishRequestedWhileManual)
         {
             _finishRequestedWhileManual = false;
