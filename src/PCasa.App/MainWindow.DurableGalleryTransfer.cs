@@ -9,6 +9,8 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    private readonly DurableGalleryTransferJournal _durableGalleryTransfers;
+
     private sealed record DurableGalleryTransferRecipe(
         string[] Sources, string Destination, bool Move);
 
@@ -26,7 +28,7 @@ public partial class MainWindow
         if (recipe.Sources is null || recipe.Sources.Length == 0 ||
             string.IsNullOrWhiteSpace(recipe.Destination))
             throw new InvalidDataException("Leeres Dateiübertragungspaket.");
-        var journal = new DurableGalleryTransferJournal(_database);
+        var journal = _durableGalleryTransfers;
         var package = new SchedulerTaskPackage(key);
         var phase = recipe.Move ? "Bilder verschieben" : "Bilder kopieren";
         var presentationTier = _activeBrowseTier;
