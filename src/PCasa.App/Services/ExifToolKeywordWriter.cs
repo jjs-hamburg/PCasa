@@ -22,6 +22,11 @@ public static class ExifToolKeywordWriter
 
     public static bool HasActiveWrites => Volatile.Read(ref _activeWrites) != 0;
 
+    public static bool HasLiveSessions
+    {
+        get { lock (ActiveGate) return ActiveSessions.Count != 0; }
+    }
+
     // Only ExifTool processes owned by this application are affected.
     public static void StopAll()
     {
@@ -141,6 +146,7 @@ public static class ExifToolKeywordWriter
             catch (System.ComponentModel.Win32Exception) { }
             finally
             {
+                lock (ActiveGate) ActiveSessions.Remove(this);
                 failed.Dispose();
                 _errorDrain = null;
             }
@@ -348,7 +354,11 @@ public static class ExifToolKeywordWriter
                 _disposed = true;
                 var process = _process;
                 _process = null;
-                if (process is null) return;
+                if (process is null)
+                {
+                    lock (ActiveGate) ActiveSessions.Remove(this);
+                    return;
+                }
                 try
                 {
                     if (!process.HasExited)
