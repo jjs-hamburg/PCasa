@@ -269,6 +269,21 @@ public sealed class ImageTagRepository
         return count;
     }
 
+    // The persisted intent table is the only source for pending-write dots.
+    public IReadOnlyList<string> PendingTagPaths()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT DISTINCT i.local_path FROM pending_tag_edits p
+            JOIN images i ON i.id=p.image_id;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var paths = new List<string>();
+        while (reader.Read()) paths.Add(reader.GetString(0));
+        return paths;
+    }
+
     public IReadOnlyList<(long Id, long ImageId, string Tag, bool Present, long Revision)>
         PendingEdits(int maximum = 512)
     {
