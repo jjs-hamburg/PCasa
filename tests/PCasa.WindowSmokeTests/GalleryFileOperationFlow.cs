@@ -776,6 +776,62 @@ internal static class GalleryFileOperationFlow
             }
             Console.WriteLine("PASS: Crash after physical move is recovered without thumbnail rebuild.");
 
+            // Reconstruct an ACTUAL durable gallery package at the exact
+            // power-loss boundary: physical rename done, per-file receipt
+            // still says 'executing', and the scheduler cursor is at step A.
+            // This exercises the real registered factory and catalog identity,
+            // not only the legacy standalone relocation-intent reconciler.
+            var durableSource = Path.Combine(first, "durable-restart.jpg");
+            var durableTarget = Path.Combine(second, "durable-restart.jpg");
+            WriteJpeg(durableSource);
+            new FolderScanner(new ImageCatalogRepository(db), new ThumbnailCache(),
+                folderRepo).ScanFile(sourceRoot, durableSource);
+            var durableImageId = CatalogIdAt(db, durableSource);
+            var durableImageCache = ThumbnailIdentities(db, durableImageId);
+            var durableKey = "gallery:file-transfer:" + Guid.NewGuid().ToString("N");
+            var durablePayload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Sources = new[] { durableSource },
+                Destination = second,
+                Move = true
+            });
+            var durableLedger = new DurablePackageJournal(db);
+            durableLedger.Put(durableKey, "gallery-transfer-v1", durablePayload,
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            durableLedger.SetState(durableKey, "running", 1);
+            var fileReceipts = new DurableGalleryTransferJournal(db);
+            var durableReceipt = new GalleryTransferReceipt(
+                durableSource, durableTarget, true, false, sourceRoot.Id,
+                durableImageId, null, "gallery-transfer:" + durableKey + ":0",
+                "planned");
+            fileReceipts.Prepare(durableKey, 0, durableReceipt);
+            fileReceipts.EnsureRelocationIntent(durableReceipt);
+            fileReceipts.Advance(durableKey, 0, "planned", "executing");
+            File.Move(durableSource, durableTarget);
+
+            var packageFactory = typeof(PCasa.App.MainWindow)
+                .GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+                .Single(method => method.Name == "BuildDurableGalleryTransferPackage" &&
+                    method.GetParameters().Length == 2);
+            var reconstructed = (SchedulerTaskPackage?)packageFactory.Invoke(
+                window, [durableKey, durablePayload])
+                ?? throw new Exception("Durable gallery package factory missing.");
+            var replay = scheduler.EnqueueDurablePackageAsync(reconstructed,
+                "gallery-transfer-v1", durablePayload, SchedulerPriority.ManualAction);
+            Until(window, () => replay.IsCompleted,
+                "Restarted durable package did not complete.");
+            replay.GetAwaiter().GetResult();
+            if (File.Exists(durableSource) || !File.Exists(durableTarget) ||
+                CatalogIdAt(db, durableTarget) != durableImageId ||
+                !durableImageCache.SequenceEqual(ThumbnailIdentities(db, durableImageId)) ||
+                new DurablePackageJournal(db).Pending().Any(item =>
+                    item.Key == durableKey))
+                throw new Exception(
+                    "Restarted durable gallery package duplicated a move or lost image identity.");
+            Console.WriteLine(
+                "PASS: Restarted gallery package reconciles physical move exactly once.");
+
+
             // The progress window is now screen-anchored, intentionally
             // independent of the PCasa window's size on that monitor.
             var progressWindow = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
