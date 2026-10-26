@@ -43,6 +43,12 @@ public sealed class SchedulerTaskPackage
     public void InsertNext(Func<CancellationToken, Task> step)
     {
         ArgumentNullException.ThrowIfNull(step);
+        // A durable cursor refers to the original factory step positions.
+        // Dynamic insertion would shift those positions after a restart and
+        // could repeat destructive work or skip a required catalog commit.
+        if (OnStepCompleted is not null)
+            throw new InvalidOperationException(
+                "Persistente Pakete benötigen eine feste, rekonstruierbare Schrittfolge.");
         _steps.Insert(_nextIndex + 1, step);
     }
 
