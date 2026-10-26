@@ -349,7 +349,7 @@ public partial class MainWindow
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.UriSource = new Uri(
-            "pack://application:,,,/Assets/" + filename, UriKind.Absolute);
+            "pack://application:,,,/PCasa.App;component/Assets/" + filename, UriKind.Absolute);
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.EndInit();
         bitmap.Freeze();
