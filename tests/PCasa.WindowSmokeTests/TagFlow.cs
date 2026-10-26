@@ -671,6 +671,53 @@ internal static class TagFlow
                     File.Move(hiddenOriginal, unavailableImage);
             }
 
+
+            // Real UI projection: a running P0 metadata write must display
+            // the exact original and pending count, not the inactive cache
+            // dialog's default "Einlesen 0/0".
+            const string visibleTag = "Visible Durable P0 Tag";
+            if (new ImageTagRepository(db).QueueTagEdit(
+                    new[] { editorIds[0] }, visibleTag, false) != 1)
+                throw new Exception("Cannot seed visible tag recovery.");
+            var scheduleRecovery = typeof(PCasa.App.MainWindow).GetMethod(
+                "StartPendingTagDrain",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Tag recovery scheduler entry missing.");
+            var presenterField = typeof(PCasa.App.MainWindow).GetField(
+                "_visibleManualWindow",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Unified manual progress presenter missing.");
+            lock (SourceFileLocks.ForPath(firstOriginal))
+            {
+                scheduleRecovery.Invoke(window, null);
+                Until(window, () =>
+                {
+                    var presenter = presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow;
+                    var phase = (presenter?.FindName("PhaseText") as TextBlock)?.Text;
+                    var current = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
+                    var count = (presenter?.FindName("CountText") as TextBlock)?.Text;
+                    return presenter?.IsVisible == true &&
+                        phase?.Contains("Tags", StringComparison.OrdinalIgnoreCase) == true &&
+                        current == Path.GetFileName(firstOriginal) &&
+                        count != "0 / 0" &&
+                        Application.Current.Windows
+                            .OfType<PCasa.App.BrowseCacheProgressWindow>()
+                            .Count(w => w.IsVisible) == 1;
+                }, "Tag recovery did not show the actual original file in the single P0 progress window.");
+            }
+            Until(window, () =>
+                new ImageTagRepository(db).PendingEdits()
+                    .All(edit => edit.ImageId != editorIds[0]) &&
+                (ImageTagRepository.ReadKeywords(firstOriginal) ?? "")
+                    .Contains(visibleTag, StringComparison.Ordinal),
+                "Visible tag recovery did not finish writing its original.");
+            Until(window, () => !FolderShowsPending(),
+                "Red tag marker remained after the visible tag write completed.");
+            Console.WriteLine(
+                "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
             window.Close();
