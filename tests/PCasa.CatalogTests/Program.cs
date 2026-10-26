@@ -27,6 +27,7 @@ internal static class Program
                 JpegTagRoundTrip();
                 JpegUnicodeTagPreservesPixels();
                 JpegTagTemporaryOutputsAreCleaned();
+                ExifToolOwnedWritersTerminate();
                 Console.WriteLine("TAG WRITE PROBE PASS");
                 return 0;
             }
@@ -3568,6 +3569,37 @@ internal static class Program
             if (Convert.ToInt32(command.ExecuteScalar()) != 1)
                 throw new Exception("Missing cleanup performance index: " + index);
         }
+    }
+
+    private static void ExifToolOwnedWritersTerminate()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "owned-exiftool-child.jpg");
+        WriteJpeg(path);
+        using var session = new ExifToolKeywordWriter.Session();
+        session.Read(path);
+        var field = typeof(ExifToolKeywordWriter.Session).GetField(
+            "_process", System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("ExifTool process owner field missing.");
+        var child = (System.Diagnostics.Process?)field.GetValue(session)
+            ?? throw new Exception("ExifTool session did not start its own process.");
+        if (!ExifToolKeywordWriter.HasLiveSessions || child.HasExited)
+            throw new Exception("Owned ExifTool process was not registered.");
+        ExifToolKeywordWriter.StopAll();
+        if (!child.HasExited || ExifToolKeywordWriter.HasLiveSessions)
+            throw new Exception("Shutdown left an owned ExifTool process running.");
+        // The durable file writer must still work after an orderly shutdown
+        // of the previous native session, without sharing a dead process.
+        using var next = new ExifToolKeywordWriter.Session();
+        next.Write(path, new[] { "After clean ExifTool shutdown" });
+        if (!ExifToolKeywordWriter.HasLiveSessions)
+            throw new Exception("Replacement ExifTool process was not tracked.");
+        ExifToolKeywordWriter.StopAll();
+        if (ExifToolKeywordWriter.HasLiveSessions ||
+            !(ImageTagRepository.ReadKeywords(path) ?? "")
+                .Contains("After clean ExifTool shutdown", StringComparison.Ordinal))
+            throw new Exception("Tag write or ExifTool final shutdown did not finish cleanly.");
     }
 
     private static void JpegTagTemporaryOutputsAreCleaned()
