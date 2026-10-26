@@ -40,6 +40,7 @@ internal static class Program
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
+        Run("Temporary transfer failure remains recoverable at manual priority", DurableTransferRetryPreservesPriority, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
@@ -171,6 +172,61 @@ internal static class Program
         catch (InvalidOperationException) { rejected = true; }
         if (!rejected || package.TotalSteps != 1)
             throw new Exception("Durable package accepted unjournaled dynamic steps.");
+    }
+
+    private static void DurableTransferRetryPreservesPriority()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, _, _) = sandbox.Prepare();
+            const string key = "test:durable-offline";
+            await using (var scheduler = new PCasaScheduler())
+            {
+                scheduler.EnableDurablePackages(database);
+                scheduler.RegisterDurablePackageType("test-offline-v1", (id, _) =>
+                    new SchedulerTaskPackage(id));
+                var package = new SchedulerTaskPackage(key);
+                package.AddStep(_ => throw new DurablePackageRetryException("NAS offline"));
+                var deferred = false;
+                try
+                {
+                    await scheduler.EnqueueDurablePackageAsync(package,
+                        "test-offline-v1", "{}", SchedulerPriority.ManualAction);
+                }
+                catch (DurablePackageRetryException) { deferred = true; }
+                if (!deferred)
+                    throw new Exception("Offline durable package was not deferred.");
+            }
+            var saved = new DurablePackageJournal(database).Pending();
+            if (saved.Count != 1 || saved[0].Key != key ||
+                saved[0].Priority != SchedulerPriority.ManualAction ||
+                saved[0].CompletedSteps != 0 || saved[0].State != "queued")
+                throw new Exception("Deferred package lost its priority or resume position.");
+
+            await using (var restarted = new PCasaScheduler())
+            {
+                restarted.EnableDurablePackages(database);
+                var executed = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                restarted.RegisterDurablePackageType("test-offline-v1", (id, _) =>
+                {
+                    var resumed = new SchedulerTaskPackage(id);
+                    resumed.AddStep(_ =>
+                    {
+                        executed.TrySetResult();
+                        return Task.CompletedTask;
+                    });
+                    return resumed;
+                });
+                if (restarted.RecoverDurablePackages().Count != 0)
+                    throw new Exception("Offline durable package was not reconstructed.");
+                await executed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            if (new DurablePackageJournal(database).Pending().Count != 0)
+                throw new Exception("Resumed offline package was not acknowledged.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void DurableGalleryTransferReceiptSurvivesRestart()
