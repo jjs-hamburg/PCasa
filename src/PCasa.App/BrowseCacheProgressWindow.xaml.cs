@@ -222,6 +222,9 @@ public partial class BrowseCacheProgressWindow : Window
         Progress.IsIndeterminate = true;
         CountText.Text = $"0 / {total:N0}";
         CurrentFileText.Text = "Warte auf Scheduler";
+        CurrentFileText.ToolTip = null;
+        FolderPathText.Text = string.Empty;
+        FolderPathText.ToolTip = null;
         CurrentThumbnail.Source = null;
         if (!IsVisible) Show();
     }
@@ -253,6 +256,8 @@ public partial class BrowseCacheProgressWindow : Window
         {
             CurrentFileText.Text = Path.GetFileName(progress.CurrentPath);
             CurrentFileText.ToolTip = progress.CurrentPath;
+            FolderPathText.Text = Path.GetDirectoryName(progress.CurrentPath) ?? string.Empty;
+            FolderPathText.ToolTip = progress.CurrentPath;
         }
     }
 
@@ -287,6 +292,8 @@ public partial class BrowseCacheProgressWindow : Window
                 PhaseText.Text = "Hintergrundvorgang läuft";
                 Progress.IsIndeterminate = true;
                 CurrentFileText.Text = "Warte auf Hintergrundfortschritt";
+                FolderPathText.Text = string.Empty;
+                FolderPathText.ToolTip = null;
                 CurrentThumbnail.Source = null;
                 break;
         }
@@ -360,6 +367,8 @@ public partial class BrowseCacheProgressWindow : Window
         {
             CurrentFileText.Text = Path.GetFileName(currentPath);
             CurrentFileText.ToolTip = currentPath;
+            FolderPathText.Text = Path.GetDirectoryName(currentPath) ?? string.Empty;
+            FolderPathText.ToolTip = currentPath;
         }
 
         if (!string.IsNullOrWhiteSpace(localThumb) && !_previewBusy &&
