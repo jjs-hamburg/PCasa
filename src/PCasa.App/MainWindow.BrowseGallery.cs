@@ -60,7 +60,16 @@ public partial class MainWindow
         // Durable user imports enter the scheduler BEFORE background legacy
         // repair. Both use the SAME catalog and generation guards.
         // Recovered user edits must be queued BEFORE background folder scans.
-        var unresolvedPackages = _scheduler.RecoverDurablePackages();
+        // Restore the read-only view of already journaled P0 tag writes
+        // BEFORE the scheduler starts replaying them. This is the same
+        // progress presenter used by ordinary manual file operations.
+        RestoreVisiblePendingTagPackages();
+        var unresolvedPackages = _scheduler.RecoverDurablePackages(
+            (key, task) =>
+            {
+                if (_recoveredTagPresentationKeys.Contains(key))
+                    _ = ObserveRecoveredTagOperationAsync(task, key);
+            });
         StartPendingTagDrain();
         // Register all persistent relocation intents before any automatic scan
         // is queued, so recovered manual work keeps precedence on startup.
@@ -242,11 +251,13 @@ public partial class MainWindow
             _browseCacheCancellation?.Dispose();
             _browseCacheCancellation = new CancellationTokenSource();
 
-            // This is intentionally SHOW(), never ShowDialog(): the thumbnail
-            // preparation must not dim, disable or block the browsing window.
-            _browseProgressWindow?.Finish();
-            var progressWindow = new BrowseCacheProgressWindow { Owner = this };
+            // ONE presenter owns visible progress. Background cache work
+            // must not replace an active manual Tag/Transfer presenter with
+            // another window showing the meaningless default "Einlesen 0/0".
+            var progressWindow = _browseProgressWindow ??
+                new BrowseCacheProgressWindow { Owner = this };
             _browseProgressWindow = progressWindow;
+            progressWindow.BeginCachePhase();
             // A queued background task has not started. Show the existing
             // presenter only when real cache-build progress arrives.
             StatusText.Text = $"Vorschaudaten vorgemerkt: {missing:N0}";
@@ -284,7 +295,10 @@ public partial class MainWindow
             {
                 _browseCacheBuilding = false;
                 progressWindow.Finish();
-                if (ReferenceEquals(_browseProgressWindow, progressWindow))
+                // Finish defers closing while a manual packet overlays the
+                // cache presenter. Let EndVisibleManualOperation own cleanup.
+                if (_visibleManualWindow is null &&
+                    ReferenceEquals(_browseProgressWindow, progressWindow))
                     _browseProgressWindow = null;
             }
         }
