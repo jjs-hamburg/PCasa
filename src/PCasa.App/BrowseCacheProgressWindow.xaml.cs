@@ -373,6 +373,7 @@ public partial class BrowseCacheProgressWindow : Window
             $"{progress.Unchanged:N0} unverändert · {progress.Changed:N0} geändert · " +
             $"{progress.CacheRepaired:N0} Cache-Reparaturen";
         UpdateCurrentImage(progress.CurrentFile, progress.CurrentFile);
+        PublishProgressStatus();
     }
 
     public void BeginCachePhase()
@@ -398,6 +399,7 @@ public partial class BrowseCacheProgressWindow : Window
         if (progress.TotalImages == 0 && progress.ProcessedImages == 0)
             return;
         ShowCacheProgress(progress);
+        PublishProgressStatus();
         if (!_hiddenByUser && !IsVisible &&
             Owner?.WindowState != WindowState.Minimized)
             Show();
