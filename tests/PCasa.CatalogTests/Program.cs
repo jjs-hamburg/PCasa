@@ -39,6 +39,7 @@ internal static class Program
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
+        Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
@@ -170,6 +171,51 @@ internal static class Program
         catch (InvalidOperationException) { rejected = true; }
         if (!rejected || package.TotalSteps != 1)
             throw new Exception("Durable package accepted unjournaled dynamic steps.");
+    }
+
+    private static void DurableGalleryTransferReceiptSurvivesRestart()
+    {
+        using var sandbox = new Sandbox();
+        var (database, _, _) = sandbox.Prepare();
+        const string key = "gallery:file-transfer:test-restart";
+        var first = new DurableGalleryTransferJournal(database);
+        var recipe = new GalleryTransferReceipt(
+            @"C:\images\source.jpg", @"C:\target\destination.jpg",
+            true, false, 42, 17, null, "test-intent-replay-1", "planned");
+        first.Prepare(key, 0, recipe);
+        first.EnsureRelocationIntent(recipe);
+        first.EnsureRelocationIntent(recipe);
+        first.Advance(key, 0, "planned", "executing");
+
+        // Recreate both the journal and the caller as if the app crashed.
+        var restarted = new DurableGalleryTransferJournal(database);
+        var saved = restarted.Get(key, 0);
+        if (saved is null || saved.Phase != "executing" ||
+            saved.SourceImageId != 17 || saved.TargetRootId != 42 ||
+            saved.RelocationId != recipe.RelocationId ||
+            !restarted.OwnsRelocationIntent(recipe.RelocationId!))
+            throw new Exception("Gallery transfer receipt was not restored.");
+        if (!new ImageCatalogRepository(database).PendingRelocationIds()
+            .Contains(recipe.RelocationId!))
+            throw new Exception("Transfer relocation intent was not preserved.");
+
+        var collisionRejected = false;
+        try
+        {
+            restarted.Prepare(key, 0, recipe with
+            {
+                Destination = @"C:\target\different.jpg"
+            });
+        }
+        catch (InvalidOperationException) { collisionRejected = true; }
+        if (!collisionRejected)
+            throw new Exception("Gallery transfer receipt allowed target reassignment.");
+
+        restarted.Advance(key, 0, "executing", "materialized");
+        restarted.Advance(key, 0, "materialized", "indexed");
+        if (new DurableGalleryTransferJournal(database)
+            .MovedImageIds(key).SetEquals(new[] { 17L }) == false)
+            throw new Exception("Committed move identity was lost.");
     }
 
     private static void DurableSchedulerPrioritySurvivesRestart()
