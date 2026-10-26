@@ -65,10 +65,17 @@ public partial class MainWindow
     {
         if (item.Tag is FolderTreeTag folder)
         {
-            var directory = folder.FullPath.Replace('/', '\\').TrimEnd('\\') + "\\";
+            var normalized = folder.FullPath.Replace('/', '\\').TrimEnd('\\');
+            var prefix = normalized + "\\";
             folder.HasPendingTagWrites = paths.Any(path =>
-                path.Replace('/', '\\').StartsWith(directory,
-                    StringComparison.OrdinalIgnoreCase));
+                string.Equals(path.Replace('/', '\\').TrimEnd('\\'),
+                    normalized, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    System.IO.Path.GetDirectoryName(path.Replace('/', '\\'))?.TrimEnd('\\'),
+                    normalized, StringComparison.OrdinalIgnoreCase));
+            folder.HasPendingChildTagWrites = !folder.HasPendingTagWrites &&
+                paths.Any(path => path.Replace('/', '\\')
+                    .StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
         }
         foreach (var child in item.Items.OfType<TreeViewItem>())
             SetPendingTagDot(child, paths);
