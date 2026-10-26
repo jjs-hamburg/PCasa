@@ -420,7 +420,7 @@ public partial class MainWindow
         try
         {
             await _scheduler.EnqueueAsync("tags:durable-drain",
-                SchedulerPriority.Background, token =>
+                SchedulerPriority.ManualAction, token =>
                 {
                     var repo = new ImageTagRepository(_database);
                     using var writer = new ExifToolKeywordWriter.Session();
