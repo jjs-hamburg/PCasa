@@ -49,9 +49,6 @@ public sealed class DurablePackageJournal
                 (package_key,package_type,payload_json,priority,work_kind,updated_utc)
             VALUES ($key,$type,$payload,$priority,$kind,$now)
             ON CONFLICT(package_key) DO NOTHING;
-            SELECT sequence,priority,work_kind,completed_steps,state,error,
-                   package_type,payload_json
-              FROM scheduler_packages WHERE package_key=$key;
             """;
         cmd.Parameters.AddWithValue("$key", key);
         cmd.Parameters.AddWithValue("$type", type);
@@ -59,7 +56,15 @@ public sealed class DurablePackageJournal
         cmd.Parameters.AddWithValue("$priority", (int)priority);
         cmd.Parameters.AddWithValue("$kind", (int)workKind);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        using var reader = cmd.ExecuteReader();
+        cmd.ExecuteNonQuery();
+        using var lookup = db.CreateCommand();
+        lookup.CommandText = """
+            SELECT sequence,priority,work_kind,completed_steps,state,error,
+                   package_type,payload_json
+              FROM scheduler_packages WHERE package_key=$key;
+            """;
+        lookup.Parameters.AddWithValue("$key", key);
+        using var reader = lookup.ExecuteReader();
         if (!reader.Read()) throw new InvalidOperationException("Paketjournal konnte nicht erstellt werden.");
         return new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
             (SchedulerPriority)reader.GetInt32(1), (SchedulerWorkKind)reader.GetInt32(2),
