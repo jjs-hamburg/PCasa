@@ -293,6 +293,14 @@ public partial class MainWindow
     private static bool IsTagSeriesKey(string key)
         => key.StartsWith("tags:", StringComparison.Ordinal);
 
+    private void SeedVisibleTagSeriesCheckpoint(string key, int confirmed)
+    {
+        if (!_visibleTagSeries.TryGetValue(key, out var record)) return;
+        _visibleTagSeries[key] =
+            (record.Total, Math.Clamp(confirmed, 0, record.Total));
+        RenderVisibleTagSeries();
+    }
+
     private void UpdateVisibleTagSeries(SchedulerJobSnapshot status)
     {
         if (!_visibleTagSeries.TryGetValue(status.Key, out var previous))
