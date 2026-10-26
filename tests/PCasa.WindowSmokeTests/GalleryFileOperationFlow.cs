@@ -831,6 +831,46 @@ internal static class GalleryFileOperationFlow
             Console.WriteLine(
                 "PASS: Restarted gallery package reconciles physical move exactly once.");
 
+            // A staged COPY can similarly have reached its final name before
+            // the scheduler committed step A. Replaying it must NOT overwrite
+            // or create a second copy; source stays present and target is indexed.
+            var copySource = Path.Combine(first, "durable-copy-restart.jpg");
+            var copyTarget = Path.Combine(second, "durable-copy-restart.jpg");
+            WriteJpeg(copySource);
+            var copyKey = "gallery:file-transfer:" + Guid.NewGuid().ToString("N");
+            var copyPayload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Sources = new[] { copySource },
+                Destination = second,
+                Move = false
+            });
+            durableLedger.Put(copyKey, "gallery-transfer-v1", copyPayload,
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            durableLedger.SetState(copyKey, "running", 1);
+            var copyReceipt = new GalleryTransferReceipt(
+                copySource, copyTarget, false, false, sourceRoot.Id,
+                null, null, null, "planned");
+            fileReceipts.Prepare(copyKey, 0, copyReceipt);
+            fileReceipts.Advance(copyKey, 0, "planned", "executing");
+            File.Copy(copySource, copyTarget);
+            var reconstructedCopy = (SchedulerTaskPackage?)packageFactory.Invoke(
+                window, [copyKey, copyPayload])
+                ?? throw new Exception("Durable copy factory missing.");
+            var copyReplay = scheduler.EnqueueDurablePackageAsync(reconstructedCopy,
+                "gallery-transfer-v1", copyPayload, SchedulerPriority.ManualAction);
+            Until(window, () => copyReplay.IsCompleted,
+                "Restarted durable copy never completed.");
+            copyReplay.GetAwaiter().GetResult();
+            if (!File.Exists(copySource) || !File.Exists(copyTarget) ||
+                !File.ReadAllBytes(copySource).SequenceEqual(File.ReadAllBytes(copyTarget)) ||
+                !CatalogContains(db, copyTarget) ||
+                new DurablePackageJournal(db).Pending().Any(item =>
+                    item.Key == copyKey))
+                throw new Exception("Restarted gallery copy was duplicated or not catalogued.");
+            Console.WriteLine(
+                "PASS: Restarted gallery copy recognizes its already committed bytes.");
+
+
 
             // The progress window is now screen-anchored, intentionally
             // independent of the PCasa window's size on that monitor.
