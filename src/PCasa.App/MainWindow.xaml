@@ -858,7 +858,7 @@
                                    PlacementTarget="{Binding ElementName=TagEntryBox}"
                                    Placement="Bottom" VerticalOffset="1"
                                    StaysOpen="False" AllowsTransparency="True"
-                                   Closed="TagSuggestionsPopup_Closed">
+                                   >
                                 <Border Background="{DynamicResource PcasaPanelBrush}"
                                         BorderBrush="{DynamicResource PcasaDividerBrush}"
                                         BorderThickness="1" CornerRadius="4" Padding="2"
