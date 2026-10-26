@@ -164,13 +164,15 @@ public static class ExifToolKeywordWriter
             // timestamp and trigger another full thumbnail/EXIF scan.
             process.StandardInput.WriteLine("-P");
             process.StandardInput.WriteLine("-overwrite_original");
+            var isSonyArw = Path.GetExtension(imagePath).Equals(".arw",
+                StringComparison.OrdinalIgnoreCase);
             // ExifTool treats repeated '=' for a list-type tag as one
             // replacement list. Write both interoperable Picasa fields in
             // the same file transaction; remove both when the list is empty.
             if (keywords.Count == 0)
             {
                 process.StandardInput.WriteLine("-XMP-dc:Subject=");
-                process.StandardInput.WriteLine("-IPTC:Keywords=");
+                if (!isSonyArw) process.StandardInput.WriteLine("-IPTC:Keywords=");
             }
             else
             {
@@ -178,13 +180,13 @@ public static class ExifToolKeywordWriter
                 // list. Mixing '=' and '+=' would change its semantics.
                 foreach (var keyword in keywords)
                 {
-                    if (Encoding.UTF8.GetByteCount(keyword) > 64)
+                    if (!isSonyArw && Encoding.UTF8.GetByteCount(keyword) > 64)
                         throw new InvalidDataException(
                             "IPTC-Schlagwort überschreitet 64 UTF-8-Bytes: " + keyword);
                     process.StandardInput.WriteLine("-XMP-dc:Subject=" + keyword);
-                    process.StandardInput.WriteLine("-IPTC:Keywords=" + keyword);
+                    if (!isSonyArw) process.StandardInput.WriteLine("-IPTC:Keywords=" + keyword);
                 }
-                process.StandardInput.WriteLine("-IPTC:CodedCharacterSet=UTF8");
+                if (!isSonyArw) process.StandardInput.WriteLine("-IPTC:CodedCharacterSet=UTF8");
             }
             // The executable receives absolute paths from the catalogue.
             // Do not send '--' in stay-open mode: the subsequent -executeN

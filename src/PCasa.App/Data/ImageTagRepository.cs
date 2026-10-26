@@ -109,7 +109,7 @@ public sealed class ImageTagRepository
         using (SourceFileLocks.Enter(path, cancellationToken))
         {
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
+        if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff" or ".arw"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
         // A tag edit must not invalidate pixels, EXIF or packed thumbnails.
         // Retain their cache identity only when the original file matched
@@ -335,7 +335,7 @@ public sealed class ImageTagRepository
             indexedTicks = reader.GetInt64(2);
         }
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"))
+        if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff" or ".arw"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
         using (SourceFileLocks.Enter(path, token))
         {
@@ -383,7 +383,8 @@ public sealed class ImageTagRepository
             var target = tags.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var xmp = sourceKeywords.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var iptc = sourceKeywords.Iptc.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var fieldsDiffer = !xmp.SetEquals(target) || !iptc.SetEquals(target);
+            var fieldsDiffer = !xmp.SetEquals(target) ||
+                (ext != ".arw" && !iptc.SetEquals(target));
             if (changed || fieldsDiffer)
             {
                 token.ThrowIfCancellationRequested();
@@ -485,6 +486,11 @@ public sealed class ImageTagRepository
     {
         try
         {
+            if (Path.GetExtension(path).Equals(".arw", StringComparison.OrdinalIgnoreCase))
+            {
+                using var reader = new ExifToolKeywordWriter.Session();
+                return string.Join("\n", reader.Read(path));
+            }
             using var stream = File.Open(path, FileMode.Open, FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete);
             var decoder = BitmapDecoder.Create(stream,
