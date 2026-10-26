@@ -347,6 +347,16 @@ public partial class MainWindow
             .Where(pair => !allOnly || pair.Value == selected.Length)
             .OrderBy(pair => pair.Key, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
+        if (allOnly && filtered.Length == 0)
+        {
+            TagRowsPanel.Children.Add(new TextBlock
+            {
+                Text = $"Kein Tag ist auf allen {selected.Length} ausgewählten Bildern vorhanden.",
+                Margin = new Thickness(5),
+                TextWrapping = TextWrapping.Wrap,
+                Opacity = 0.75
+            });
+        }
         foreach (var pair in filtered)
         {
             var row = new DockPanel { Margin = new Thickness(3, 5, 3, 5) };
