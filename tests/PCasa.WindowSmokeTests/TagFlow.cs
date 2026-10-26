@@ -497,6 +497,56 @@ internal static class TagFlow
                     string.Equals(button.Content?.ToString(), editableTag,
                         StringComparison.Ordinal)),
                 "New tag was not immediately shown with multi-image frequency and quick tag.");
+            // Existing keywords are suggested from the local DB and never
+            // require another original JPEG/NAS read. A choice fills the
+            // editor; it is not committed until the user explicitly adds it.
+            if (!new ImageTagRepository(db).SuggestExistingTags("PCasa UI M")
+                .Contains(editableTag, StringComparer.Ordinal))
+                throw new Exception("Existing Unicode tag was absent from suggestions.");
+            var suggestionsPopup = (System.Windows.Controls.Primitives.Popup?)
+                window.FindName("TagSuggestionsPopup")
+                ?? throw new Exception("Tag suggestions popup missing.");
+            var suggestions = (ListBox?)window.FindName("TagSuggestionsList")
+                ?? throw new Exception("Tag suggestions list missing.");
+            tagInput.Focus();
+            Keyboard.Focus(tagInput);
+            tagInput.Text = "PCasa UI M";
+            Until(window, () => suggestionsPopup.IsOpen &&
+                suggestions.Items.OfType<string>().Contains(editableTag),
+                "Typing a known Tag did not open matching DB suggestions.");
+            suggestions.SelectedItem = editableTag;
+            var pressEnter = typeof(PCasa.App.MainWindow).GetMethod(
+                "TagEntry_KeyDown", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            KeyEventArgs SimulateEnter() => new(
+                Keyboard.PrimaryDevice, PresentationSource.FromVisual(tagInput)!, 0,
+                Key.Enter);
+            pressEnter.Invoke(window, [tagInput, SimulateEnter()]);
+            if (tagInput.Text != editableTag || suggestionsPopup.IsOpen ||
+                tagOk.IsEnabled)
+                throw new Exception("First Enter did not accept the existing Tag without staging.");
+            pressEnter.Invoke(window, [tagInput, SimulateEnter()]);
+            if (!tagOk.IsEnabled)
+                throw new Exception("Second Enter did not stage the accepted Tag.");
+            tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
+            tagInput.Focus();
+            Keyboard.Focus(tagInput);
+            tagInput.Text = "PCasa UI M";
+            Until(window, () => suggestionsPopup.IsOpen &&
+                suggestions.Items.OfType<string>().Contains(editableTag),
+                "Tag matching did not reopen after a previous selection.");
+            suggestions.SelectedItem = editableTag;
+            var chooseByMouse = typeof(PCasa.App.MainWindow).GetMethod(
+                "TagSuggestion_MouseUp", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            chooseByMouse.Invoke(window, [suggestions,
+                new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)]);
+            if (tagInput.Text != editableTag || suggestionsPopup.IsOpen ||
+                tagOk.IsEnabled)
+                throw new Exception("Mouse selection did not fill Tag input only.");
+            tagInput.Clear();
+            Console.WriteLine("PASS: SQLite Tag autocomplete accepts mouse or arrows/Enter without premature edits.");
+
             tagAnd.IsChecked = true;
             Until(window, () => tagRows.Children.OfType<DockPanel>()
                 .Any(row => row.Children.OfType<TextBlock>().Any(label =>
@@ -717,6 +767,7 @@ internal static class TagFlow
                         count != "0 / 0" &&
                         hide == "Hide" &&
                         preview is not null &&
+                        status.Text == presenter.ProgressStatusText &&
                         Application.Current.Windows
                             .OfType<PCasa.App.BrowseCacheProgressWindow>()
                             .Count(w => w.IsVisible) == 1;
@@ -770,8 +821,11 @@ internal static class TagFlow
                 (presenterField.GetValue(window)
                     as PCasa.App.BrowseCacheProgressWindow)?
                     .FindName("CountText") is TextBlock number &&
-                number.Text == "5 / 10",
-                "Global Tag progress showed only one job instead of 5 / 10.");
+                number.Text == "5 / 10" &&
+                status.Text ==
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?.ProgressStatusText,
+                "Status bar and floating dialog disagree on aggregate Tag progress.");
             endManual.Invoke(window, [olderTag]);
             FakeProgress(newerTag, 5, 6);
             Until(window, () =>
