@@ -98,7 +98,12 @@ public sealed class DurableGalleryTransferJournal
         var actual = Get(key, ordinal) ??
             throw new InvalidOperationException("Datei-Checkpoint konnte nicht gespeichert werden.");
         if (!string.Equals(actual.Source, proposed.Source, StringComparison.OrdinalIgnoreCase) ||
-            actual.Move != proposed.Move)
+            !string.Equals(actual.Destination, proposed.Destination, StringComparison.OrdinalIgnoreCase) ||
+            actual.Move != proposed.Move || actual.Replace != proposed.Replace ||
+            actual.TargetRootId != proposed.TargetRootId ||
+            actual.SourceImageId != proposed.SourceImageId ||
+            actual.ReplacedImageId != proposed.ReplacedImageId ||
+            !string.Equals(actual.RelocationId, proposed.RelocationId, StringComparison.Ordinal))
             throw new InvalidOperationException("Datei-Checkpoint passt nicht zum Paket.");
         return actual;
     }
