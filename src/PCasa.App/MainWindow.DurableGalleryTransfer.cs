@@ -75,6 +75,11 @@ public partial class MainWindow
             package.AddStep(async token =>
             {
                 token.ThrowIfCancellationRequested();
+                // This becomes visible BEFORE waiting for a blocked SMB or
+                // image-path lock. The scheduler owns progress even while
+                // the physical operation has not yet started.
+                _scheduler.ReportProgress(key, phase, ordinal,
+                    recipe.Sources.Length, source);
                 var receipt = journal.Get(key, ordinal);
                 if (receipt is null)
                 {
