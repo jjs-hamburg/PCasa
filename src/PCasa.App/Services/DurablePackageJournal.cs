@@ -66,6 +66,15 @@ public sealed class DurablePackageJournal
         lookup.Parameters.AddWithValue("$key", key);
         using var reader = lookup.ExecuteReader();
         if (!reader.Read()) throw new InvalidOperationException("Paketjournal konnte nicht erstellt werden.");
+        // An existing key may only refer to the identical immutable recipe.
+        // Never attach a new caller to a different payload or silently change
+        // its priority; doing so could replay destructive steps on wrong files.
+        if (!string.Equals(reader.GetString(6), type, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(7), payload, StringComparison.Ordinal) ||
+            reader.GetInt32(1) != (int)priority ||
+            reader.GetInt32(2) != (int)workKind)
+            throw new InvalidOperationException(
+                "Paketidentität kollidiert mit einem anderen unveränderlichen Auftrag: " + key);
         return new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
             (SchedulerPriority)reader.GetInt32(1), (SchedulerWorkKind)reader.GetInt32(2),
             reader.GetInt64(0), reader.GetInt32(3), reader.GetString(4),
