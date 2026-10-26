@@ -44,6 +44,15 @@ public partial class BrowseCacheProgressWindow : Window
     private DateTime _lastPreviewUpdate = DateTime.MinValue;
     private bool _previewBusy;
     private bool _finished;
+    public event EventHandler? ProgressPresentationChanged;
+    public bool IsManualPresentationActive => _manualPresentationActive;
+    public string ProgressStatusText =>
+        PhaseText.Text + (string.IsNullOrWhiteSpace(CountText.Text)
+            ? string.Empty : " · " + CountText.Text);
+
+    private void PublishProgressStatus()
+        => ProgressPresentationChanged?.Invoke(this, EventArgs.Empty);
+
     private bool _manualPresentationActive;
     private string? _manualCurrentImagePath;
     private bool _finishRequestedWhileManual;
@@ -229,6 +238,7 @@ public partial class BrowseCacheProgressWindow : Window
         _manualCurrentImagePath = null;
         CurrentThumbnail.Source = null;
         if (!IsVisible) Show();
+        PublishProgressStatus();
     }
 
     public void UpdateManualOperation(SchedulerJobSnapshot progress)
@@ -268,6 +278,7 @@ public partial class BrowseCacheProgressWindow : Window
             FolderPathText.Text = Path.GetDirectoryName(progress.CurrentPath) ?? string.Empty;
             FolderPathText.ToolTip = progress.CurrentPath;
         }
+        PublishProgressStatus();
     }
 
     // A thumbnail from PCasa's local browse-cache may arrive after the
@@ -300,6 +311,7 @@ public partial class BrowseCacheProgressWindow : Window
         CountText.Text = $"{processed:N0} / {total:N0}";
         CountText.ToolTip =
             "Gesamtfortschritt aller Tag-Pakete dieser Arbeitsserie";
+        PublishProgressStatus();
     }
 
     public void EndManualOperation()
