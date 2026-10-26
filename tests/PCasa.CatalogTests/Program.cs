@@ -37,6 +37,8 @@ internal static class Program
         }
         var failures = new List<string>();
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
+        Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
+        Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
@@ -150,6 +152,111 @@ internal static class Program
             ExclusionTestScheduler.Value.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Console.WriteLine($"RESULT: catalog regression suite complete, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    private static void DurableSchedulerPrioritySurvivesRestart()
+    {
+        using var sandbox = new Sandbox();
+        var (database, _, _) = sandbox.Prepare();
+        var journal = new DurablePackageJournal(database);
+        journal.Put("older", "test-case", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.Catalog);
+        journal.Put("background", "test-case", "{}",
+            SchedulerPriority.Background, SchedulerWorkKind.CatalogScan);
+        journal.Put("newer", "test-case", "{}", SchedulerPriority.ManualAction,
+            SchedulerWorkKind.Catalog);
+        journal.SetState("older", "running", 2);
+        journal.SetState("newer", "running", 1);
+
+        // A new journal instance simulates application restart.
+        var restored = new DurablePackageJournal(database).Pending();
+        if (restored.Count != 3 ||
+            restored[0].Key != "older" ||
+            restored[1].Key != "newer" ||
+            restored[2].Key != "background")
+            throw new Exception("Durable package journal lost original sequence/priority.");
+        if (restored[0].Priority != SchedulerPriority.ManualAction ||
+            restored[0].CompletedSteps != 2 ||
+            restored[1].CompletedSteps != 1)
+            throw new Exception("Durable package journal lost manual priority or cursor.");
+        // An old key can never silently acquire a lower priority at restart.
+        var repeated = journal.Put("older", "test-case", "{}",
+            SchedulerPriority.Background, SchedulerWorkKind.Catalog);
+        if (repeated.Priority != SchedulerPriority.ManualAction)
+            throw new Exception("Duplicate package replaced original priority.");
+    }
+
+    private static void DurableSchedulerCursorSurvivesRestart()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, _, _) = sandbox.Prepare();
+            var firstStepCalls = 0;
+            var enteredSecondStep = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            SchedulerTaskPackage Build(string key, bool blockSecond)
+            {
+                var package = new SchedulerTaskPackage(key);
+                package.AddStep(_ =>
+                {
+                    Interlocked.Increment(ref firstStepCalls);
+                    return Task.CompletedTask;
+                });
+                package.AddStep(async token =>
+                {
+                    if (blockSecond)
+                    {
+                        enteredSecondStep.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                });
+                return package;
+            }
+
+            await using (var original = new PCasaScheduler())
+            {
+                original.EnableDurablePackages(database);
+                original.RegisterDurablePackageType("resume-test",
+                    (key, _) => Build(key, true));
+                var task = original.EnqueueDurablePackageAsync(
+                    Build("durable:resume-test", true),
+                    "resume-test", "{}", SchedulerPriority.ManualAction);
+                await enteredSecondStep.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                var saved = new DurablePackageJournal(database).Pending();
+                if (saved.Count != 1 || saved[0].CompletedSteps != 1)
+                    throw new Exception("Finished first step was not checkpointed.");
+                // Dispose simulates a stopped application while step 2 runs.
+            }
+
+            await using (var restarted = new PCasaScheduler())
+            {
+                restarted.EnableDurablePackages(database);
+                var finished = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                restarted.RegisterDurablePackageType("resume-test",
+                    (key, _) =>
+                    {
+                        var package = Build(key, false);
+                        package.AddStep(_ =>
+                        {
+                            finished.TrySetResult();
+                            return Task.CompletedTask;
+                        });
+                        return package;
+                    });
+                var unresolved = restarted.RecoverDurablePackages();
+                if (unresolved.Count != 0)
+                    throw new Exception("Registered durable package was not restored.");
+                await finished.Task.WaitAsync(TimeSpan.FromSeconds(20));
+                if (firstStepCalls != 1)
+                    throw new Exception("Completed step was repeated after restart.");
+            }
+            var remaining = new DurablePackageJournal(database).Pending();
+            if (remaining.Count != 0)
+                throw new Exception("Finished recovered package stayed in durable queue.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void SchedulerPriorityOrdering()
