@@ -438,97 +438,86 @@ public partial class MainWindow
     }
 
     private bool _tagRecoveryQueued;
+    private const string TagRecoveryType = "tag-recovery-v1";
 
-    // One scheduler package replays the ONLY durable backlog. This is manual
-    // P0 work even after a restart. There is no background drain/second queue.
+    // An immutable ordered image-ID snapshot is the package recipe. The
+    // pending_tag_edits table remains the ONLY durable user-intent queue.
+    // Replaying a step reads CURRENT revisions, so new tag intents always win.
+    private SchedulerTaskPackage BuildTagRecoveryPackage(string key, string payload)
+    {
+        var ids = System.Text.Json.JsonSerializer.Deserialize<long[]>(payload)
+            ?? throw new InvalidDataException("Ungültiger Wiederherstellungsauftrag.");
+        var package = new SchedulerTaskPackage(key);
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var imageId = ids[i];
+            var completed = i + 1;
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                var repo = new ImageTagRepository(_database);
+                var edits = repo.PendingEditsForImage(imageId);
+                if (edits.Count > 0)
+                {
+                    try
+                    {
+                        using var writer = new ExifToolKeywordWriter.Session();
+                        repo.ApplyPendingImageEdits(imageId, edits, writer, token);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        // Failure remains in SQLite; continue other images
+                        // and make it visible in scheduler diagnostics.
+                        PCasaDiagnostics.Write("Tags.RecoveryWrite", ex);
+                    }
+                }
+                _scheduler.ReportProgress(key, "Tags wiederherstellen",
+                    completed, ids.Length);
+                if (!Dispatcher.HasShutdownStarted)
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                        _ = RefreshPendingTagDotsAsync()));
+                return Task.CompletedTask;
+            });
+        }
+        return package;
+    }
+
     private void StartPendingTagDrain()
     {
-        if (_tagRecoveryQueued || Dispatcher.HasShutdownStarted) return;
+        if (_tagRecoveryQueued || Dispatcher.HasShutdownStarted ||
+            _scheduler.HasActiveDurablePackageType(TagRecoveryType)) return;
+        var ids = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
+            .Select(edit => edit.ImageId).Distinct().ToArray();
+        if (ids.Length == 0) return;
         _tagRecoveryQueued = true;
-        var key = "tags:recover-pending";
-        var package = new SchedulerTaskPackage(key);
-        var failures = new HashSet<long>();
-        var written = 0;
-        var failed = 0;
-
-        // Discover at execution time, not at window initialization: newer
-        // manual writes may already have completed before recovery starts.
-        package.AddStep(token =>
-        {
-            token.ThrowIfCancellationRequested();
-            var groups = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
-                .GroupBy(edit => edit.ImageId)
-                .Select(group => group.ToArray()).ToArray();
-            _scheduler.ReportProgress(key, "Offene Tag-Dateien", 0, groups.Length);
-            // Package.InsertNext preserves one cursor across scheduler yield.
-            for (var i = groups.Length - 1; i >= 0; i--)
-            {
-                var group = groups[i];
-                var total = groups.Length;
-                package.InsertNext(stepToken =>
-                {
-                    stepToken.ThrowIfCancellationRequested();
-                    if (!failures.Contains(group[0].ImageId))
-                    {
-                        try
-                        {
-                            using var writer = new ExifToolKeywordWriter.Session();
-                            new ImageTagRepository(_database).ApplyPendingImageEdits(
-                                group[0].ImageId, group, writer, stepToken);
-                            written++;
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception ex)
-                        {
-                            failures.Add(group[0].ImageId);
-                            failed++;
-                            PCasaDiagnostics.Write("Tags.RecoverPending", ex);
-                            // Failure stays in pending_tag_edits. Continue
-                            // other images, never spin on this image.
-                        }
-                    }
-                    _scheduler.ReportProgress(key,
-                        failed == 0 ? "Tags wiederherstellen" :
-                            "Tags wiederherstellen (Fehler offen)",
-                        written + failed, total);
-                    if (!Dispatcher.HasShutdownStarted)
-                        _ = Dispatcher.BeginInvoke(new Action(() =>
-                            _ = RefreshPendingTagDotsAsync()));
-                    return Task.CompletedTask;
-                });
-            }
-            return Task.CompletedTask;
-        });
-
+        var key = "tags:recover:" + Guid.NewGuid().ToString("N");
         try
         {
-            var task = _scheduler.EnqueuePackageAsync(package,
-                SchedulerPriority.ManualAction);
-            _ = ObserveTagRecoveryAsync(task, key, failures);
+            var payload = System.Text.Json.JsonSerializer.Serialize(ids);
+            var package = BuildTagRecoveryPackage(key, payload);
+            var task = _scheduler.EnqueueDurablePackageAsync(package,
+                TagRecoveryType, payload, SchedulerPriority.ManualAction);
+            _ = ObserveTagRecoveryAsync(task);
             _ = RefreshPendingTagDotsAsync();
         }
         catch (Exception ex)
         {
             _tagRecoveryQueued = false;
-            PCasaDiagnostics.Write("Tags.RecoverQueue", ex);
+            PCasaDiagnostics.Write("Tags.RecoveryQueue", ex);
         }
     }
 
-    private async Task ObserveTagRecoveryAsync(Task completion, string key,
-        HashSet<long> failures)
+    private async Task ObserveTagRecoveryAsync(Task completion)
     {
         try { await completion; }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { PCasaDiagnostics.Write("Tags.Recover", ex); }
+        catch (Exception ex) { PCasaDiagnostics.Write("Tags.Recovery", ex); }
         finally
         {
             _tagRecoveryQueued = false;
             if (!Dispatcher.HasShutdownStarted)
-            {
                 _ = RefreshPendingTagDotsAsync();
-                if (failures.Count > 0)
-                    StatusText.Text = $"Tag-Wiederherstellung: {failures.Count} Bilder mit Schreibfehlern – Änderungen weiter gesichert";
-            }
         }
     }
 

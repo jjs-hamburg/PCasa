@@ -90,6 +90,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         _durableJournal = new DurablePackageJournal(database);
     }
 
+    public bool HasActiveDurablePackageType(string type)
+        => _durableJournal?.Pending().Any(p => p.Type == type) == true;
+
     public void RegisterDurablePackageType(string type,
         Func<string, string, SchedulerTaskPackage> factory)
     {

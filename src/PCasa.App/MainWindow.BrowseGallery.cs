@@ -59,6 +59,7 @@ public partial class MainWindow
         // Durable user imports enter the scheduler BEFORE background legacy
         // repair. Both use the SAME catalog and generation guards.
         // Recovered user edits must be queued BEFORE background folder scans.
+        _scheduler.RecoverDurablePackages();
         StartPendingTagDrain();
         QueuePendingInitialScans();
         _ = ReconcilePersistedExclusionsAsync();

@@ -311,6 +311,25 @@ public sealed class ImageTagRepository
         return result;
     }
 
+    public IReadOnlyList<(long Id, long ImageId, string Tag, bool Present, long Revision)>
+        PendingEditsForImage(long imageId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT rowid,image_id,tag,desired_present,revision
+              FROM pending_tag_edits WHERE image_id=$image
+             ORDER BY updated_utc;
+            """;
+        cmd.Parameters.AddWithValue("$image", imageId);
+        using var reader = cmd.ExecuteReader();
+        var result = new List<(long,long,string,bool,long)>();
+        while (reader.Read())
+            result.Add((reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),
+                reader.GetInt64(3)!=0,reader.GetInt64(4)));
+        return result;
+    }
+
     // Execute one source read and at most one write per image, regardless of
     // the number of pending tag changes. The SQLite intent table remains the
     // sole durable backlog; it is never copied into another persistent queue.
