@@ -189,7 +189,7 @@ internal static class Program
             SchedulerPriority Priority, SchedulerWorkKind Kind)[]
         {
             ("different-type", "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog),
-            ("test-case", "{\\"other\\":true}", SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog),
+            ("test-case", "different-payload", SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog),
             ("test-case", "{}", SchedulerPriority.Background, SchedulerWorkKind.Catalog),
             ("test-case", "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.SourceProbe)
         })
