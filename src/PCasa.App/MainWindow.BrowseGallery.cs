@@ -60,10 +60,15 @@ public partial class MainWindow
         // Durable user imports enter the scheduler BEFORE background legacy
         // repair. Both use the SAME catalog and generation guards.
         // Recovered user edits must be queued BEFORE background folder scans.
-        _scheduler.RecoverDurablePackages();
+        var unresolvedPackages = _scheduler.RecoverDurablePackages();
         StartPendingTagDrain();
         _ = RecoverPendingFileTransfersAsync();
-        QueuePendingInitialScans();
+        // A persistent but unrecognised P0 recipe cannot be silently
+        // demoted beneath a background scan.
+        if (unresolvedPackages.Count == 0)
+            QueuePendingInitialScans();
+        else
+            StatusText.Text = $"{unresolvedPackages.Count} Paket(e) benötigen Wiederherstellungsprüfung – automatischer Scan angehalten";
         _ = ReconcilePersistedExclusionsAsync();
         await EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();

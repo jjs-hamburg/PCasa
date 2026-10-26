@@ -42,6 +42,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private DurablePackageJournal? _durableJournal;
     private readonly HashSet<Task> _durableCompletions = new();
     private bool _restoringDurablePackages;
+    private int _unresolvedDurableManualCount;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
@@ -144,6 +145,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             lock (_gate)
             {
+                _unresolvedDurableManualCount =
+                    unresolved.Count(p => p.Priority == SchedulerPriority.ManualAction);
                 _restoringDurablePackages = false;
                 // Workers may have consumed signals during recovery.
                 foreach (var lane in new[] { LaneManual, LaneManualSourceProbe })
@@ -450,12 +453,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // Otherwise parallel workers can reverse the logical order.
                     var blockedByHigherPriority =
                         lane == LaneBackground &&
-                        (_catalogForegroundRunning > 0 ||
+                        (_unresolvedDurableManualCount > 0 ||
+                         _catalogForegroundRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.UserAction)) ||
                         lane == LaneUserAction &&
-                        (_catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
+                        (_unresolvedDurableManualCount > 0 ||
+                         _catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.Interactive));
