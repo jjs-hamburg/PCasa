@@ -578,10 +578,43 @@ public partial class MainWindow
         }
     }
 
+    private async Task ObserveRecoveredTagOperationAsync(Task completion, string key)
+    {
+        try { await completion; }
+        catch (OperationCanceledException) { }
+        catch (DurablePackageRetryException ex)
+        {
+            PCasaDiagnostics.Write("Tags.RecoveredDeferred", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text =
+                    "Tag-Aufträge weiter vorgemerkt – nicht alle Originaldateien erreichbar";
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Tags.RecoveredWrite", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text =
+                    "Wiederhergestellter Tag-Auftrag fehlgeschlagen – offene Tags bleiben sichtbar";
+        }
+        finally
+        {
+            _recoveredTagPresentationKeys.Remove(key);
+            if (!Dispatcher.HasShutdownStarted)
+            {
+                EndVisibleManualOperation(key);
+                _ = RefreshPendingTagDotsAsync();
+                // Old V1/edited packages may have left file writes pending.
+                // Reuse the one durable v2 recipe; never create a second worker.
+                StartPendingTagDrain();
+            }
+        }
+    }
+
     private void StartPendingTagDrain()
     {
         if (_tagRecoveryQueued || Dispatcher.HasShutdownStarted ||
-            _scheduler.HasActiveDurablePackageType(TagRecoveryType)) return;
+            _scheduler.HasActiveDurablePackageType(TagRecoveryType) ||
+            _scheduler.HasActiveDurablePackageType("tag-recovery-v1")) return;
         var imageIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
             .Select(edit => edit.ImageId).Distinct().ToArray();
         if (imageIds.Length == 0) return;
