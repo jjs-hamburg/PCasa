@@ -575,13 +575,53 @@ public partial class MainWindow
                 "tag-recovery-v1" or "tag-recovery-v2")
             .ToArray();
         if (pending.Length == 0) return;
-        var images = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
-            .Select(p => p.ImageId).Distinct().Count();
+        // The OLD UI multiplied the entire database backlog by the number
+        // of recovered packages (e.g. 1,000 pending photos * 50 packages =
+        // "50,000 writes"). A package's immutable recipe, NOT the global
+        // pending table, defines that package's file-write steps.
+        // Two genuinely separate packages for one image count twice.
+        var pendingImageCount = new ImageTagRepository(_database)
+            .PendingEdits(int.MaxValue).Select(p => p.ImageId).Distinct().Count();
         foreach (var record in pending)
         {
+            int total;
+            int confirmed;
+            try
+            {
+                if (record.Type == "tag-edit-v1")
+                {
+                    var recipe = System.Text.Json.JsonSerializer
+                        .Deserialize<DurableTagEdit>(record.Payload)
+                        ?? throw new InvalidDataException("Ungültiges Tag-Paket.");
+                    total = recipe.ImageIds.Length;
+                    // First persisted step commits SQLite, not a file write.
+                    confirmed = Math.Clamp(record.CompletedSteps - 1, 0, total);
+                }
+                else if (record.Type == "tag-recovery-v1")
+                {
+                    total = System.Text.Json.JsonSerializer
+                        .Deserialize<long[]>(record.Payload)?.Length
+                        ?? throw new InvalidDataException("Ungültiges altes Tag-Paket.");
+                    confirmed = Math.Clamp(record.CompletedSteps, 0, total);
+                }
+                else
+                {
+                    total = pendingImageCount;
+                    confirmed = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                // An unreadable recipe must remain in the durable scheduler
+                // journal, but cannot justify an invented progress number.
+                PCasaDiagnostics.Write("Tags.ProgressRecipe", ex);
+                total = 0;
+                confirmed = 0;
+            }
             _recoveredTagPresentationKeys.Add(record.Key);
             BeginVisibleManualOperation(record.Key,
-                "Tags in Originaldateien schreiben", Math.Max(1, images));
+                "Tags in Originaldateien schreiben", total);
+            SeedVisibleTagSeriesCheckpoint(record.Key, confirmed);
         }
     }
 
@@ -621,7 +661,10 @@ public partial class MainWindow
     {
         if (_tagRecoveryQueued || Dispatcher.HasShutdownStarted ||
             _scheduler.HasActiveDurablePackageType(TagRecoveryType) ||
-            _scheduler.HasActiveDurablePackageType("tag-recovery-v1")) return;
+            _scheduler.HasActiveDurablePackageType("tag-recovery-v1") ||
+            // First finish the real user-written packages; recovery is for
+            // leftover pending edits, not a duplicate pass over their work.
+            _scheduler.HasActiveDurablePackageType("tag-edit-v1")) return;
         var imageIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
             .Select(edit => edit.ImageId).Distinct().ToArray();
         if (imageIds.Length == 0) return;
