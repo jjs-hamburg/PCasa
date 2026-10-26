@@ -110,7 +110,7 @@ public sealed class DurablePackageJournal
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             UPDATE scheduler_packages
-               SET state=$state, completed_steps=COALESCE($step,completed_steps),
+               SET state=$state, completed_steps=MAX(completed_steps,COALESCE($step,completed_steps)),
                    error=$error,updated_utc=$now
              WHERE package_key=$key;
             """;
