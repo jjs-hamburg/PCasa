@@ -563,6 +563,88 @@ internal static class TagFlow
                     .Any(edit => edit.ImageId == editorIds[0]))
                 throw new Exception("Grouped durable keyword replay did not finish.");
             Console.WriteLine("PASS: Two durable intents replay once per image and clear after acknowledgment.");
+            // A real WPF recovery must not mark the package complete merely
+            // because one original was temporarily unavailable. Successful
+            // files are acknowledged independently in pending_tag_edits; the
+            // same persisted scheduler identity resumes the remaining photo.
+            const string recoveredTag = "Recovered P0 Tag";
+            const string unavailableTag = "Offline P0 Tag";
+            var unavailableImage = Path.Combine(albumA, "a-01-topaz.jpg");
+            var hiddenOriginal = unavailableImage + ".unreachable";
+            var repoForRecovery = new ImageTagRepository(db);
+            if (repoForRecovery.QueueTagEdit(
+                    new[] { editorIds[0] }, recoveredTag, false) != 1 ||
+                repoForRecovery.QueueTagEdit(
+                    new[] { editorIds[1] }, unavailableTag, false) != 1)
+                throw new Exception("Cannot seed the durable tag recovery test.");
+            File.Move(unavailableImage, hiddenOriginal);
+            try
+            {
+                var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                    .GetField("_scheduler",
+                        System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic)!
+                    .GetValue(window)!;
+                var factory = typeof(PCasa.App.MainWindow).GetMethod(
+                    "BuildTagRecoveryPackageV2",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new Exception("Durable tag recovery V2 factory missing.");
+                var recoveryKey = "tags:recover:test-" +
+                    Guid.NewGuid().ToString("N");
+                const string recoveryPayload = "{}";
+                SchedulerTaskPackage Package() =>
+                    (SchedulerTaskPackage?)factory.Invoke(
+                        window, [recoveryKey, recoveryPayload])
+                    ?? throw new Exception("Unable to build tag recovery package.");
+                var firstReplay = scheduler.EnqueueDurablePackageAsync(
+                    Package(), "tag-recovery-v2", recoveryPayload,
+                    SchedulerPriority.ManualAction);
+                Until(window, () => firstReplay.IsCompleted,
+                    "Unavailable original blocked the durable recovery forever.");
+                var deferred = false;
+                try { firstReplay.GetAwaiter().GetResult(); }
+                catch (DurablePackageRetryException) { deferred = true; }
+                if (!deferred ||
+                    !new ImageTagRepository(db).PendingEdits().Any(edit =>
+                        edit.ImageId == editorIds[1]) ||
+                    new ImageTagRepository(db).PendingEdits().Any(edit =>
+                        edit.ImageId == editorIds[0]) ||
+                    !(ImageTagRepository.ReadKeywords(firstOriginal) ?? "")
+                        .Contains(recoveredTag, StringComparison.Ordinal) ||
+                    !new DurablePackageJournal(db).Pending().Any(record =>
+                        record.Key == recoveryKey &&
+                        record.Priority == SchedulerPriority.ManualAction &&
+                        record.CompletedSteps == 0))
+                    throw new Exception(
+                        "Offline tag recovery lost priority or treated an unsaved image as finished.");
+
+                File.Move(hiddenOriginal, unavailableImage);
+                // Recreate the exact same versioned recipe. Persisted DB
+                // revisions, not a newly staged tag edit, are replayed.
+                var resumed = scheduler.EnqueueDurablePackageAsync(
+                    Package(), "tag-recovery-v2", recoveryPayload,
+                    SchedulerPriority.ManualAction);
+                Until(window, () => resumed.IsCompleted,
+                    "Tag recovery did not resume after the file returned.");
+                resumed.GetAwaiter().GetResult();
+                if (new ImageTagRepository(db).PendingEdits().Any(edit =>
+                        edit.ImageId == editorIds[0] || edit.ImageId == editorIds[1]) ||
+                    !(ImageTagRepository.ReadKeywords(unavailableImage) ?? "")
+                        .Contains(unavailableTag, StringComparison.Ordinal) ||
+                    new DurablePackageJournal(db).Pending().Any(record =>
+                        record.Key == recoveryKey))
+                    throw new Exception(
+                        "Recovered original did not receive durable pending keywords.");
+                Console.WriteLine(
+                    "PASS: Offline original stays pending at P0 and resumes without re-tagging saved files.");
+            }
+            finally
+            {
+                if (File.Exists(hiddenOriginal) && !File.Exists(unavailableImage))
+                    File.Move(hiddenOriginal, unavailableImage);
+            }
+
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
             window.Close();
