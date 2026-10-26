@@ -40,6 +40,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneInteractiveSourceProbe = 9;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
+    private readonly HashSet<Task> _durableCompletions = new();
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
@@ -124,7 +125,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 // A dynamically built package must rebuild the identical
                 // step sequence before a saved cursor can be applied.
                 package.RestoreCursor(record.CompletedSteps);
-                _ = QueueDurableExisting(package, record);
+                TrackDurableCompletion(QueueDurableExisting(package, record));
             }
             catch (Exception ex)
             {
@@ -148,7 +149,22 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (record.State is "completed" or "failed")
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
         package.RestoreCursor(record.CompletedSteps);
-        return QueueDurableExisting(package, record, cancellationToken);
+        return TrackDurableCompletion(QueueDurableExisting(package, record, cancellationToken));
+    }
+
+    // Durable ledger commits are part of scheduler shutdown, not detached
+    // fire-and-forget continuations that outlive the database owner.
+    private Task TrackDurableCompletion(Task completion)
+    {
+        lock (_gate) _durableCompletions.Add(completion);
+        _ = completion.ContinueWith(task =>
+        {
+            // Observe exceptions, but retain the original Task for callers.
+            _ = task.Exception;
+            lock (_gate) _durableCompletions.Remove(task);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return completion;
     }
 
     private async Task QueueDurableExisting(SchedulerTaskPackage package,
@@ -644,6 +660,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         _shutdown.Cancel();
         await Task.WhenAll(_workers);
+        // Worker completion can unblock the journal continuation AFTER the
+        // worker exits. Do not close the app while a checkpoint is in flight.
+        Task[] durable;
+        lock (_gate) durable = _durableCompletions.ToArray();
+        try { await Task.WhenAll(durable); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         _shutdown.Dispose();
         foreach (var signal in _signals) signal.Dispose();
     }
