@@ -335,7 +335,8 @@ public sealed class ImageTagRepository
     // sole durable backlog; it is never copied into another persistent queue.
     public void ApplyPendingImageEdits(long imageId,
         IReadOnlyList<(long Id, long ImageId, string Tag, bool Present, long Revision)> edits,
-        ExifToolKeywordWriter.Session writer, CancellationToken token)
+        ExifToolKeywordWriter.Session writer, CancellationToken token,
+        Action<string>? onFileStarting = null)
     {
         if (edits.Count == 0) return;
         token.ThrowIfCancellationRequested();
@@ -356,6 +357,9 @@ public sealed class ImageTagRepository
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff" or ".arw"))
             throw new NotSupportedException($"Schreiben von Tags in {ext} wird nicht unterstützt.");
+        // This reports the REAL file path before a possibly slow NAS/source
+        // lock. The scheduler still owns all progress and job state.
+        onFileStarting?.Invoke(path);
         using (SourceFileLocks.Enter(path, token))
         {
             // Validate snapshot revisions BEFORE touching a potentially slow NAS.
