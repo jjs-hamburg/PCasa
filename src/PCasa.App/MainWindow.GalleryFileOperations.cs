@@ -396,10 +396,14 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
+            if (!Dispatcher.HasShutdownStarted)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true);
             StatusText.Text = "Dateiübertragung abgebrochen";
         }
         catch (Exception ex)
         {
+            if (!Dispatcher.HasShutdownStarted)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true);
             ShowFileActionError(ex);
         }
         finally
