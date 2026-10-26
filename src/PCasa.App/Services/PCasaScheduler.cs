@@ -93,6 +93,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public bool HasActiveDurablePackageType(string type)
         => _durableJournal?.Pending().Any(p => p.Type == type) == true;
 
+    public bool HasActiveDurablePackage(string type, string payload)
+        => _durableJournal?.Pending().Any(p =>
+            p.Type == type && p.Payload == payload) == true;
+
     public void RegisterDurablePackageType(string type,
         Func<string, string, SchedulerTaskPackage> factory)
     {
