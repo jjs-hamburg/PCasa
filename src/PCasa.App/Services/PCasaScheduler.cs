@@ -1,3 +1,5 @@
+using PCasa.App.Data;
+
 namespace PCasa.App.Services;
 
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
@@ -37,6 +39,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneManualSourceProbe = 8;
     private const int LaneInteractiveSourceProbe = 9;
     private readonly object _gate = new();
+    private DurablePackageJournal? _durableJournal;
+    private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
@@ -77,6 +81,92 @@ public sealed class PCasaScheduler : IAsyncDisposable
             Task.Run(() => RunAsync(LaneManualSourceProbe)),
             Task.Run(() => RunAsync(LaneInteractiveSourceProbe))
         };
+    }
+
+    public void EnableDurablePackages(LocalDatabase database)
+    {
+        if (_durableJournal is not null)
+            throw new InvalidOperationException("Paketjournal bereits aktiviert.");
+        _durableJournal = new DurablePackageJournal(database);
+    }
+
+    public void RegisterDurablePackageType(string type,
+        Func<string, string, SchedulerTaskPackage> factory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(type);
+        _packageFactories.Add(type, factory);
+    }
+
+    // Replay ONLY registered types. Unknown versions stay durable and visible;
+    // never silently discard them or pretend their source steps ran.
+    public IReadOnlyList<DurablePackageRecord> RecoverDurablePackages()
+    {
+        var journal = _durableJournal ??
+            throw new InvalidOperationException("Paketjournal nicht aktiviert.");
+        var unresolved = new List<DurablePackageRecord>();
+        foreach (var record in journal.Pending())
+        {
+            if (!_packageFactories.TryGetValue(record.Type, out var factory))
+            {
+                unresolved.Add(record);
+                continue;
+            }
+            try
+            {
+                var package = factory(record.Key, record.Payload);
+                // A dynamically built package must rebuild the identical
+                // step sequence before a saved cursor can be applied.
+                package.RestoreCursor(record.CompletedSteps);
+                _ = QueueDurableExisting(package, record);
+            }
+            catch (Exception ex)
+            {
+                journal.SetState(record.Key, "failed", error: ex.Message);
+                unresolved.Add(record);
+            }
+        }
+        return unresolved;
+    }
+
+    public Task EnqueueDurablePackageAsync(SchedulerTaskPackage package,
+        string type, string payload, SchedulerPriority priority,
+        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog)
+    {
+        var journal = _durableJournal ??
+            throw new InvalidOperationException("Paketjournal nicht aktiviert.");
+        if (!_packageFactories.ContainsKey(type))
+            throw new InvalidOperationException("Pakettyp ohne Wiederherstellungsfabrik: " + type);
+        var record = journal.Put(package.Key, type, payload, priority, workKind);
+        if (record.State is "completed" or "failed")
+            throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
+        package.RestoreCursor(record.CompletedSteps);
+        return QueueDurableExisting(package, record);
+    }
+
+    private async Task QueueDurableExisting(SchedulerTaskPackage package,
+        DurablePackageRecord record)
+    {
+        var journal = _durableJournal!;
+        package.OnStepCompleted = step => journal.SetState(record.Key, "running", step);
+        try
+        {
+            // Durable identity/priority come only from the journal; never
+            // substitute a default background priority on restart.
+            await EnqueuePackageAsync(package, record.Priority,
+                workKind: record.WorkKind);
+            journal.SetState(record.Key, "completed", package.CompletedSteps);
+        }
+        catch (OperationCanceledException)
+        {
+            // During shutdown retain the checkpoint and original priority.
+            journal.SetState(record.Key, "queued", package.CompletedSteps);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            journal.SetState(record.Key, "failed", package.CompletedSteps, ex.Message);
+            throw;
+        }
     }
 
     private static int LaneFor(SchedulerPriority priority, SchedulerWorkKind kind)

@@ -13,6 +13,14 @@ public sealed class SchedulerTaskPackage
 {
     private readonly List<Func<CancellationToken, Task>> _steps = new();
     private int _nextIndex;
+    internal Action<int>? OnStepCompleted { get; set; }
+
+    internal void RestoreCursor(int step)
+    {
+        if (step < 0 || step > _steps.Count)
+            throw new InvalidOperationException("Ungültige Paket-Wiederaufnahmeposition.");
+        _nextIndex = step;
+    }
 
     public SchedulerTaskPackage(string key)
     {
@@ -45,6 +53,7 @@ public sealed class SchedulerTaskPackage
             token.ThrowIfCancellationRequested();
             await _steps[_nextIndex](token);
             _nextIndex++;
+            OnStepCompleted?.Invoke(_nextIndex);
         }
     }
 }

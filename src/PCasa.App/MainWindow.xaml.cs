@@ -36,6 +36,7 @@ public partial class MainWindow : Window
 
         _database = new LocalDatabase();
         _database.Initialize();
+        _scheduler.EnableDurablePackages(_database);
         _folderRepository = new FolderRepository(_database);
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
