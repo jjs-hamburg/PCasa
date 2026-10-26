@@ -179,11 +179,32 @@ internal static class Program
             restored[0].CompletedSteps != 2 ||
             restored[1].CompletedSteps != 1)
             throw new Exception("Durable package journal lost manual priority or cursor.");
-        // An old key can never silently acquire a lower priority at restart.
+        // Idempotent re-submission must retain the exact immutable recipe.
         var repeated = journal.Put("older", "test-case", "{}",
-            SchedulerPriority.Background, SchedulerWorkKind.Catalog);
-        if (repeated.Priority != SchedulerPriority.ManualAction)
-            throw new Exception("Duplicate package replaced original priority.");
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        if (repeated.Priority != SchedulerPriority.ManualAction ||
+            repeated.CompletedSteps != 2)
+            throw new Exception("Duplicate package lost original cursor.");
+        foreach (var conflicting in new (string Type, string Payload,
+            SchedulerPriority Priority, SchedulerWorkKind Kind)[]
+        {
+            ("different-type", "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog),
+            ("test-case", "{\\"other\\":true}", SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog),
+            ("test-case", "{}", SchedulerPriority.Background, SchedulerWorkKind.Catalog),
+            ("test-case", "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.SourceProbe)
+        })
+        {
+            try
+            {
+                journal.Put("older", conflicting.Type, conflicting.Payload,
+                    conflicting.Priority, conflicting.Kind);
+                throw new Exception("Conflicting durable identity was accepted.");
+            }
+            catch (InvalidOperationException)
+            {
+                // Expected: a key can never silently acquire another recipe.
+            }
+        }
     }
 
     private static void DurableSchedulerCursorSurvivesRestart()
