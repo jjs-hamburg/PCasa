@@ -157,6 +157,7 @@ public partial class MainWindow
         _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
         RefreshFolderTree(preserveGalleryAnchor: false);
+        _ = RefreshPendingTagDotsAsync();
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
         // A foreground scan must NOT suppress the independent gallery.
