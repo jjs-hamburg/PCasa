@@ -41,6 +41,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
     private readonly HashSet<Task> _durableCompletions = new();
+    private bool _restoringDurablePackages;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
@@ -112,25 +113,42 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal ??
             throw new InvalidOperationException("Paketjournal nicht aktiviert.");
         var unresolved = new List<DurablePackageRecord>();
-        foreach (var record in journal.Pending())
+        // The manual executor must NOT start the oldest recovered package
+        // while newer durable P0 packages are still being reconstructed.
+        lock (_gate) _restoringDurablePackages = true;
+        try
         {
-            if (!_packageFactories.TryGetValue(record.Type, out var factory))
+            foreach (var record in journal.Pending())
             {
-                unresolved.Add(record);
-                continue;
+                if (!_packageFactories.TryGetValue(record.Type, out var factory))
+                {
+                    unresolved.Add(record);
+                    continue;
+                }
+                try
+                {
+                    var package = factory(record.Key, record.Payload);
+                    package.RestoreCursor(record.CompletedSteps);
+                    TrackDurableCompletion(QueueDurableExisting(package, record));
+                }
+                catch (Exception ex)
+                {
+                    // An unreadable recipe is not a completed operation.
+                    journal.SetState(record.Key, "queued",
+                        record.CompletedSteps, ex.Message);
+                    unresolved.Add(record);
+                }
             }
-            try
+        }
+        finally
+        {
+            lock (_gate)
             {
-                var package = factory(record.Key, record.Payload);
-                // A dynamically built package must rebuild the identical
-                // step sequence before a saved cursor can be applied.
-                package.RestoreCursor(record.CompletedSteps);
-                TrackDurableCompletion(QueueDurableExisting(package, record));
-            }
-            catch (Exception ex)
-            {
-                journal.SetState(record.Key, "failed", error: ex.Message);
-                unresolved.Add(record);
+                _restoringDurablePackages = false;
+                // Workers may have consumed signals during recovery.
+                foreach (var lane in new[] { LaneManual, LaneManualSourceProbe })
+                    if (_pending.Any(p => LaneFor(p.Priority, p.Kind) == lane))
+                        _signals[lane].Release();
             }
         }
         return unresolved;
@@ -465,7 +483,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                          _pending.Any(x => x.Kind == SchedulerWorkKind.SourceProbe &&
                              x.Priority == SchedulerPriority.ManualAction &&
                              x.Id > candidate.Id));
-                    item = blockedByHigherPriority || newerManualProbe ? null : candidate;
+                    item = blockedByHigherPriority || newerManualProbe ||
+                        (_restoringDurablePackages &&
+                         lane is LaneManual or LaneManualSourceProbe)
+                        ? null : candidate;
                     if (item is not null)
                     {
                         _pending.Remove(item);
