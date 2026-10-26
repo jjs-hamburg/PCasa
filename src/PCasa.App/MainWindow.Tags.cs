@@ -569,72 +569,69 @@ public partial class MainWindow
         await RefreshTagSidebarAsync();
     }
 
+    private sealed record DurableTagChange(string Tag, bool Remove);
+    private sealed record DurableTagEdit(long[] ImageIds, DurableTagChange[] Changes);
+
+    // Exactly reproducible steps: one local commit, then one step per image.
+    // A restart never needs an in-memory closure to reconstruct this package.
+    private SchedulerTaskPackage BuildTagEditPackage(string key, string payload)
+    {
+        var request = System.Text.Json.JsonSerializer.Deserialize<DurableTagEdit>(payload)
+            ?? throw new InvalidDataException("Ungültiger Tag-Auftrag.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var edits = request.Changes.Select(e => (e.Tag, e.Remove)).ToArray();
+            var count = new ImageTagRepository(_database)
+                .QueueTagEdits(request.ImageIds, edits);
+            _scheduler.ReportProgress(key, "Tags lokal gesichert", 0,
+                request.ImageIds.Length);
+            if (!Dispatcher.HasShutdownStarted)
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                    _ = PublishTagCommitAsync(key, count)));
+            return Task.CompletedTask;
+        });
+        for (var i = 0; i < request.ImageIds.Length; i++)
+        {
+            var id = request.ImageIds[i];
+            var completed = i + 1;
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                var repo = new ImageTagRepository(_database);
+                var edits = repo.PendingEditsForImage(id);
+                if (edits.Count > 0)
+                {
+                    using var writer = new ExifToolKeywordWriter.Session();
+                    repo.ApplyPendingImageEdits(id, edits, writer, token);
+                }
+                _scheduler.ReportProgress(key, "Originaldateien schreiben",
+                    completed, request.ImageIds.Length);
+                if (!Dispatcher.HasShutdownStarted)
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                        _ = RefreshPendingTagDotsAsync()));
+                return Task.CompletedTask;
+            });
+        }
+        return package;
+    }
+
     private void TagDraftOk_Click(object sender, RoutedEventArgs e)
     {
         if (_tagWriteActive || _tagDraft.Count == 0 || _tagDraftImageIds is null) return;
         var ids = _tagDraftImageIds.ToArray();
         var edits = _tagDraft.Select(x => (Tag: x.Key, Remove: x.Value)).ToArray();
         var key = "tags:package:" + Guid.NewGuid().ToString("N");
-        var package = new SchedulerTaskPackage(key);
-
-        // Commit is one short scheduler step. Never keep the tag editor busy
-        // while this package waits behind an older network/source operation.
-        package.AddStep(token =>
-        {
-            token.ThrowIfCancellationRequested();
-            var changes = new ImageTagRepository(_database).QueueTagEdits(ids, edits);
-            _scheduler.ReportProgress(key, "SQLite gesichert", 0, ids.Length);
-            if (!Dispatcher.HasShutdownStarted)
-                _ = Dispatcher.BeginInvoke(new Action(() =>
-                    _ = PublishTagCommitAsync(key, changes)));
-            return Task.CompletedTask;
-        });
-
-        // Work is sliced by IMAGE so a newer manual package can preempt and
-        // resume this one without replaying completed images. There is only
-        // one persistent write-intent table and one scheduler identity.
-        package.AddStep(token =>
-        {
-            token.ThrowIfCancellationRequested();
-            var idSet = ids.ToHashSet();
-            var groups = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
-                .Where(edit => idSet.Contains(edit.ImageId))
-                .GroupBy(edit => edit.ImageId).ToArray();
-            for (var i = groups.Length - 1; i >= 0; i--)
-            {
-                var group = groups[i].ToArray();
-                var ordinal = i;
-                package.InsertNext(stepToken =>
-                {
-                    stepToken.ThrowIfCancellationRequested();
-                    using var writer = new ExifToolKeywordWriter.Session();
-                    try
-                    {
-                        new ImageTagRepository(_database).ApplyPendingImageEdits(
-                            group[0].ImageId, group, writer, stepToken);
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
-                    {
-                        PCasaDiagnostics.Write("Tags.DurableWrite", ex);
-                        throw;
-                    }
-                    _scheduler.ReportProgress(key, "Originaldateien schreiben",
-                        groups.Length - ordinal, groups.Length);
-                    if (!Dispatcher.HasShutdownStarted)
-                        _ = Dispatcher.BeginInvoke(new Action(() =>
-                            _ = RefreshPendingTagDotsAsync()));
-                    return Task.CompletedTask;
-                });
-            }
-            return Task.CompletedTask;
-        });
+        var payload = System.Text.Json.JsonSerializer.Serialize(new DurableTagEdit(
+            ids, edits.Select(e => new DurableTagChange(e.Tag, e.Remove)).ToArray()));
+        var package = BuildTagEditPackage(key, payload);
 
         _tagWriteActive = true;
         try
         {
-            var completion = _scheduler.EnqueuePackageAsync(package,
-                SchedulerPriority.ManualAction);
+            var completion = _scheduler.EnqueueDurablePackageAsync(package,
+                "tag-edit-v1", payload, SchedulerPriority.ManualAction);
             _ = ObserveTagPackageAsync(completion, key);
             // The edit is accepted. The next manual action MUST be possible
             // immediately, even if this package later waits for slow I/O.

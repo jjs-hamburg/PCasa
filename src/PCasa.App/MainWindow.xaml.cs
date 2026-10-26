@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         _database.Initialize();
         _scheduler.EnableDurablePackages(_database);
         _scheduler.RegisterDurablePackageType("tag-recovery-v1", BuildTagRecoveryPackage);
+        _scheduler.RegisterDurablePackageType("tag-edit-v1", BuildTagEditPackage);
         _folderRepository = new FolderRepository(_database);
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);

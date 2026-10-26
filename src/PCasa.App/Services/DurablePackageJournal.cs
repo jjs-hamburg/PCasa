@@ -75,7 +75,7 @@ public sealed class DurablePackageJournal
             SELECT package_key,package_type,payload_json,priority,work_kind,
                    sequence,completed_steps,state,error
               FROM scheduler_packages WHERE state IN ('queued','running')
-             ORDER BY priority ASC, sequence DESC;
+             ORDER BY priority ASC, sequence ASC;
             """;
         using var reader = cmd.ExecuteReader();
         var results = new List<DurablePackageRecord>();
