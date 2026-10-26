@@ -356,10 +356,8 @@ public partial class MainWindow
     private async Task TransferGalleryFilesAsync(IEnumerable<string> input,
         string targetDirectory, bool move)
     {
-        // Every valid manual drop must reach the scheduler, even if an
-        // earlier manual transfer is still running or awaiting a source lock.
         string[] requested;
-        string targetPath;
+        string target;
         try
         {
             requested = input.Where(FolderScanner.IsSupportedImagePath)
@@ -370,7 +368,7 @@ public partial class MainWindow
                 StatusText.Text = "Keine unterstützten Bilddateien für die Ablage";
                 return;
             }
-            targetPath = Path.GetFullPath(targetDirectory);
+            target = Path.GetFullPath(targetDirectory);
         }
         catch (Exception ex) when (ex is ArgumentException or
             NotSupportedException or PathTooLongException)
@@ -378,350 +376,31 @@ public partial class MainWindow
             ShowFileActionError(ex);
             return;
         }
-        var key = $"gallery:file-transfer:{Guid.NewGuid():N}";
-        var transferPhase = move ? "Bilder verschieben" : "Bilder kopieren";
-        var completed = new List<string>();
-        var retainedIds = new HashSet<long>();
-        var failed = new List<string>();
-        var userCanceled = false;
-        var serverRenames = 0;
-        var crossVolumeCopies = 0;
-        // The tier is captured on WPF before the scheduler begins. Each
-        // successful step can publish one immutable catalog projection;
-        // a later thumb-size change will fall back to the final full read.
-        var presentationTier = _activeBrowseTier;
-        var navigationAtStart = _explicitGalleryNavigationVersion;
 
+        var key = "gallery:file-transfer:" + Guid.NewGuid().ToString("N");
+        var payload = System.Text.Json.JsonSerializer.Serialize(
+            new DurableGalleryTransferRecipe(requested, target, move));
         _outstandingGalleryMutations++;
         _outstandingFileTransfers++;
-        // The SCHEDULER alone preempts the running scan through its yield
-        // token and resumes that same request afterward. Directly canceling
-        // _activeScanCancellation here would turn safe preemption into a
-        // permanent cancellation of a user-initiated or initial import.
         _backgroundDebounceTimer?.Stop();
         try
         {
-            BeginVisibleManualOperation(key, transferPhase, requested.Length);
-            // Build a single operation from reusable steps. The first step
-            // validates the destination; each requested file becomes one
-            // independently resumable step and may discover an additional
-            // image-import step. No work is scheduled at lower priority.
-            var package = new SchedulerTaskPackage(key);
-            var catalog = _imageCatalog;
-            MonitoredFolder? destinationRoot = null;
-            IReadOnlyList<MonitoredFolder> monitoredRoots = Array.Empty<MonitoredFolder>();
-            var reserved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            // A newer package may preempt this transfer between files. Only
-            // the current inventory epoch may authorize a background prune.
-            // Fence at the first mutation of each uninterrupted epoch.
-            var fencedEpochs = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-            void FenceInventory(MonitoredFolder root)
-            {
-                var epoch = _folderRepository.GetScanEpoch(root.CanonicalPath);
-                if (fencedEpochs.TryGetValue(root.CanonicalPath, out var fenced) &&
-                    fenced == epoch) return;
-                fencedEpochs[root.CanonicalPath] =
-                    _folderRepository.BeginManualScan(root.CanonicalPath);
-            }
-
-            package.AddStep(token =>
-            {
-                token.ThrowIfCancellationRequested();
-                if (!Directory.Exists(targetPath) ||
-                    !IsMonitoredGalleryDestination(targetPath))
-                    throw new IOException(
-                        "Ablage nur in einem erreichbaren überwachten Ordner möglich.");
-                monitoredRoots = _folderRepository.GetAll();
-                destinationRoot = monitoredRoots
-                    .Where(root => FolderExclusionRules.IsAtOrBelow(
-                        targetPath, root.LocalPath))
-                    .OrderByDescending(root => root.LocalPath.Length)
-                    .FirstOrDefault() ?? throw new IOException(
-                        "Der Zielordner ist nicht überwacht.");
-                _scheduler.ReportProgress(key, transferPhase, 0, requested.Length);
-                return Task.CompletedTask;
-            });
-
-            foreach (var sourcePath in requested)
-            {
-                package.AddStep(async token =>
-                {
-                    if (userCanceled) return;
-                    foreach (var source in new[] { sourcePath })
-                    {
-                        token.ThrowIfCancellationRequested();
-                        if (!File.Exists(source))
-                        {
-                            failed.Add(Path.GetFileName(source) +
-                                ": Quelldatei nicht erreichbar");
-                            _scheduler.ReportProgress(key, transferPhase,
-                                completed.Count + failed.Count, requested.Length, source);
-                            continue;
-                        }
-                        var destination = Path.Combine(targetPath,
-                            Path.GetFileName(source));
-                        var samePath = string.Equals(source, destination,
-                            StringComparison.OrdinalIgnoreCase);
-                        if (samePath && move) continue;
-                        try
-                        {
-                            _scheduler.ReportProgress(key, transferPhase,
-                                completed.Count + failed.Count,
-                                requested.Length, source);
-                            var replace = false;
-                            long? movedImageId = null;
-                            long? movedFromFolderId = null;
-                            long? removedTargetId = null;
-                            if (reserved.Contains(destination))
-                                destination = UniqueCopyPath(destination, reserved);
-                            else if (samePath || File.Exists(destination))
-                            {
-                                var conflictPath = destination;
-                                var choice = samePath ? NameConflict.KeepBoth :
-                                    await Dispatcher.InvokeAsync(() =>
-                                        ResolveFileConflict(conflictPath));
-                                if (choice == NameConflict.Cancel)
-                                {
-                                    userCanceled = true;
-                                    break;
-                                }
-                                if (choice == NameConflict.Skip) continue;
-                                if (choice == NameConflict.Replace && !samePath)
-                                    replace = true;
-                                else destination = UniqueCopyPath(
-                                    destination, reserved);
-                            }
-                            // A preempted step must not reserve a name it has
-                            // NOT yet materialized. Only a successfully
-                            // completed file mutation can claim this target.
-                            using (SourceFileLocks.EnterPair(source, destination, token))
-                            {
-                                token.ThrowIfCancellationRequested();
-                                // Both catalog identities are read inside the
-                                // same path gate as the physical mutation.
-                                var sourceId = move ? CatalogImageIdAtPath(source) : null;
-                                var replacedId = replace
-                                    ? CatalogImageIdAtPath(destination) : null;
-                                removedTargetId = replacedId;
-                                if (move && sourceId is long knownId)
-                                    movedFromFolderId =
-                                        catalog.GetImagePhotoFolderId(knownId);
-                                // Any in-flight older NAS inventory must not
-                                // prune a newly copied/moved destination.
-                                FenceInventory(destinationRoot!);
-                                if (move)
-                                {
-                                    var sourceRoot = monitoredRoots
-                                        .Where(root => FolderExclusionRules.IsAtOrBelow(
-                                            source, root.LocalPath))
-                                        .OrderByDescending(root => root.LocalPath.Length)
-                                        .FirstOrDefault();
-                                    if (sourceRoot is not null)
-                                        FenceInventory(sourceRoot);
-                                }
-
-                                // Durable intent BEFORE File.Move. Its removal
-                                // is atomic with the catalog location update.
-                                // A crash between the two is recoverable without
-                                // ever treating an offline NAS as a deletion.
-                                string? intentId = null;
-                                if (move && sourceId is long indexed)
-                                {
-                                    intentId = Guid.NewGuid().ToString("N");
-                                    catalog.BeginRelocationIntent(intentId,
-                                        indexed, source, destination,
-                                        destinationRoot!.Id);
-                                }
-
-                                if (move)
-                                {
-                                    // One physical move path. Try a server-side
-                                    // rename first, even for overwrite or mapped
-                                    // aliases. Only ERROR_NOT_SAME_DEVICE permits
-                                    // copying a file across the VPN.
-                                    var method = ServerSideFileMover.Move(
-                                        source, destination, replace);
-                                    if (method == ServerSideFileMover.MoveMethod.Rename)
-                                        serverRenames++;
-                                    else
-                                        crossVolumeCopies++;
-                                }
-                                else if (replace)
-                                {
-                                    // Cross-volume-copy semantics for explicit
-                                    // COPY+Replace: stage completely before
-                                    // replacing the target file.
-                                    var stage = destination + ".pcasa-" +
-                                        Guid.NewGuid().ToString("N") + ".tmp";
-                                    try
-                                    {
-                                        File.Copy(source, stage, overwrite: false);
-                                        if (new FileInfo(source).Length !=
-                                            new FileInfo(stage).Length)
-                                            throw new IOException("Kopie unvollständig.");
-                                        File.Move(stage, destination, overwrite: true);
-                                    }
-                                    finally
-                                    {
-                                        if (File.Exists(stage)) File.Delete(stage);
-                                    }
-                                }
-                                else File.Copy(source, destination, overwrite: false);
-
-                                // No scan or re-decode for an unchanged image.
-                                // Failure is NOT treated as permission to
-                                // delete the original catalog row. The durable
-                                // intent remains for conservative recovery.
-                                if (move && sourceId is long imageId)
-                                {
-                                    if (!catalog.RelocateImage(imageId, source,
-                                        destination, destinationRoot!, CancellationToken.None,
-                                        intentId))
-                                        throw new InvalidOperationException(
-                                            "Verschiebung erfolgt, Katalogzustand " +
-                                            "nicht bestätigt; Wiederherstellung vorgemerkt.");
-                                    retainedIds.Add(imageId);
-                                    movedImageId = imageId;
-                                    // The parent package publishes the final
-                                    // gallery once, after all moves/imports.
-                                    // Per-file notifications used to reflow it
-                                    // every 750 ms during a large transfer.
-                                }
-                                else
-                                {
-                                    if (replace && replacedId is long oldId)
-                                        new CatalogRemovalService(_database)
-                                            .DetachImage(oldId, destination);
-                                    // Attach only the work this file actually needs.
-                                    // The package's cursor survives preemption.
-                                    package.InsertNext(indexToken =>
-                                    {
-                                        indexToken.ThrowIfCancellationRequested();
-                                        _scheduler.ReportProgress(key, "Bild katalogisieren",
-                                            completed.Count, requested.Length, destination);
-                                        try
-                                        {
-                                            if (!File.Exists(destination))
-                                                throw new FileNotFoundException(
-                                                    "Übertragene Datei ist nicht mehr vorhanden.", destination);
-                                            var result = _folderScanner.ScanFile(
-                                                destinationRoot!, destination,
-                                                cancellationToken: indexToken,
-                                                publishCatalogChange: false);
-                                            if (result.Failed > 0)
-                                                throw new IOException(
-                                                    "Katalogaufnahme fehlgeschlagen: " + destination);
-                                            // A newly decoded source is now
-                                            // durably in the same catalog as
-                                            // any relocated image. Publish via
-                                            // the SAME gallery delta path.
-                                            if (CatalogImageIdAtPath(destination) is long newId)
-                                                PublishCommittedGalleryImage(
-                                                    presentationTier, newId,
-                                                    previousFolderId: null,
-                                                    replacedImageId: removedTargetId);
-                                        }
-                                        catch (Exception ex) when (ex is IOException or
-                                            UnauthorizedAccessException or InvalidOperationException)
-                                        {
-                                            failed.Add(Path.GetFileName(destination) +
-                                                ": Katalogaufnahme: " + ex.Message);
-                                            PCasaDiagnostics.Write("Gallery.TransferImport", ex);
-                                        }
-                                        return Task.CompletedTask;
-                                    });
-                                }
-                            }
-                            // The physical move and SQLite relocation are
-                            // already committed. Never wait for WPF while
-                            // holding the two file gates or the scheduler.
-                            // Unrelated folders retain their displayed index.
-                            if (movedImageId is long committedImageId)
-                                PublishCommittedGalleryImage(presentationTier,
-                                    committedImageId, movedFromFolderId,
-                                    removedTargetId);
-                            completed.Add(destination);
-                            reserved.Add(destination);
-                        }
-                        catch (Exception ex) when (ex is IOException or
-                            UnauthorizedAccessException or InvalidOperationException)
-                        {
-                            failed.Add(Path.GetFileName(source) + ": " + ex.Message);
-                            PCasaDiagnostics.Write("Gallery.Transfer", ex);
-                        }
-                        _scheduler.ReportProgress(key, transferPhase,
-                            completed.Count + failed.Count, requested.Length, source);
-                    }
-                    // A copy/relocation and its DB identity update are now
-                    // one safe step. Scanner ingestion, when necessary, is
-                    // inserted immediately AFTER it in this package.
-                });
-            }
-
-            package.AddStep(async token =>
-            {
-                token.ThrowIfCancellationRequested();
-                    _scheduler.ReportProgress(key, "Galerie aktualisieren",
-                        completed.Count, Math.Max(1, requested.Length));
-
-                    // Final publication belongs to the SAME package as all
-                    // file changes and image ingestion; no orphaned followup.
-                    await Dispatcher.InvokeAsync(async () =>
-                    {
-                        await RefreshBrowseGalleryAsync(
-                            forceIndexReload: true, warmViewport: false);
-
-                        // Existing image IDs remain stable. Copies/new
-                        // sources will appear as their normal scanner commits.
-                        var newSelection = new HashSet<long>(retainedIds);
-                        _selectedImageIds.Clear();
-                        _selectedImageIds.UnionWith(newSelection);
-                        if (_selectedImageIds.Count == 0)
-                            _gallerySelection.Reset();
-                        ApplyGallerySelection();
-                        var first = _displayedBrowseIndex.FirstOrDefault(
-                            entry => _selectedImageIds.Contains(entry.ImageId));
-                        // A later user's folder click outranks this older
-                        // package's automatic target scroll. Do not pull the
-                        // viewport away from the chosen source/other folder.
-                        if (first is not null &&
-                            navigationAtStart == _explicitGalleryNavigationVersion)
-                            ScrollGalleryImageIntoView(first.ImageId);
-                        StatusText.Text = $"{completed.Count:N0} Datei(en) " +
-                            (move ? "verschoben" : "kopiert") +
-                            (move ? $" · {serverRenames:N0} direkt, " +
-                                $"{crossVolumeCopies:N0} per Kopie" : "") +
-                            (failed.Count > 0 ? $" · {failed.Count:N0} Fehler" : "");
-                    }, System.Windows.Threading.DispatcherPriority.Normal)
-                        .Task.Unwrap();
-
-                    _scheduler.ReportProgress(key, "Galerie aktualisiert",
-                        completed.Count, Math.Max(1, requested.Length));
-
-
-                    // Scheduler state reflects the outcome, not merely that
-                    // this delegate returned: partial failure is FAILED and
-                    // deliberate cancellation is CANCELED, even if individual
-                    // preceding files were already moved and published.
-                    if (failed.Count > 0)
-                        throw new InvalidOperationException(
-                            $"{completed.Count:N0} Datei(en) übertragen, " +
-                            $"{failed.Count:N0} fehlgeschlagen:\n" +
-                            string.Join("\n", failed.Take(15)));
-                    if (userCanceled)
-                        throw new OperationCanceledException(
-                            "Dateiübertragung vom Benutzer abgebrochen.");
-
-            });
-            await _scheduler.EnqueuePackageAsync(
-                package, SchedulerPriority.ManualAction);
+            BeginVisibleManualOperation(key,
+                move ? "Bilder verschieben" : "Bilder kopieren", requested.Length);
+            var package = BuildDurableGalleryTransferPackage(
+                key, payload, recovered: false);
+            await _scheduler.EnqueueDurablePackageAsync(
+                package, "gallery-transfer-v1", payload,
+                SchedulerPriority.ManualAction);
         }
         catch (OperationCanceledException)
         {
-            StatusText.Text = $"{completed.Count:N0} Datei(en) übertragen · " +
-                "weitere Übertragung abgebrochen";
+            StatusText.Text = "Dateiübertragung abgebrochen";
         }
-        catch (Exception ex) { ShowFileActionError(ex); }
+        catch (Exception ex)
+        {
+            ShowFileActionError(ex);
+        }
         finally
         {
             try { EndVisibleManualOperation(key); }
