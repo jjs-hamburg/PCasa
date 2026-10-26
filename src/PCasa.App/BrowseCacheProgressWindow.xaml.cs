@@ -281,6 +281,27 @@ public partial class BrowseCacheProgressWindow : Window
         CurrentThumbnail.Source = thumbnail;
     }
 
+    // Tag writers often submit many separate durable packages. Show the
+    // entire currently active tag-writing series, not just the most recently
+    // scheduled package. This changes presentation only; the scheduler still
+    // owns every job and its persisted position.
+    public void UpdateTagAggregateProgress(int processed, int total)
+    {
+        if (_finished || !_manualPresentationActive ||
+            Dispatcher.HasShutdownStarted) return;
+        total = Math.Max(0, total);
+        processed = Math.Clamp(processed, 0, total);
+        Progress.IsIndeterminate = total == 0;
+        if (total > 0)
+        {
+            Progress.Maximum = total;
+            Progress.Value = processed;
+        }
+        CountText.Text = $"{processed:N0} / {total:N0}";
+        CountText.ToolTip =
+            "Gesamtfortschritt aller Tag-Pakete dieser Arbeitsserie";
+    }
+
     public void EndManualOperation()
     {
         if (!_manualPresentationActive) return;
