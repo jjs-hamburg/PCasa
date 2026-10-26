@@ -235,6 +235,7 @@
                                 <ColumnDefinition Width="19" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="15" />
+                                <ColumnDefinition Width="12" />
                             </Grid.ColumnDefinitions>
 
                             <Grid Grid.Column="0"
@@ -279,6 +280,22 @@
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
                                        Visibility="Collapsed"
  />
+                            <Ellipse Grid.Column="3" Width="7" Height="7"
+                                     Fill="#DF4A54" HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     ToolTip="Tag-Änderungen noch nicht in Originaldateien geschrieben">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.HasPendingTagWrites}"
+                                                         Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
                         </Grid>
 
                         <DataTemplate.Triggers>
