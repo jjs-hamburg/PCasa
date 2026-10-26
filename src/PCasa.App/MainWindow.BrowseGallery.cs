@@ -257,6 +257,7 @@ public partial class MainWindow
             var progressWindow = _browseProgressWindow ??
                 new BrowseCacheProgressWindow { Owner = this };
             _browseProgressWindow = progressWindow;
+            AttachProgressStatus(progressWindow);
             progressWindow.BeginCachePhase();
             // A queued background task has not started. Show the existing
             // presenter only when real cache-build progress arrives.
@@ -264,9 +265,9 @@ public partial class MainWindow
 
             var progress = new Progress<BrowseCacheBuildProgress>(value =>
             {
+                // The shared presenter publishes exactly the same phase
+                // and count to the status bar, including manual overlays.
                 progressWindow.Update(value);
-                StatusText.Text =
-                    $"Vorschaudaten: {value.ProcessedImages:N0} / {value.TotalImages:N0}";
             });
 
             try
