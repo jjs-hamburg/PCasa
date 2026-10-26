@@ -135,6 +135,8 @@ public partial class MainWindow
                 if (Dispatcher.HasShutdownStarted) return;
                 var key = "gallery:reconcile-transfer:" + Guid.NewGuid().ToString("N");
                 var payload = System.Text.Json.JsonSerializer.Serialize(intent);
+                if (_scheduler.HasActiveDurablePackage("transfer-reconcile-v1", payload))
+                    continue;
                 var package = BuildTransferRecoveryPackage(key, payload);
                 var completion = _scheduler.EnqueueDurablePackageAsync(package,
                     "transfer-reconcile-v1", payload, SchedulerPriority.ManualAction);
