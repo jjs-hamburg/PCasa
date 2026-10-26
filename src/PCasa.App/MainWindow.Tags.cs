@@ -421,7 +421,7 @@ public partial class MainWindow
         try
         {
             await _scheduler.EnqueueAsync("tags:durable-drain",
-                SchedulerPriority.ManualAction, token =>
+                SchedulerPriority.Background, token =>
                 {
                     var repo = new ImageTagRepository(_database);
                     using var writer = new ExifToolKeywordWriter.Session();
@@ -543,86 +543,84 @@ public partial class MainWindow
         await RefreshTagSidebarAsync();
     }
 
-    private async void TagDraftOk_Click(object sender, RoutedEventArgs e)
+    private void TagDraftOk_Click(object sender, RoutedEventArgs e)
     {
         if (_tagWriteActive || _tagDraft.Count == 0 || _tagDraftImageIds is null) return;
         var ids = _tagDraftImageIds.ToArray();
         var edits = _tagDraft.Select(x => (Tag: x.Key, Remove: x.Value)).ToArray();
         var key = "tags:package:" + Guid.NewGuid().ToString("N");
-        var committed = new TaskCompletionSource<int>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
         var package = new SchedulerTaskPackage(key);
-        int changed = 0;
+
+        // Commit is one short scheduler step. Never keep the tag editor busy
+        // while this package waits behind an older network/source operation.
         package.AddStep(token =>
         {
             token.ThrowIfCancellationRequested();
-            changed = new ImageTagRepository(_database).QueueTagEdits(ids, edits);
-            committed.TrySetResult(changed);
+            var changes = new ImageTagRepository(_database).QueueTagEdits(ids, edits);
             _scheduler.ReportProgress(key, "SQLite gesichert", 0, ids.Length);
+            if (!Dispatcher.HasShutdownStarted)
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                    _ = PublishTagCommitAsync(key, changes)));
             return Task.CompletedTask;
         });
+
+        // Work is sliced by IMAGE so a newer manual package can preempt and
+        // resume this one without replaying completed images. There is only
+        // one persistent write-intent table and one scheduler identity.
         package.AddStep(token =>
         {
-            var repo = new ImageTagRepository(_database);
+            token.ThrowIfCancellationRequested();
             var idSet = ids.ToHashSet();
-            var pending = repo.PendingEdits(int.MaxValue)
+            var groups = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
                 .Where(edit => idSet.Contains(edit.ImageId))
                 .GroupBy(edit => edit.ImageId).ToArray();
-            using var writer = new ExifToolKeywordWriter.Session();
-            var completed = 0;
-            var errors = new List<Exception>();
-            foreach (var group in pending)
+            for (var i = groups.Length - 1; i >= 0; i--)
             {
-                token.ThrowIfCancellationRequested();
-                try
+                var group = groups[i].ToArray();
+                var ordinal = i;
+                package.InsertNext(stepToken =>
                 {
-                    repo.ApplyPendingImageEdits(group.Key, group.ToArray(), writer, token);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    errors.Add(ex);
-                    PCasaDiagnostics.Write("Tags.DurableWrite", ex);
-                }
-                completed++;
-                _scheduler.ReportProgress(key, "Originaldateien schreiben",
-                    completed, pending.Length);
-                if (!Dispatcher.HasShutdownStarted)
-                    _ = Dispatcher.BeginInvoke(new Action(() =>
-                        _ = RefreshPendingTagDotsAsync()));
+                    stepToken.ThrowIfCancellationRequested();
+                    using var writer = new ExifToolKeywordWriter.Session();
+                    try
+                    {
+                        new ImageTagRepository(_database).ApplyPendingImageEdits(
+                            group[0].ImageId, group, writer, stepToken);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        PCasaDiagnostics.Write("Tags.DurableWrite", ex);
+                        throw;
+                    }
+                    _scheduler.ReportProgress(key, "Originaldateien schreiben",
+                        groups.Length - ordinal, groups.Length);
+                    if (!Dispatcher.HasShutdownStarted)
+                        _ = Dispatcher.BeginInvoke(new Action(() =>
+                            _ = RefreshPendingTagDotsAsync()));
+                    return Task.CompletedTask;
+                });
             }
-            if (errors.Count != 0)
-                throw new AggregateException("Nicht alle Tags konnten geschrieben werden.", errors);
             return Task.CompletedTask;
         });
 
         _tagWriteActive = true;
-        RefreshTagDraftControls();
         try
         {
             var completion = _scheduler.EnqueuePackageAsync(package,
                 SchedulerPriority.ManualAction);
-            // On a failure before the first commit, unblock the UI as well.
-            _ = completion.ContinueWith(t => {
-                if (t.IsFaulted) committed.TrySetException(t.Exception!);
-                else if (t.IsCanceled) committed.TrySetCanceled();
-            }, TaskScheduler.Default);
             _ = ObserveTagPackageAsync(completion, key);
-            var total = await committed.Task;
+            // The edit is accepted. The next manual action MUST be possible
+            // immediately, even if this package later waits for slow I/O.
             _tagDraft.Clear();
             _tagDraftImageIds = null;
-            StatusText.Text = $"Tag-Paket: {total} Änderungen lokal gesichert · Originaldateien werden geschrieben";
-            RefreshQuickTags();
-            await RefreshTagSidebarAsync();
-            if (_browseInitialized && _browsePageCache is not null &&
-                !string.IsNullOrWhiteSpace(TagSearchBox.Text))
-                await ApplyTagFilterAsync();
-            _ = RefreshPendingTagDotsAsync();
+            TagEntryBox.Clear();
+            StatusText.Text = "Tag-Paket P0 vorgemerkt · SQLite und Originaldateien folgen";
         }
         catch (Exception ex)
         {
-            PCasaDiagnostics.Write("Tags.PackageCommit", ex);
-            StatusText.Text = "Tag-Paket konnte nicht lokal gesichert werden";
+            PCasaDiagnostics.Write("Tags.PackageQueue", ex);
+            StatusText.Text = "Tag-Paket konnte nicht eingeplant werden";
             MessageBox.Show(this, ex.Message, "Tag-Änderung fehlgeschlagen",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -631,6 +629,17 @@ public partial class MainWindow
             _tagWriteActive = false;
             RefreshTagDraftControls();
         }
+    }
+
+    private async Task PublishTagCommitAsync(string key, int changes)
+    {
+        StatusText.Text = $"Tag-Paket: {changes} Änderungen lokal gesichert · Dateien folgen";
+        RefreshQuickTags();
+        await RefreshTagSidebarAsync();
+        if (_browseInitialized && _browsePageCache is not null &&
+            !string.IsNullOrWhiteSpace(TagSearchBox.Text))
+            await ApplyTagFilterAsync();
+        _ = RefreshPendingTagDotsAsync();
     }
 
     private async Task ObserveTagPackageAsync(Task completion, string key)
