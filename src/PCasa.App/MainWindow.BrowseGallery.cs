@@ -137,8 +137,13 @@ public partial class MainWindow
                     token.ThrowIfCancellationRequested();
                     return _imageCatalog.PendingRelocationIds();
                 }, workKind: SchedulerWorkKind.CatalogRead);
+            var durableTransfers = new DurableGalleryTransferJournal(_database);
             foreach (var intent in intents)
             {
+                // A durable gallery package owns this receipt and its intent.
+                // Do not race it with the legacy one-intent repair package.
+                if (durableTransfers.OwnsRelocationIntent(intent))
+                    continue;
                 if (Dispatcher.HasShutdownStarted) return;
                 var key = "gallery:reconcile-transfer:" + Guid.NewGuid().ToString("N");
                 var payload = System.Text.Json.JsonSerializer.Serialize(intent);
