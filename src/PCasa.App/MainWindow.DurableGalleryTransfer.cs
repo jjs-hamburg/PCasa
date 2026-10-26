@@ -209,7 +209,9 @@ public partial class MainWindow
                         if (receipt.Move)
                             _ = ServerSideFileMover.Move(
                                 receipt.Source, receipt.Destination,
-                                receipt.Replace);
+                                receipt.Replace,
+                                stagingPath: TransferStagePath(key, ordinal,
+                                    receipt.Destination));
                         else
                             StageCopyToDestination(
                                 key, ordinal, receipt, token);
@@ -329,13 +331,19 @@ public partial class MainWindow
         return sourceHash.AsSpan().SequenceEqual(destinationHash);
     }
 
+    private static string TransferStagePath(
+        string key, int ordinal, string destination)
+    {
+        var fingerprint = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(key + ":" + ordinal)))[..16];
+        return destination + ".pcasa-" + fingerprint + ".tmp";
+    }
+
     private static void StageCopyToDestination(string key, int ordinal,
         GalleryTransferReceipt item, CancellationToken token)
     {
         // The stage belongs uniquely to this immutable package and file.
-        var fingerprint = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(key + ":" + ordinal)))[..16];
-        var stage = item.Destination + ".pcasa-" + fingerprint + ".tmp";
+        var stage = TransferStagePath(key, ordinal, item.Destination);
         try
         {
             token.ThrowIfCancellationRequested();
