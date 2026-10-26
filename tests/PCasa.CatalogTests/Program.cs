@@ -39,6 +39,7 @@ internal static class Program
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
+        Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
         Run("Scheduler cancels queued work on shutdown", SchedulerShutdownCancelsQueuedWork, failures);
@@ -152,6 +153,18 @@ internal static class Program
             ExclusionTestScheduler.Value.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Console.WriteLine($"RESULT: catalog regression suite complete, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    private static void DurablePackageRejectsDynamicSteps()
+    {
+        var package = new SchedulerTaskPackage("test:durable:dynamic");
+        package.AddStep(_ => Task.CompletedTask);
+        package.OnStepCompleted = _ => { };
+        var rejected = false;
+        try { package.InsertNext(_ => Task.CompletedTask); }
+        catch (InvalidOperationException) { rejected = true; }
+        if (!rejected || package.TotalSteps != 1)
+            throw new Exception("Durable package accepted unjournaled dynamic steps.");
     }
 
     private static void DurableSchedulerPrioritySurvivesRestart()
