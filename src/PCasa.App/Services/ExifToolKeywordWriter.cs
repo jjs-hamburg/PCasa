@@ -11,6 +11,26 @@ namespace PCasa.App.Services;
 /// </summary>
 public static class ExifToolKeywordWriter
 {
+    private static readonly object ActiveGate = new();
+    private static readonly HashSet<Session> ActiveSessions = new();
+    private static int _activeWrites;
+
+    static ExifToolKeywordWriter()
+    {
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => StopAll();
+    }
+
+    public static bool HasActiveWrites => Volatile.Read(ref _activeWrites) != 0;
+
+    // Only ExifTool processes owned by this application are affected.
+    public static void StopAll()
+    {
+        Session[] sessions;
+        lock (ActiveGate) sessions = ActiveSessions.ToArray();
+        foreach (var session in sessions)
+            session.Dispose();
+    }
+
     public static void Write(string imagePath, IReadOnlyList<string> keywords)
     {
         using var session = new Session();
@@ -19,6 +39,7 @@ public static class ExifToolKeywordWriter
 
     public sealed class Session : IDisposable
     {
+        private readonly object _operationGate = new();
         private Process? _process;
         private Task<string>? _errorDrain;
         private int _nextRequestId;
@@ -38,6 +59,13 @@ public static class ExifToolKeywordWriter
 
         public KeywordSnapshot ReadSnapshot(string imagePath,
             CancellationToken cancellationToken = default)
+        {
+            lock (_operationGate)
+                return ReadSnapshotCore(imagePath, cancellationToken);
+        }
+
+        private KeywordSnapshot ReadSnapshotCore(string imagePath,
+            CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
@@ -140,6 +168,17 @@ public static class ExifToolKeywordWriter
 
         public void Write(string imagePath, IReadOnlyList<string> keywords,
             CancellationToken cancellationToken = default)
+        {
+            lock (_operationGate)
+            {
+                Interlocked.Increment(ref _activeWrites);
+                try { WriteCore(imagePath, keywords, cancellationToken); }
+                finally { Interlocked.Decrement(ref _activeWrites); }
+            }
+        }
+
+        private void WriteCore(string imagePath, IReadOnlyList<string> keywords,
+            CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
@@ -295,6 +334,7 @@ public static class ExifToolKeywordWriter
                 start.ArgumentList.Add(arg);
             _process = Process.Start(start)
                 ?? throw new IOException("ExifTool konnte nicht gestartet werden.");
+            lock (ActiveGate) ActiveSessions.Add(this);
             // Always drain stderr concurrently so a warning cannot deadlock
             // a subsequent request. The final metadata read verifies success.
             _errorDrain = _process.StandardError.ReadToEndAsync();
@@ -302,33 +342,44 @@ public static class ExifToolKeywordWriter
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
-            if (_process is null) return;
-            try
+            lock (_operationGate)
             {
-                if (!_process.HasExited)
+                if (_disposed) return;
+                _disposed = true;
+                var process = _process;
+                _process = null;
+                if (process is null) return;
+                try
                 {
-                    _process.StandardInput.WriteLine("-stay_open");
-                    _process.StandardInput.WriteLine("False");
-                    _process.StandardInput.Flush();
-                    if (!_process.WaitForExit(2000))
+                    if (!process.HasExited)
                     {
-                        _process.Kill(entireProcessTree: true);
-                        _process.WaitForExit(1500);
+                        try
+                        {
+                            process.StandardInput.WriteLine("-stay_open");
+                            process.StandardInput.WriteLine("False");
+                            process.StandardInput.Flush();
+                            if (process.WaitForExit(3000)) return;
+                        }
+                        catch (IOException) { }
+                        catch (InvalidOperationException) { }
+                        // No native read/write is in flight: all those methods
+                        // share the operation gate with Dispose. A failed
+                        // clean exit must never leave a writer process alive.
+                        if (!process.HasExited)
+                        {
+                            process.Kill(entireProcessTree: true);
+                            process.WaitForExit(3000);
+                        }
                     }
                 }
-                // Observe the error reader after the child has exited.
-                if (_errorDrain?.IsCompletedSuccessfully == true)
-                    _ = _errorDrain.Result;
-            }
-            catch (IOException) { }
-            catch (InvalidOperationException) { }
-            catch (System.ComponentModel.Win32Exception) { }
-            finally
-            {
-                _process.Dispose();
-                _process = null;
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+                finally
+                {
+                    lock (ActiveGate) ActiveSessions.Remove(this);
+                    process.Dispose();
+                    _errorDrain = null;
+                }
             }
         }
     }
