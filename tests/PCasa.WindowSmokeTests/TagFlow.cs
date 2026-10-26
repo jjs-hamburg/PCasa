@@ -724,6 +724,68 @@ internal static class TagFlow
                 "Visible tag recovery did not finish writing its original.");
             Until(window, () => !FolderShowsPending(),
                 "Red tag marker remained after the visible tag write completed.");
+            // Several manual Tag packets must share ONE series-wide counter
+            // even when an older package progresses behind the newest one.
+            // The UI is a projection; no fake durable jobs or DB intents are
+            // created by this smoke test.
+            var beginManual = typeof(PCasa.App.MainWindow).GetMethod(
+                "BeginVisibleManualOperation",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var reportManual = typeof(PCasa.App.MainWindow).GetMethod(
+                "VisibleManualProgressChanged",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var endManual = typeof(PCasa.App.MainWindow).GetMethod(
+                "EndVisibleManualOperation",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            const string olderTag = "tags:smoke:older";
+            const string newerTag = "tags:smoke:newer";
+            void FakeProgress(string key, int completed, int total)
+            {
+                var snapshot = new SchedulerJobSnapshot(
+                    0, key, SchedulerPriority.ManualAction,
+                    SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
+                {
+                    Phase = "Tags in Originaldateien schreiben",
+                    Processed = completed, Total = total,
+                    CurrentPath = firstOriginal
+                };
+                reportManual.Invoke(window, [snapshot]);
+            }
+            beginManual.Invoke(window, [olderTag,
+                "Tags in Originaldateien schreiben", 4]);
+            beginManual.Invoke(window, [newerTag,
+                "Tags in Originaldateien schreiben", 6]);
+            FakeProgress(olderTag, 3, 4);
+            FakeProgress(newerTag, 2, 6);
+            Until(window, () =>
+                (presenterField.GetValue(window)
+                    as PCasa.App.BrowseCacheProgressWindow)?
+                    .FindName("CountText") is TextBlock number &&
+                number.Text == "5 / 10",
+                "Global Tag progress showed only one job instead of 5 / 10.");
+            endManual.Invoke(window, [olderTag]);
+            FakeProgress(newerTag, 5, 6);
+            Until(window, () =>
+                (presenterField.GetValue(window)
+                    as PCasa.App.BrowseCacheProgressWindow)?
+                    .FindName("CountText") is TextBlock number &&
+                number.Text == "8 / 10",
+                "Finished Tag job was dropped from the series-wide count.");
+            beginManual.Invoke(window, ["tags:smoke:third",
+                "Tags in Originaldateien schreiben", 7]);
+            Until(window, () =>
+                (presenterField.GetValue(window)
+                    as PCasa.App.BrowseCacheProgressWindow)?
+                    .FindName("CountText") is TextBlock number &&
+                number.Text == "8 / 17",
+                "A new Tag packet did not grow the shared total.");
+            endManual.Invoke(window, [newerTag]);
+            endManual.Invoke(window, ["tags:smoke:third"]);
+            Console.WriteLine(
+                "PASS: Tag series count stays cumulative across older, newer and newly added packages.");
             Console.WriteLine(
                 "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
