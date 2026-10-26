@@ -23,7 +23,7 @@ public static class ServerSideFileMover
     private static extern bool MoveFileEx(string source, string destination, uint flags);
 
     public static MoveMethod Move(string source, string destination,
-        bool replace = false)
+        bool replace = false, string? stagingPath = null)
     {
         var flags = replace ? MoveFileReplaceExisting : 0;
         if (MoveFileEx(source, destination, flags))
@@ -39,10 +39,10 @@ public static class ServerSideFileMover
         // Different volumes require physical transfer. Stage the entire file
         // on the destination volume, verify size, then rename there. Never
         // touch the original until the staged destination is complete.
-        var stage = destination + ".pcasa-" + Guid.NewGuid().ToString("N") + ".tmp";
+        var stage = stagingPath ?? destination + ".pcasa-" + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            File.Copy(source, stage, overwrite: false);
+            // A durable caller owns its deterministic stage and may safely\n            // retry an interrupted partial copy without touching the target.\n            if (stagingPath is not null && File.Exists(stage)) File.Delete(stage);\n            File.Copy(source, stage, overwrite: false);
             if (new FileInfo(source).Length != new FileInfo(stage).Length)
                 throw new IOException("Kopiervorgang unvollständig; Quelldatei bleibt erhalten.");
             File.Move(stage, destination, overwrite: replace);
