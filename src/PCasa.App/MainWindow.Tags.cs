@@ -938,6 +938,8 @@ public partial class MainWindow
 
     private void AcceptTagSuggestion(string value)
     {
+        _tagSuggestionVersion++;
+        _tagSuggestionCancellation?.Cancel();
         _acceptingTagSuggestion = true;
         try
         {
@@ -957,14 +959,6 @@ public partial class MainWindow
             AcceptTagSuggestion(suggestion);
             e.Handled = true;
         }
-    }
-
-    private void TagSuggestionsPopup_Closed(object? sender, EventArgs e)
-    {
-        // An older async query must not reopen the popup after the user
-        // clicked elsewhere, accepted a word, or dismissed suggestions.
-        _tagSuggestionVersion++;
-        _tagSuggestionCancellation?.Cancel();
     }
 
     private void TagAdd_Click(object sender, RoutedEventArgs e)
