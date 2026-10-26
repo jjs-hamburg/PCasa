@@ -392,6 +392,7 @@ public partial class MainWindow
             await _scheduler.EnqueueDurablePackageAsync(
                 package, "gallery-transfer-v1", payload,
                 SchedulerPriority.ManualAction);
+            _durableGalleryTransfers.PruneCompleted();
         }
         catch (OperationCanceledException)
         {
