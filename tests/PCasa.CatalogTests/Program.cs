@@ -222,9 +222,16 @@ internal static class Program
                 if (restarted.RecoverDurablePackages().Count != 0)
                     throw new Exception("Offline durable package was not reconstructed.");
                 await executed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                // Step execution precedes the final ledger acknowledgement.
+                // Dispose is shutdown (a safe yield), not a completion barrier
+                // for work that has not yet finished committing its result.
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (new DurablePackageJournal(database).Pending().Count > 0 &&
+                       DateTime.UtcNow < deadline)
+                    await Task.Delay(20);
+                if (new DurablePackageJournal(database).Pending().Count != 0)
+                    throw new Exception("Resumed offline package was not acknowledged.");
             }
-            if (new DurablePackageJournal(database).Pending().Count != 0)
-                throw new Exception("Resumed offline package was not acknowledged.");
         }
         Check().GetAwaiter().GetResult();
     }
