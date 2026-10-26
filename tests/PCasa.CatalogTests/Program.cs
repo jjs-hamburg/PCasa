@@ -199,16 +199,18 @@ internal static class Program
             ("test-case", "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.SourceProbe)
         })
         {
+            var rejected = false;
             try
             {
                 journal.Put("older", conflicting.Type, conflicting.Payload,
                     conflicting.Priority, conflicting.Kind);
-                throw new Exception("Conflicting durable identity was accepted.");
             }
             catch (InvalidOperationException)
             {
-                // Expected: a key can never silently acquire another recipe.
+                rejected = true;
             }
+            if (!rejected)
+                throw new Exception("Conflicting durable identity was accepted.");
         }
     }
 
