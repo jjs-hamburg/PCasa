@@ -337,10 +337,8 @@ public sealed class ImageTagRepository
             var before = new FileInfo(path);
             var oldSize = before.Length;
             var oldTicks = before.LastWriteTimeUtc.Ticks;
-            var tags = writer.Read(path, token)
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .Select(t => t.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var sourceKeywords = writer.ReadSnapshot(path, token);
+            var tags = sourceKeywords.Combined.ToList();
             var changed = false;
             foreach (var edit in edits)
             {
@@ -356,7 +354,13 @@ public sealed class ImageTagRepository
                     t.Equals(edit.Tag, StringComparison.OrdinalIgnoreCase)) > 0)
                     changed = true;
             }
-            if (changed)
+            // Also repair a previously divergent IPTC/XMP pair, even when
+            // the requested keyword was already present in one of them.
+            var target = tags.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var xmp = sourceKeywords.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var iptc = sourceKeywords.Iptc.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var fieldsDiffer = !xmp.SetEquals(target) || !iptc.SetEquals(target);
+            if (changed || fieldsDiffer)
             {
                 token.ThrowIfCancellationRequested();
                 writer.Write(path, tags, token);
