@@ -167,7 +167,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (!_packageFactories.ContainsKey(type))
             throw new InvalidOperationException("Pakettyp ohne Wiederherstellungsfabrik: " + type);
         var record = journal.Put(package.Key, type, payload, priority, workKind);
-        if (record.State is "completed" or "failed")
+        if (record.State is "completed" or "failed" or "canceled")
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
         package.RestoreCursor(record.CompletedSteps);
         return TrackDurableCompletion(QueueDurableExisting(package, record, cancellationToken));
