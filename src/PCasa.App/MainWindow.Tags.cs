@@ -506,6 +506,7 @@ public partial class MainWindow
             var ids = repo.PendingEdits(int.MaxValue).Select(edit => edit.ImageId)
                 .Distinct().ToArray();
             var failures = new List<string>();
+            var confirmed = 0;
             _scheduler.ReportProgress(key, "Tags in Originaldateien schreiben",
                 0, ids.Length);
             for (var i = 0; i < ids.Length; i++)
@@ -521,7 +522,7 @@ public partial class MainWindow
                         repo.ApplyPendingImageEdits(imageId, edits, writer, token,
                             path => _scheduler.ReportProgress(key,
                                 "Tags in Originaldateien schreiben",
-                                i, ids.Length, path));
+                                confirmed, ids.Length, path));
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -533,8 +534,14 @@ public partial class MainWindow
                     failures.Add(imageId + ": " + ex.Message);
                     PCasaDiagnostics.Write("Tags.RecoveryWrite", ex);
                 }
+                // Count only originals whose pending revisions have been
+                // confirmed and removed from SQLite, not attempted writes.
+                // An unreachable NAS file must never make the global counter
+                // appear complete while its red pending marker remains.
+                if (repo.PendingEditsForImage(imageId).Count == 0)
+                    confirmed++;
                 _scheduler.ReportProgress(key, "Tags wiederherstellen",
-                    i + 1, ids.Length);
+                    confirmed, ids.Length);
                 if (!Dispatcher.HasShutdownStarted)
                     _ = Dispatcher.BeginInvoke(new Action(() =>
                         _ = RefreshPendingTagDotsAsync()));
@@ -544,7 +551,7 @@ public partial class MainWindow
             {
                 _scheduler.ReportProgress(key,
                     "Tag-Schreibfehler – Aufträge bleiben vorgemerkt",
-                    ids.Length, ids.Length);
+                    confirmed, ids.Length);
                 throw new DurablePackageRetryException(
                     "Tag-Schreibaufträge weiterhin offen (" +
                     failures.Count + " Fehler). " +
