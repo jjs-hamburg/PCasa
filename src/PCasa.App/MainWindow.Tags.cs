@@ -273,6 +273,18 @@ public partial class MainWindow
     {
         var revision = ++_tagSidebarRefreshVersion;
         var selected = _selectedImageIds.ToArray();
+        // A draft belongs to one selection. Never carry it into another
+        // folder or make the next folder's tag editor unusable.
+        var selectedSorted = selected.OrderBy(id => id).ToArray();
+        if (_tagDraftImageIds is not null &&
+            !_tagDraftImageIds.SequenceEqual(selectedSorted))
+        {
+            _tagDraft.Clear();
+            _tagDraftImageIds = null;
+            if (TagEntryBox is not null) TagEntryBox.Clear();
+            if (TagDraftOkButton is not null) TagDraftOkButton.IsEnabled = false;
+            if (TagDraftCancelButton is not null) TagDraftCancelButton.IsEnabled = false;
+        }
         TagSelectionCaption.Text = $"Tags der Auswahl ({selected.Length} Bilder)";
         TagRowsPanel.Children.Clear();
         if (selected.Length == 0)
@@ -511,8 +523,10 @@ public partial class MainWindow
         }
         if (_tagDraftImageIds is not null && !_tagDraftImageIds.SequenceEqual(ids))
         {
-            StatusText.Text = "Zuerst vorgemerkte Änderungen mit OK bestätigen oder abbrechen.";
-            return;
+            // Changing the selected images starts a fresh draft. Pending
+            // unconfirmed edits were never committed and are discarded.
+            _tagDraft.Clear();
+            _tagDraftImageIds = null;
         }
         _tagDraftImageIds ??= ids;
         _tagDraft[tag] = remove;
