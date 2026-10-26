@@ -578,6 +578,25 @@ internal static class TagFlow
                     new[] { editorIds[1] }, unavailableTag, false) != 1)
                 throw new Exception("Cannot seed the durable tag recovery test.");
             File.Move(unavailableImage, hiddenOriginal);
+            // Red folder markers are driven ONLY by pending_tag_edits.
+            // Recompute once for our synthetic test setup; all later
+            // transitions must refresh themselves from scheduler callbacks.
+            var dots = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshPendingTagDotsAsync",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Pending tag-dot projection missing.");
+            _ = (Task)dots.Invoke(window, null)!;
+            bool FolderShowsPending()
+            {
+                var item = Walk(tree).FirstOrDefault(node =>
+                    string.Equals(ReadPath(node), albumA,
+                        StringComparison.OrdinalIgnoreCase));
+                return item?.Tag?.GetType().GetProperty("HasPendingTagWrites")
+                    ?.GetValue(item.Tag) is true;
+            }
+            Until(window, FolderShowsPending,
+                "Pending tag writes were not marked on the affected folder.");
             try
             {
                 var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
@@ -618,6 +637,9 @@ internal static class TagFlow
                         record.CompletedSteps == 0))
                     throw new Exception(
                         "Offline tag recovery lost priority or treated an unsaved image as finished.");
+                if (!FolderShowsPending())
+                    throw new Exception(
+                        "Red pending-tag marker disappeared although one original was still offline.");
 
                 File.Move(hiddenOriginal, unavailableImage);
                 // Recreate the exact same versioned recipe. Persisted DB
@@ -636,6 +658,10 @@ internal static class TagFlow
                         record.Key == recoveryKey))
                     throw new Exception(
                         "Recovered original did not receive durable pending keywords.");
+                Until(window, () => !FolderShowsPending(),
+                    "Red pending-tag marker remained after all originals were written.");
+                Console.WriteLine(
+                    "PASS: Red tag marker persists while a file is offline, then disappears automatically.");
                 Console.WriteLine(
                     "PASS: Offline original stays pending at P0 and resumes without re-tagging saved files.");
             }
