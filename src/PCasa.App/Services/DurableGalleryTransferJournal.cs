@@ -6,6 +6,15 @@ namespace PCasa.App.Services;
 // This is NOT a second scheduler. These are the per-file receipts for one
 // immutable, durable scheduler recipe. No OS file operation and SQLite commit
 // can be atomic together. A receipt never licenses an ambiguous retry.
+// Retry only at the next coordinated scheduler recovery, never in a tight
+// worker loop and never by treating an unavailable share as a deleted file.
+public sealed class DurablePackageRetryException : IOException
+{
+    public DurablePackageRetryException(string message) : base(message) { }
+    public DurablePackageRetryException(string message, Exception inner)
+        : base(message, inner) { }
+}
+
 public sealed record GalleryTransferReceipt(
     string Source, string Destination, bool Move, bool Replace,
     long TargetRootId, long? SourceImageId, long? ReplacedImageId,
