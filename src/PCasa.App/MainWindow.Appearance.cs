@@ -89,13 +89,56 @@ public partial class MainWindow
         Closed += AppearanceWindowClosed;
     }
 
-    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    private bool _closingTagScheduler;
+    private bool _tagSchedulerStopped;
+
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
-        // Closing happens before background tasks and the WPF dispatcher
-        // wind down. Stop owned EXIF children even if a scan is blocked.
+        // A native ExifTool write is NOT interruptible halfway through its
+        // temp-file replacement. Keep WPF alive until the shared scheduler
+        // has yielded all tag workers and committed their durable checkpoints.
+        // This happens only if owned writers or P0 tag work still exist.
+        if (!_tagSchedulerStopped &&
+            (_closingTagScheduler ||
+             ExifToolKeywordWriter.HasLiveSessions ||
+             _scheduler.Snapshot().Any(job =>
+                 job.Key.StartsWith("tags:", StringComparison.Ordinal) &&
+                 job.State is SchedulerJobState.Queued or
+                     SchedulerJobState.Running or SchedulerJobState.YieldRequested)))
+        {
+            e.Cancel = true;
+            if (_closingTagScheduler) return;
+            _closingTagScheduler = true;
+            StatusText.Text = "Laufenden Tag-Schreibvorgang sicher abschließen …";
+            try
+            {
+                _activeScanCancellation?.Cancel();
+                _backgroundCurrentScanCancellation?.Cancel();
+                ImageExifReader.StopAll();
+                await _scheduler.DisposeAsync();
+                // Dispose uses the same lock as the native write request, so
+                // no ExifTool process is abandoned after the scheduler exits.
+                ExifToolKeywordWriter.StopAll();
+            }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Shutdown.TagWriters", ex);
+            }
+            finally
+            {
+                _tagSchedulerStopped = true;
+                if (!Dispatcher.HasShutdownStarted)
+                    _ = Dispatcher.BeginInvoke(new Action(Close));
+            }
+            return;
+        }
+
         _activeScanCancellation?.Cancel();
         _backgroundCurrentScanCancellation?.Cancel();
         ImageExifReader.StopAll();
+        // Idle ExifTool writer sessions must not survive closing, either.
+        // No native writes are in flight after the guarded branch above.
+        ExifToolKeywordWriter.StopAll();
 
         var bounds = WindowState == WindowState.Normal
             ? new Rect(Left, Top, Width, Height) : RestoreBounds;
