@@ -103,37 +103,62 @@ public partial class MainWindow
         }
     }
 
-    private Task CreateGallerySubfolderAsync(string destination, string key)
-        => _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction, token =>
+    private SchedulerTaskPackage BuildCreateGalleryFolderPackage(string key, string payload)
+        => BuildCreateGalleryFolderPackage(key, payload, recovery: true);
+
+    private SchedulerTaskPackage BuildCreateGalleryFolderPackage(
+        string key, string payload, bool recovery)
+    {
+        var destination = System.Text.Json.JsonSerializer.Deserialize<string>(payload)
+            ?? throw new InvalidDataException("Ungültiger Ordnerauftrag.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            _scheduler.ReportProgress(key, "Ordner auf Datenträger anlegen", 0, 1,
+                destination);
+            var owner = FolderExclusionRules.FindOwner(
+                destination, _folderRepository.GetAll());
+            if (owner is null || FolderExclusionRules.IsExcluded(
+                destination, _folderRepository.GetExcludedPaths(owner.Id)))
+                throw new IOException("Zielordner wird nicht überwacht.");
+            if (File.Exists(destination))
+                throw new IOException("Eine Datei mit diesem Namen existiert.");
+            if (Directory.Exists(destination))
             {
-                token.ThrowIfCancellationRequested();
-                _scheduler.ReportProgress(key, "Ordner auf Datenträger anlegen", 0, 1,
-                    destination);
-                var owner = FolderExclusionRules.FindOwner(
-                    destination, _folderRepository.GetAll());
-                if (owner is null || FolderExclusionRules.IsExcluded(
-                    destination, _folderRepository.GetExcludedPaths(owner.Id)))
-                    throw new IOException("Zielordner wird nicht überwacht.");
-                if (Directory.Exists(destination) || File.Exists(destination))
+                if (!recovery)
                     throw new IOException("Der Ordner existiert bereits.");
-                Directory.CreateDirectory(destination);
-                try
-                {
-                    _folderRepository.RegisterCreatedDirectory(owner.Id, destination);
-                }
-                catch
-                {
-                    // Either both the new empty directory and its durable
-                    // tree registration exist, or neither does. Never report
-                    // a successful NAS mutation which vanishes on restart.
-                    if (Directory.Exists(destination) &&
-                        !Directory.EnumerateFileSystemEntries(destination).Any())
-                        Directory.Delete(destination);
-                    throw;
-                }
-                _scheduler.ReportProgress(key, "Ordner angelegt", 1, 1, destination);
-                return Task.CompletedTask;
-            }, workKind: SchedulerWorkKind.SourceProbe);
+                // A crash may occur after creation but before SQLite commit.
+                // Adopt only the same explicitly requested directory.
+            }
+            else Directory.CreateDirectory(destination);
+            try
+            {
+                _folderRepository.RegisterCreatedDirectory(owner.Id, destination);
+            }
+            catch
+            {
+                // A registration failure is recoverable from the journal.
+                // Never remove an existing directory on replay.
+                if (!recovery && Directory.Exists(destination) &&
+                    !Directory.EnumerateFileSystemEntries(destination).Any())
+                    Directory.Delete(destination);
+                throw;
+            }
+            _scheduler.ReportProgress(key, "Ordner angelegt", 1, 1, destination);
+            return Task.CompletedTask;
+        });
+        return package;
+    }
+
+    private Task CreateGallerySubfolderAsync(string destination, string key)
+    {
+        var payload = System.Text.Json.JsonSerializer.Serialize(destination);
+        var package = BuildCreateGalleryFolderPackage(key, payload, recovery: false);
+        return _scheduler.EnqueueDurablePackageAsync(package,
+            "create-gallery-folder-v1", payload, SchedulerPriority.ManualAction,
+            SchedulerWorkKind.SourceProbe);
+    }
 
     private async void FolderContext_DeletePhysicalDirectory_Click(
         object sender, RoutedEventArgs e)
