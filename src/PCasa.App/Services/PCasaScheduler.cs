@@ -210,6 +210,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 package.CompletedSteps);
             throw;
         }
+        catch (DurablePackageRetryException ex)
+        {
+            // An offline NAS or temporarily unreachable transfer is neither
+            // a completed operation nor a destructive user cancellation.
+            // Preserve its original P0 order and cursor for the next startup.
+            journal.SetState(record.Key, "queued", package.CompletedSteps, ex.Message);
+            throw;
+        }
         catch (Exception ex)
         {
             journal.SetState(record.Key, "failed", package.CompletedSteps, ex.Message);
