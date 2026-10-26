@@ -26,6 +26,7 @@ internal static class Program
             {
                 JpegTagRoundTrip();
                 JpegUnicodeTagPreservesPixels();
+                JpegTagTemporaryOutputsAreCleaned();
                 Console.WriteLine("TAG WRITE PROBE PASS");
                 return 0;
             }
@@ -3566,6 +3567,70 @@ internal static class Program
             command.Parameters.AddWithValue("$name", index);
             if (Convert.ToInt32(command.ExecuteScalar()) != 1)
                 throw new Exception("Missing cleanup performance index: " + index);
+        }
+    }
+
+    private static void JpegTagTemporaryOutputsAreCleaned()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "metadata-temporary.jpg");
+        WriteJpeg(path);
+        var temporary = path + "_exiftool_tmp";
+
+        // A previous failed native write left exactly ExifTool's own suffix
+        // next to an intact original. It must not block a new metadata write
+        // or grow an archive of temporary copies.
+        File.WriteAllText(temporary, "abandoned-output");
+        File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow.AddHours(-2));
+        using (var session = new ExifToolKeywordWriter.Session())
+            session.Write(path, new[] { "No temp graveyard" });
+        if (File.Exists(temporary) || !File.Exists(path) ||
+            !ImageTagRepository.ReadKeywords(path)!.Contains("No temp graveyard"))
+            throw new Exception("ExifTool left an abandoned temp or lost the original.");
+
+        // A second PC may own a fresh native temp, or the process may still
+        // hold the file. Neither case may be "cleaned" on assumption.
+        var cleanup = typeof(ExifToolKeywordWriter.Session).GetMethod(
+            "TryRemoveAbandonedTemporaryOutput",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static)
+            ?? throw new Exception("Scoped ExifTool cleanup missing.");
+        void Prune() => cleanup.Invoke(null, new object[]
+        {
+            path, TimeSpan.FromMinutes(30)
+        });
+        File.WriteAllText(temporary, "fresh-output");
+        Prune();
+        if (!File.Exists(temporary))
+            throw new Exception("Cleanup deleted a live ExifTool temp.");
+        File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow.AddHours(-2));
+        using (var open = new FileStream(temporary, FileMode.Open,
+            FileAccess.ReadWrite, FileShare.None))
+        {
+            Prune();
+            if (!File.Exists(temporary))
+                throw new Exception("Cleanup deleted another writer's locked temp.");
+        }
+        Prune();
+        if (File.Exists(temporary) || !File.Exists(path))
+            throw new Exception("Stale temp was not safely removed.");
+
+        // If the original is absent, a temp could be the only remaining
+        // data; never remove it, even if stale.
+        var movedOriginal = path + ".preserved";
+        File.WriteAllText(temporary, "only-recoverable-data");
+        File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow.AddHours(-2));
+        File.Move(path, movedOriginal);
+        try
+        {
+            Prune();
+            if (!File.Exists(temporary))
+                throw new Exception("Cleanup erased the only surviving file.");
+        }
+        finally
+        {
+            File.Move(movedOriginal, path);
+            File.Delete(temporary);
         }
     }
 
