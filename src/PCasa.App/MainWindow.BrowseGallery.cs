@@ -137,7 +137,7 @@ public partial class MainWindow
                     token.ThrowIfCancellationRequested();
                     return _imageCatalog.PendingRelocationIds();
                 }, workKind: SchedulerWorkKind.CatalogRead);
-            var durableTransfers = new DurableGalleryTransferJournal(_database);
+            var durableTransfers = _durableGalleryTransfers;
             foreach (var intent in intents)
             {
                 // A durable gallery package owns this receipt and its intent.
