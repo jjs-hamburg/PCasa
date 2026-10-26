@@ -174,9 +174,11 @@ internal static class Program
             throw new Exception("Delayed checkpoint rewound the durable cursor.");
 
         // Late writes from a retired worker cannot revive a terminal record.
-        journal.SetState("background", "completed", 0);
-        journal.SetState("background", "running", 1);
-        if (journal.Put("background", "test-case", "{}",
+        journal.Put("terminal", "test-case", "{}",
+            SchedulerPriority.Background, SchedulerWorkKind.CatalogScan);
+        journal.SetState("terminal", "completed", 0);
+        journal.SetState("terminal", "running", 1);
+        if (journal.Put("terminal", "test-case", "{}",
                 SchedulerPriority.Background, SchedulerWorkKind.CatalogScan).State != "completed")
             throw new Exception("Late checkpoint reopened a completed package.");
 
