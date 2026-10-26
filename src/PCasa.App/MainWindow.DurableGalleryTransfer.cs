@@ -59,7 +59,7 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             if (!Directory.Exists(recipe.Destination))
-                throw new IOException("Zielordner nicht erreichbar: " + recipe.Destination);
+                throw new DurablePackageRetryException("Zielordner nicht erreichbar: " + recipe.Destination);
             _ = OwnerOf(recipe.Destination);
             _scheduler.ReportProgress(key, phase, 0, recipe.Sources.Length);
             return Task.CompletedTask;
@@ -180,8 +180,8 @@ public partial class MainWindow
                         SourceFilePresence.Probe(receipt.Destination);
                     if (sourcePresence == FilePresence.Unknown ||
                         destinationPresence == FilePresence.Unknown)
-                        throw new IOException(
-                            "Dateizustand unklar (NAS/VPN offline). Keine Wiederholung: " +
+                        throw new DurablePackageRetryException(
+                            "Dateizustand unklar (NAS/VPN offline); Wiederaufnahme vorgemerkt: " +
                             receipt.Source);
 
                     if (!initialAttempt &&
@@ -215,15 +215,27 @@ public partial class MainWindow
                                 "Keine automatische Überschreibung: " +
                                 receipt.Destination);
 
-                        if (receipt.Move)
-                            _ = ServerSideFileMover.Move(
-                                receipt.Source, receipt.Destination,
-                                receipt.Replace,
-                                stagingPath: TransferStagePath(key, ordinal,
-                                    receipt.Destination));
-                        else
-                            StageCopyToDestination(
-                                key, ordinal, receipt, token);
+                        try
+                        {
+                            if (receipt.Move)
+                                _ = ServerSideFileMover.Move(
+                                    receipt.Source, receipt.Destination,
+                                    receipt.Replace,
+                                    stagingPath: TransferStagePath(key, ordinal,
+                                        receipt.Destination));
+                            else
+                                StageCopyToDestination(
+                                    key, ordinal, receipt, token);
+                        }
+                        catch (IOException ex)
+                        {
+                            // The durable 'executing' receipt is intentionally
+                            // left intact. Replay probes both files before
+                            // deciding whether anything may be repeated.
+                            throw new DurablePackageRetryException(
+                                "Dateiübertragung unterbrochen: " +
+                                receipt.Source, ex);
+                        }
                         // Cancellation is checked only AFTER this receipt:
                         // a completed filesystem change must not be forgotten.
                         journal.Advance(key, ordinal, "executing", "materialized");
@@ -249,7 +261,7 @@ public partial class MainWindow
                 if (root.Id != receipt.TargetRootId)
                     throw new IOException("Zielwurzel geändert; Katalog nicht aktualisiert.");
                 if (SourceFilePresence.Probe(receipt.Destination) != FilePresence.Present)
-                    throw new IOException(
+                    throw new DurablePackageRetryException(
                         "Zieldatei nicht sicher erreichbar: " + receipt.Destination);
 
                 long? previousFolderId = null;
