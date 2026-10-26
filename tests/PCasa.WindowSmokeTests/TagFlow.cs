@@ -527,6 +527,14 @@ internal static class TagFlow
                     editorIds[0], durableEdits, durableWriter, CancellationToken.None);
             var firstOriginal = Path.Combine(albumA, "a-00-topaz.jpg");
             var persisted = ImageTagRepository.ReadKeywords(firstOriginal) ?? "";
+            using (var verifier = new ExifToolKeywordWriter.Session())
+            {
+                var snapshot = verifier.ReadSnapshot(firstOriginal);
+                foreach (var field in new[] { snapshot.Xmp, snapshot.Iptc })
+                    if (!field.Contains(pendingA, StringComparer.OrdinalIgnoreCase) ||
+                        !field.Contains(pendingB, StringComparer.OrdinalIgnoreCase))
+                        throw new Exception("Original JPEG is missing a keyword in XMP or IPTC.");
+            }
             if (!persisted.Contains(pendingA, StringComparison.Ordinal) ||
                 !persisted.Contains(pendingB, StringComparison.Ordinal) ||
                 new ImageTagRepository(db).PendingEdits()
