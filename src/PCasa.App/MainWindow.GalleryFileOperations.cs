@@ -310,6 +310,74 @@ public partial class MainWindow
             _visibleManualWindow?.UpdateManualOperation(latest);
     }
 
+    private bool _manualThumbnailBusy;
+    private DateTime _lastManualThumbnailUtc = DateTime.MinValue;
+    private string? _lastManualThumbnailPath;
+
+    private void RequestVisibleTagThumbnail(SchedulerJobSnapshot status)
+    {
+        if (!status.Key.StartsWith("tags:", StringComparison.Ordinal) ||
+            status.CurrentPath is not { Length: > 0 } source ||
+            _manualThumbnailBusy ||
+            string.Equals(_lastManualThumbnailPath, source,
+                StringComparison.OrdinalIgnoreCase) ||
+            DateTime.UtcNow - _lastManualThumbnailUtc < TimeSpan.FromMilliseconds(850))
+            return;
+
+        // A bounded local thumbnail lookup; never decode the NAS original
+        // and never start a second progress/scheduler subsystem.
+        _manualThumbnailBusy = true;
+        _lastManualThumbnailPath = source;
+        _lastManualThumbnailUtc = DateTime.UtcNow;
+        _ = LoadVisibleTagThumbnailAsync(status.Key, source);
+    }
+
+    private async Task LoadVisibleTagThumbnailAsync(string jobKey, string source)
+    {
+        try
+        {
+            var bitmap = await _scheduler.RunAsync(
+                "ui:tag-progress-preview:" + Guid.NewGuid().ToString("N"),
+                SchedulerPriority.Interactive, token =>
+                {
+                    using var connection = _database.OpenConnection();
+                    using var lookup = connection.CreateCommand();
+                    lookup.CommandText =
+                        "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                    lookup.Parameters.AddWithValue("$path", source);
+                    var value = lookup.ExecuteScalar();
+                    if (value is null) return (System.Windows.Media.Imaging.BitmapSource?)null;
+
+                    var imageId = Convert.ToInt64(value);
+                    var repository = new BrowseCacheRepository(_database);
+                    var tiers = _browseProfileRepository.Get().Tiers;
+                    using var reader = new PackedThumbnailReader();
+                    foreach (var tier in tiers)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var entry = repository.GetIndexEntry(tier, imageId);
+                        if (entry is null) continue;
+                        return reader.Load(entry, token);
+                    }
+                    return null;
+                }, workKind: SchedulerWorkKind.ThumbnailRead);
+            if (!Dispatcher.HasShutdownStarted &&
+                _visibleManualActiveKey == jobKey)
+                _visibleManualWindow?.ShowManualThumbnail(source, bitmap);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            // A preview is nonessential. It must never fail or hold up the
+            // original's durable metadata write.
+            PCasaDiagnostics.Write("Tags.ProgressPreview", ex);
+        }
+        finally
+        {
+            _manualThumbnailBusy = false;
+        }
+    }
+
     private void VisibleManualProgressChanged(SchedulerJobSnapshot status)
     {
         if (Dispatcher.HasShutdownStarted) return;
@@ -320,7 +388,10 @@ public partial class MainWindow
         {
             if (_visibleManualOperations.ContainsKey(status.Key) &&
                 status.Key == _visibleManualActiveKey)
+            {
                 _visibleManualWindow?.UpdateManualOperation(status);
+                RequestVisibleTagThumbnail(status);
+            }
         }));
     }
 
