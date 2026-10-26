@@ -461,6 +461,12 @@ internal static class TagFlow
                 sidebar.IsVisible, "Tag sidebar did not open.");
             tagInput.Text = editableTag;
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            var tagOk = (Button?)window.FindName("TagDraftOkButton")
+                ?? throw new Exception("Tag OK button missing.");
+            var tagCancel = (Button?)window.FindName("TagDraftCancelButton")
+                ?? throw new Exception("Tag cancel button missing.");
+            if (!tagOk.IsEnabled) throw new Exception("Staged tag did not enable OK.");
+            tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
             Until(window, () => editorIds.All(id =>
                 (new ImageTagRepository(db).GetKeywords(id) ?? "")
                     .Contains(editableTag, StringComparison.Ordinal)) &&
@@ -499,6 +505,8 @@ internal static class TagFlow
                         StringComparison.Ordinal)));
             var removeTag = keywordRow.Children.OfType<Button>().Single();
             removeTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, removeTag));
+            if (!tagOk.IsEnabled) throw new Exception("Staged tag removal did not enable OK.");
+            tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
             Until(window, () => editorIds.All(id =>
                     !(new ImageTagRepository(db).GetKeywords(id) ?? "")
                         .Contains(editableTag, StringComparison.Ordinal)) &&

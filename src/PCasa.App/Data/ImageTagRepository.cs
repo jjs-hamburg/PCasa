@@ -203,14 +203,21 @@ public sealed class ImageTagRepository
     // Immediate, durable user intent. No remote file I/O and no separate work queue.
     // Existing index and pending intent are committed atomically.
     public int QueueTagEdit(IReadOnlyList<long> imageIds, string tag, bool remove)
+        => QueueTagEdits(imageIds, new[] { (Tag: tag, Remove: remove) });
+
+    public int QueueTagEdits(IReadOnlyList<long> imageIds,
+        IReadOnlyList<(string Tag, bool Remove)> edits)
     {
-        tag = tag.Trim();
-        if (tag.Length == 0) throw new ArgumentException("Tag fehlt.");
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
         var count = 0;
-        foreach (var id in imageIds)
+        var recent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (originalTag, remove) in edits)
         {
+            var tag = originalTag.Trim();
+            if (tag.Length == 0) throw new ArgumentException("Tag fehlt.");
+            foreach (var id in imageIds)
+            {
             using var read = db.CreateCommand();
             read.Transaction = tx;
             read.CommandText = """
@@ -263,9 +270,11 @@ public sealed class ImageTagRepository
             pending.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             pending.ExecuteNonQuery();
             count++;
+            if (!remove) recent.Add(tag);
+            }
         }
         tx.Commit();
-        if (!remove && count > 0) RememberTag(tag);
+        foreach (var tag in recent) RememberTag(tag);
         return count;
     }
 

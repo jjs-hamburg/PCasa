@@ -340,7 +340,7 @@ public partial class MainWindow
                     VerticalAlignment.Center);
                 template.VisualTree = presenter;
                 remove.Template = template;
-                remove.Click += async (_, _) => await ChangeSelectedTagsAsync(pair.Key, remove: true);
+                remove.Click += (_, _) => StageTagChange(pair.Key, remove: true);
                 DockPanel.SetDock(remove, Dock.Right);
                 row.Children.Add(remove);
                 var label = new TextBlock {
@@ -397,7 +397,7 @@ public partial class MainWindow
                 Margin = new Thickness(2), Padding = new Thickness(6, 3, 6, 3),
                 Style = (Style)FindResource("PcasaStatusButtonStyle")
             };
-            button.Click += async (_, _) => await ChangeSelectedTagsAsync(tag, remove: false);
+            button.Click += (_, _) => StageTagChange(tag, remove: false);
             TagQuickPanel.Children.Add(button);
         }
     }
@@ -471,57 +471,189 @@ public partial class MainWindow
         }
     }
 
-    private async Task ChangeSelectedTagsAsync(string tag, bool remove)
+    private readonly Dictionary<string, bool> _tagDraft =
+        new(StringComparer.OrdinalIgnoreCase);
+    private long[]? _tagDraftImageIds;
+
+    // Draft changes never mutate SQLite or the originals. One OK is one package.
+    private void StageTagChange(string tag, bool remove)
     {
         tag = tag.Trim();
         if (tag.Length == 0 || _tagWriteActive) return;
-        var ids = _selectedImageIds.ToArray();
+        var ids = _selectedImageIds.OrderBy(id => id).ToArray();
         if (ids.Length == 0)
         {
             StatusText.Text = "Zuerst Bilder auswählen.";
             return;
         }
+        if (_tagDraftImageIds is not null && !_tagDraftImageIds.SequenceEqual(ids))
+        {
+            StatusText.Text = "Zuerst vorgemerkte Änderungen mit OK bestätigen oder abbrechen.";
+            return;
+        }
+        _tagDraftImageIds ??= ids;
+        _tagDraft[tag] = remove;
+        if (!remove) TagEntryBox.Clear();
+        RefreshTagDraftControls();
+    }
+
+    private void RefreshTagDraftControls()
+    {
+        if (TagDraftRows is null) return;
+        TagDraftRows.Children.Clear();
+        foreach (var (tag, remove) in _tagDraft.OrderBy(x => x.Key,
+                     StringComparer.CurrentCultureIgnoreCase))
+        {
+            var row = new DockPanel { Margin = new Thickness(2, 1, 2, 1) };
+            var undo = new Button {
+                Content = "×", Width = 21, Height = 21,
+                ToolTip = "Vormerkung rückgängig machen",
+                Style = (Style)FindResource("PcasaStatusButtonStyle")
+            };
+            undo.Click += (_, _) => {
+                _tagDraft.Remove(tag);
+                if (_tagDraft.Count == 0) _tagDraftImageIds = null;
+                RefreshTagDraftControls();
+            };
+            DockPanel.SetDock(undo, Dock.Right);
+            row.Children.Add(undo);
+            row.Children.Add(new TextBlock {
+                Text = (remove ? "− " : "+ ") + tag,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            TagDraftRows.Children.Add(row);
+        }
+        TagDraftCaption.Text = _tagDraft.Count == 0
+            ? "Keine Änderungen vorgemerkt"
+            : $"{_tagDraft.Count} Tag-Änderungen für {_tagDraftImageIds?.Length ?? 0} Bilder vorgemerkt";
+        TagDraftOkButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
+        TagDraftCancelButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
+    }
+
+    private void TagDraftCancel_Click(object sender, RoutedEventArgs e)
+    {
+        _tagDraft.Clear();
+        _tagDraftImageIds = null;
+        RefreshTagDraftControls();
+    }
+
+    private async void TagDraftOk_Click(object sender, RoutedEventArgs e)
+    {
+        if (_tagWriteActive || _tagDraft.Count == 0 || _tagDraftImageIds is null) return;
+        var ids = _tagDraftImageIds.ToArray();
+        var edits = _tagDraft.Select(x => (Tag: x.Key, Remove: x.Value)).ToArray();
+        var key = "tags:package:" + Guid.NewGuid().ToString("N");
+        var committed = new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var package = new SchedulerTaskPackage(key);
+        int changed = 0;
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            changed = new ImageTagRepository(_database).QueueTagEdits(ids, edits);
+            committed.TrySetResult(changed);
+            _scheduler.ReportProgress(key, "SQLite gesichert", 0, ids.Length);
+            return Task.CompletedTask;
+        });
+        package.AddStep(token =>
+        {
+            var repo = new ImageTagRepository(_database);
+            var idSet = ids.ToHashSet();
+            var pending = repo.PendingEdits(int.MaxValue)
+                .Where(edit => idSet.Contains(edit.ImageId))
+                .GroupBy(edit => edit.ImageId).ToArray();
+            using var writer = new ExifToolKeywordWriter.Session();
+            var completed = 0;
+            var errors = new List<Exception>();
+            foreach (var group in pending)
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    repo.ApplyPendingImageEdits(group.Key, group.ToArray(), writer, token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                    PCasaDiagnostics.Write("Tags.DurableWrite", ex);
+                }
+                completed++;
+                _scheduler.ReportProgress(key, "Originaldateien schreiben",
+                    completed, pending.Length);
+                if (!Dispatcher.HasShutdownStarted)
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                        _ = RefreshPendingTagDotsAsync()));
+            }
+            if (errors.Count != 0)
+                throw new AggregateException("Nicht alle Tags konnten geschrieben werden.", errors);
+            return Task.CompletedTask;
+        });
+
         _tagWriteActive = true;
+        RefreshTagDraftControls();
         try
         {
-            var changed = await _scheduler.RunAsync(
-                "tags:queue:" + Guid.NewGuid().ToString("N"),
-                SchedulerPriority.ManualAction,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return new ImageTagRepository(_database).QueueTagEdit(ids, tag, remove);
-                }, workKind: SchedulerWorkKind.Catalog);
-            if (!remove) TagEntryBox.Clear();
-            StatusText.Text = $"Tag '{tag}': {changed} Änderungen lokal gesichert · Dateischreiben im Hintergrund";
+            var completion = _scheduler.EnqueuePackageAsync(package,
+                SchedulerPriority.ManualAction);
+            // On a failure before the first commit, unblock the UI as well.
+            _ = completion.ContinueWith(t => {
+                if (t.IsFaulted) committed.TrySetException(t.Exception!);
+                else if (t.IsCanceled) committed.TrySetCanceled();
+            }, TaskScheduler.Default);
+            _ = ObserveTagPackageAsync(completion, key);
+            var total = await committed.Task;
+            _tagDraft.Clear();
+            _tagDraftImageIds = null;
+            StatusText.Text = $"Tag-Paket: {total} Änderungen lokal gesichert · Originaldateien werden geschrieben";
             RefreshQuickTags();
             await RefreshTagSidebarAsync();
             if (_browseInitialized && _browsePageCache is not null &&
                 !string.IsNullOrWhiteSpace(TagSearchBox.Text))
                 await ApplyTagFilterAsync();
-            _tagDrainFailures.Clear();
             _ = RefreshPendingTagDotsAsync();
-            StartPendingTagDrain();
         }
         catch (Exception ex)
         {
-            PCasaDiagnostics.Write("Tags.Queue", ex);
-            StatusText.Text = "Tag-Änderung konnte nicht gespeichert werden";
+            PCasaDiagnostics.Write("Tags.PackageCommit", ex);
+            StatusText.Text = "Tag-Paket konnte nicht lokal gesichert werden";
             MessageBox.Show(this, ex.Message, "Tag-Änderung fehlgeschlagen",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
-        finally { _tagWriteActive = false; }
+        finally
+        {
+            _tagWriteActive = false;
+            RefreshTagDraftControls();
+        }
     }
 
-    private async void TagAdd_Click(object sender, RoutedEventArgs e)
-        => await ChangeSelectedTagsAsync(TagEntryBox.Text, remove: false);
+    private async Task ObserveTagPackageAsync(Task completion, string key)
+    {
+        try { await completion; }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Tags.PackageWrite", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text = "Tag-Schreibfehler – Änderungen in SQLite weiterhin offen";
+        }
+        finally
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                _ = RefreshPendingTagDotsAsync();
+        }
+    }
 
-    private async void TagEntry_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private void TagAdd_Click(object sender, RoutedEventArgs e)
+        => StageTagChange(TagEntryBox.Text, remove: false);
+
+    private void TagEntry_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == System.Windows.Input.Key.Enter)
         {
             e.Handled = true;
-            await ChangeSelectedTagsAsync(TagEntryBox.Text, remove: false);
+            StageTagChange(TagEntryBox.Text, remove: false);
         }
     }
 

@@ -844,6 +844,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Text="Tag hinzufügen" FontSize="12" Margin="3,0,0,5"/>
                         <DockPanel Grid.Row="1" Margin="2,0,2,10">
@@ -876,6 +877,20 @@
                         <StackPanel Grid.Row="4" Margin="2,7,2,0" MinHeight="96">
                             <TextBlock Text="Schnell-Tags" FontSize="12" Margin="0,0,0,5"/>
                             <WrapPanel x:Name="TagQuickPanel"/>
+                        </StackPanel>
+                        <StackPanel Grid.Row="5" Margin="2,7,2,0">
+                            <TextBlock x:Name="TagDraftCaption" Text="Keine Änderungen vorgemerkt"
+                                       FontSize="11" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                            <StackPanel x:Name="TagDraftRows" Margin="0,0,0,5"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="TagDraftCancelButton" Content="Abbrechen" MinWidth="80"
+                                        Margin="0,0,6,0" IsEnabled="False"
+                                        Style="{StaticResource PcasaStatusButtonStyle}"
+                                        Click="TagDraftCancel_Click"/>
+                                <Button x:Name="TagDraftOkButton" Content="OK" MinWidth="65" IsEnabled="False"
+                                        Style="{StaticResource PcasaStatusButtonStyle}"
+                                        Click="TagDraftOk_Click"/>
+                            </StackPanel>
                         </StackPanel>
                     </Grid>
                 </Grid>
