@@ -531,11 +531,16 @@ public partial class MainWindow
         TagDraftCancelButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
     }
 
-    private void TagDraftCancel_Click(object sender, RoutedEventArgs e)
+    private async void TagDraftCancel_Click(object sender, RoutedEventArgs e)
     {
+        if (_tagWriteActive) return;
         _tagDraft.Clear();
         _tagDraftImageIds = null;
+        TagEntryBox.Clear();
         RefreshTagDraftControls();
+        // Discard the entire draft and reload the unchanged, authoritative
+        // tag list for the selected images. No SQLite or file mutation.
+        await RefreshTagSidebarAsync();
     }
 
     private async void TagDraftOk_Click(object sender, RoutedEventArgs e)
