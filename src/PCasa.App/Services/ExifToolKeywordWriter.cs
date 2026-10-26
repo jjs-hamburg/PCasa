@@ -44,6 +44,7 @@ public static class ExifToolKeywordWriter
             var request = ++_nextRequestId;
             process.StandardInput.WriteLine("-j");
             process.StandardInput.WriteLine("-XMP-dc:Subject");
+            process.StandardInput.WriteLine("-IPTC:Keywords");
             process.StandardInput.WriteLine(imagePath);
             process.StandardInput.WriteLine("-execute" + request);
             process.StandardInput.Flush();
@@ -54,14 +55,20 @@ public static class ExifToolKeywordWriter
                 throw new IOException("ExifTool lieferte keine lesbaren Metadaten.");
             if (entry.TryGetProperty("Error", out var error))
                 throw new IOException("ExifTool: " + error.ToString());
-            if (!entry.TryGetProperty("Subject", out var subject))
-                return Array.Empty<string>();
-            if (subject.ValueKind == System.Text.Json.JsonValueKind.Array)
-                return subject.EnumerateArray().Select(x => x.GetString() ?? "")
-                    .Where(x => x.Length > 0).ToArray();
-            if (subject.ValueKind == System.Text.Json.JsonValueKind.String)
-                return new[] { subject.GetString()! };
-            return Array.Empty<string>();
+            var combined = new List<string>();
+            foreach (var field in new[] { "Subject", "Keywords" })
+            {
+                if (!entry.TryGetProperty(field, out var value)) continue;
+                if (value.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    combined.AddRange(value.EnumerateArray()
+                        .Where(v => v.ValueKind == System.Text.Json.JsonValueKind.String)
+                        .Select(v => v.GetString() ?? ""));
+                else if (value.ValueKind == System.Text.Json.JsonValueKind.String)
+                    combined.Add(value.GetString() ?? "");
+            }
+            return combined.Where(v => !string.IsNullOrWhiteSpace(v))
+                .Select(v => v.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
         // A timeout leaves ReadLineAsync outstanding. Never reuse that stream.
@@ -142,10 +149,25 @@ public static class ExifToolKeywordWriter
             // timestamp and trigger another full thumbnail/EXIF scan.
             process.StandardInput.WriteLine("-P");
             process.StandardInput.WriteLine("-overwrite_original");
-            if (keywords.Count == 0)
-                process.StandardInput.WriteLine("-XMP-dc:Subject=");
-            foreach (var keyword in keywords)
-                process.StandardInput.WriteLine("-XMP-dc:Subject=" + keyword);
+            // ExifTool treats repeated '=' for a list-type tag as one
+            // replacement list. Write both interoperable Picasa fields in
+            // the same file transaction; remove both when the list is empty.
+            process.StandardInput.WriteLine("-XMP-dc:Subject=");
+            process.StandardInput.WriteLine("-IPTC:Keywords=");
+            if (keywords.Count > 0)
+            {
+                // IPTC IIM keywords have a 64-byte limit per item. Never
+                // silently truncate Unicode user tags during dual writes.
+                foreach (var keyword in keywords)
+                {
+                    if (Encoding.UTF8.GetByteCount(keyword) > 64)
+                        throw new InvalidDataException(
+                            "IPTC-Schlagwort überschreitet 64 UTF-8-Bytes: " + keyword);
+                    process.StandardInput.WriteLine("-XMP-dc:Subject+=" + keyword);
+                    process.StandardInput.WriteLine("-IPTC:Keywords+=" + keyword);
+                }
+                process.StandardInput.WriteLine("-IPTC:CodedCharacterSet=UTF8");
+            }
             // The executable receives absolute paths from the catalogue.
             // Do not send '--' in stay-open mode: the subsequent -executeN
             // must remain recognizable as a control command.
