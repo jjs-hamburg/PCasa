@@ -700,14 +700,21 @@ internal static class TagFlow
                     var phase = (presenter?.FindName("PhaseText") as TextBlock)?.Text;
                     var current = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
                     var count = (presenter?.FindName("CountText") as TextBlock)?.Text;
+                    var folder = (presenter?.FindName("FolderPathText") as TextBlock)?.Text;
+                    var preview = (presenter?.FindName("CurrentThumbnail") as Image)?.Source;
+                    var hide = (presenter?.FindName("HideButton") as Button)?.Content?.ToString();
                     return presenter?.IsVisible == true &&
+                        presenter.Width == 348 && presenter.Height == 76 &&
                         phase?.Contains("Tags", StringComparison.OrdinalIgnoreCase) == true &&
                         current == Path.GetFileName(firstOriginal) &&
+                        folder == Path.GetDirectoryName(firstOriginal) &&
                         count != "0 / 0" &&
+                        hide == "Hide" &&
+                        preview is not null &&
                         Application.Current.Windows
                             .OfType<PCasa.App.BrowseCacheProgressWindow>()
                             .Count(w => w.IsVisible) == 1;
-                }, "Tag recovery did not show the actual original file in the single P0 progress window.");
+                }, "Tag progress did not show compact count, folder, Hide and cached image in one unchanged-size window.");
             }
             Until(window, () =>
                 new ImageTagRepository(db).PendingEdits()
