@@ -326,6 +326,28 @@ public partial class MainWindow
             (int)Math.Min(int.MaxValue, total));
     }
 
+    // The status bar observes the SAME presenter as the floating progress
+    // window. There is no second progress counter or polling loop.
+    private BrowseCacheProgressWindow? _attachedProgressPresenter;
+
+    private void AttachProgressStatus(BrowseCacheProgressWindow presenter)
+    {
+        if (ReferenceEquals(_attachedProgressPresenter, presenter)) return;
+        if (_attachedProgressPresenter is not null)
+            _attachedProgressPresenter.ProgressPresentationChanged -=
+                VisibleProgressStatusChanged;
+        _attachedProgressPresenter = presenter;
+        presenter.ProgressPresentationChanged += VisibleProgressStatusChanged;
+    }
+
+    private void VisibleProgressStatusChanged(object? sender, EventArgs e)
+    {
+        if (Dispatcher.HasShutdownStarted || sender is not BrowseCacheProgressWindow
+            presenter || !ReferenceEquals(_browseProgressWindow, presenter))
+            return;
+        StatusText.Text = presenter.ProgressStatusText;
+    }
+
     private void BeginVisibleManualOperation(string key, string title, int total)
     {
         if (_visibleManualOperations.ContainsKey(key)) return;
@@ -336,6 +358,7 @@ public partial class MainWindow
                 new BrowseCacheProgressWindow { Owner = this };
             if (_visibleManualOwnsWindow)
                 _browseProgressWindow = _visibleManualWindow;
+            AttachProgressStatus(_visibleManualWindow);
             _scheduler.ProgressChanged += VisibleManualProgressChanged;
         }
         _visibleManualOperations.Add(key, (title, total));
