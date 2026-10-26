@@ -109,7 +109,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     // Replay ONLY registered types. Unknown versions stay durable and visible;
     // never silently discard them or pretend their source steps ran.
-    public IReadOnlyList<DurablePackageRecord> RecoverDurablePackages()
+    public IReadOnlyList<DurablePackageRecord> RecoverDurablePackages(
+        Action<string, Task>? onRestored = null)
     {
         var journal = _durableJournal ??
             throw new InvalidOperationException("Paketjournal nicht aktiviert.");
@@ -130,7 +131,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     var package = factory(record.Key, record.Payload);
                     package.RestoreCursor(record.CompletedSteps);
-                    TrackDurableCompletion(QueueDurableExisting(package, record));
+                    var completion = TrackDurableCompletion(
+                        QueueDurableExisting(package, record));
+                    // Observe the SAME scheduler lifetime, not a second
+                    // presentation queue. Subscribers may render progress or
+                    // clear the view when the original task completes.
+                    try { onRestored?.Invoke(record.Key, completion); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
                 }
                 catch (Exception ex)
                 {
