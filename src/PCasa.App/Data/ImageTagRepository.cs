@@ -16,6 +16,84 @@ public sealed class ImageTagRepository
 
     public ImageTagRepository(LocalDatabase database) => _database = database;
 
+    // Suggestions are derived from the existing SQLite keyword index; no
+    // original photo, EXIF, thumbnail or NAS path is opened. FTS narrows
+    // candidate rows before we split stored full tag phrases in managed code.
+    public IReadOnlyList<string> SuggestExistingTags(string prefix,
+        int maximum = 8, CancellationToken cancellationToken = default)
+    {
+        prefix = prefix.Trim();
+        if (prefix.Length == 0) return Array.Empty<string>();
+        maximum = Math.Clamp(maximum, 1, 16);
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? tag, int weight = 1)
+        {
+            if (string.IsNullOrWhiteSpace(tag)) return;
+            tag = tag.Trim();
+            if (tag.Contains(prefix, StringComparison.OrdinalIgnoreCase))
+                counts[tag] = counts.GetValueOrDefault(tag) + weight;
+        }
+
+        using var db = _database.OpenConnection();
+        // Recent and queued words are already real tag vocabulary.
+        using (var recents = db.CreateCommand())
+        {
+            recents.CommandText = "SELECT tag FROM recent_tags ORDER BY last_used_utc DESC LIMIT 9;";
+            using var reader = recents.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Add(reader.GetString(0), 20);
+            }
+        }
+        using (var pending = db.CreateCommand())
+        {
+            pending.CommandText = """
+                SELECT tag FROM pending_tag_edits
+                WHERE instr(lower(tag),lower($fragment)) > 0
+                GROUP BY tag LIMIT 100;
+                """;
+            pending.Parameters.AddWithValue("$fragment", prefix);
+            using var reader = pending.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Add(reader.GetString(0), 2);
+            }
+        }
+        // FTS uses token prefixes, not SQL '%' wildcard scans over 500k rows.
+        // Use the last typed word so multi-word tags also match after spaces.
+        var words = Regex.Matches(prefix, @"[\p{L}\p{N}_]+")
+            .Select(m => m.Value).ToArray();
+        if (words.Length > 0)
+        {
+            var term = words[^1].Replace("\"", "\"\"");
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = """
+                SELECT t.keywords FROM image_tags_fts f
+                JOIN image_tags t ON t.image_id=f.rowid
+                WHERE image_tags_fts MATCH $term
+                LIMIT 1000;
+                """;
+            cmd.Parameters.AddWithValue("$term", "\"" + term + "\"*");
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (reader.IsDBNull(0)) continue;
+                foreach (var tag in reader.GetString(0)
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries |
+                        StringSplitOptions.TrimEntries))
+                    Add(tag);
+            }
+        }
+        return counts.OrderByDescending(kv =>
+                kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(kv => kv.Value)
+            .ThenBy(kv => kv.Key, StringComparer.CurrentCultureIgnoreCase)
+            .Take(maximum).Select(kv => kv.Key).ToArray();
+    }
+
     public IReadOnlyList<string> GetRecentTags()
     {
         using var db = _database.OpenConnection();
