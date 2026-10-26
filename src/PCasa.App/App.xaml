@@ -296,6 +296,23 @@
                                     </Style>
                                 </Ellipse.Style>
                             </Ellipse>
+                            <Ellipse Grid.Column="3" Width="7" Height="7"
+                                     Stroke="#DF4A54" StrokeThickness="1.5"
+                                     Fill="Transparent" HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     ToolTip="Tag-Schreibvorgänge in Unterordnern ausstehend">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=TreeViewItem}, Path=Tag.HasPendingChildTagWrites}"
+                                                         Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
                         </Grid>
 
                         <DataTemplate.Triggers>
