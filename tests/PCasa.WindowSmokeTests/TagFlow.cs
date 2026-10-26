@@ -466,6 +466,20 @@ internal static class TagFlow
             var tagCancel = (Button?)window.FindName("TagDraftCancelButton")
                 ?? throw new Exception("Tag cancel button missing.");
             if (!tagOk.IsEnabled) throw new Exception("Staged tag did not enable OK.");
+            // Cancel must leave both the tag catalogue and originals untouched
+            // and restore the original tag list in the sidebar.
+            tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
+            Until(window, () => !tagOk.IsEnabled &&
+                editorIds.All(id => !(new ImageTagRepository(db).GetKeywords(id) ?? "")
+                    .Contains(editableTag, StringComparison.Ordinal)) &&
+                !tagRows.Children.OfType<DockPanel>()
+                    .Any(row => row.Children.OfType<TextBlock>()
+                        .Any(label => label.Text.Contains(editableTag,
+                            StringComparison.Ordinal))),
+                "Cancel did not restore the original tag list.");
+            tagInput.Text = editableTag;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            if (!tagOk.IsEnabled) throw new Exception("Re-staged tag did not enable OK.");
             tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
             Until(window, () => editorIds.All(id =>
                 (new ImageTagRepository(db).GetKeywords(id) ?? "")
