@@ -103,7 +103,11 @@ public static class ExifToolKeywordWriter
             if (ReferenceEquals(_process, failed)) _process = null;
             try
             {
-                if (!failed.HasExited) failed.Kill(entireProcessTree: true);
+                if (!failed.HasExited)
+                {
+                    failed.Kill(entireProcessTree: true);
+                    failed.WaitForExit(3000);
+                }
             }
             catch (InvalidOperationException) { }
             catch (System.ComponentModel.Win32Exception) { }
@@ -147,15 +151,15 @@ public static class ExifToolKeywordWriter
 
             StartIfNeeded();
             var process = _process!;
-            using var cancellation = cancellationToken.Register(() =>
-            {
-                try
-                {
-                    if (!process.HasExited) process.Kill(entireProcessTree: true);
-                }
-                catch (InvalidOperationException) { }
-                catch (System.ComponentModel.Win32Exception) { }
-            });
+            // Unlike metadata reads, a write MUST NOT be killed by an
+            // ordinary scheduler yield. ExifTool creates a temporary file
+            // before atomically replacing the original; terminating the
+            // process mid-transaction leaves an *_exiftool_tmp orphan.
+            // Check cancellation before sending the complete write request,
+            // then let the in-flight native transaction finish or hit the
+            // bounded response timeout.
+            cancellationToken.ThrowIfCancellationRequested();
+            TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.FromMinutes(30));
 
             // ExifTool -stay_open consumes one argument per line. -executeNN
             // delimits each complete write and its {readyNN} acknowledgment.
@@ -195,7 +199,23 @@ public static class ExifToolKeywordWriter
             process.StandardInput.WriteLine("-execute" + request);
             process.StandardInput.Flush();
 
-            var response = ReadResponseOrReset(process, request, cancellationToken);
+            // Do not pass the yield token once -execute was committed:
+            // only the protocol timeout may terminate this process. The
+            // calling package checkpoints its successful file write before
+            // acknowledging a yield.
+            string response;
+            try
+            {
+                response = ReadResponseOrReset(process, request, CancellationToken.None);
+            }
+            catch
+            {
+                // ReadResponseOrReset has terminated the owned ExifTool
+                // process. Never touch a temp file unless the full original
+                // still exists; its contents remain the only safe source.
+                TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
+                throw;
+            }
 
             // Stay-open mode does not return a separate exit code per request.
             // The response acknowledges the write; uncertain results remain errors.
@@ -203,6 +223,39 @@ public static class ExifToolKeywordWriter
                 StringComparison.Ordinal))
                 throw new IOException("ExifTool konnte die Datei nicht aktualisieren: " +
                     response.ToString().Trim());
+        }
+
+        // ExifTool's precise, deterministic temp name for this original.
+        // Never scan directories or touch unrelated files. A stale orphan is
+        // safe to discard ONLY if the untouched original still exists, the
+        // temp is old enough, and an exclusive open proves no writer owns it.
+        // Current in-flight output is left alone; the caller can retry the
+        // unchanged pending_tag_edits after a failed native transaction.
+        private static void TryRemoveAbandonedTemporaryOutput(
+            string imagePath, TimeSpan minimumAge)
+        {
+            try
+            {
+                if (!File.Exists(imagePath)) return;
+                var temporary = imagePath + "_exiftool_tmp";
+                var info = new FileInfo(temporary);
+                if (!info.Exists || DateTime.UtcNow - info.LastWriteTimeUtc < minimumAge)
+                    return;
+                var size = info.Length;
+                var stamp = info.LastWriteTimeUtc;
+                using (var exclusivelyHeld = new FileStream(temporary,
+                    FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    if (exclusivelyHeld.Length != size ||
+                        File.GetLastWriteTimeUtc(temporary) != stamp ||
+                        !File.Exists(imagePath))
+                        return;
+                }
+                // The source image was never removed by this cleanup.
+                File.Delete(temporary);
+            }
+            catch (IOException) { } // NAS offline, file in use or transient.
+            catch (UnauthorizedAccessException) { }
         }
 
         private void StartIfNeeded()
