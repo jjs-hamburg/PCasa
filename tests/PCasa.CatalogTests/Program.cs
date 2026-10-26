@@ -168,6 +168,11 @@ internal static class Program
         journal.SetState("older", "running", 2);
         journal.SetState("newer", "running", 1);
 
+        // A delayed checkpoint write must never rewind already durable work.
+        journal.SetState("older", "running", 1);
+        if (journal.Pending().Single(x => x.Key == "older").CompletedSteps != 2)
+            throw new Exception("Delayed checkpoint rewound the durable cursor.");
+
         // A new journal instance simulates application restart.
         var restored = new DurablePackageJournal(database).Pending();
         if (restored.Count != 3 ||
