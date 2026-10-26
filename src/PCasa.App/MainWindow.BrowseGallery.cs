@@ -645,6 +645,62 @@ public partial class MainWindow
 
     private bool _manualScanAllActive;
 
+    private sealed record DurableScanRoot(long Id, string Path);
+
+    // One stable step per original root; a restart never rediscovers a
+    // different root order and does not replay already completed roots.
+    private SchedulerTaskPackage BuildScanAllPackage(string key, string payload)
+        => BuildScanAllPackage(key, payload, null, null);
+
+    private SchedulerTaskPackage BuildScanAllPackage(string key, string payload,
+        List<CompleteFolderScanStep>? callerScans, List<string>? callerFailures)
+    {
+        var roots = System.Text.Json.JsonSerializer.Deserialize<DurableScanRoot[]>(payload)
+            ?? throw new InvalidDataException("Ungültiger Gesamtscan-Auftrag.");
+        var package = new SchedulerTaskPackage(key);
+        for (var i = 0; i < roots.Length; i++)
+        {
+            var root = roots[i];
+            var position = i + 1;
+            var display = new Progress<ScanProgress>(scan =>
+            {
+                ShowScannedPhotoFolder(scan);
+                if (_visibleManualActiveKey == key)
+                    StatusText.Text = $"Einlesen {position}/{roots.Length}: " +
+                        $"{root.Path} · {scan.ImageFilesSeen:N0} geprüft";
+            });
+            var step = new CompleteFolderScanStep(this, root.Path,
+                new ScanJobProgress(_scheduler, key, display), root.Id);
+            callerScans?.Add(step);
+            package.AddStep(async token =>
+            {
+                if (!_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
+                {
+                    step.Dispose();
+                    return;
+                }
+                try
+                {
+                    await step.ExecuteAsync(token);
+                    step.Dispose();
+                }
+                catch (OperationCanceledException) when (step.SourceChanged ||
+                    !_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
+                {
+                    step.Dispose();
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    callerFailures?.Add($"{root.Path}: {ex.Message}");
+                    PCasaDiagnostics.Write("Catalog.ScanAll", ex);
+                    step.Dispose();
+                }
+            });
+        }
+        return package;
+    }
+
     private async void BrowseScanAll_Click(object sender, RoutedEventArgs e)
     {
         if (_manualScanAllActive || _folderRemovalPending)
@@ -670,7 +726,9 @@ public partial class MainWindow
         using var cancellation = new CancellationTokenSource();
         var scans = new List<CompleteFolderScanStep>();
         var failures = new List<string>();
-        var package = new SchedulerTaskPackage(key);
+        var payload = System.Text.Json.JsonSerializer.Serialize(
+            roots.Select(root => new DurableScanRoot(root.Id, root.LocalPath)).ToArray());
+        var package = BuildScanAllPackage(key, payload, scans, failures);
         _manualScanAllActive = true;
         _manualScanRunning = true;
         _manualFolderScanWaiting = true;
@@ -684,61 +742,9 @@ public partial class MainWindow
 
         try
         {
-            for (var index = 0; index < roots.Length; index++)
-            {
-                var root = roots[index];
-                var position = index + 1;
-                var display = new Progress<ScanProgress>(scan =>
-                {
-                    ShowScannedPhotoFolder(scan);
-                    if (_visibleManualActiveKey == key)
-                        StatusText.Text = $"Einlesen {position}/{roots.Length}: " +
-                            $"{root.LocalPath} · {scan.ImageFilesSeen:N0} geprüft";
-                });
-                var report = new ScanJobProgress(_scheduler, key, display);
-                var step = new CompleteFolderScanStep(this,
-                    root.LocalPath, report, root.Id);
-                scans.Add(step);
-                package.AddStep(async token =>
-                {
-                    // The root may have been removed while this manual packet
-                    // was paused beneath a newer one. Skip only that root.
-                    if (!_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
-                    {
-                        step.Dispose();
-                        return;
-                    }
-
-                    try
-                    {
-                        await step.ExecuteAsync(token);
-                        step.Dispose();
-                    }
-                    catch (OperationCanceledException) when (
-                        step.SourceChanged ||
-                        !_folderRepository.GetAll().Any(folder => folder.Id == root.Id))
-                    {
-                        // The newest folder-selection change supersedes only
-                        // this root, not the remainder of Scan All.
-                        step.Dispose();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // Scheduler yield: retain the SAME scanner enumerator.
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        failures.Add($"{root.LocalPath}: {ex.Message}");
-                        PCasaDiagnostics.Write("Catalog.ScanAll", ex);
-                        step.Dispose();
-                    }
-                });
-            }
-
-            await _scheduler.EnqueuePackageAsync(package,
-                SchedulerPriority.ManualAction, cancellation.Token,
-                workKind: SchedulerWorkKind.CatalogScan);
+            await _scheduler.EnqueueDurablePackageAsync(package,
+                "manual-scan-all-v1", payload, SchedulerPriority.ManualAction,
+                SchedulerWorkKind.CatalogScan);
         }
         catch (OperationCanceledException) when (_folderRemovalPending ||
             cancellation.IsCancellationRequested)

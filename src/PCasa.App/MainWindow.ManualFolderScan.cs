@@ -137,6 +137,28 @@ public partial class MainWindow
         }
     }
 
+    private sealed record ManualScanRecipe(string Directory, long? MonitoredRootId);
+
+    private SchedulerTaskPackage BuildManualFolderScanPackage(string key, string payload)
+    {
+        var recipe = System.Text.Json.JsonSerializer.Deserialize<ManualScanRecipe>(payload)
+            ?? throw new InvalidDataException("Ungültiger manueller Scan-Auftrag.");
+        var step = new CompleteFolderScanStep(this, recipe.Directory,
+            new ScanJobProgress(_scheduler, key, null), recipe.MonitoredRootId);
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(async token =>
+        {
+            try { await step.ExecuteAsync(token); }
+            catch (OperationCanceledException) { throw; }
+            finally
+            {
+                // Do not discard the in-memory scan enumerator on a yield.
+                if (!token.IsCancellationRequested) step.Dispose();
+            }
+        });
+        return package;
+    }
+
     // One shared entrance for every complete user-initiated directory scan.
     // The scheduler owns validation, generation advancement, scan, thumbnail
     // indexing and reconciliation; the entry points only present UI progress.
@@ -151,9 +173,23 @@ public partial class MainWindow
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
         using var step = new CompleteFolderScanStep(this, directory,
             schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport);
-        await _scheduler.EnqueueAsync(key, priority, step.ExecuteAsync,
-            cancellationToken: cancellationToken,
-            workKind: SchedulerWorkKind.CatalogScan);
+        if (priority == SchedulerPriority.ManualAction &&
+            !requirePendingInitialImport)
+        {
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(step.ExecuteAsync);
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                new ManualScanRecipe(directory, expectedMonitoredFolderId));
+            await _scheduler.EnqueueDurablePackageAsync(package,
+                "manual-folder-scan-v1", payload, priority,
+                SchedulerWorkKind.CatalogScan);
+        }
+        else
+        {
+            await _scheduler.EnqueueAsync(key, priority, step.ExecuteAsync,
+                cancellationToken: cancellationToken,
+                workKind: SchedulerWorkKind.CatalogScan);
+        }
         return step.Result ?? throw new OperationCanceledException();
     }
 
