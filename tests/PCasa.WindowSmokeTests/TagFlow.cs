@@ -521,7 +521,7 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.Instance)!;
             KeyEventArgs SimulateEnter() => new(
                 Keyboard.PrimaryDevice, PresentationSource.FromVisual(tagInput)!, 0,
-                Key.Enter);
+                Key.Enter) { RoutedEvent = Keyboard.KeyDownEvent };
             pressEnter.Invoke(window, [tagInput, SimulateEnter()]);
             if (tagInput.Text != editableTag || suggestionsPopup.IsOpen ||
                 tagOk.IsEnabled)
@@ -541,7 +541,10 @@ internal static class TagFlow
                 "TagSuggestion_MouseUp", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
             chooseByMouse.Invoke(window, [suggestions,
-                new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)]);
+                new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.MouseLeftButtonUpEvent
+                }]);
             if (tagInput.Text != editableTag || suggestionsPopup.IsOpen ||
                 tagOk.IsEnabled)
                 throw new Exception("Mouse selection did not fill Tag input only.");
