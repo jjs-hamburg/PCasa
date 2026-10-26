@@ -156,6 +156,22 @@ public sealed class DurableGalleryTransferJournal
         return ids;
     }
 
+    // A receipt must remain inspectable while the scheduler outcome is not
+    // terminal. Only a confirmed, durable COMPLETED package may be pruned.
+    // A crash between completion and this cleanup is harmless on next start.
+    public void PruneCompleted()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM gallery_transfer_receipts
+             WHERE package_key IN (
+                SELECT package_key FROM scheduler_packages WHERE state='completed'
+             );
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
     public bool OwnsRelocationIntent(string intentId)
     {
         using var db = _database.OpenConnection();
