@@ -502,6 +502,31 @@ internal static class TagFlow
                 .Any(row => row.Children.OfType<TextBlock>().Any(label =>
                     label.Text.Contains(editableTag, StringComparison.Ordinal))),
                 "Tag AND failed to show a tag shared by both selected images.");
+
+            // AND is a genuine intersection across ALL selected photos.
+            // Two A photos share the edited tag, but a B photo has only
+            // "berlin", so three selected photos have no common keyword.
+            long mixedAlbumId;
+            using (var connection = db.OpenConnection())
+            using (var lookup = connection.CreateCommand())
+            {
+                lookup.CommandText =
+                    "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE;";
+                lookup.Parameters.AddWithValue("$path",
+                    Path.Combine(albumB, "b-00-topaz.jpg"));
+                mixedAlbumId = Convert.ToInt64(lookup.ExecuteScalar());
+            }
+            selected.Add(mixedAlbumId);
+            surface.SetSelection(selected);
+            tagOr.IsChecked = true;
+            tagAnd.IsChecked = true;
+            Until(window, () => tagRows.Children.OfType<TextBlock>()
+                .Any(text => text.Text.Contains(
+                    "Kein Tag ist auf allen 3 ausgewählten Bildern vorhanden.",
+                    StringComparison.Ordinal)),
+                "AND did not explain the empty intersection across three photos.");
+            selected.Remove(mixedAlbumId);
+            surface.SetSelection(selected);
             tagOr.IsChecked = true;
             // RefreshTagSidebarAsync clears the panel before its asynchronous
             // scheduler read. Wait for the OR projection to be republished
