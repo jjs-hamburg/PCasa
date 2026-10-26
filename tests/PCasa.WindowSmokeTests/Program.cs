@@ -62,6 +62,25 @@ internal static class Program
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
 
+            // The two approved backgrounds must decode from EMBEDDED resources
+            // and use mirrored repeats, not fall back to the old 12px lines.
+            var canvasFactory = typeof(PCasa.App.MainWindow).GetMethod(
+                "MakeCanvasBrush", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+                ?? throw new Exception("Canvas brush factory missing.");
+            foreach (var light in new[] { true, false })
+            {
+                var canvas = canvasFactory.Invoke(null, [light]) as ImageBrush
+                    ?? throw new Exception("Canvas background is not image-backed.");
+                if (canvas.TileMode != TileMode.FlipXY ||
+                    canvas.ViewportUnits != BrushMappingMode.Absolute ||
+                    canvas.Viewport.Width != 128 || canvas.Viewport.Height != 128 ||
+                    canvas.ImageSource is not System.Windows.Media.Imaging.BitmapSource bitmap ||
+                    bitmap.PixelWidth != 128 || bitmap.PixelHeight != 128)
+                    throw new Exception("Canvas tile is missing or not rendered at native size.");
+            }
+            Console.WriteLine("PASS: Both woven-canvas backgrounds are embedded and decode correctly.");
+
             // The actual WPF layout determines the distance between adjacent
             // menu items. This detects changing margins or a wrong template.
             var gaps = new List<double>();

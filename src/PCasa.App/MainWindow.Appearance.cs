@@ -334,27 +334,33 @@ public partial class MainWindow
             new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
     }
 
+    // The two approved woven-canvas samples are packaged once as WPF resources.
+    // Keep the existing background choices and their single application path.
+    private static readonly Lazy<Brush> LightCanvasBrush =
+        new(() => CreateCanvasBrush("CanvasLight.jpg"));
+    private static readonly Lazy<Brush> DarkCanvasBrush =
+        new(() => CreateCanvasBrush("CanvasDark.jpg"));
+
     private static Brush MakeCanvasBrush(bool light)
+        => light ? LightCanvasBrush.Value : DarkCanvasBrush.Value;
+
+    private static Brush CreateCanvasBrush(string filename)
     {
-        var background = light ? Color.FromRgb(234, 229, 217) : Color.FromRgb(48, 47, 44);
-        var thread = light ? Color.FromArgb(4, 120, 111, 91) : Color.FromArgb(5, 220, 213, 195);
-        var group = new DrawingGroup();
-        group.Children.Add(new GeometryDrawing(new SolidColorBrush(background), null,
-            new RectangleGeometry(new Rect(0, 0, 12, 12))));
-        var pen = new Pen(new SolidColorBrush(thread), 0.6);
-        foreach (var n in new[] { 1d, 3d, 5d, 7d, 9d, 11d })
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.UriSource = new Uri(
+            "pack://application:,,,/Assets/" + filename, UriKind.Absolute);
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.EndInit();
+        bitmap.Freeze();
+        var brush = new ImageBrush(bitmap)
         {
-            group.Children.Add(new GeometryDrawing(null, pen,
-                new LineGeometry(new Point(0, n), new Point(12, n))));
-            group.Children.Add(new GeometryDrawing(null, pen,
-                new LineGeometry(new Point(n, 0), new Point(n, 12))));
-        }
-        var brush = new DrawingBrush(group)
-        {
-            TileMode = TileMode.Tile,
+            // Mirrored tiles avoid sharp joins without scaling the weave to
+            // the size of the whole gallery or introducing extra layers.
+            TileMode = TileMode.FlipXY,
             ViewportUnits = BrushMappingMode.Absolute,
-            Viewport = new Rect(0, 0, 12, 12),
-            Stretch = Stretch.None
+            Viewport = new Rect(0, 0, 128, 128),
+            Stretch = Stretch.Fill
         };
         brush.Freeze();
         return brush;

@@ -15,4 +15,9 @@
     <PackageReference Include="NetVips" />
     <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
+  
+  <ItemGroup>
+    <Resource Include="Assets/CanvasLight.jpg" />
+    <Resource Include="Assets/CanvasDark.jpg" />
+  </ItemGroup>
 </Project>
