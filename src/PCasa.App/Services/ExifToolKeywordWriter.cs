@@ -160,6 +160,10 @@ public static class ExifToolKeywordWriter
             // bounded response timeout.
             cancellationToken.ThrowIfCancellationRequested();
             TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.FromMinutes(30));
+            // A younger temp may belong to another PC or an in-flight
+            // writer. Never remove it in our exception handler.
+            var temporaryExistedBeforeWrite =
+                File.Exists(imagePath + "_exiftool_tmp");
 
             // ExifTool -stay_open consumes one argument per line. -executeNN
             // delimits each complete write and its {readyNN} acknowledgment.
@@ -213,16 +217,23 @@ public static class ExifToolKeywordWriter
                 // ReadResponseOrReset has terminated the owned ExifTool
                 // process. Never touch a temp file unless the full original
                 // still exists; its contents remain the only safe source.
-                TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
+                if (!temporaryExistedBeforeWrite)
+                    TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
                 throw;
             }
 
             // Stay-open mode does not return a separate exit code per request.
             // The response acknowledges the write; uncertain results remain errors.
-            if (!response.ToString().Contains("1 image files updated",
+            if (!response.Contains("1 image files updated",
                 StringComparison.Ordinal))
+            {
+                // ExifTool acknowledged a failed request. Its own operation
+                // has stopped, but never touch a temp that predated our write.
+                if (!temporaryExistedBeforeWrite)
+                    TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
                 throw new IOException("ExifTool konnte die Datei nicht aktualisieren: " +
-                    response.ToString().Trim());
+                    response.Trim());
+            }
         }
 
         // ExifTool's precise, deterministic temp name for this original.
