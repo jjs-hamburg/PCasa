@@ -3586,8 +3586,20 @@ internal static class Program
             ?? throw new Exception("ExifTool session did not start its own process.");
         if (!ExifToolKeywordWriter.HasLiveSessions || child.HasExited)
             throw new Exception("Owned ExifTool process was not registered.");
+        var childPid = child.Id;
         ExifToolKeywordWriter.StopAll();
-        if (!child.HasExited || ExifToolKeywordWriter.HasLiveSessions)
+        // Dispose releases Process handles; inspecting child.HasExited after
+        // dispose raises InvalidOperationException even if it exited cleanly.
+        static bool IsProcessAlive(int pid)
+        {
+            try
+            {
+                using var probe = System.Diagnostics.Process.GetProcessById(pid);
+                return !probe.HasExited;
+            }
+            catch (ArgumentException) { return false; }
+        }
+        if (IsProcessAlive(childPid) || ExifToolKeywordWriter.HasLiveSessions)
             throw new Exception("Shutdown left an owned ExifTool process running.");
         // The durable file writer must still work after an orderly shutdown
         // of the previous native session, without sharing a dead process.
