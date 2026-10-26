@@ -159,7 +159,12 @@ internal static class Program
     {
         var package = new SchedulerTaskPackage("test:durable:dynamic");
         package.AddStep(_ => Task.CompletedTask);
-        package.OnStepCompleted = _ => { };
+        // Production owns this internal callback; bind it reflectively here
+        // instead of widening the scheduler's public API just for a test.
+        typeof(SchedulerTaskPackage).GetProperty("OnStepCompleted",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(package, (Action<int>)(_ => { }));
         var rejected = false;
         try { package.InsertNext(_ => Task.CompletedTask); }
         catch (InvalidOperationException) { rejected = true; }
