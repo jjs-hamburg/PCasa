@@ -265,6 +265,9 @@ public partial class MainWindow
     }
 
     private int _tagSidebarRefreshVersion;
+    private long[] _tagSidebarCountImageIds = Array.Empty<long>();
+    private KeyValuePair<string, int>[] _tagSidebarOriginalCounts =
+        Array.Empty<KeyValuePair<string, int>>();
 
     private async Task RefreshTagSidebarAsync()
     {
@@ -299,65 +302,85 @@ public partial class MainWindow
             }, () => revision == _tagSidebarRefreshVersion,
                 workKind: SchedulerWorkKind.CatalogRead);
             if (revision != _tagSidebarRefreshVersion || _sidebarMode != "Tags") return;
-            var allOnly = TagLogicAnd.IsChecked == true;
-            var filtered = counts.Where(pair => !allOnly || pair.Value == selected.Length).ToArray();
-            foreach (var pair in filtered)
-            {
-                var row = new DockPanel { Margin = new Thickness(3, 5, 3, 5) };
-                // Use a self-contained template so global button styles cannot
-                // hide the delete glyph in either light or dark appearance.
-                var deleteGlyph = new System.Windows.Shapes.Path
-                {
-                    Data = System.Windows.Media.Geometry.Parse("M 4,4 L 16,16 M 16,4 L 4,16"),
-                    Stroke = System.Windows.Media.Brushes.IndianRed,
-                    StrokeThickness = 1.8,
-                    StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
-                    StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
-                    Width = 12,
-                    Height = 12,
-                    Stretch = System.Windows.Media.Stretch.Uniform
-                };
-                var remove = new Button
-                {
-                    Content = deleteGlyph,
-                    ToolTip = "Tag aus allen ausgewählten Bildern entfernen",
-                    Width = 22,
-                    Height = 22,
-                    Background = System.Windows.Media.Brushes.Transparent,
-                    BorderThickness = new Thickness(0),
-                    Cursor = System.Windows.Input.Cursors.Hand,
-                    HorizontalAlignment = HorizontalAlignment.Right,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                var template = new ControlTemplate(typeof(Button));
-                var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-                presenter.SetValue(ContentPresenter.ContentProperty,
-                    new System.Windows.TemplateBindingExtension(
-                        System.Windows.Controls.ContentControl.ContentProperty));
-                presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty,
-                    HorizontalAlignment.Center);
-                presenter.SetValue(FrameworkElement.VerticalAlignmentProperty,
-                    VerticalAlignment.Center);
-                template.VisualTree = presenter;
-                remove.Template = template;
-                remove.Click += (_, _) => StageTagChange(pair.Key, remove: true);
-                DockPanel.SetDock(remove, Dock.Right);
-                row.Children.Add(remove);
-                var label = new TextBlock {
-                    Text = $"🏷  {pair.Key}  [{pair.Value}]",
-                    VerticalAlignment = VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    ToolTip = pair.Key
-                };
-                row.Children.Add(label);
-                TagRowsPanel.Children.Add(row);
-            }
+            _tagSidebarCountImageIds = selected.OrderBy(id => id).ToArray();
+            _tagSidebarOriginalCounts = counts;
+            RenderTagRows();
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Tags.Sidebar", ex);
             if (revision == _tagSidebarRefreshVersion)
                 TagRowsPanel.Children.Add(new TextBlock { Text = "Tags konnten nicht gelesen werden." });
+        }
+    }
+
+    private void RenderTagRows()
+    {
+        if (TagRowsPanel is null) return;
+        var selected = _selectedImageIds.OrderBy(id => id).ToArray();
+        if (!_tagSidebarCountImageIds.SequenceEqual(selected)) return;
+        var projected = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in _tagSidebarOriginalCounts)
+            projected[pair.Key] = pair.Value;
+        if (_tagDraftImageIds is not null && _tagDraftImageIds.SequenceEqual(selected))
+            foreach (var (tag, remove) in _tagDraft)
+            {
+                if (remove) projected.Remove(tag);
+                else projected[tag] = selected.Length;
+            }
+        TagRowsPanel.Children.Clear();
+        var allOnly = TagLogicAnd.IsChecked == true;
+        var filtered = projected
+            .Where(pair => !allOnly || pair.Value == selected.Length)
+            .OrderBy(pair => pair.Key, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+        foreach (var pair in filtered)
+        {
+            var row = new DockPanel { Margin = new Thickness(3, 5, 3, 5) };
+            var deleteGlyph = new System.Windows.Shapes.Path
+            {
+                Data = System.Windows.Media.Geometry.Parse("M 4,4 L 16,16 M 16,4 L 4,16"),
+                Stroke = System.Windows.Media.Brushes.IndianRed,
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
+                StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
+                Width = 12,
+                Height = 12,
+                Stretch = System.Windows.Media.Stretch.Uniform
+            };
+            var remove = new Button
+            {
+                Content = deleteGlyph,
+                ToolTip = "Tag aus allen ausgewählten Bildern entfernen",
+                Width = 22,
+                Height = 22,
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var template = new ControlTemplate(typeof(Button));
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.ContentProperty,
+                new System.Windows.TemplateBindingExtension(
+                    System.Windows.Controls.ContentControl.ContentProperty));
+            presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            template.VisualTree = presenter;
+            remove.Template = template;
+            remove.Click += (_, _) => StageTagChange(pair.Key, remove: true);
+            DockPanel.SetDock(remove, Dock.Right);
+            row.Children.Add(remove);
+            row.Children.Add(new TextBlock {
+                Text = $"🏷  {pair.Key}  [{pair.Value}]",
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = pair.Key
+            });
+            TagRowsPanel.Children.Add(row);
         }
     }
 
@@ -499,36 +522,10 @@ public partial class MainWindow
 
     private void RefreshTagDraftControls()
     {
-        if (TagDraftRows is null) return;
-        TagDraftRows.Children.Clear();
-        foreach (var (tag, remove) in _tagDraft.OrderBy(x => x.Key,
-                     StringComparer.CurrentCultureIgnoreCase))
-        {
-            var row = new DockPanel { Margin = new Thickness(2, 1, 2, 1) };
-            var undo = new Button {
-                Content = "×", Width = 21, Height = 21,
-                ToolTip = "Vormerkung rückgängig machen",
-                Style = (Style)FindResource("PcasaStatusButtonStyle")
-            };
-            undo.Click += (_, _) => {
-                _tagDraft.Remove(tag);
-                if (_tagDraft.Count == 0) _tagDraftImageIds = null;
-                RefreshTagDraftControls();
-            };
-            DockPanel.SetDock(undo, Dock.Right);
-            row.Children.Add(undo);
-            row.Children.Add(new TextBlock {
-                Text = (remove ? "− " : "+ ") + tag,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis
-            });
-            TagDraftRows.Children.Add(row);
-        }
-        TagDraftCaption.Text = _tagDraft.Count == 0
-            ? "Keine Änderungen vorgemerkt"
-            : $"{_tagDraft.Count} Tag-Änderungen für {_tagDraftImageIds?.Length ?? 0} Bilder vorgemerkt";
+        // The existing tag list IS the editor; no second staging list.
         TagDraftOkButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
         TagDraftCancelButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
+        RenderTagRows();
     }
 
     private async void TagDraftCancel_Click(object sender, RoutedEventArgs e)
