@@ -416,7 +416,11 @@ public sealed class ImageTagRepository
                     File.SetLastWriteTimeUtc(path,
                         new DateTime(oldTicks, DateTimeKind.Utc));
             }
-            token.ThrowIfCancellationRequested();
+            // The physical ExifTool write is now complete. Even if a
+            // higher-priority task requested a yield during those bytes,
+            // checkpoint this result in SQLite before surrendering the
+            // scheduler step. Otherwise the intent would be needlessly
+            // replayed while an orphaned native temp might block progress.
             var after = new FileInfo(path);
             var newSize = after.Length;
             var newTicks = after.LastWriteTimeUtc.Ticks;
