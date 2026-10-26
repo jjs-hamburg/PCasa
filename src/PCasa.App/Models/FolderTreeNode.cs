@@ -40,6 +40,18 @@ internal sealed class FolderTreeTag : INotifyPropertyChanged
     public string FullPath { get; }
     public long? PhotoFolderId { get; }
 
+    private bool _hasPendingTagWrites;
+    public bool HasPendingTagWrites
+    {
+        get => _hasPendingTagWrites;
+        set
+        {
+            if (_hasPendingTagWrites == value) return;
+            _hasPendingTagWrites = value;
+            OnPropertyChanged();
+        }
+    }
+
     private string _statusCode = "None";
     private string _statusDescription = "";
 
