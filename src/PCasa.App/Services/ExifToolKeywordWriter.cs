@@ -152,19 +152,22 @@ public static class ExifToolKeywordWriter
             // ExifTool treats repeated '=' for a list-type tag as one
             // replacement list. Write both interoperable Picasa fields in
             // the same file transaction; remove both when the list is empty.
-            process.StandardInput.WriteLine("-XMP-dc:Subject=");
-            process.StandardInput.WriteLine("-IPTC:Keywords=");
-            if (keywords.Count > 0)
+            if (keywords.Count == 0)
             {
-                // IPTC IIM keywords have a 64-byte limit per item. Never
-                // silently truncate Unicode user tags during dual writes.
+                process.StandardInput.WriteLine("-XMP-dc:Subject=");
+                process.StandardInput.WriteLine("-IPTC:Keywords=");
+            }
+            else
+            {
+                // Repeated '=' for ExifTool list tags defines one replacement
+                // list. Mixing '=' and '+=' would change its semantics.
                 foreach (var keyword in keywords)
                 {
                     if (Encoding.UTF8.GetByteCount(keyword) > 64)
                         throw new InvalidDataException(
                             "IPTC-Schlagwort überschreitet 64 UTF-8-Bytes: " + keyword);
-                    process.StandardInput.WriteLine("-XMP-dc:Subject+=" + keyword);
-                    process.StandardInput.WriteLine("-IPTC:Keywords+=" + keyword);
+                    process.StandardInput.WriteLine("-XMP-dc:Subject=" + keyword);
+                    process.StandardInput.WriteLine("-IPTC:Keywords=" + keyword);
                 }
                 process.StandardInput.WriteLine("-IPTC:CodedCharacterSet=UTF8");
             }
