@@ -112,7 +112,8 @@ public sealed class DurablePackageJournal
             UPDATE scheduler_packages
                SET state=$state, completed_steps=MAX(completed_steps,COALESCE($step,completed_steps)),
                    error=$error,updated_utc=$now
-             WHERE package_key=$key;
+             WHERE package_key=$key
+               AND state NOT IN ('completed','failed','canceled');
             """;
         cmd.Parameters.AddWithValue("$state", state);
         cmd.Parameters.AddWithValue("$step", (object?)completed ?? DBNull.Value);
