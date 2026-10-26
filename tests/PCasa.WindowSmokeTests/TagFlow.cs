@@ -792,6 +792,56 @@ internal static class TagFlow
             endManual.Invoke(window, ["tags:smoke:third"]);
             Console.WriteLine(
                 "PASS: Tag series count stays cumulative across older, newer and newly added packages.");
+            // Recovery must use each immutable package's own image count.
+            // Previously the UI assigned the ENTIRE pending-tag image count
+            // to every recovered package and multiplied the grand total.
+            // Two separate requests for the SAME photo are still two file
+            // steps, not one "unique photo".
+            long[] fiveImageIds;
+            using (var connection = db.OpenConnection())
+            using (var query = connection.CreateCommand())
+            {
+                query.CommandText = "SELECT id FROM images ORDER BY id LIMIT 5;";
+                using var reader = query.ExecuteReader();
+                var ids = new List<long>();
+                while (reader.Read()) ids.Add(reader.GetInt64(0));
+                fiveImageIds = ids.ToArray();
+            }
+            if (new ImageTagRepository(db).QueueTagEdit(
+                    fiveImageIds, "recovery-count-smoke", false) != 5)
+                throw new Exception("Could not stage five distinct recovery targets.");
+            var journal = new DurablePackageJournal(db);
+            var sameImagePayload = System.Text.Json.JsonSerializer.Serialize(
+                new
+                {
+                    ImageIds = new[] { fiveImageIds[0] },
+                    Changes = new[] { new { Tag = "recovery-count-smoke", Remove = false } }
+                });
+            var firstKey = "tags:package:smoke-first-" + Guid.NewGuid().ToString("N");
+            var secondKey = "tags:package:smoke-second-" + Guid.NewGuid().ToString("N");
+            journal.Put(firstKey, "tag-edit-v1", sameImagePayload,
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            journal.Put(secondKey, "tag-edit-v1", sameImagePayload,
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            var restore = typeof(PCasa.App.MainWindow).GetMethod(
+                "RestoreVisiblePendingTagPackages",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Recovered Tag progress projection missing.");
+            restore.Invoke(window, null);
+            Until(window, () =>
+                (presenterField.GetValue(window)
+                    as PCasa.App.BrowseCacheProgressWindow)?
+                    .FindName("CountText") is TextBlock number &&
+                number.Text == "0 / 2",
+                "Recovered Tag progress multiplied the five pending images by two packages.");
+            journal.SetState(firstKey, "completed");
+            journal.SetState(secondKey, "completed");
+            endManual.Invoke(window, [firstKey]);
+            endManual.Invoke(window, [secondKey]);
+            Console.WriteLine(
+                "PASS: Two separate Tag packages for the same photo count twice, without duplicating the recovery backlog.");
+
             Console.WriteLine(
                 "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
