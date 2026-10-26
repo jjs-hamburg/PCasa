@@ -283,6 +283,41 @@ public partial class MainWindow
     private BrowseCacheProgressWindow? _visibleManualWindow;
     private bool _visibleManualOwnsWindow;
 
+    // Read-only UI projection across a continuous burst of durable Tag jobs.
+    // Entries remain visible in this projection after each package finishes,
+    // until ALL tag packages of this burst finish. It is never an execution
+    // queue and does not replace scheduler or pending_tag_edits state.
+    private readonly Dictionary<string, (int Total, int Processed)>
+        _visibleTagSeries = new(StringComparer.Ordinal);
+
+    private static bool IsTagSeriesKey(string key)
+        => key.StartsWith("tags:", StringComparison.Ordinal);
+
+    private void UpdateVisibleTagSeries(SchedulerJobSnapshot status)
+    {
+        if (!_visibleTagSeries.TryGetValue(status.Key, out var previous))
+            return;
+        var total = Math.Max(previous.Total, status.Total);
+        var processed = status.State == SchedulerJobState.Completed
+            ? total
+            : Math.Clamp(Math.Max(previous.Processed, status.Processed), 0, total);
+        _visibleTagSeries[status.Key] = (total, processed);
+    }
+
+    private void RenderVisibleTagSeries()
+    {
+        if (_visibleManualActiveKey is null ||
+            !IsTagSeriesKey(_visibleManualActiveKey)) return;
+        // Display just one truthful overall count for the tag work burst.
+        // Total grows when another manual packet is submitted; completed
+        // packets remain in the sum until the whole burst ends.
+        var processed = _visibleTagSeries.Values.Sum(x => (long)x.Processed);
+        var total = _visibleTagSeries.Values.Sum(x => (long)x.Total);
+        _visibleManualWindow?.UpdateTagAggregateProgress(
+            (int)Math.Min(int.MaxValue, processed),
+            (int)Math.Min(int.MaxValue, total));
+    }
+
     private void BeginVisibleManualOperation(string key, string title, int total)
     {
         if (_visibleManualOperations.ContainsKey(key)) return;
@@ -296,6 +331,8 @@ public partial class MainWindow
             _scheduler.ProgressChanged += VisibleManualProgressChanged;
         }
         _visibleManualOperations.Add(key, (title, total));
+        if (IsTagSeriesKey(key))
+            _visibleTagSeries.TryAdd(key, (Math.Max(0, total), 0));
         _visibleManualOrder.Add(key);
         DisplayManualOperation(key);
     }
@@ -307,7 +344,11 @@ public partial class MainWindow
         _visibleManualWindow?.BeginManualOperation(item.Title, item.Total);
         var latest = _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
         if (latest is not null)
+        {
+            if (IsTagSeriesKey(key)) UpdateVisibleTagSeries(latest);
             _visibleManualWindow?.UpdateManualOperation(latest);
+        }
+        RenderVisibleTagSeries();
     }
 
     private bool _manualThumbnailBusy;
@@ -386,19 +427,35 @@ public partial class MainWindow
         // the UI-owned job dictionary on a background thread.
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (_visibleManualOperations.ContainsKey(status.Key) &&
-                status.Key == _visibleManualActiveKey)
+            if (!_visibleManualOperations.ContainsKey(status.Key)) return;
+            if (IsTagSeriesKey(status.Key))
+                UpdateVisibleTagSeries(status);
+            if (status.Key == _visibleManualActiveKey)
             {
                 _visibleManualWindow?.UpdateManualOperation(status);
                 RequestVisibleTagThumbnail(status);
             }
+            // A *different* older Tag package may have progressed in its
+            // scheduler lane. Its completed images count toward the SAME
+            // overall total even while the newest package is displayed.
+            RenderVisibleTagSeries();
         }));
     }
 
     private void EndVisibleManualOperation(string key)
     {
         if (!_visibleManualOperations.Remove(key)) return;
+        if (IsTagSeriesKey(key) &&
+            _visibleTagSeries.TryGetValue(key, out var last))
+        {
+            var final = _scheduler.Snapshot().LastOrDefault(x => x.Key == key);
+            if (final is not null) UpdateVisibleTagSeries(final);
+            // Do not count failed originals as successful. The scheduler's
+            // last confirmed cursor/progress remains authoritative.
+        }
         _visibleManualOrder.Remove(key);
+        if (!_visibleManualOperations.Keys.Any(IsTagSeriesKey))
+            _visibleTagSeries.Clear();
         if (_visibleManualOrder.Count != 0)
         {
             if (_visibleManualActiveKey == key)
