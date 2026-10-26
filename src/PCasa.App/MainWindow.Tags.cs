@@ -465,7 +465,10 @@ public partial class MainWindow
                     try
                     {
                         using var writer = new ExifToolKeywordWriter.Session();
-                        repo.ApplyPendingImageEdits(imageId, edits, writer, token);
+                        repo.ApplyPendingImageEdits(imageId, edits, writer, token,
+                            path => _scheduler.ReportProgress(key,
+                                "Tags in Originaldateien schreiben",
+                                completed - 1, ids.Length, path));
                     }
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
@@ -503,6 +506,8 @@ public partial class MainWindow
             var ids = repo.PendingEdits(int.MaxValue).Select(edit => edit.ImageId)
                 .Distinct().ToArray();
             var failures = new List<string>();
+            _scheduler.ReportProgress(key, "Tags in Originaldateien schreiben",
+                0, ids.Length);
             for (var i = 0; i < ids.Length; i++)
             {
                 token.ThrowIfCancellationRequested();
@@ -513,7 +518,10 @@ public partial class MainWindow
                     if (edits.Count > 0)
                     {
                         using var writer = new ExifToolKeywordWriter.Session();
-                        repo.ApplyPendingImageEdits(imageId, edits, writer, token);
+                        repo.ApplyPendingImageEdits(imageId, edits, writer, token,
+                            path => _scheduler.ReportProgress(key,
+                                "Tags in Originaldateien schreiben",
+                                i, ids.Length, path));
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -533,39 +541,72 @@ public partial class MainWindow
             }
             var remaining = repo.PendingEdits(1).Count > 0;
             if (remaining)
+            {
+                _scheduler.ReportProgress(key,
+                    "Tag-Schreibfehler – Aufträge bleiben vorgemerkt",
+                    ids.Length, ids.Length);
                 throw new DurablePackageRetryException(
                     "Tag-Schreibaufträge weiterhin offen (" +
                     failures.Count + " Fehler). " +
                     string.Join("; ", failures.Take(3)));
+            }
             return Task.CompletedTask;
         });
         return package;
+    }
+
+    // The scheduler journal provides identity/order. This is ONLY a WPF
+    // projection of recovered user work, registered before the workers start
+    // restored packages. The presenter does not own or execute the jobs.
+    private readonly HashSet<string> _recoveredTagPresentationKeys =
+        new(StringComparer.Ordinal);
+
+    private void RestoreVisiblePendingTagPackages()
+    {
+        var pending = new DurablePackageJournal(_database).Pending()
+            .Where(p => p.Type is "tag-edit-v1" or
+                "tag-recovery-v1" or "tag-recovery-v2")
+            .ToArray();
+        if (pending.Length == 0) return;
+        var images = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
+            .Select(p => p.ImageId).Distinct().Count();
+        foreach (var record in pending)
+        {
+            _recoveredTagPresentationKeys.Add(record.Key);
+            BeginVisibleManualOperation(record.Key,
+                "Tags in Originaldateien schreiben", Math.Max(1, images));
+        }
     }
 
     private void StartPendingTagDrain()
     {
         if (_tagRecoveryQueued || Dispatcher.HasShutdownStarted ||
             _scheduler.HasActiveDurablePackageType(TagRecoveryType)) return;
-        if (new ImageTagRepository(_database).PendingEdits(1).Count == 0) return;
+        var imageIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
+            .Select(edit => edit.ImageId).Distinct().ToArray();
+        if (imageIds.Length == 0) return;
         _tagRecoveryQueued = true;
         var key = "tags:recover:" + Guid.NewGuid().ToString("N");
         try
         {
             const string payload = "{}";
             var package = BuildTagRecoveryPackageV2(key, payload);
+            BeginVisibleManualOperation(key,
+                "Tags in Originaldateien schreiben", imageIds.Length);
             var task = _scheduler.EnqueueDurablePackageAsync(package,
                 TagRecoveryType, payload, SchedulerPriority.ManualAction);
-            _ = ObserveTagRecoveryAsync(task);
+            _ = ObserveTagRecoveryAsync(task, key);
             _ = RefreshPendingTagDotsAsync();
         }
         catch (Exception ex)
         {
             _tagRecoveryQueued = false;
+            EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Tags.RecoveryQueue", ex);
         }
     }
 
-    private async Task ObserveTagRecoveryAsync(Task completion)
+    private async Task ObserveTagRecoveryAsync(Task completion, string key)
     {
         try { await completion; }
         catch (OperationCanceledException) { }
@@ -586,7 +627,10 @@ public partial class MainWindow
         {
             _tagRecoveryQueued = false;
             if (!Dispatcher.HasShutdownStarted)
+            {
+                EndVisibleManualOperation(key);
                 _ = RefreshPendingTagDotsAsync();
+            }
         }
     }
 
@@ -673,7 +717,10 @@ public partial class MainWindow
                 if (edits.Count > 0)
                 {
                     using var writer = new ExifToolKeywordWriter.Session();
-                    repo.ApplyPendingImageEdits(id, edits, writer, token);
+                    repo.ApplyPendingImageEdits(id, edits, writer, token,
+                        path => _scheduler.ReportProgress(key,
+                            "Tags in Originaldateien schreiben",
+                            completed - 1, request.ImageIds.Length, path));
                 }
                 _scheduler.ReportProgress(key, "Originaldateien schreiben",
                     completed, request.ImageIds.Length);
@@ -699,6 +746,8 @@ public partial class MainWindow
         _tagWriteActive = true;
         try
         {
+            BeginVisibleManualOperation(key,
+                "Tags in Originaldateien schreiben", ids.Length);
             var completion = _scheduler.EnqueueDurablePackageAsync(package,
                 "tag-edit-v1", payload, SchedulerPriority.ManualAction);
             _ = ObserveTagPackageAsync(completion, key);
@@ -711,6 +760,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
+            EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Tags.PackageQueue", ex);
             StatusText.Text = "Tag-Paket konnte nicht eingeplant werden";
             MessageBox.Show(this, ex.Message, "Tag-Änderung fehlgeschlagen",
@@ -752,7 +802,10 @@ public partial class MainWindow
         finally
         {
             if (!Dispatcher.HasShutdownStarted)
+            {
+                EndVisibleManualOperation(key);
                 _ = RefreshPendingTagDotsAsync();
+            }
         }
     }
 
