@@ -625,6 +625,12 @@ internal static class TagFlow
                 var deferred = false;
                 try { firstReplay.GetAwaiter().GetResult(); }
                 catch (DurablePackageRetryException) { deferred = true; }
+                var firstProgress = scheduler.Snapshot()
+                    .LastOrDefault(snapshot => snapshot.Key == recoveryKey);
+                if (firstProgress is null ||
+                    firstProgress.Total != 2 || firstProgress.Processed != 1)
+                    throw new Exception(
+                        "An offline original was falsely counted as a confirmed Tag write.");
                 if (!deferred ||
                     !new ImageTagRepository(db).PendingEdits().Any(edit =>
                         edit.ImageId == editorIds[1]) ||
