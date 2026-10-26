@@ -411,6 +411,7 @@ public partial class MainWindow
     {
         if (_tagDrainActive || Dispatcher.HasShutdownStarted) return;
         _tagDrainActive = true;
+        _ = RefreshPendingTagDotsAsync();
         _ = DrainPendingTagsAsync();
     }
 
@@ -439,6 +440,9 @@ public partial class MainWindow
                             {
                                 repo.ApplyPendingImageEdits(group.Key, group.ToArray(), writer, token);
                                 processed++;
+                                if (!Dispatcher.HasShutdownStarted)
+                                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                                        _ = RefreshPendingTagDotsAsync()));
                             }
                             catch (OperationCanceledException) { throw; }
                             catch (Exception ex)
@@ -496,6 +500,7 @@ public partial class MainWindow
                 !string.IsNullOrWhiteSpace(TagSearchBox.Text))
                 await ApplyTagFilterAsync();
             _tagDrainFailures.Clear();
+            _ = RefreshPendingTagDotsAsync();
             StartPendingTagDrain();
         }
         catch (Exception ex)
