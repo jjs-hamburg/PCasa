@@ -740,6 +740,78 @@ public partial class MainWindow
         }
     }
 
+    private sealed record DurableDeleteItem(long Id, string Path);
+
+    private SchedulerTaskPackage BuildDurableDeletePackage(string key, string payload)
+        => BuildDurableDeletePackage(key, payload, null, null);
+
+    private SchedulerTaskPackage BuildDurableDeletePackage(string key, string payload,
+        List<long>? succeeded, List<string>? errors)
+    {
+        var selected = System.Text.Json.JsonSerializer.Deserialize<DurableDeleteItem[]>(payload)
+            ?? throw new InvalidDataException("Ungültiger Löschauftrag.");
+        var package = new SchedulerTaskPackage(key);
+        for (var i = 0; i < selected.Length; i++)
+        {
+            var (id, path) = selected[i];
+            var ordinal = i + 1;
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    using (SourceFileLocks.Enter(path, token))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var currentId = CatalogImageIdAtPath(path);
+                        var presence = SourceFilePresence.Probe(path);
+                        if (currentId == id && presence == FilePresence.Present)
+                        {
+                            if (PathClassifier.Classify(path).IsNetwork)
+                                File.Delete(path);
+                            else
+                                FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
+                                    RecycleOption.SendToRecycleBin);
+                            // The operation may be interrupted between the
+                            // physical deletion and SQLite reconciliation.
+                            if (!new CatalogRemovalService(_database).DetachImage(id, path))
+                                throw new InvalidOperationException(
+                                    "Datei entfernt, Katalogeintrag nicht bestätigt.");
+                        }
+                        else if (currentId == id &&
+                                 presence == FilePresence.ConfirmedMissing)
+                        {
+                            // Crash after the physical delete, before the
+                            // catalogue commit. Resume only when missing is
+                            // authoritative, never for an unreachable NAS.
+                            if (!new CatalogRemovalService(_database).DetachImage(id, path))
+                                throw new InvalidOperationException(
+                                    "Bereits gelöschte Datei nicht aus dem Katalog entfernt.");
+                        }
+                        else if (currentId is null &&
+                                 presence == FilePresence.ConfirmedMissing)
+                        {
+                            // Already fully committed before the crash.
+                        }
+                        else throw new InvalidOperationException(
+                            "Unklarer oder inzwischen veränderter Dateizustand: " + path);
+                    }
+                    succeeded?.Add(id);
+                }
+                catch (Exception ex) when (ex is IOException or
+                    UnauthorizedAccessException or InvalidOperationException)
+                {
+                    errors?.Add(Path.GetFileName(path) + ": " + ex.Message);
+                    PCasaDiagnostics.Write("Gallery.Delete", ex);
+                }
+                _scheduler.ReportProgress(key, "Bilder löschen",
+                    ordinal, selected.Length, path);
+                return Task.CompletedTask;
+            });
+        }
+        return package;
+    }
+
     private async Task DeleteSelectedImagesAsync()
     {
         if (_selectedImageIds.Count == 0) return;
@@ -777,46 +849,11 @@ public partial class MainWindow
         try
         {
             BeginVisibleManualOperation(key, "Bilder löschen", selected.Length);
-            var package = new SchedulerTaskPackage(key);
-            foreach (var (id, path) in selected)
-            {
-                package.AddStep(token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    try
-                    {
-                        using (SourceFileLocks.Enter(path, token))
-                        {
-                            token.ThrowIfCancellationRequested();
-                            // A suspended older transfer can change the path.
-                            // Never physically delete an image solely on the
-                            // basis of a stale gallery-selection snapshot.
-                            if (CatalogImageIdAtPath(path) != id)
-                                throw new InvalidOperationException(
-                                    "Bild wurde inzwischen verschoben oder ersetzt.");
-                            if (PathClassifier.Classify(path).IsNetwork)
-                                File.Delete(path);
-                            else
-                                FileSystem.DeleteFile(path, UIOption.OnlyErrorDialogs,
-                                    RecycleOption.SendToRecycleBin);
-                            if (!new CatalogRemovalService(_database).DetachImage(id, path))
-                                throw new InvalidOperationException(
-                                    "Datei entfernt, aber Katalogeintrag nicht bestätigt.");
-                        }
-                        succeeded.Add(id);
-                    }
-                    catch (Exception ex) when (ex is IOException or
-                        UnauthorizedAccessException or InvalidOperationException)
-                    {
-                        errors.Add(Path.GetFileName(path) + ": " + ex.Message);
-                        PCasaDiagnostics.Write("Gallery.Delete", ex);
-                    }
-                    _scheduler.ReportProgress(key, "Bilder löschen",
-                        succeeded.Count + errors.Count, selected.Length, path);
-                    return Task.CompletedTask;
-                });
-            }
-            await _scheduler.EnqueuePackageAsync(package, SchedulerPriority.ManualAction);
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                selected.Select(image => new DurableDeleteItem(image.Id, image.Path)).ToArray());
+            var package = BuildDurableDeletePackage(key, payload, succeeded, errors);
+            await _scheduler.EnqueueDurablePackageAsync(package,
+                "gallery-delete-v1", payload, SchedulerPriority.ManualAction);
             _selectedImageIds.ExceptWith(succeeded);
             if (_selectedImageIds.Count == 0) _gallerySelection.Reset();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);

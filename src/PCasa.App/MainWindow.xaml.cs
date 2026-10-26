@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
         _scheduler.RegisterDurablePackageType("transfer-reconcile-v1", BuildTransferRecoveryPackage);
+        _scheduler.RegisterDurablePackageType("gallery-delete-v1", BuildDurableDeletePackage);
         _folderRepository = new FolderRepository(_database);
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
