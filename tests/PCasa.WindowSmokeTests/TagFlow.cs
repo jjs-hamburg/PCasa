@@ -499,8 +499,8 @@ internal static class TagFlow
                         StringComparison.Ordinal)),
                 "New tag was not immediately shown with multi-image frequency and quick tag.");
             // Existing keywords are suggested from the local DB and never
-            // require another original JPEG/NAS read. A choice fills the
-            // editor; it is not committed until the user explicitly adds it.
+            // require another original JPEG/NAS read. A choice stages the tag
+            // immediately, but it is not committed until the user presses OK.
             if (!new ImageTagRepository(db).SuggestExistingTags("PCasa UI M")
                 .Contains(editableTag, StringComparer.Ordinal))
                 throw new Exception("Existing Unicode tag was absent from suggestions.");
@@ -523,12 +523,9 @@ internal static class TagFlow
                 Keyboard.PrimaryDevice, PresentationSource.FromVisual(tagInput)!, 0,
                 Key.Enter) { RoutedEvent = Keyboard.KeyDownEvent };
             pressEnter.Invoke(window, [tagInput, SimulateEnter()]);
-            if (tagInput.Text != editableTag || suggestionsPopup.IsOpen ||
-                tagOk.IsEnabled)
-                throw new Exception("First Enter did not accept the existing Tag without staging.");
-            pressEnter.Invoke(window, [tagInput, SimulateEnter()]);
-            if (!tagOk.IsEnabled)
-                throw new Exception("Second Enter did not stage the accepted Tag.");
+            if (tagInput.Text.Length != 0 || suggestionsPopup.IsOpen ||
+                !tagOk.IsEnabled)
+                throw new Exception("First Enter did not stage the selected Tag.");
             tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
             tagInput.Focus();
             Keyboard.Focus(tagInput);
@@ -545,11 +542,11 @@ internal static class TagFlow
                 {
                     RoutedEvent = UIElement.MouseLeftButtonUpEvent
                 }]);
-            if (tagInput.Text != editableTag || suggestionsPopup.IsOpen ||
-                tagOk.IsEnabled)
-                throw new Exception("Mouse selection did not fill Tag input only.");
-            tagInput.Clear();
-            Console.WriteLine("PASS: SQLite Tag autocomplete accepts mouse or arrows/Enter without premature edits.");
+            if (tagInput.Text.Length != 0 || suggestionsPopup.IsOpen ||
+                !tagOk.IsEnabled)
+                throw new Exception("Mouse click did not stage the selected Tag.");
+            tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
+            Console.WriteLine("PASS: Tag suggestions stage on one Enter or mouse click, without early writes.");
 
             tagAnd.IsChecked = true;
             Until(window, () => tagRows.Children.OfType<DockPanel>()

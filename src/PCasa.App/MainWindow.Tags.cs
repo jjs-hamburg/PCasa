@@ -944,8 +944,9 @@ public partial class MainWindow
         try
         {
             TagSuggestionsPopup.IsOpen = false;
-            TagEntryBox.Text = value;
-            TagEntryBox.CaretIndex = value.Length;
+            // Selection stages the tag immediately; the existing OK button
+            // remains responsible for committing the edits.
+            StageTagChange(value, remove: false);
             TagEntryBox.Focus();
         }
         finally { _acceptingTagSuggestion = false; }
