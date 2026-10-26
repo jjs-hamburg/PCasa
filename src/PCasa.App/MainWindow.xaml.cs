@@ -36,6 +36,7 @@ public partial class MainWindow : Window
 
         _database = new LocalDatabase();
         _database.Initialize();
+        _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
         _scheduler.EnableDurablePackages(_database);
         _scheduler.RegisterDurablePackageType("tag-recovery-v1", BuildTagRecoveryPackage);
         _scheduler.RegisterDurablePackageType("tag-edit-v1", BuildTagEditPackage);
