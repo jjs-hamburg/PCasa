@@ -173,6 +173,13 @@ internal static class Program
         if (journal.Pending().Single(x => x.Key == "older").CompletedSteps != 2)
             throw new Exception("Delayed checkpoint rewound the durable cursor.");
 
+        // Late writes from a retired worker cannot revive a terminal record.
+        journal.SetState("background", "completed", 0);
+        journal.SetState("background", "running", 1);
+        if (journal.Put("background", "test-case", "{}",
+                SchedulerPriority.Background, SchedulerWorkKind.CatalogScan).State != "completed")
+            throw new Exception("Late checkpoint reopened a completed package.");
+
         // A new journal instance simulates application restart.
         var restored = new DurablePackageJournal(database).Pending();
         if (restored.Count != 3 ||
