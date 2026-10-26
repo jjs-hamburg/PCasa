@@ -53,12 +53,27 @@ public sealed class ImageCatalogRepository
         command.ExecuteNonQuery();
     }
 
+    public IReadOnlyList<string> PendingRelocationIds()
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT operation_id FROM file_transfer_intents
+            ORDER BY created_utc, operation_id;
+            """;
+        using var reader = command.ExecuteReader();
+        var ids = new List<string>();
+        while (reader.Read()) ids.Add(reader.GetString(0));
+        return ids;
+    }
+
     // Reconciliation is conservative: an unreachable NAS or both names
     // existing is NEVER treated as permission to delete an original.
     // Only a confirmed, completed move is adopted into the same catalog.
     public (int Recovered, int Unresolved) RecoverRelocations(
         IReadOnlyList<MonitoredFolder> monitored,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? onlyOperationId = null)
     {
         var intents = new List<(string Id, long ImageId, string Source,
             string Destination, long RootId)>();
@@ -68,8 +83,10 @@ public sealed class ImageCatalogRepository
             command.CommandText = """
                 SELECT operation_id, image_id, source_path, destination_path,
                        target_root_id FROM file_transfer_intents
+                WHERE $only IS NULL OR operation_id = $only
                 ORDER BY created_utc;
                 """;
+            command.Parameters.AddWithValue("$only", (object?)onlyOperationId ?? DBNull.Value);
             using var reader = command.ExecuteReader();
             while (reader.Read())
                 intents.Add((reader.GetString(0), reader.GetInt64(1),

@@ -55,13 +55,14 @@ public partial class MainWindow
         // It may perform slow SMB probes without blocking WPF startup.
         // If any durable move is recovered, the SAME gallery publication
         // owner will bring the new catalog state into the current view.
-        _ = RecoverPendingFileTransfersAsync();
+        // Reconciliation is queued after registering and restoring durable P0 packages.
 
         // Durable user imports enter the scheduler BEFORE background legacy
         // repair. Both use the SAME catalog and generation guards.
         // Recovered user edits must be queued BEFORE background folder scans.
         _scheduler.RecoverDurablePackages();
         StartPendingTagDrain();
+        _ = RecoverPendingFileTransfersAsync();
         QueuePendingInitialScans();
         _ = ReconcilePersistedExclusionsAsync();
         await EnsureBrowseCacheAndRefreshAsync();
@@ -93,35 +94,72 @@ public partial class MainWindow
         }
     }
 
+    private SchedulerTaskPackage BuildTransferRecoveryPackage(string key, string payload)
+    {
+        var intentId = System.Text.Json.JsonSerializer.Deserialize<string>(payload)
+            ?? throw new InvalidDataException("Ungültige Dateiübertragungs-Wiederherstellung.");
+        var package = new SchedulerTaskPackage(key);
+        package.AddStep(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            var result = _imageCatalog.RecoverRelocations(
+                _folderRepository.GetAll(), token, intentId);
+            _scheduler.ReportProgress(key,
+                result.Unresolved == 0 ? "Verschiebung geprüft" :
+                    "Verschiebung unklar – Prüfbedarf", 1, 1);
+            if (result.Unresolved > 0)
+                PCasaDiagnostics.Write("Catalog.TransferRecovery",
+                    new IOException("Dateizustand bei Wiederherstellung unklar: " + intentId));
+            return Task.CompletedTask;
+        });
+        return package;
+    }
+
     private async Task RecoverPendingFileTransfersAsync()
     {
         try
         {
-            // Recovery may encounter a disconnected NAS. It runs in the
-            // cancellable background lane; a fresh MANUAL operation can
-            // preempt it. Startup recovery is never allowed to occupy the
-            // sole manual executor while an unreachable SMB path times out.
-            var result = await _scheduler.RunAsync(
-                "catalog:recover-file-transfers",
-                SchedulerPriority.Background,
-                token => _imageCatalog.RecoverRelocations(
-                    _folderRepository.GetAll(), token),
-                workKind: SchedulerWorkKind.Catalog);
-            if (result.Recovered > 0)
-                await RefreshBrowseGalleryAsync(forceIndexReload: true);
-            if (result.Unresolved > 0)
+            // Old manually initiated moves retain their manual priority
+            // after restart. The physical move journal is authoritative,
+            // the scheduler ledger owns their execution and order.
+            var intents = await _scheduler.RunAsync(
+                "catalog:read-pending-relocations",
+                SchedulerPriority.Interactive,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return _imageCatalog.PendingRelocationIds();
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            foreach (var intent in intents)
             {
-                StatusText.Text =
-                    $"{result.Unresolved:N0} Dateioperation(en) benötigen Prüfung " +
-                    "(Quell-/Zielzustand unklar)";
+                if (Dispatcher.HasShutdownStarted) return;
+                var key = "gallery:reconcile-transfer:" + Guid.NewGuid().ToString("N");
+                var payload = System.Text.Json.JsonSerializer.Serialize(intent);
+                var package = BuildTransferRecoveryPackage(key, payload);
+                var completion = _scheduler.EnqueueDurablePackageAsync(package,
+                    "transfer-reconcile-v1", payload, SchedulerPriority.ManualAction);
+                _ = ObserveTransferRecoveryAsync(completion);
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Catalog.TransferRecovery", ex);
-            StatusText.Text = "Ausstehende Dateioperationen konnten nicht geprüft werden";
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text = "Ausstehende Dateioperationen konnten nicht geprüft werden";
         }
+    }
+
+    private async Task ObserveTransferRecoveryAsync(Task completion)
+    {
+        try
+        {
+            await completion;
+            if (!Dispatcher.HasShutdownStarted)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Catalog.TransferRecovery", ex); }
     }
 
     private async Task EnsureBrowseCacheAndRefreshAsync()
