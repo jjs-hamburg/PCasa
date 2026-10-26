@@ -52,6 +52,18 @@ internal sealed class FolderTreeTag : INotifyPropertyChanged
         }
     }
 
+    private bool _hasPendingChildTagWrites;
+    public bool HasPendingChildTagWrites
+    {
+        get => _hasPendingChildTagWrites;
+        set
+        {
+            if (_hasPendingChildTagWrites == value) return;
+            _hasPendingChildTagWrites = value;
+            OnPropertyChanged();
+        }
+    }
+
     private string _statusCode = "None";
     private string _statusDescription = "";
 
