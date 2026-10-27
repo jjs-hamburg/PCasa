@@ -790,9 +790,6 @@ internal static class TagFlow
             // the exact original and pending count, not the inactive cache
             // dialog's default "Einlesen 0/0".
             const string visibleTag = "Visible Durable P0 Tag";
-            if (new ImageTagRepository(db).QueueTagEdit(
-                    new[] { editorIds[0] }, visibleTag, false) != 1)
-                throw new Exception("Cannot seed visible tag recovery.");
             var scheduleRecovery = typeof(PCasa.App.MainWindow).GetMethod(
                 "StartPendingTagDrain",
                 System.Reflection.BindingFlags.NonPublic |
@@ -805,6 +802,12 @@ internal static class TagFlow
                 ?? throw new Exception("Unified manual progress presenter missing.");
             lock (SourceFileLocks.ForPath(firstOriginal))
             {
+                // Hold this original BEFORE staging the visible intent.
+                // Otherwise the automatic post-package recovery may already
+                // have written it before the test can observe progress.
+                if (new ImageTagRepository(db).QueueTagEdit(
+                        new[] { editorIds[0] }, visibleTag, false) != 1)
+                    throw new Exception("Cannot seed visible tag recovery.");
                 scheduleRecovery.Invoke(window, null);
                 Until(window, () =>
                 {
@@ -1079,6 +1082,30 @@ internal static class TagFlow
             journal.SetState(secondKey, "completed");
             endManual.Invoke(window, [firstKey]);
             endManual.Invoke(window, [secondKey]);
+            // These five rows were generated ONLY to exercise aggregate
+            // presentation. They were not real EXIF writes, and must not leak
+            // into the next independent WPF smoke test through shared
+            // %LOCALAPPDATA%: that would create an unavailable manual P0
+            // recovery and legitimately block all background work.
+            using (var cleanup = db.OpenConnection())
+            using (var tx = cleanup.BeginTransaction())
+            {
+                using var dropIntent = cleanup.CreateCommand();
+                dropIntent.Transaction = tx;
+                dropIntent.CommandText =
+                    "DELETE FROM pending_tag_edits WHERE tag='recovery-count-smoke';";
+                dropIntent.ExecuteNonQuery();
+                using var restoreProjection = cleanup.CreateCommand();
+                restoreProjection.Transaction = tx;
+                restoreProjection.CommandText = """
+                    UPDATE image_tags
+                    SET keywords = TRIM(
+                        REPLACE(keywords, 'recovery-count-smoke', ''), char(10))
+                    WHERE keywords LIKE '%recovery-count-smoke%';
+                    """;
+                restoreProjection.ExecuteNonQuery();
+                tx.Commit();
+            }
             Console.WriteLine(
                 "PASS: Two separate Tag packages for the same photo count twice, without duplicating the recovery backlog.");
 
