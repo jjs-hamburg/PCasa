@@ -32,7 +32,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Closing += MainWindow_Closing;
-        Closed += async (_, _) => await _scheduler.DisposeAsync();
 
         _database = new LocalDatabase();
         _database.Initialize();

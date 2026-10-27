@@ -490,6 +490,19 @@ internal static class TagFlow
                         albumA, name)) ?? "")
                     .Contains(editableTag, StringComparison.Ordinal)),
                 "Tag UI did not persist Unicode keyword to both ORIGINAL JPEG files.");
+            // Image information reads the same catalog tags in its existing
+            // SQLite query; no extra EXIF/NAS request is made.
+            var infoGetter = typeof(PCasa.App.MainWindow).GetMethod(
+                "ReadImageInfo", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Image info reader missing.");
+            var imageInfo = infoGetter.Invoke(window, [editorIds[0], "Info"]) as string
+                ?? throw new Exception("Image info was empty.");
+            if (!imageInfo.Contains("Tags:", StringComparison.Ordinal) ||
+                !imageInfo.Contains(editableTag, StringComparison.Ordinal))
+                throw new Exception("Image information does not include stored tags.");
+            Console.WriteLine("PASS: Image info displays current SQLite keywords.");
+
             Until(window, () => tagRows.Children.OfType<DockPanel>()
                     .Any(row => row.Children.OfType<TextBlock>().Any(label =>
                         label.Text.Contains(editableTag, StringComparison.Ordinal) &&
@@ -902,6 +915,11 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
             window.Close();
+            var closeDeadline = DateTime.UtcNow.AddSeconds(20);
+            while (window.IsVisible && DateTime.UtcNow < closeDeadline)
+                Flush(window);
+            if (window.IsVisible || ExifToolKeywordWriter.HasLiveSessions)
+                throw new Exception("Closing tag editor left an active writer.");
             window = null;
             Console.WriteLine("RESULT: Live WPF tag-search round trip passed.");
             return 0;

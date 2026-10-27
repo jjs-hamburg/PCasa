@@ -102,57 +102,88 @@ public partial class MainWindow
         Closed += AppearanceWindowClosed;
     }
 
-    private bool _closingTagScheduler;
-    private bool _tagSchedulerStopped;
+    // One shutdown owner. The original MainWindow remains open until all
+    // scheduler workers AND durable journal continuations have finished.
+    // A canceled first Close() is never allowed to race a second disposer.
+    private bool _shutdownStarted;
+    private bool _shutdownFinished;
+    private ShutdownProgressWindow? _shutdownProgressWindow;
 
-    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
-        // A native ExifTool write is NOT interruptible halfway through its
-        // temp-file replacement. Keep WPF alive until the shared scheduler
-        // has yielded all tag workers and committed their durable checkpoints.
-        // This happens only if owned writers or P0 tag work still exist.
-        if (!_tagSchedulerStopped &&
-            (_closingTagScheduler ||
-             ExifToolKeywordWriter.HasLiveSessions ||
-             _scheduler.Snapshot().Any(job =>
-                 job.Key.StartsWith("tags:", StringComparison.Ordinal) &&
-                 job.State is SchedulerJobState.Queued or
-                     SchedulerJobState.Running or SchedulerJobState.YieldRequested)))
+        if (_shutdownFinished)
         {
-            e.Cancel = true;
-            if (_closingTagScheduler) return;
-            _closingTagScheduler = true;
-            StatusText.Text = "Laufenden Tag-Schreibvorgang sicher abschließen …";
-            try
-            {
-                _activeScanCancellation?.Cancel();
-                _backgroundCurrentScanCancellation?.Cancel();
-                ImageExifReader.StopAll();
-                await _scheduler.DisposeAsync();
-                // Dispose uses the same lock as the native write request, so
-                // no ExifTool process is abandoned after the scheduler exits.
-                ExifToolKeywordWriter.StopAll();
-            }
-            catch (Exception ex)
-            {
-                PCasaDiagnostics.Write("Shutdown.TagWriters", ex);
-            }
-            finally
-            {
-                _tagSchedulerStopped = true;
-                if (!Dispatcher.HasShutdownStarted)
-                    _ = Dispatcher.BeginInvoke(new Action(Close));
-            }
+            PersistWindowBounds();
             return;
         }
 
-        _activeScanCancellation?.Cancel();
-        _backgroundCurrentScanCancellation?.Cancel();
-        ImageExifReader.StopAll();
-        // Idle ExifTool writer sessions must not survive closing, either.
-        // No native writes are in flight after the guarded branch above.
-        ExifToolKeywordWriter.StopAll();
+        e.Cancel = true;
+        if (_shutdownStarted) return; // Double click/Alt+F4 cannot start a second shutdown.
+        _shutdownStarted = true;
 
+        // In-flight catalog work or owned ExifTool sessions can need an
+        // uninterruptible file transaction or a slow NAS cancellation.
+        // Make this visible before any slow cleanup, not after it.
+        var busy = ExifToolKeywordWriter.HasLiveSessions ||
+            _scheduler.Snapshot().Any(job => job.State is
+                SchedulerJobState.Queued or SchedulerJobState.Running or
+                SchedulerJobState.YieldRequested);
+        IsEnabled = false; // Prevent new user operations during the final checkpoint.
+        if (busy)
+        {
+            _shutdownProgressWindow = new ShutdownProgressWindow { Owner = this };
+            _shutdownProgressWindow.Show();
+        }
+
+        // All slow work takes place off the WPF dispatcher. A normal idle
+        // shutdown has no modal UI and reaches Close() as soon as the workers
+        // acknowledge cancellation.
+        _ = FinishShutdownAsync();
+    }
+
+    private async Task FinishShutdownAsync()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await Task.Run(async () =>
+            {
+                // The scheduler's shutdown token cancels all work types,
+                // including source scans, without a competing stop mechanism.
+                // Wait for the existing durable package journal to checkpoint.
+                try { await _scheduler.DisposeAsync(); }
+                finally
+                {
+                    // Native handles may only be reaped AFTER scheduler-owned
+                    // writes have reached their safe transaction boundary.
+                    ImageExifReader.StopAll();
+                    ExifToolKeywordWriter.StopAll();
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Shutdown.Workers", ex);
+            // Even an exceptional cleanup must be visible in diagnostics;
+            // do not create a second disposal path on the UI thread.
+        }
+        finally
+        {
+            watch.Stop();
+            if (watch.ElapsedMilliseconds >= 1000)
+                PCasaDiagnostics.WriteMessage("Shutdown.Duration",
+                    $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
+                    "Scheduler und native Metadatenprozesse abgeschlossen.");
+            _shutdownProgressWindow?.Close();
+            _shutdownProgressWindow = null;
+            _shutdownFinished = true;
+            if (!Dispatcher.HasShutdownStarted)
+                Close();
+        }
+    }
+
+    private void PersistWindowBounds()
+    {
         var bounds = WindowState == WindowState.Normal
             ? new Rect(Left, Top, Width, Height) : RestoreBounds;
         if (double.IsFinite(bounds.X) && double.IsFinite(bounds.Y) &&
@@ -541,11 +572,12 @@ public partial class MainWindow
             SELECT i.file_name, i.local_path, i.file_size, i.width, i.height,
                    i.modified_utc_ticks, x.camera_make, x.camera_model,
                    x.date_time_original, x.gps_latitude, x.gps_longitude,
-                   x.gps_altitude
+                   x.gps_altitude, t.keywords
             FROM images i
             LEFT JOIN image_exif x ON x.image_id = i.id
                 AND x.source_modified_utc_ticks = i.modified_utc_ticks
                 AND x.source_file_size = i.file_size
+            LEFT JOIN image_tags t ON t.image_id = i.id
             WHERE i.id = $id;
             """;
         command.Parameters.AddWithValue("$id", id);
@@ -568,12 +600,18 @@ public partial class MainWindow
         var modified = new DateTime(row.GetInt64(5), DateTimeKind.Utc).ToLocalTime();
         var camera = string.Join(" ", new[] { StringAt(6), StringAt(7) }
             .Where(value => !string.IsNullOrWhiteSpace(value)));
+        var keywords = StringAt(12);
+        var tagLines = string.IsNullOrWhiteSpace(keywords) ? "–"
+            : string.Join("\n  • ", keywords.Split(
+                ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries));
         return $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
                $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
                $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
                $"\nAufnahme: {StringAt(8) ?? "–"}" +
                $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
                $"\nGPS: {(lat.HasValue && lon.HasValue ? "vorhanden" : "–")}" +
+               $"\nTags: {(tagLines == "–" ? "–" : "\n  • " + tagLines)}" +
                $"\nLetzte Änderung: {modified:g}";
     }
 

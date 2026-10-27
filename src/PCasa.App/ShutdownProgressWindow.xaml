@@ -1,0 +1,21 @@
+<Window x:Class="PCasa.App.ShutdownProgressWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PCasa" Width="420" Height="140"
+        MinWidth="420" MinHeight="140" MaxWidth="420" MaxHeight="140"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" WindowStyle="ToolWindow"
+        ShowInTaskbar="False" Topmost="False"
+        Background="{DynamicResource PcasaPanelBrush}"
+        Foreground="{DynamicResource PcasaTextBrush}">
+    <StackPanel Margin="20,14" VerticalAlignment="Center">
+        <TextBlock Text="Hintergrundprozesse werden beendet …"
+                   FontSize="15" FontWeight="SemiBold" Margin="0,0,0,9"/>
+        <TextBlock Text="Offene Schreibvorgänge und Paketstände werden sicher abgeschlossen."
+                   TextWrapping="Wrap" FontSize="12"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   Margin="0,0,0,12"/>
+        <ProgressBar Height="7" IsIndeterminate="True"
+                     Background="{DynamicResource PcasaPanelAltBrush}"/>
+    </StackPanel>
+</Window>

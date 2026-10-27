@@ -919,7 +919,46 @@ internal static class Program
                 panel.Visibility = Visibility.Collapsed;
             }
 
+            // Exercise the REAL shutdown lifecycle with one busy background
+            // worker. Closing must return immediately to the dispatcher,
+            // display progress and wait for the single scheduler's disposal.
+            var closingScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+            var startedShutdownWorker = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var working = closingScheduler.EnqueueAsync("test:shutdown-cancellation",
+                SchedulerPriority.Background, async token =>
+                {
+                    startedShutdownWorker.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                });
+            var enteredDeadline = DateTime.UtcNow.AddSeconds(12);
+            while (!startedShutdownWorker.Task.IsCompleted &&
+                DateTime.UtcNow < enteredDeadline)
+                Flush(window);
+            if (!startedShutdownWorker.Task.IsCompleted)
+                throw new Exception("Shutdown test worker never started.");
             window.Close();
+            var progress = Application.Current.Windows
+                .OfType<PCasa.App.ShutdownProgressWindow>().SingleOrDefault();
+            if (!window.IsVisible || window.IsEnabled ||
+                progress is null || !progress.IsVisible)
+                throw new Exception("Shutdown blocked UI or did not show immediate progress.");
+            // Repeated Close does not create another shutdown or dialog.
+            window.Close();
+            if (Application.Current.Windows
+                    .OfType<PCasa.App.ShutdownProgressWindow>().Count() != 1)
+                throw new Exception("Repeated Close started a duplicate shutdown.");
+            var exitDeadline = DateTime.UtcNow.AddSeconds(18);
+            while (window.IsVisible && DateTime.UtcNow < exitDeadline)
+                Flush(window);
+            if (window.IsVisible || !working.IsCompleted ||
+                Application.Current.Windows
+                    .OfType<PCasa.App.ShutdownProgressWindow>().Any(w => w.IsVisible) ||
+                ExifToolKeywordWriter.HasLiveSessions)
+                throw new Exception("Shared scheduler/native cleanup did not finish on Close.");
+            Console.WriteLine("PASS: Asynchronous shutdown shows progress, cancels background work, closes once.");
             window = null;
             Console.WriteLine("RESULT: Window smoke checks passed.");
             return 0;

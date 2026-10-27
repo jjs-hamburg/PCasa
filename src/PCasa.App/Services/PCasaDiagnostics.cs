@@ -15,6 +15,20 @@ internal static class PCasaDiagnostics
 
     private static readonly object Sync = new();
 
+    public static void WriteMessage(string source, string message)
+    {
+        try
+        {
+            lock (Sync)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+                File.AppendAllText(LogPath,
+                    $"{DateTimeOffset.Now:O} [{source}] {message}\n");
+            }
+        }
+        catch { /* Diagnostics must never block shutdown. */ }
+    }
+
     public static void Write(string source, Exception exception)
     {
         try
