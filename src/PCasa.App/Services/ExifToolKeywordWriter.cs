@@ -15,11 +15,6 @@ public static class ExifToolKeywordWriter
     private static readonly HashSet<Session> ActiveSessions = new();
     private static int _activeWrites;
 
-    static ExifToolKeywordWriter()
-    {
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => StopAll();
-    }
-
     public static bool HasActiveWrites => Volatile.Read(ref _activeWrites) != 0;
 
     public static bool HasLiveSessions
@@ -147,7 +142,7 @@ public static class ExifToolKeywordWriter
             finally
             {
                 lock (ActiveGate) ActiveSessions.Remove(this);
-                failed.Dispose();
+                ExifToolProcessRegistry.Retire(failed);
                 _errorDrain = null;
             }
         }
@@ -338,8 +333,7 @@ public static class ExifToolKeywordWriter
             foreach (var arg in new[] { "-charset", "filename=UTF8",
                 "-stay_open", "True", "-@", "-" })
                 start.ArgumentList.Add(arg);
-            _process = Process.Start(start)
-                ?? throw new IOException("ExifTool konnte nicht gestartet werden.");
+            _process = ExifToolProcessRegistry.Start(start);
             lock (ActiveGate) ActiveSessions.Add(this);
             // Always drain stderr concurrently so a warning cannot deadlock
             // a subsequent request. The final metadata read verifies success.
@@ -354,40 +348,16 @@ public static class ExifToolKeywordWriter
                 _disposed = true;
                 var process = _process;
                 _process = null;
-                if (process is null)
-                {
-                    lock (ActiveGate) ActiveSessions.Remove(this);
-                    return;
-                }
                 try
                 {
-                    if (!process.HasExited)
-                    {
-                        try
-                        {
-                            process.StandardInput.WriteLine("-stay_open");
-                            process.StandardInput.WriteLine("False");
-                            process.StandardInput.Flush();
-                            if (process.WaitForExit(3000)) return;
-                        }
-                        catch (IOException) { }
-                        catch (InvalidOperationException) { }
-                        // No native read/write is in flight: all those methods
-                        // share the operation gate with Dispose. A failed
-                        // clean exit must never leave a writer process alive.
-                        if (!process.HasExited)
-                        {
-                            process.Kill(entireProcessTree: true);
-                            process.WaitForExit(3000);
-                        }
-                    }
+                    // All reads/writes own this gate. No transaction can be
+                    // interrupted by normal Session disposal.
+                    if (process is not null)
+                        ExifToolProcessRegistry.Retire(process);
                 }
-                catch (InvalidOperationException) { }
-                catch (System.ComponentModel.Win32Exception) { }
                 finally
                 {
                     lock (ActiveGate) ActiveSessions.Remove(this);
-                    process.Dispose();
                     _errorDrain = null;
                 }
             }

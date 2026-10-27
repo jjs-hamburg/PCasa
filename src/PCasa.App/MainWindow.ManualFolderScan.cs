@@ -101,26 +101,31 @@ public partial class MainWindow
                     SchedulerPriority.ManualAction,
                     token =>
                     {
-                        var created = new FolderManagerSelectionService(_database)
+                        var registration = new FolderManagerSelectionService(_database)
                             .EnsureMonitoredFolder(directory, token);
                         var snapshot = ReadFolderTreeConfigurationSnapshot();
                         var root = FolderExclusionRules.FindOwner(directory,
                             snapshot.Select(candidate => candidate.Folder))
                             ?? throw new InvalidOperationException(
                                 "Der Ordner konnte nicht als Bildordner registriert werden.");
-                        return (Created: created, RootId: root.Id, Snapshot: snapshot);
+                        return (registration.Changed, registration.CreatedRoot,
+                            RootId: root.Id, Snapshot: snapshot);
                     }, cancellationToken: cancellation.Token,
                     workKind: SchedulerWorkKind.Catalog);
 
-                newRoot = registration.Created;
+                newRoot = registration.CreatedRoot;
                 expectedRootId = registration.RootId;
-                if (newRoot)
+                if (registration.Changed)
                 {
                     _dropTargetProjection = registration.Snapshot;
                     _dragTargetValidity.Clear();
+                    // Newly activated subfolders also become permanent
+                    // catalog entries after the scan; never hide them when
+                    // Explorer Ansicht is turned off.
                     PromoteExplorerMonitoredPath(directory);
-                    StatusText.Text =
-                        "Ordner im Ordnermanager registriert · Manueller Scan gestartet";
+                    StatusText.Text = newRoot
+                        ? "Neuen Bildordner registriert · Manueller Scan gestartet"
+                        : "Unterordner im Ordnermanager aktiviert · Manueller Scan gestartet";
                 }
             }
             else

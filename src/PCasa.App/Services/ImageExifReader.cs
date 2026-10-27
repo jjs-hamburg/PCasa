@@ -17,42 +17,10 @@ public sealed record ImageExifData(string Json, string? CameraMake,
 
 public sealed class ImageExifReader : IDisposable
 {
-    private static readonly object ActiveProcessesGate = new();
-    private static readonly HashSet<Process> ActiveProcesses = new();
     private Process? _process;
     private bool _disposed;
 
-    static ImageExifReader()
-    {
-        // Stay-open children are not guaranteed to finish their scan before
-        // WPF shuts down. A process-exit hook is the final safety net.
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => StopAll();
-    }
-
-    public static void StopAll()
-    {
-        Process[] children;
-        lock (ActiveProcessesGate)
-            children = ActiveProcesses.ToArray();
-        foreach (var child in children)
-        {
-            try
-            {
-                if (child.HasExited) continue;
-                child.Kill(entireProcessTree: true);
-                child.WaitForExit(1500);
-            }
-            catch (InvalidOperationException) { }
-            catch (System.ComponentModel.Win32Exception) { }
-            catch (AggregateException ex) when (ex.Flatten().InnerExceptions.All(
-                inner => inner is System.ComponentModel.Win32Exception))
-            {
-                // Kill(entireProcessTree: true) can terminate ExifTool while
-                // Windows refuses access to an already-exiting descendant.
-                // Shutdown must not fail after the owned child was stopped.
-            }
-        }
-    }
+    public static void StopAll() => ExifToolProcessRegistry.StopAll();
 
     public ImageExifData Read(string path, CancellationToken cancellationToken = default)
     {
@@ -176,10 +144,7 @@ public sealed class ImageExifReader : IDisposable
         foreach (var arg in new[] { "-charset", "filename=UTF8",
             "-stay_open", "True", "-@", "-" })
             start.ArgumentList.Add(arg);
-        _process = Process.Start(start)
-            ?? throw new IOException("ExifTool für den Metadatenindex konnte nicht starten.");
-        lock (ActiveProcessesGate)
-            ActiveProcesses.Add(_process);
+        _process = ExifToolProcessRegistry.Start(start);
         // Drain warnings asynchronously to avoid a blocked stderr pipe.
         _ = _process.StandardError.ReadToEndAsync();
     }
@@ -188,27 +153,13 @@ public sealed class ImageExifReader : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        if (_process is null) return;
-        try
-        {
-            if (!_process.HasExited)
-            {
-                _process.StandardInput.WriteLine("-stay_open");
-                _process.StandardInput.WriteLine("False");
-                _process.StandardInput.Flush();
-                if (!_process.WaitForExit(3000))
-                    _process.Kill(entireProcessTree: true);
-            }
-        }
-        catch (InvalidOperationException) { }
-        catch (IOException) { }
-        catch (System.ComponentModel.Win32Exception) { }
-        finally
-        {
-            lock (ActiveProcessesGate)
-                ActiveProcesses.Remove(_process);
-            _process.Dispose();
-            _process = null;
-        }
+        var process = _process;
+        _process = null;
+        // Reads have finished before normal Dispose. There is no benefit in
+        // waiting for a native -stay_open handshake; terminate the owned child
+        // through the single registry instead.
+        if (process is not null)
+            ExifToolProcessRegistry.Retire(process);
     }
+
 }

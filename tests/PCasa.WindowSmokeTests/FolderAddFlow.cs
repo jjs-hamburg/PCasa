@@ -356,14 +356,14 @@ internal static class FolderAddFlow
                 File.GetAttributes(hiddenExplorer) | FileAttributes.Hidden);
             WriteJpeg(Path.Combine(inactiveExplorer, "registered.jpg"));
 
-            // Make one subtree inactive through the same transactional folder
-            // selection owner. The Explorer manual scan must make this exact
-            // subtree a new monitored root, without reactivating all siblings.
+            // Exclude two siblings under the SAME monitored root. Explorer
+            // must reactivate only the requested child, not register a second
+            // root or silently re-enable the other excluded sibling.
             var presentRoots = roots.GetAll();
             var choices = presentRoots.Select(root =>
                 new FolderManagerRootChoice(root.LocalPath,
                     SamePath(root.LocalPath, initialRoot)
-                        ? new[] { inactiveExplorer }
+                        ? new[] { inactiveExplorer, lastExplorer }
                         : roots.GetExcludedPaths(root.Id).ToArray(),
                     root.ServerSyncEnabled)).ToArray();
             new FolderManagerSelectionService(db).Apply(
@@ -438,16 +438,26 @@ internal static class FolderAddFlow
             var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
                 .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(window)!;
-            Until(window, () => roots.GetAll().Any(root =>
-                SamePath(root.LocalPath, inactiveExplorer)),
-                "Explorer scan did not activate a new root in Ordnermanager.");
-            if (!originalRoots.All(path => roots.GetAll().Any(root =>
+            Until(window, () =>
+            {
+                var currentRoots = roots.GetAll();
+                var parent = currentRoots.FirstOrDefault(root =>
+                    SamePath(root.LocalPath, initialRoot));
+                return parent is not null &&
+                    !roots.GetExcludedPaths(parent.Id)
+                        .Any(path => SamePath(path, inactiveExplorer));
+            }, "Explorer scan did not reactivate the excluded child in Ordnermanager.");
+            var afterActivation = roots.GetAll();
+            if (afterActivation.Count != originalRoots.Length ||
+                afterActivation.Any(root =>
+                    SamePath(root.LocalPath, inactiveExplorer)) ||
+                !originalRoots.All(path => afterActivation.Any(root =>
                     SamePath(root.LocalPath, path))) ||
-                !roots.GetExcludedPaths(roots.GetAll().Single(root =>
+                !roots.GetExcludedPaths(afterActivation.Single(root =>
                     SamePath(root.LocalPath, initialRoot)).Id)
-                    .Any(path => SamePath(path, inactiveExplorer)))
+                    .Any(path => SamePath(path, lastExplorer)))
                 throw new Exception(
-                    "Explorer registration removed existing roots or changed exclusions.");
+                    "Explorer created a duplicate root or lost a sibling exclusion.");
 
             Until(window, () => scheduler.Snapshot().Any(job =>
                     job.Key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) &&
@@ -485,7 +495,7 @@ internal static class FolderAddFlow
                     "Explorer off destroyed original nodes or lost a newly registered root.");
 
             Console.WriteLine(
-                "PASS: Explorer Ansicht is scoped to selected subtree, sorts entries, preserves siblings and registers roots.");
+                "PASS: Explorer enables excluded subtree within original monitored root without duplicates or lost exclusions.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");

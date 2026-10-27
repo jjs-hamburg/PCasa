@@ -16,11 +16,12 @@ public sealed class FolderManagerSelectionService
 
     public FolderManagerSelectionService(LocalDatabase database) => _database = database;
 
-    // Explorer-originated manual scans add ONE monitored root through the
-    // same transactional Apply() boundary as an Ordnermanager OK. Existing
-    // roots, exclusions, sync flags and catalog state are preserved.
-    // A nested selected root is allowed to override an excluded parent.
-    public bool EnsureMonitoredFolder(string path,
+    public readonly record struct ExplorerRegistration(bool Changed, bool CreatedRoot);
+
+    // The manager's one transaction is also the only Explorer registration
+    // path. An excluded direct child belongs to its existing monitored root:
+    // reactivate its checkbox, never create a duplicate independent root.
+    public ExplorerRegistration EnsureMonitoredFolder(string path,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -28,25 +29,53 @@ public sealed class FolderManagerSelectionService
         var repository = new FolderRepository(_database);
         var roots = repository.GetAll();
         var covering = FolderExclusionRules.FindOwner(normalized, roots);
-        if (covering is not null &&
-            !FolderExclusionRules.IsExcluded(normalized,
-                repository.GetExcludedPaths(covering.Id)))
-            return false;
 
         var choices = roots.Select(root => new FolderManagerRootChoice(
             root.LocalPath, repository.GetExcludedPaths(root.Id).ToArray(),
             root.ServerSyncEnabled)).ToList();
-        if (choices.Any(choice => string.Equals(
-                FolderExclusionRules.Normalize(choice.LocalPath), normalized,
-                StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException(
-                "Ein ausgeschlossener Überwachungsordner muss im Ordnermanager " +
-                "wieder aktiviert werden.");
+        if (covering is not null)
+        {
+            var exclusions = repository.GetExcludedPaths(covering.Id);
+            if (!FolderExclusionRules.IsExcluded(normalized, exclusions))
+                return new ExplorerRegistration(false, false);
+
+            // The current exclusion schema represents disjoint excluded
+            // subtrees, not include-overrides. Never silently enable an
+            // ancestor and all its other children merely to select one
+            // descendant. The manager must resolve that configuration.
+            var blockedByAncestor = exclusions.FirstOrDefault(excluded =>
+                FolderExclusionRules.IsAtOrBelow(normalized, excluded) &&
+                !string.Equals(normalized,
+                    FolderExclusionRules.Normalize(excluded),
+                    StringComparison.OrdinalIgnoreCase));
+            if (blockedByAncestor is not null)
+                throw new InvalidOperationException(
+                    $"Der übergeordnete Ordner '{blockedByAncestor}' ist abgewählt. " +
+                    "Bitte zuerst diesen Ordner im Ordnermanager aktivieren.");
+
+            choices = choices.Select(choice =>
+                string.Equals(FolderExclusionRules.Normalize(choice.LocalPath),
+                    FolderExclusionRules.Normalize(covering.LocalPath),
+                    StringComparison.OrdinalIgnoreCase)
+                    ? choice with
+                    {
+                        ExcludedPaths = choice.ExcludedPaths
+                            .Where(excluded => !string.Equals(
+                                FolderExclusionRules.Normalize(excluded), normalized,
+                                StringComparison.OrdinalIgnoreCase))
+                            .ToArray()
+                    }
+                    : choice).ToList();
+            return new ExplorerRegistration(Apply(new FolderManagerSelection(
+                choices, BackgroundScanSettings.Load().Enabled),
+                cancellationToken), false);
+        }
+
+        // No monitored ancestor exists: only now is this a new root.
         choices.Add(new FolderManagerRootChoice(normalized, [], false));
-        // Apply is the ONLY root-commit path. All validation, source
-        // generations and publication eligibility stay in that service.
-        return Apply(new FolderManagerSelection(choices,
-            BackgroundScanSettings.Load().Enabled), cancellationToken);
+        return new ExplorerRegistration(Apply(new FolderManagerSelection(
+            choices, BackgroundScanSettings.Load().Enabled),
+            cancellationToken), true);
     }
 
     public bool Apply(FolderManagerSelection selection, CancellationToken cancellationToken = default)

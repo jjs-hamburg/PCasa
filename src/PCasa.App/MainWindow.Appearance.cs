@@ -124,7 +124,8 @@ public partial class MainWindow
         // In-flight catalog work or owned ExifTool sessions can need an
         // uninterruptible file transaction or a slow NAS cancellation.
         // Make this visible before any slow cleanup, not after it.
-        var busy = ExifToolKeywordWriter.HasLiveSessions ||
+        var busy = ExifToolProcessRegistry.LiveCount > 0 ||
+            ExifToolKeywordWriter.HasLiveSessions ||
             _scheduler.Snapshot().Any(job => job.State is
                 SchedulerJobState.Queued or SchedulerJobState.Running or
                 SchedulerJobState.YieldRequested);
@@ -159,7 +160,9 @@ public partial class MainWindow
                 {
                     // Native handles may only be reaped AFTER scheduler-owned
                     // writes have reached their safe transaction boundary.
-                    ImageExifReader.StopAll();
+                    // The existing scheduler has finished all in-flight
+                    // writes. Kill every PCasa-owned reader/writer child now.
+                    ExifToolProcessRegistry.StopAll();
                     ExifToolKeywordWriter.StopAll();
                 }
             });

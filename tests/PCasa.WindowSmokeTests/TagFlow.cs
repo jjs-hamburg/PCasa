@@ -945,11 +945,29 @@ internal static class TagFlow
                 "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
+            // Explicitly leave an EXIF reader and keyword writer session
+            // alive (not disposed) when closing. The app MUST kill both
+            // owned native children after the scheduler's journal finishes.
+            using var lingeringReader = new ImageExifReader();
+            lingeringReader.Read(firstOriginal);
+            using var lingeringWriter = new ExifToolKeywordWriter.Session();
+            lingeringWriter.ReadSnapshot(firstOriginal);
+            var registryType = typeof(ImageExifReader).Assembly.GetType(
+                "PCasa.App.Services.ExifToolProcessRegistry")
+                ?? throw new Exception("ExifTool process owner missing.");
+            var liveCount = registryType.GetProperty("LiveCount",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Native process tracking missing.");
+            int ActiveChildren() => (int)liveCount.GetValue(null)!;
+            if (ActiveChildren() < 2)
+                throw new Exception("ExifTool shutdown test did not start two children.");
             window.Close();
             Until(window, () => !window.IsVisible,
                 "PCasa did not finish shutdown after writing tags.");
-            if (ExifToolKeywordWriter.HasLiveSessions)
-                throw new Exception("Closing tag editor left an active writer.");
+            if (ExifToolKeywordWriter.HasLiveSessions || ActiveChildren() != 0)
+                throw new Exception(
+                    "Closing PCasa left a reader or writer ExifTool process running.");
             window = null;
             Console.WriteLine("RESULT: Live WPF tag-search round trip passed.");
             return 0;
