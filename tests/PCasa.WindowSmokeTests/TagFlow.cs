@@ -891,6 +891,57 @@ internal static class TagFlow
             endManual.Invoke(window, ["tags:smoke:third"]);
             Console.WriteLine(
                 "PASS: Tag series count stays cumulative across older, newer and newly added packages.");
+
+            // The last displayed tag can still be queued while a prior
+            // non-interruptible write is running. Its unchanged "wait" text
+            // must not conceal the real file currently being processed.
+            const string realWorkerKey = "tags:smoke:running-original";
+            const string waitingUiKey = "tags:smoke:waiting-newer";
+            var workerStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseWorker = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var actualScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+            var runningTag = actualScheduler.EnqueueAsync(realWorkerKey,
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    workerStarted.TrySetResult();
+                    await releaseWorker.Task.WaitAsync(token);
+                });
+            try
+            {
+                Until(window, () => workerStarted.Task.IsCompleted,
+                    "Tag scheduler worker did not begin.");
+                beginManual.Invoke(window, [realWorkerKey,
+                    "Tags in Originaldateien schreiben", 4]);
+                beginManual.Invoke(window, [waitingUiKey,
+                    "Tags in Originaldateien schreiben", 6]);
+                const string actualPath = @"C:\Tests\actual-original.jpg";
+                actualScheduler.ReportProgress(realWorkerKey,
+                    "Tags in Originaldateien schreiben", 1, 4, actualPath);
+                Until(window, () =>
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CurrentFileText") is TextBlock file &&
+                    file.Text == "actual-original.jpg" &&
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CountText") is TextBlock count &&
+                    count.Text == "1 / 10",
+                    "A queued newer Tag package hid the executing original's path.");
+            }
+            finally
+            {
+                releaseWorker.TrySetResult();
+                Until(window, () => runningTag.IsCompleted,
+                    "Tag presenter test scheduler worker failed to finish.");
+                endManual.Invoke(window, [realWorkerKey]);
+                endManual.Invoke(window, [waitingUiKey]);
+            }
+            Console.WriteLine(
+                "PASS: Running original path overrides newer queued tag while series total stays cumulative.");
             // Recovery must use each immutable package's own image count.
             // Previously the UI assigned the ENTIRE pending-tag image count
             // to every recovered package and multiplied the grand total.

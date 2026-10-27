@@ -264,6 +264,20 @@ public partial class BrowseCacheProgressWindow : Window
             // A recursive NAS scan has no known total until enumeration ends.
             CountText.Text = $"{progress.Processed:N0} geprüft";
         }
+        if (progress.CurrentPath is not { Length: > 0 } &&
+            _manualCurrentImagePath is null)
+        {
+            // A running catalog step is work, not a wait for the scheduler.
+            // Do not claim that a file is being written before its path has
+            // actually been reported by the same scheduler snapshot.
+            CurrentFileText.Text = progress.State switch
+            {
+                SchedulerJobState.Running => "Auftrag wird bearbeitet",
+                SchedulerJobState.YieldRequested => "Wartet auf neueren Auftrag",
+                SchedulerJobState.Queued => "Warte auf Scheduler",
+                _ => CurrentFileText.Text
+            };
+        }
         if (progress.CurrentPath is { Length: > 0 })
         {
             if (!string.Equals(_manualCurrentImagePath, progress.CurrentPath,

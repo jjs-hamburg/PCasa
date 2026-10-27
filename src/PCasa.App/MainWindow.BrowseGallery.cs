@@ -70,6 +70,18 @@ public partial class MainWindow
                 if (_recoveredTagPresentationKeys.Contains(key))
                     _ = ObserveRecoveredTagOperationAsync(task, key);
             });
+        // A recipe or journal cursor that cannot be reconstructed is NOT a
+        // queued scheduler operation. Keep it durable for inspection, but do
+        // not leave a fake "Warte auf Scheduler" progress dialog forever.
+        foreach (var unresolved in unresolvedPackages)
+        {
+            if (_recoveredTagPresentationKeys.Remove(unresolved.Key))
+                EndVisibleManualOperation(unresolved.Key);
+            PCasaDiagnostics.WriteMessage("Scheduler.UnresolvedPackage",
+                $"Key={unresolved.Key}; Type={unresolved.Type}; " +
+                $"Priority={unresolved.Priority}; Step={unresolved.CompletedSteps}; " +
+                $"Error={unresolved.Error ?? "(no error recorded)"}");
+        }
         StartPendingTagDrain();
         // Register all persistent relocation intents before any automatic scan
         // is queued, so recovered manual work keeps precedence on startup.

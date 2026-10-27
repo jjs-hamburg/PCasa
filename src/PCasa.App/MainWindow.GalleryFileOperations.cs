@@ -365,7 +365,22 @@ public partial class MainWindow
         if (IsTagSeriesKey(key))
             _visibleTagSeries.TryAdd(key, (Math.Max(0, total), 0));
         _visibleManualOrder.Add(key);
-        DisplayManualOperation(key);
+        DisplayManualOperation(PreferredVisibleManualOperation() ?? key);
+    }
+
+    // The most recently requested tag job can be queued while an older,
+    // non-interruptible original-file write is genuinely executing.
+    // Select the actual running scheduler job for the visible filename and
+    // phase; retain the existing aggregate series counter across all jobs.
+    private string? PreferredVisibleManualOperation()
+    {
+        var active = _scheduler.Snapshot()
+            .Where(job => _visibleManualOperations.ContainsKey(job.Key) &&
+                job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested)
+            .OrderBy(job => job.State == SchedulerJobState.Running ? 0 : 1)
+            .ThenByDescending(job => job.StartedAt)
+            .FirstOrDefault();
+        return active?.Key ?? _visibleManualOrder.LastOrDefault();
     }
 
     private void DisplayManualOperation(string key)
@@ -461,6 +476,11 @@ public partial class MainWindow
             if (!_visibleManualOperations.ContainsKey(status.Key)) return;
             if (IsTagSeriesKey(status.Key))
                 UpdateVisibleTagSeries(status);
+            var preferred = PreferredVisibleManualOperation();
+            if (preferred is not null &&
+                !string.Equals(preferred, _visibleManualActiveKey,
+                    StringComparison.Ordinal))
+                DisplayManualOperation(preferred);
             if (status.Key == _visibleManualActiveKey)
             {
                 _visibleManualWindow?.UpdateManualOperation(status);
@@ -490,7 +510,8 @@ public partial class MainWindow
         if (_visibleManualOrder.Count != 0)
         {
             if (_visibleManualActiveKey == key)
-                DisplayManualOperation(_visibleManualOrder[^1]);
+                DisplayManualOperation(PreferredVisibleManualOperation() ??
+                    _visibleManualOrder[^1]);
             else
                 RenderVisibleTagSeries();
             return;
