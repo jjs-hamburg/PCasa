@@ -62,24 +62,57 @@ internal static class Program
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
 
-            // The two approved backgrounds must decode from EMBEDDED resources
-            // and use mirrored repeats, not fall back to the old 12px lines.
+            // Texture pixels must remain physical screen pixels, even at
+            // 125%, 150% and 200% display scaling (DIPs are not pixels).
             var canvasFactory = typeof(PCasa.App.MainWindow).GetMethod(
                 "MakeCanvasBrush", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Static)
                 ?? throw new Exception("Canvas brush factory missing.");
             foreach (var light in new[] { true, false })
+            foreach (var scale in new[] { 1.0, 1.25, 1.5, 2.0 })
             {
-                var canvas = canvasFactory.Invoke(null, [light]) as ImageBrush
+                var canvas = canvasFactory.Invoke(null, [light, new DpiScale(scale, scale)])
+                    as ImageBrush
                     ?? throw new Exception("Canvas background is not image-backed.");
                 if (canvas.TileMode != TileMode.FlipXY ||
                     canvas.ViewportUnits != BrushMappingMode.Absolute ||
-                    canvas.Viewport.Width != 128 || canvas.Viewport.Height != 128 ||
                     canvas.ImageSource is not System.Windows.Media.Imaging.BitmapSource bitmap ||
-                    bitmap.PixelWidth != 128 || bitmap.PixelHeight != 128)
-                    throw new Exception("Canvas tile is missing or not rendered at native size.");
+                    bitmap.PixelWidth != 128 || bitmap.PixelHeight != 128 ||
+                    Math.Abs(canvas.Viewport.Width * scale - bitmap.PixelWidth) > .001 ||
+                    Math.Abs(canvas.Viewport.Height * scale - bitmap.PixelHeight) > .001)
+                    throw new Exception("Canvas has been stretched beyond its original pixel size.");
             }
-            Console.WriteLine("PASS: Both woven-canvas backgrounds are embedded and decode correctly.");
+            Console.WriteLine("PASS: Light/dark canvas textures remain native-sized at all DPI scales.");
+
+            // Real menu action must update the one gallery renderer and persist.
+            var filenameBoldMenu = (MenuItem?)window.FindName("ThumbnailBoldFileNamesMenu")
+                ?? throw new Exception("Bold filename option missing.");
+            var gallerySurface = (BrowseGallerySurface?)window.FindName("BrowseSurface")
+                ?? throw new Exception("Gallery surface missing.");
+            var boldField = typeof(BrowseGallerySurface).GetField(
+                "_boldFileNames", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Bold filename rendering field missing.");
+            filenameBoldMenu.IsChecked = true;
+            filenameBoldMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, filenameBoldMenu));
+            if (!(bool)boldField.GetValue(gallerySurface)!)
+                throw new Exception("Bold option did not reach gallery renderer.");
+            var appearancePath = typeof(PCasa.App.MainWindow).GetField(
+                "_appearanceFile", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)?.GetValue(window) as string
+                ?? throw new Exception("Appearance path missing.");
+            using (var savedAppearance = System.Text.Json.JsonDocument.Parse(
+                System.IO.File.ReadAllText(appearancePath)))
+            {
+                if (!savedAppearance.RootElement
+                    .GetProperty("BoldThumbnailFileNames").GetBoolean())
+                    throw new Exception("Bold filename choice did not persist.");
+            }
+            filenameBoldMenu.IsChecked = false;
+            filenameBoldMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, filenameBoldMenu));
+            if ((bool)boldField.GetValue(gallerySurface)!)
+                throw new Exception("Disabling bold filenames did not restore normal weight.");
+            Console.WriteLine("PASS: Filename boldness toggles renderer and persists without another settings owner.");
 
             // The actual WPF layout determines the distance between adjacent
             // menu items. This detects changing margins or a wrong template.

@@ -35,6 +35,7 @@ public partial class MainWindow
         public bool FolderExpansionsSaved { get; set; }
         public string[] ExpandedTreePaths { get; set; } = [];
         public bool ShowThumbnailFileNames { get; set; } = true;
+        public bool BoldThumbnailFileNames { get; set; }
         public bool ShowThumbnailIcons { get; set; } = true;
         public double? WindowLeft { get; set; }
         public double? WindowTop { get; set; }
@@ -251,9 +252,11 @@ public partial class MainWindow
     {
         QueueGalleryAnchorRestore();
         _appearance.ShowThumbnailFileNames = ThumbnailFileNamesMenu.IsChecked;
+        _appearance.BoldThumbnailFileNames = ThumbnailBoldFileNamesMenu.IsChecked;
         _appearance.ShowThumbnailIcons = ThumbnailIconsMenu.IsChecked;
         BrowseSurface.SetThumbnailAnnotations(
             _appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
+        BrowseSurface.SetFilenameBold(_appearance.BoldThumbnailFileNames);
         SaveAppearance();
         BrowseScrollViewer.UpdateLayout();
         RestorePendingGalleryAnchor();
@@ -294,8 +297,10 @@ public partial class MainWindow
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
         UpdateAllFoldersButtonState();
         ThumbnailFileNamesMenu.IsChecked = _appearance.ShowThumbnailFileNames;
+        ThumbnailBoldFileNamesMenu.IsChecked = _appearance.BoldThumbnailFileNames;
         ThumbnailIconsMenu.IsChecked = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
+        BrowseSurface.SetFilenameBold(_appearance.BoldThumbnailFileNames);
         ApplyFolderStatusMode();
         if (ThumbnailSizeSlider is not null)
             ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 72, 600);
@@ -306,8 +311,8 @@ public partial class MainWindow
         var background = actualBackground switch
         {
             "Light" => new SolidColorBrush(Color.FromRgb(239, 238, 234)),
-            "Canvas" => MakeCanvasBrush(light: true),
-            "CanvasDark" => MakeCanvasBrush(light: false),
+            "Canvas" => MakeCanvasBrush(light: true, VisualTreeHelper.GetDpi(BrowseSurface)),
+            "CanvasDark" => MakeCanvasBrush(light: false, VisualTreeHelper.GetDpi(BrowseSurface)),
             _ => new SolidColorBrush(Color.FromRgb(32, 33, 34))
         };
         BrowseScrollViewer.Background = background;
@@ -334,36 +339,55 @@ public partial class MainWindow
             new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
     }
 
-    // The two approved woven-canvas samples are packaged once as WPF resources.
-    // Keep the existing background choices and their single application path.
-    private static readonly Lazy<Brush> LightCanvasBrush =
-        new(() => CreateCanvasBrush("CanvasLight.jpg"));
-    private static readonly Lazy<Brush> DarkCanvasBrush =
-        new(() => CreateCanvasBrush("CanvasDark.jpg"));
+    // The original texture samples are 128 x 128 pixels. Cache the decoded
+    // bitmaps, not the WPF brushes: a brush's viewport depends on monitor DPI.
+    private static readonly Lazy<BitmapSource> LightCanvasBitmap =
+        new(() => LoadCanvasBitmap("CanvasLight.jpg"));
+    private static readonly Lazy<BitmapSource> DarkCanvasBitmap =
+        new(() => LoadCanvasBitmap("CanvasDark.jpg"));
 
-    private static Brush MakeCanvasBrush(bool light)
-        => light ? LightCanvasBrush.Value : DarkCanvasBrush.Value;
-
-    private static Brush CreateCanvasBrush(string filename)
+    private static BitmapSource LoadCanvasBitmap(string filename)
     {
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.UriSource = new Uri(
-            "pack://application:,,,/PCasa.App;component/Assets/" + filename, UriKind.Absolute);
+            "pack://application:,,,/PCasa.App;component/Assets/" + filename,
+            UriKind.Absolute);
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.EndInit();
         bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static Brush MakeCanvasBrush(bool light, DpiScale dpi)
+    {
+        var bitmap = light ? LightCanvasBitmap.Value : DarkCanvasBitmap.Value;
+        // Viewport is specified in device-independent units, not physical
+        // pixels. Compensating for DPI means exactly one image pixel is drawn
+        // per screen pixel at 100%, 125%, 150%, 200%, etc.
         var brush = new ImageBrush(bitmap)
         {
-            // Mirrored tiles avoid sharp joins without scaling the weave to
-            // the size of the whole gallery or introducing extra layers.
             TileMode = TileMode.FlipXY,
             ViewportUnits = BrushMappingMode.Absolute,
-            Viewport = new Rect(0, 0, 128, 128),
+            Viewport = new Rect(0, 0,
+                bitmap.PixelWidth / dpi.DpiScaleX,
+                bitmap.PixelHeight / dpi.DpiScaleY),
             Stretch = Stretch.Fill
         };
         brush.Freeze();
         return brush;
+    }
+
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        // Moving between monitors must not rescale the fixed-pixel weave.
+        // Update only the two backgrounds; never trigger a gallery relayout.
+        if (BrowseSurface is null || BrowseScrollViewer is null ||
+            _appearance.Background is not ("Canvas" or "CanvasDark")) return;
+        var brush = MakeCanvasBrush(_appearance.Background == "Canvas", newDpi);
+        BrowseScrollViewer.Background = brush;
+        BrowseSurface.SetGalleryBackground(brush);
     }
 
     private void SaveGalleryPosition()

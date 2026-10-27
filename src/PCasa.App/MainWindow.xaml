@@ -499,6 +499,8 @@
                             <MenuItem Header="Eingeklappte Ordner in Galerie ausblenden" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
                             <MenuItem Header="Dateinamen unter Thumbnails" x:Name="ThumbnailFileNamesMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
+                            <MenuItem Header="Dateinamen fett" x:Name="ThumbnailBoldFileNamesMenu"
+                                      IsCheckable="True" Click="AppearanceThumbnailOptions_Click"/>
                             <MenuItem Header="GPS-, Tag- und RAW-Symbole" x:Name="ThumbnailIconsMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
                             <MenuItem Header="Ordnerstatus-Legende" Click="FolderStatusLegend_Click" />

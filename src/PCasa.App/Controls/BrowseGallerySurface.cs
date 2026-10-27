@@ -34,7 +34,11 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private const double ShadowDepth = 2;
     private const double FileLabelHeight = 18;
     private bool _showFileNames = true;
+    private bool _boldFileNames;
     private bool _showStatusIcons = true;
+    private static readonly Typeface RegularFilenameTypeface = new("Segoe UI");
+    private static readonly Typeface BoldFilenameTypeface =
+        new("Segoe UI", FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
     private static readonly Brush GpsIconBrush = new SolidColorBrush(Color.FromRgb(225, 68, 76));
     private static readonly Brush RawIconBrush = new SolidColorBrush(Color.FromArgb(215, 33, 37, 42));
     private static readonly Geometry GpsPinGeometry = Geometry.Parse(
@@ -117,6 +121,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
             _showStatusIcons = statusIcons;
             InvalidateVisual();
         }
+    }
+
+    public void SetFilenameBold(bool bold)
+    {
+        if (_boldFileNames == bold) return;
+        _boldFileNames = bold;
+        InvalidateVisual();
     }
 
     public void SetGalleryBackground(Brush background)
@@ -679,7 +690,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 {
                     var caption = new FormattedText(entry.FileName,
                         CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                        new Typeface("Segoe UI"), 10, _mutedBrush, pixelsPerDip)
+                        _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, 10, _mutedBrush, pixelsPerDip)
                     {
                         // Portraits and landscapes share the full column
                         // width and the same reserved caption row.
@@ -709,7 +720,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         if (section is null) return;
         var full = new FormattedText(entry.FileName,
             CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-            new Typeface("Segoe UI"), 10, _headerBrush, pixelsPerDip);
+            _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, 10, _headerBrush, pixelsPerDip);
         if (full.WidthIncludingTrailingWhitespace <= _thumbnailWidth)
             return; // The caption is already fully visible.
 
