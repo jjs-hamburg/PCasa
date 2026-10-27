@@ -33,8 +33,8 @@ public partial class MainWindow
             _allFolderProjectionRootPath is null ? null : "ActiveGold";
         ShowAllFilesystemFoldersButton.ToolTip =
             _allFolderProjectionRootPath is null
-                ? "Explorer Ansicht einschalten – alle Verzeichnisse anzeigen"
-                : "Explorer Ansicht ausschalten – nur PCasa-Ordner anzeigen";
+                ? "Explorer Ansicht: Unterordner des ausgewählten Ordners anzeigen"
+                : "Explorer Ansicht: zusätzliche Unterordner wieder ausblenden";
     }
 
     private void ShowAllFilesystemFolders_Click(object sender, RoutedEventArgs e)
@@ -51,7 +51,8 @@ public partial class MainWindow
             return;
         }
 
-        _allFolderProjectionRootPath = selected.FullPath;
+        _allFolderProjectionRootPath =
+            FolderExclusionRules.Normalize(selected.FullPath);
         _explorerOriginalSelection = (TreeViewItem)FoldersTree.SelectedItem;
         _explorerOriginalSelectionPath = selected.FullPath;
         _explorerOriginalScroll = FindTreeScrollViewer(FoldersTree)?.VerticalOffset;
@@ -61,7 +62,7 @@ public partial class MainWindow
 
         // No Items.Clear(), no other TreeView, no selecting a new root.
         // Existing opened nodes and their WPF object identities survive.
-        AddExplorerExpanders(FoldersTree);
+        AddExplorerExpanders(_explorerOriginalSelection);
         ProbeOpenedExplorerFolders();
         RestoreExplorerScroll();
     }
@@ -88,7 +89,11 @@ public partial class MainWindow
                 if (original is not null) original.IsSelected = true;
             }
 
-            RemoveTemporaryExplorerNodes(FoldersTree);
+            // Only our original subtree was augmented; all other
+            // branches stay exactly as the user left them.
+            if (_explorerOriginalSelectionPath is string scopePath &&
+                FindFolderTreeItemByPath(FoldersTree, scopePath) is { } scopeRoot)
+                RemoveTemporaryExplorerNodes(scopeRoot);
             _explorerInsertedPaths.Clear();
             _explorerLoadedPaths.Clear();
             _explorerPending.Clear();
@@ -149,8 +154,9 @@ public partial class MainWindow
         }
     }
 
-    private static bool HasExplorerPlaceholder(TreeViewItem item)
-        => item.Items.OfType<TreeViewItem>().Any(child => child.Tag is null);
+    private bool IsWithinExplorerScope(string path)
+        => _allFolderProjectionRootPath is string root &&
+           FolderExclusionRules.IsAtOrBelow(path, root);
 
     private void AddExplorerExpanders(ItemsControl parent)
     {
@@ -170,7 +176,10 @@ public partial class MainWindow
     private void ProbeOpenedExplorerFolders()
     {
         if (_allFolderProjectionRootPath is null) return;
-        foreach (var node in Opened(FoldersTree))
+        if (FindFolderTreeItemByPath(FoldersTree,
+                _allFolderProjectionRootPath) is not { } scopeRoot)
+            return;
+        foreach (var node in Opened(scopeRoot))
             _ = LoadExplorerChildrenAsync(node);
 
         static IEnumerable<TreeViewItem> Opened(ItemsControl parent)
@@ -188,17 +197,17 @@ public partial class MainWindow
 
     private void ExplorerFolders_Expanded(RoutedEventArgs e)
     {
-        if (_allFolderProjectionRootPath is null ||
-            e.OriginalSource is not TreeViewItem { Tag: FolderTreeTag } item)
+        if (e.OriginalSource is not TreeViewItem { Tag: FolderTreeTag tag } item ||
+            !IsWithinExplorerScope(tag.FullPath))
             return;
         _ = LoadExplorerChildrenAsync(item);
     }
 
     private async Task LoadExplorerChildrenAsync(TreeViewItem item)
     {
-        if (_allFolderProjectionRootPath is null ||
-            _explorerSession is null ||
-            item.Tag is not FolderTreeTag folder) return;
+        if (_explorerSession is null ||
+            item.Tag is not FolderTreeTag folder ||
+            !IsWithinExplorerScope(folder.FullPath)) return;
         var path = folder.FullPath;
         if (_explorerLoadedPaths.Contains(path) || !_explorerPending.Add(path))
             return;
@@ -263,7 +272,22 @@ public partial class MainWindow
                     Header = "Ordner laden …", IsEnabled = false
                 });
                 _explorerInsertedPaths.Add(child);
-                item.Items.Add(newNode);
+                // Insert alphabetically among *existing* catalog items.
+                // Items.Sort/Items.Clear would replace open WPF nodes and
+                // would make the NAS scrollbar jump, so only insert ONE row.
+                var insertAt = item.Items.Count;
+                for (var i = 0; i < item.Items.Count; i++)
+                {
+                    if (item.Items[i] is not TreeViewItem
+                        { Tag: FolderTreeTag sibling }) continue;
+                    var siblingName = Path.GetFileName(
+                        Path.TrimEndingDirectorySeparator(sibling.FullPath));
+                    if (StringComparer.CurrentCultureIgnoreCase.Compare(
+                            name, siblingName) >= 0) continue;
+                    insertAt = i;
+                    break;
+                }
+                item.Items.Insert(insertAt, newNode);
                 if (indexed is not null) _folderTreeItems[indexed.Id] = newNode;
             }
 
@@ -347,8 +371,12 @@ public partial class MainWindow
         _explorerPending.Clear();
         _explorerLoadedPaths.Clear();
         _explorerInsertedPaths.Clear();
-        AddExplorerExpanders(FoldersTree);
-        _ = Dispatcher.BeginInvoke(new Action(ProbeOpenedExplorerFolders),
-            DispatcherPriority.Background);
+        if (FindFolderTreeItemByPath(FoldersTree,
+                _allFolderProjectionRootPath) is { } scopeRoot)
+        {
+            AddExplorerExpanders(scopeRoot);
+            _ = Dispatcher.BeginInvoke(new Action(ProbeOpenedExplorerFolders),
+                DispatcherPriority.Background);
+        }
     }
 }

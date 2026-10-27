@@ -343,9 +343,15 @@ internal static class FolderAddFlow
             var neverScanned = Path.Combine(initialRoot, "ExplorerNotIndexed");
             var hiddenExplorer = Path.Combine(initialRoot, "ExplorerHidden");
             var inactiveExplorer = Path.Combine(initialRoot, "ExplorerInactive");
+            var firstExplorer = Path.Combine(initialRoot, "AaaaExplorerFirst");
+            var lastExplorer = Path.Combine(initialRoot, "ZzzzExplorerLast");
+            var otherBranchOnly = Path.Combine(afterRestart, "OutsideSelectedBranch");
             Directory.CreateDirectory(neverScanned);
             Directory.CreateDirectory(hiddenExplorer);
             Directory.CreateDirectory(inactiveExplorer);
+            Directory.CreateDirectory(firstExplorer);
+            Directory.CreateDirectory(lastExplorer);
+            Directory.CreateDirectory(otherBranchOnly);
             File.SetAttributes(hiddenExplorer,
                 File.GetAttributes(hiddenExplorer) | FileAttributes.Hidden);
             WriteJpeg(Path.Combine(inactiveExplorer, "registered.jpg"));
@@ -366,6 +372,12 @@ internal static class FolderAddFlow
             new BackgroundScanSettings { Enabled = false }.Save();
             var selectedRoot = Walk(tree).Single(item =>
                 SamePath(PathOf(item), initialRoot));
+            var unrelatedRoot = Walk(tree).Single(item =>
+                SamePath(PathOf(item), afterRestart));
+            unrelatedRoot.IsExpanded = true;
+            var unrelatedRootBefore = unrelatedRoot;
+            var unrelatedChildrenBefore = unrelatedRoot.Items
+                .OfType<TreeViewItem>().ToArray();
             selectedRoot.IsSelected = true;
             selectedRoot.IsExpanded = true;
             var treeBefore = selectedRoot;
@@ -376,8 +388,35 @@ internal static class FolderAddFlow
             Until(window, () =>
                     Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) &&
                     Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)),
+                    Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) &&
+                    Walk(tree).Any(item => SamePath(PathOf(item), firstExplorer)) &&
+                    Walk(tree).Any(item => SamePath(PathOf(item), lastExplorer)),
                 "Explorer in-place extension did not expose all child directories.");
+
+            // The sibling root is expanded too, but Explorer mode must not
+            // touch it: only the CURRENT selection and its descendants qualify.
+            if (Walk(tree).Any(item => SamePath(PathOf(item), otherBranchOnly)) ||
+                !ReferenceEquals(unrelatedRootBefore,
+                    Walk(tree).Single(item => SamePath(PathOf(item), afterRestart))) ||
+                !unrelatedRoot.IsExpanded ||
+                !unrelatedChildrenBefore.SequenceEqual(
+                    unrelatedRoot.Items.OfType<TreeViewItem>()))
+                throw new Exception(
+                    "Explorer Ansicht scanned or changed an unrelated expanded branch.");
+
+            // Insert before, between and after EXISTING folders in the same
+            // alphabetical ordering as the normal catalog tree, without
+            // reconstructing any already opened WPF tree nodes.
+            var directChildren = selectedRoot.Items.OfType<TreeViewItem>()
+                .Where(item => PathOf(item) is not null).ToArray();
+            var names = directChildren.Select(item =>
+                Path.GetFileName(PathOf(item)!)).ToArray();
+            if (!names.SequenceEqual(names.OrderBy(name => name,
+                    StringComparer.CurrentCultureIgnoreCase),
+                    StringComparer.CurrentCultureIgnoreCase) ||
+                !ReferenceEquals(selectedRoot, treeBefore))
+                throw new Exception(
+                    "Explorer child folders are not alphabetically interleaved.");
             if (window.FindName("ExplorerTree") is not null ||
                 !ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
@@ -436,12 +475,17 @@ internal static class FolderAddFlow
                 !treeBefore.IsExpanded ||
                 !Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) ||
-                Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)))
+                Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) ||
+                Walk(tree).Any(item => SamePath(PathOf(item), firstExplorer)) ||
+                Walk(tree).Any(item => SamePath(PathOf(item), lastExplorer)) ||
+                Walk(tree).Any(item => SamePath(PathOf(item), otherBranchOnly)) ||
+                !ReferenceEquals(unrelatedRootBefore,
+                    Walk(tree).Single(item => SamePath(PathOf(item), afterRestart))))
                 throw new Exception(
                     "Explorer off destroyed original nodes or lost a newly registered root.");
 
             Console.WriteLine(
-                "PASS: Explorer Ansicht preserves opened tree, hides temporary dirs and registers inactive roots via Ordnermanager.");
+                "PASS: Explorer Ansicht is scoped to selected subtree, sorts entries, preserves siblings and registers roots.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");

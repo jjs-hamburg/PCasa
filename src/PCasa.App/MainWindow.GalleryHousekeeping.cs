@@ -134,10 +134,12 @@ public partial class MainWindow
     {
         if (_bulkFolderExpansion || _rebuildingFolderTree || !_folderTreeInitialized)
             return;
-        if (_allFolderProjectionRootPath is not null)
+        if (_allFolderProjectionRootPath is not null &&
+            e.OriginalSource is TreeViewItem { Tag: FolderTreeTag tag } &&
+            IsWithinExplorerScope(tag.FullPath))
         {
-            // Explorer's expansion does not change gallery visibility,
-            // persisted catalog-tree state, or sorting.
+            // Only expansions inside the selected Explorer subtree load
+            // directory entries; unrelated branches keep normal behavior.
             ExplorerFolders_Expanded(e);
             return;
         }
