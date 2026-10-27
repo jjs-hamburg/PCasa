@@ -600,9 +600,9 @@ public partial class MainWindow
         var modified = new DateTime(row.GetInt64(5), DateTimeKind.Utc).ToLocalTime();
         var camera = string.Join(" ", new[] { StringAt(6), StringAt(7) }
             .Where(value => !string.IsNullOrWhiteSpace(value)));
-        var keywords = StringAt(12);
-        var tagLines = string.IsNullOrWhiteSpace(keywords) ? "–"
-            : string.Join("\n  • ", keywords.Split(
+        var infoKeywords = StringAt(12);
+        var tagLines = string.IsNullOrWhiteSpace(infoKeywords) ? "–"
+            : string.Join("\n  • ", infoKeywords.Split(
                 ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries |
                     StringSplitOptions.TrimEntries));
         return $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
