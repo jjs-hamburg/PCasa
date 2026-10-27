@@ -816,7 +816,7 @@ internal static class TagFlow
                     var presenter = presenterField.GetValue(window)
                         as PCasa.App.BrowseCacheProgressWindow;
                     var phase = (presenter?.FindName("PhaseText") as TextBlock)?.Text;
-                    var diagnosticFile = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
+                    var current = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
                     var count = (presenter?.FindName("CountText") as TextBlock)?.Text;
                     var folder = (presenter?.FindName("FolderPathText") as TextBlock)?.Text;
                     var preview = (presenter?.FindName("CurrentThumbnail") as Image)?.Source;
@@ -839,7 +839,7 @@ internal static class TagFlow
                 {
                     var presenter = presenterField.GetValue(window)
                         as PCasa.App.BrowseCacheProgressWindow;
-                    var current = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
+                    var diagnosticFile = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
                     var phase = (presenter?.FindName("PhaseText") as TextBlock)?.Text;
                     var count = (presenter?.FindName("CountText") as TextBlock)?.Text;
                     var folder = (presenter?.FindName("FolderPathText") as TextBlock)?.Text;
