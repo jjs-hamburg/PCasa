@@ -116,9 +116,12 @@ public partial class MainWindow
                 shownWindow.UpdateScan(scan,
                     showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
                 ShowScannedPhotoFolder(scan);
-                StatusText.Text =
-                    $"Ordner einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} geprüft · " +
-                    $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · {scan.Failed:N0} Fehler";
+                // While a queued Tag series shares this presenter, the
+                // dialog itself owns the status-bar text as well.
+                if (!shownWindow.IsManualPresentationActive)
+                    StatusText.Text =
+                        $"Ordner einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} geprüft · " +
+                        $"{scan.Added:N0} neu · {scan.Changed:N0} geändert · {scan.Failed:N0} Fehler";
             });
             StatusText.Text = $"Ordner wird eingelesen: {folder.LocalPath}";
 

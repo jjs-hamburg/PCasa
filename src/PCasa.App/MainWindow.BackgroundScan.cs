@@ -628,10 +628,13 @@ public partial class MainWindow
                         activityWindow?.UpdateScan(value,
                             showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
                         ShowScannedPhotoFolder(value);
-                        StatusText.Text =
-                            $"Hintergrund: {value.Added:N0} neu · {value.Changed:N0} geändert · " +
-                            $"{value.CacheRepaired:N0} Cache-Reparaturen · {value.Unchanged:N0} unverändert" +
-                            (value.Failed > 0 ? $" · {value.Failed:N0} Fehler" : string.Empty);
+                        // Do not overwrite the shared Tag/scan presenter's
+                        // authoritative status-bar projection.
+                        if (_visibleManualOperations.Count == 0)
+                            StatusText.Text =
+                                $"Hintergrund: {value.Added:N0} neu · {value.Changed:N0} geändert · " +
+                                $"{value.CacheRepaired:N0} Cache-Reparaturen · {value.Unchanged:N0} unverändert" +
+                                (value.Failed > 0 ? $" · {value.Failed:N0} Fehler" : string.Empty);
                     });
                     var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
                     if (sourceState is not { DesiredPresent: true })
