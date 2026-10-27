@@ -915,10 +915,9 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
             window.Close();
-            var closeDeadline = DateTime.UtcNow.AddSeconds(20);
-            while (window.IsVisible && DateTime.UtcNow < closeDeadline)
-                Flush(window);
-            if (window.IsVisible || ExifToolKeywordWriter.HasLiveSessions)
+            Until(window, () => !window.IsVisible,
+                "PCasa did not finish shutdown after writing tags.");
+            if (ExifToolKeywordWriter.HasLiveSessions)
                 throw new Exception("Closing tag editor left an active writer.");
             window = null;
             Console.WriteLine("RESULT: Live WPF tag-search round trip passed.");
