@@ -38,7 +38,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private bool _showStatusIcons = true;
     private static readonly Typeface RegularFilenameTypeface = new("Segoe UI");
     private static readonly Typeface BoldFilenameTypeface =
-        new("Segoe UI", FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+        new(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
     private static readonly Brush GpsIconBrush = new SolidColorBrush(Color.FromRgb(225, 68, 76));
     private static readonly Brush RawIconBrush = new SolidColorBrush(Color.FromArgb(215, 33, 37, 42));
     private static readonly Geometry GpsPinGeometry = Geometry.Parse(
