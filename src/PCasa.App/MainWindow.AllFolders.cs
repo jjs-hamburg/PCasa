@@ -1,6 +1,8 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -8,12 +10,19 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
-    // A temporary alternative visual projection, NOT another catalog tree.
-    // The existing FoldersTree remains alive and controls gallery ordering,
-    // collapsed-folder visibility, selection and saved expansion state.
+    // Explorer Ansicht is a temporary projection WITHIN the existing
+    // FoldersTree. It never replaces the tree, its visual nodes, or the
+    // catalog/gallery folder-order owner.
     private string? _allFolderProjectionRootPath;
     private CancellationTokenSource? _explorerSession;
     private int _explorerGeneration;
+    private TreeViewItem? _explorerOriginalSelection;
+    private string? _explorerOriginalSelectionPath;
+    private double? _explorerOriginalScroll;
+    private readonly HashSet<string> _explorerInsertedPaths =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _explorerLoadedPaths =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _explorerPending =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -23,9 +32,9 @@ public partial class MainWindow
         ShowAllFilesystemFoldersButton.Tag =
             _allFolderProjectionRootPath is null ? null : "ActiveGold";
         ShowAllFilesystemFoldersButton.ToolTip =
-            _allFolderProjectionRootPath is string root
-                ? $"Exploreransicht schließen: {root}"
-                : "Exploreransicht: alle Verzeichnisse des ausgewählten Ordners";
+            _allFolderProjectionRootPath is null
+                ? "Explorer Ansicht einschalten – alle Verzeichnisse anzeigen"
+                : "Explorer Ansicht ausschalten – nur PCasa-Ordner anzeigen";
     }
 
     private void ShowAllFilesystemFolders_Click(object sender, RoutedEventArgs e)
@@ -38,146 +47,238 @@ public partial class MainWindow
 
         if (FoldersTree.SelectedItem is not TreeViewItem { Tag: FolderTreeTag selected })
         {
-            StatusText.Text = "Zuerst einen Ordner im Ordnerbaum auswählen.";
+            StatusText.Text = "Zuerst einen Ordner auswählen.";
             return;
         }
 
-        // Only the chosen path is captured. No whole-drive/NAS enumeration.
-        // Every subsequent click on a twisty loads exactly ONE level.
-        var path = FolderExclusionRules.Normalize(selected.FullPath);
-        _allFolderProjectionRootPath = path;
+        _allFolderProjectionRootPath = selected.FullPath;
+        _explorerOriginalSelection = (TreeViewItem)FoldersTree.SelectedItem;
+        _explorerOriginalSelectionPath = selected.FullPath;
+        _explorerOriginalScroll = FindTreeScrollViewer(FoldersTree)?.VerticalOffset;
         _explorerSession = new CancellationTokenSource();
         ++_explorerGeneration;
-        _explorerPending.Clear();
-
-        ExplorerTree.Items.Clear();
-        var root = MakeExplorerItem(path);
-        ExplorerTree.Items.Add(root);
-        FoldersTree.Visibility = Visibility.Collapsed;
-        ExplorerTree.Visibility = Visibility.Visible;
         UpdateAllFoldersButtonState();
-        root.IsSelected = true;
-        root.IsExpanded = true;
-        _ = LoadExplorerChildrenAsync(root); // also safe if Expanded routed first
+
+        // No Items.Clear(), no other TreeView, no selecting a new root.
+        // Existing opened nodes and their WPF object identities survive.
+        AddExplorerExpanders(FoldersTree);
+        ProbeOpenedExplorerFolders();
+        RestoreExplorerScroll();
     }
 
     private void HideExplorerFolders()
     {
-        ++_explorerGeneration; // fence late NAS completions and stale dispatcher posts
+        ++_explorerGeneration; // fence late NAS/drive completions
         _explorerSession?.Cancel();
         _explorerSession?.Dispose();
         _explorerSession = null;
-        _explorerPending.Clear();
-        _allFolderProjectionRootPath = null;
-        ExplorerTree.Visibility = Visibility.Collapsed;
-        ExplorerTree.Items.Clear();
-        FoldersTree.Visibility = Visibility.Visible; // original UI state untouched
-        UpdateAllFoldersButtonState();
+
+        _bulkFolderExpansion = true;
+        try
+        {
+            // If a temporary-only entry is selected, restore the original
+            // selection before removing it. Otherwise do not change focus.
+            if (FoldersTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag current } &&
+                _explorerInsertedPaths.Contains(current.FullPath))
+            {
+                var original = _explorerOriginalSelection;
+                if (original is null || original.Tag is not FolderTreeTag)
+                    original = _explorerOriginalSelectionPath is string path
+                        ? FindFolderTreeItemByPath(FoldersTree, path) : null;
+                if (original is not null) original.IsSelected = true;
+            }
+
+            RemoveTemporaryExplorerNodes(FoldersTree);
+            _explorerInsertedPaths.Clear();
+            _explorerLoadedPaths.Clear();
+            _explorerPending.Clear();
+            _allFolderProjectionRootPath = null;
+            UpdateAllFoldersButtonState();
+        }
+        finally { _bulkFolderExpansion = false; }
+
+        // The original WPF scroll and expanded positions are unchanged.
+        // Persist only the genuine catalog tree, never temporary nodes.
+        SaveFolderTreeState();
+        UpdateGalleryFolderVisibility();
+        RestoreExplorerScroll();
+        _explorerOriginalSelection = null;
+        _explorerOriginalSelectionPath = null;
+        _explorerOriginalScroll = null;
     }
 
-    private TreeViewItem MakeExplorerItem(string path)
+    private static ScrollViewer? FindTreeScrollViewer(DependencyObject parent)
     {
-        var known = _photoFolders.FirstOrDefault(folder =>
-            string.Equals(FolderExclusionRules.Normalize(folder.LocalPath),
-                path, StringComparison.OrdinalIgnoreCase));
-        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
-        if (string.IsNullOrEmpty(name)) name = path;
-        var item = new TreeViewItem
+        if (parent is ScrollViewer scroll) return scroll;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
         {
-            Header = known is { ImageCount: > 0 }
-                ? $"{name} ({known.ImageCount:N0})" : name,
-            ToolTip = path,
-            Tag = CreateFolderTreeTag(path, known?.Id)
-        };
-        // Explorer expansion arrows are optimistic: the underlying filesystem
-        // is queried only on expansion, never once per child to test emptiness.
-        item.Items.Add(new TreeViewItem
-        {
-            Header = "Ordner laden …",
-            IsEnabled = false
-        });
-        return item;
+            var found = FindTreeScrollViewer(VisualTreeHelper.GetChild(parent, i));
+            if (found is not null) return found;
+        }
+        return null;
     }
 
-    private void ExplorerTree_Expanded(object sender, RoutedEventArgs e)
+    private void RestoreExplorerScroll()
+    {
+        if (_explorerOriginalScroll is not double offset) return;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                FindTreeScrollViewer(FoldersTree)?.ScrollToVerticalOffset(offset);
+        }), DispatcherPriority.Loaded);
+    }
+
+    private void RemoveTemporaryExplorerNodes(ItemsControl parent)
+    {
+        foreach (var item in parent.Items.OfType<TreeViewItem>().ToArray())
+        {
+            if (item.Tag is FolderTreeTag tag &&
+                _explorerInsertedPaths.Contains(tag.FullPath))
+            {
+                parent.Items.Remove(item);
+                continue;
+            }
+
+            if (item.Tag is FolderTreeTag)
+                RemoveTemporaryExplorerNodes(item);
+            // A placeholder never has a FolderTreeTag, and belongs only to
+            // the temporary projection.
+            foreach (var placeholder in item.Items.OfType<TreeViewItem>()
+                         .Where(child => child.Tag is null).ToArray())
+                item.Items.Remove(placeholder);
+        }
+    }
+
+    private static bool HasExplorerPlaceholder(TreeViewItem item)
+        => item.Items.OfType<TreeViewItem>().Any(child => child.Tag is null);
+
+    private void AddExplorerExpanders(ItemsControl parent)
+    {
+        foreach (var item in parent.Items.OfType<TreeViewItem>())
+        {
+            if (item.Tag is not FolderTreeTag) continue;
+            if (item.Items.Count == 0)
+                item.Items.Add(new TreeViewItem
+                {
+                    Header = "Ordner laden …", IsEnabled = false
+                });
+            else
+                AddExplorerExpanders(item);
+        }
+    }
+
+    private void ProbeOpenedExplorerFolders()
+    {
+        if (_allFolderProjectionRootPath is null) return;
+        foreach (var node in Opened(FoldersTree))
+            _ = LoadExplorerChildrenAsync(node);
+
+        static IEnumerable<TreeViewItem> Opened(ItemsControl parent)
+        {
+            foreach (var node in parent.Items.OfType<TreeViewItem>())
+            {
+                if (node.Tag is not FolderTreeTag) continue;
+                if (!node.IsExpanded) continue;
+                yield return node;
+                foreach (var descendant in Opened(node))
+                    yield return descendant;
+            }
+        }
+    }
+
+    private void ExplorerFolders_Expanded(RoutedEventArgs e)
     {
         if (_allFolderProjectionRootPath is null ||
-            e.OriginalSource is not TreeViewItem { Tag: FolderTreeTag } item ||
-            item.Items.Count != 1 ||
-            item.Items[0] is not TreeViewItem { Tag: null })
+            e.OriginalSource is not TreeViewItem { Tag: FolderTreeTag } item)
             return;
         _ = LoadExplorerChildrenAsync(item);
     }
 
     private async Task LoadExplorerChildrenAsync(TreeViewItem item)
     {
-        if (item.Tag is not FolderTreeTag tag || _explorerSession is null ||
-            _allFolderProjectionRootPath is null ||
-            item.Items.Count != 1 ||
-            item.Items[0] is not TreeViewItem { Tag: null })
+        if (_allFolderProjectionRootPath is null ||
+            _explorerSession is null ||
+            item.Tag is not FolderTreeTag folder) return;
+        var path = folder.FullPath;
+        if (_explorerLoadedPaths.Contains(path) || !_explorerPending.Add(path))
             return;
 
-        var path = tag.FullPath;
-        if (!_explorerPending.Add(path)) return;
-        var generation = _explorerGeneration;
         var session = _explorerSession;
-        ((TreeViewItem)item.Items[0]).Header = "Wird geladen …";
+        var generation = _explorerGeneration;
         try
         {
-            // Exactly one directory per interaction. The shared scheduler
-            // owns all filesystem probes; never enumerate NAS paths in WPF.
+            // Only ONE level for each opened folder. Filesystem work remains
+            // in the existing interactive SourceProbe scheduler lane.
             var children = await _scheduler.RunAsync(
                 $"folder-tree:explorer:{generation}:{Guid.NewGuid():N}",
                 SchedulerPriority.Interactive,
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    var opts = new EnumerationOptions
+                    var options = new EnumerationOptions
                     {
                         RecurseSubdirectories = false,
                         IgnoreInaccessible = true,
-                        AttributesToSkip = 0 // show Windows, hidden and system folders
+                        AttributesToSkip = 0 // include system and hidden folders
                     };
-                    var result = Directory.EnumerateDirectories(path, "*", opts)
+                    var paths = Directory.EnumerateDirectories(path, "*", options)
                         .Select(FolderExclusionRules.Normalize)
                         .OrderBy(p => Path.GetFileName(
-                            Path.TrimEndingDirectorySeparator(p)),
+                                Path.TrimEndingDirectorySeparator(p)),
                             StringComparer.CurrentCultureIgnoreCase)
                         .ToArray();
                     token.ThrowIfCancellationRequested();
-                    return result;
+                    return paths;
                 },
                 () => generation == _explorerGeneration &&
-                      ReferenceEquals(session, _explorerSession),
+                    ReferenceEquals(session, _explorerSession),
                 cancellationToken: session.Token,
                 workKind: SchedulerWorkKind.SourceProbe);
+
             if (generation != _explorerGeneration ||
                 !ReferenceEquals(session, _explorerSession) ||
                 Dispatcher.HasShutdownStarted) return;
 
-            // ONE publication, no repeated full-tree rebuild, no scrollbar
-            // resets. Reuse the existing tree-row style and context scanning.
-            item.Items.Clear();
+            var existing = item.Items.OfType<TreeViewItem>()
+                .Where(node => node.Tag is FolderTreeTag)
+                .Select(node => ((FolderTreeTag)node.Tag).FullPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var child in children)
-                item.Items.Add(MakeExplorerItem(child));
+            {
+                if (!existing.Add(child)) continue;
+                var indexed = _photoFolders.FirstOrDefault(f =>
+                    string.Equals(FolderExclusionRules.Normalize(f.LocalPath),
+                        child, StringComparison.OrdinalIgnoreCase));
+                var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(child));
+                if (string.IsNullOrWhiteSpace(name)) name = child;
+                var newNode = new TreeViewItem
+                {
+                    Header = indexed is { ImageCount: > 0 }
+                        ? $"{name} ({indexed.ImageCount:N0})" : name,
+                    ToolTip = child,
+                    Tag = CreateFolderTreeTag(child, indexed?.Id)
+                };
+                newNode.Items.Add(new TreeViewItem
+                {
+                    Header = "Ordner laden …", IsEnabled = false
+                });
+                _explorerInsertedPaths.Add(child);
+                item.Items.Add(newNode);
+                if (indexed is not null) _folderTreeItems[indexed.Id] = newNode;
+            }
+
+            foreach (var placeholder in item.Items.OfType<TreeViewItem>()
+                .Where(node => node.Tag is null).ToArray())
+                item.Items.Remove(placeholder);
+            _explorerLoadedPaths.Add(path);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or
-            System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (ex is IOException or
+            UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
             PCasaDiagnostics.Write("Explorer.EnumerateDirectory", ex);
-            if (generation == _explorerGeneration &&
-                ReferenceEquals(session, _explorerSession) &&
-                !Dispatcher.HasShutdownStarted)
-            {
-                item.Items.Clear();
-                item.Items.Add(new TreeViewItem
-                {
-                    Header = "Kein Zugriff oder nicht erreichbar",
-                    IsEnabled = false
-                });
-            }
+            // Keep the placeholder to allow another attempt after the
+            // network share becomes reachable.
         }
         finally
         {
@@ -186,26 +287,18 @@ public partial class MainWindow
         }
     }
 
-    private async void ExplorerTree_SelectedItemChanged(object sender,
-        RoutedPropertyChangedEventArgs<object> e)
-    {
-        if (_allFolderProjectionRootPath is null ||
-            e.NewValue is not TreeViewItem { Tag: FolderTreeTag tag } item ||
-            tag.PhotoFolderId is not long id || !_browseInitialized)
-            return;
-        // Selecting an already indexed folder preserves the existing gallery
-        // navigation path. Unindexed folders become navigable after a manual
-        // scan commits them; no independent gallery lookup is introduced.
-        await NavigateToPhotoFolderAsync(item, id);
-    }
-
+    // Existing photo-folder rows can become known after a manual scan.
+    // Update tags and image counts in place; never clear the TreeView.
     private void RefreshExplorerIndexedFolders()
     {
         if (_allFolderProjectionRootPath is null) return;
-        var byPath = _photoFolders.ToDictionary(
-            folder => FolderExclusionRules.Normalize(folder.LocalPath),
-            folder => folder, StringComparer.OrdinalIgnoreCase);
-        Refresh(ExplorerTree);
+        var byPath = _photoFolders.GroupBy(
+            f => FolderExclusionRules.Normalize(f.LocalPath),
+            StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(),
+                StringComparer.OrdinalIgnoreCase);
+        Refresh(FoldersTree);
+
         void Refresh(ItemsControl parent)
         {
             foreach (var item in parent.Items.OfType<TreeViewItem>())
@@ -215,14 +308,47 @@ public partial class MainWindow
                 {
                     if (existing.PhotoFolderId != indexed.Id)
                         item.Tag = CreateFolderTreeTag(existing.FullPath, indexed.Id);
-                    var name = Path.GetFileName(
-                        Path.TrimEndingDirectorySeparator(existing.FullPath));
-                    if (string.IsNullOrEmpty(name)) name = existing.FullPath;
+                    _folderTreeItems[indexed.Id] = item;
+                    var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(
+                        existing.FullPath));
+                    if (string.IsNullOrWhiteSpace(name)) name = existing.FullPath;
                     item.Header = indexed.ImageCount > 0
                         ? $"{name} ({indexed.ImageCount:N0})" : name;
                 }
                 Refresh(item);
             }
         }
+    }
+
+    // A newly registered root must survive Explorer-mode deactivation.
+    // Promote its full existing WPF ancestry from temporary to permanent.
+    private void PromoteExplorerMonitoredPath(string path)
+    {
+        var selected = FindFolderTreeItemByPath(FoldersTree, path);
+        while (selected is not null)
+        {
+            if (selected.Tag is FolderTreeTag tag)
+                _explorerInsertedPaths.Remove(tag.FullPath);
+            selected = ItemsControl.ItemsControlFromItemContainer(selected)
+                as TreeViewItem;
+        }
+    }
+
+    // Existing catalog refresh is still allowed when the source changes.
+    // Re-attach only Explorer's temporary lazy expanders afterward; never
+    // create a second logical tree or perform recursive filesystem scans.
+    private void ExplorerCatalogTreeRebuilt()
+    {
+        if (_allFolderProjectionRootPath is null) return;
+        ++_explorerGeneration;
+        _explorerSession?.Cancel();
+        _explorerSession?.Dispose();
+        _explorerSession = new CancellationTokenSource();
+        _explorerPending.Clear();
+        _explorerLoadedPaths.Clear();
+        _explorerInsertedPaths.Clear();
+        AddExplorerExpanders(FoldersTree);
+        _ = Dispatcher.BeginInvoke(new Action(ProbeOpenedExplorerFolders),
+            DispatcherPriority.Background);
     }
 }

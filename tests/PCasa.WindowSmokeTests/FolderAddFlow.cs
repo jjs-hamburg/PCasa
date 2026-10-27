@@ -337,74 +337,111 @@ internal static class FolderAddFlow
                 "Restarted durable first import failed to resume after independent automatic scans.");
             Console.WriteLine("PASS: Background image discovery and durable first-import resume coexist.");
 
-            // Explorer mode is a temporary lazy filesystem projection:
-            // show non-indexed directories, including hidden folders,
-            // without rebuilding the gallery's existing tree or rescanning
-            // a whole monitored drive. Manual scan uses the SAME P0 entrypoint.
+            // Explorer Ansicht is an in-place expansion of FoldersTree,
+            // not a replacement control. Even hidden and unindexed folders
+            // appear while existing WPF nodes, selection and expansion survive.
             var neverScanned = Path.Combine(initialRoot, "ExplorerNotIndexed");
             var hiddenExplorer = Path.Combine(initialRoot, "ExplorerHidden");
+            var inactiveExplorer = Path.Combine(initialRoot, "ExplorerInactive");
             Directory.CreateDirectory(neverScanned);
             Directory.CreateDirectory(hiddenExplorer);
+            Directory.CreateDirectory(inactiveExplorer);
             File.SetAttributes(hiddenExplorer,
                 File.GetAttributes(hiddenExplorer) | FileAttributes.Hidden);
-            WriteJpeg(Path.Combine(neverScanned, "now-visible.jpg"));
+            WriteJpeg(Path.Combine(inactiveExplorer, "registered.jpg"));
 
-            // Disable automatic monitoring for this manual-scan assertion.
+            // Make one subtree inactive through the same transactional folder
+            // selection owner. The Explorer manual scan must make this exact
+            // subtree a new monitored root, without reactivating all siblings.
+            var presentRoots = roots.GetAll();
+            var choices = presentRoots.Select(root =>
+                new FolderManagerRootChoice(root.LocalPath,
+                    SamePath(root.LocalPath, initialRoot)
+                        ? new[] { inactiveExplorer }
+                        : roots.GetExcludedPaths(root.Id).ToArray(),
+                    root.ServerSyncEnabled)).ToArray();
+            new FolderManagerSelectionService(db).Apply(
+                new FolderManagerSelection(choices, BackgroundScanEnabled: false));
+
             new BackgroundScanSettings { Enabled = false }.Save();
             var selectedRoot = Walk(tree).Single(item =>
                 SamePath(PathOf(item), initialRoot));
             selectedRoot.IsSelected = true;
+            selectedRoot.IsExpanded = true;
             var treeBefore = selectedRoot;
+            var expandedBefore = treeBefore.IsExpanded;
+            var originalRoots = presentRoots.Select(r => r.LocalPath).ToArray();
             var browserButton = (Button)window.FindName("ShowAllFilesystemFoldersButton");
-            var explorer = (TreeView)window.FindName("ExplorerTree");
             browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
-            Until(window, () => explorer.Visibility == Visibility.Visible &&
-                tree.Visibility == Visibility.Collapsed &&
-                Walk(explorer).Any(item => SamePath(PathOf(item), neverScanned)) &&
-                Walk(explorer).Any(item => SamePath(PathOf(item), hiddenExplorer)),
-                "Explorer did not display all child directories on first expansion.");
-            if (!ReferenceEquals(treeBefore,
+            Until(window, () =>
+                    Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) &&
+                    Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) &&
+                    Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)),
+                "Explorer in-place extension did not expose all child directories.");
+            if (window.FindName("ExplorerTree") is not null ||
+                !ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
-                explorer.Items.Count != 1 ||
+                !expandedBefore || !treeBefore.IsExpanded ||
                 browserButton.Tag as string != "ActiveGold")
-                throw new Exception("Explorer mode rebuilt the catalog tree or navigated away.");
+                throw new Exception(
+                    "Explorer Ansicht replaced or collapsed the original folder tree.");
 
-            var newFolderItem = Walk(explorer).Single(item =>
-                SamePath(PathOf(item), neverScanned));
-            if (newFolderItem.Tag?.GetType().GetProperty("PhotoFolderId")?
-                    .GetValue(newFolderItem.Tag) is not null)
-                throw new Exception("Unscanned folder unexpectedly has a catalog ID.");
-            newFolderItem.IsSelected = true;
+            var inactiveItem = Walk(tree).Single(item =>
+                SamePath(PathOf(item), inactiveExplorer));
+            if (inactiveItem.Tag?.GetType().GetProperty("PhotoFolderId")?
+                    .GetValue(inactiveItem.Tag) is not null)
+                throw new Exception("Excluded unindexed folder already has a catalog ID.");
+            inactiveItem.IsSelected = true;
             var scan = typeof(PCasa.App.MainWindow).GetMethod(
                 "BrowseScanCurrentFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
-            scan.Invoke(window, [explorer, new RoutedEventArgs()]);
+            scan.Invoke(window, [tree, new RoutedEventArgs()]);
             var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
                 .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(window)!;
+            Until(window, () => roots.GetAll().Any(root =>
+                SamePath(root.LocalPath, inactiveExplorer)),
+                "Explorer scan did not activate a new root in Ordnermanager.");
+            if (!originalRoots.All(path => roots.GetAll().Any(root =>
+                    SamePath(root.LocalPath, path))) ||
+                !roots.GetExcludedPaths(roots.GetAll().Single(root =>
+                    SamePath(root.LocalPath, initialRoot)).Id)
+                    .Any(path => SamePath(path, inactiveExplorer)))
+                throw new Exception(
+                    "Explorer registration removed existing roots or changed exclusions.");
+
             Until(window, () => scheduler.Snapshot().Any(job =>
                     job.Key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) &&
-                    job.Key.Contains("ExplorerNotIndexed", StringComparison.Ordinal) &&
+                    job.Key.Contains("ExplorerInactive", StringComparison.Ordinal) &&
                     job.Priority == SchedulerPriority.ManualAction),
-                "Explorer context scan did not enter the shared scheduler at P0.");
+                "Explorer manual scan did not start at P0.");
             Until(window, () => new ImageCatalogRepository(db).GetPhotoFolders()
-                .Any(folder => SamePath(folder.LocalPath, neverScanned)) &&
-                newFolderItem.Tag?.GetType().GetProperty("PhotoFolderId")?
-                    .GetValue(newFolderItem.Tag) is long &&
+                    .Any(folder => SamePath(folder.LocalPath, inactiveExplorer)) &&
+                inactiveItem.Tag?.GetType().GetProperty("PhotoFolderId")?
+                    .GetValue(inactiveItem.Tag) is long &&
                 surface.GetFolderOffset(
                     new ImageCatalogRepository(db).GetPhotoFolders()
-                        .Single(folder => SamePath(folder.LocalPath, neverScanned)).Id)
+                        .Single(folder => SamePath(folder.LocalPath, inactiveExplorer)).Id)
                     is not null,
-                "Manual scan of Explorer-only folder did not publish its image.");
+                "Explorer scanned folder was not published without rebuilding the tree.");
 
+            if (!ReferenceEquals(treeBefore,
+                    Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
+                !treeBefore.IsExpanded)
+                throw new Exception("Explorer scan replaced the original open tree nodes.");
             browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
-            if (explorer.Visibility != Visibility.Collapsed ||
-                tree.Visibility != Visibility.Visible ||
-                browserButton.Tag is not null)
-                throw new Exception("Explorer toggle failed to restore catalog tree.");
+            if (browserButton.Tag is not null ||
+                !ReferenceEquals(treeBefore,
+                    Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
+                !treeBefore.IsExpanded ||
+                !Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) ||
+                Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) ||
+                Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)))
+                throw new Exception(
+                    "Explorer off destroyed original nodes or lost a newly registered root.");
 
             Console.WriteLine(
-                "PASS: Lazy Explorer shows hidden/unindexed folders, P0 scan and restores original tree.");
+                "PASS: Explorer Ansicht preserves opened tree, hides temporary dirs and registers inactive roots via Ordnermanager.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");

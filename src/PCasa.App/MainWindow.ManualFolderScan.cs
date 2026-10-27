@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using PCasa.App.Models;
+using PCasa.App.Data;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -39,23 +40,10 @@ public partial class MainWindow
             return;
         }
 
-        var selectedTree = _allFolderProjectionRootPath is null
-            ? FoldersTree : ExplorerTree;
-        if (selectedTree.SelectedItem is not TreeViewItem item ||
+        if (FoldersTree.SelectedItem is not TreeViewItem item ||
             item.Tag is not FolderTreeTag tag)
         {
             StatusText.Text = "Bitte zuerst den einzulesenden Ordner auswählen.";
-            return;
-        }
-
-        // Unmonitored Explorer directories are navigable but are not
-        // implicitly imported by clicking Scan; folder manager remains
-        // the sole authority for choosing monitored roots.
-        if (DisplayedMonitoredRoot(tag.FullPath) is not { } monitored ||
-            FolderExclusionRules.IsExcluded(tag.FullPath,
-                DisplayedExcludedPaths(monitored.Id)))
-        {
-            StatusText.Text = "Dieser Ordner wird nicht überwacht – bitte im Ordnermanager auswählen.";
             return;
         }
 
@@ -98,23 +86,78 @@ public partial class MainWindow
 
         try
         {
+            // Explorer-originated manual scanning may register a previously
+            // inactive folder, but ONLY through Ordnermanager's transactional
+            // FolderManagerSelectionService.Apply. The scheduler owns that
+            // root transition and the subsequent durable manual scan.
+            bool newRoot = false;
+            long? expectedRootId = null;
+            if (_allFolderProjectionRootPath is not null)
+            {
+                // The *persisted* catalog selection is authoritative here.
+                // Never decide a root's activation from a stale UI snapshot.
+                var registration = await _scheduler.RunAsync(
+                    "folder-manager:explorer-register:" + Guid.NewGuid().ToString("N"),
+                    SchedulerPriority.ManualAction,
+                    token =>
+                    {
+                        var created = new FolderManagerSelectionService(_database)
+                            .EnsureMonitoredFolder(directory, token);
+                        var snapshot = ReadFolderTreeConfigurationSnapshot();
+                        var root = FolderExclusionRules.FindOwner(directory,
+                            snapshot.Select(candidate => candidate.Folder))
+                            ?? throw new InvalidOperationException(
+                                "Der Ordner konnte nicht als Bildordner registriert werden.");
+                        return (Created: created, RootId: root.Id, Snapshot: snapshot);
+                    }, cancellationToken: cancellation.Token,
+                    workKind: SchedulerWorkKind.Catalog);
+
+                newRoot = registration.Created;
+                expectedRootId = registration.RootId;
+                if (newRoot)
+                {
+                    _dropTargetProjection = registration.Snapshot;
+                    _dragTargetValidity.Clear();
+                    PromoteExplorerMonitoredPath(directory);
+                    StatusText.Text =
+                        "Ordner im Ordnermanager registriert · Manueller Scan gestartet";
+                }
+            }
+            else
+            {
+                var owner = DisplayedMonitoredRoot(directory);
+                if (owner is null ||
+                    FolderExclusionRules.IsExcluded(directory,
+                        DisplayedExcludedPaths(owner.Id)))
+                    throw new InvalidOperationException(
+                        "Dieser Ordner muss zuerst im Ordnermanager ausgewählt werden.");
+            }
+
             var result = await ScheduleCompleteFolderScanAsync(
                 directory, SchedulerPriority.ManualAction, progress, cancellation.Token,
+                expectedMonitoredFolderId: expectedRootId,
+                requirePendingInitialImport: newRoot,
                 operationKey: operationKey);
             TrackFolderActivity(directory,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: true);
-            RefreshFolderTree();
-            RefreshExplorerIndexedFolders();
-            if (_allFolderProjectionRootPath is not null &&
-                ExplorerTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag selected } &&
-                string.Equals(selected.FullPath, directory,
-                    StringComparison.OrdinalIgnoreCase) &&
-                selected.PhotoFolderId is long newFolderId)
-                await NavigateToPhotoFolderAsync(
-                    (TreeViewItem)ExplorerTree.SelectedItem, newFolderId);
+            // Explorer must not rebuild its one existing TreeView, even after
+            // a newly registered folder commits images to the catalog.
+            if (_allFolderProjectionRootPath is null)
+                RefreshFolderTree();
+            else
+            {
+                RefreshExplorerIndexedFolders();
+                if (FoldersTree.SelectedItem is TreeViewItem
+                    { Tag: FolderTreeTag selected } &&
+                    string.Equals(selected.FullPath, directory,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    selected.PhotoFolderId is long newFolderId)
+                    await NavigateToPhotoFolderAsync(
+                        (TreeViewItem)FoldersTree.SelectedItem, newFolderId);
+            }
             StatusText.Text = result.Failed == 0
                 ? $"Scan abgeschlossen: {result.Updated:N0} aktualisiert · " +
                   $"{result.Removed:N0} verwaiste Einträge entfernt"
@@ -158,14 +201,16 @@ public partial class MainWindow
         }
     }
 
-    private sealed record ManualScanRecipe(string Directory, long? MonitoredRootId);
+    private sealed record ManualScanRecipe(string Directory,
+        long? MonitoredRootId, bool RequirePendingInitialImport = false);
 
     private SchedulerTaskPackage BuildManualFolderScanPackage(string key, string payload)
     {
         var recipe = System.Text.Json.JsonSerializer.Deserialize<ManualScanRecipe>(payload)
             ?? throw new InvalidDataException("Ungültiger manueller Scan-Auftrag.");
         var step = new CompleteFolderScanStep(this, recipe.Directory,
-            new ScanJobProgress(_scheduler, key, null), recipe.MonitoredRootId);
+            new ScanJobProgress(_scheduler, key, null), recipe.MonitoredRootId,
+            recipe.RequirePendingInitialImport);
         var package = new SchedulerTaskPackage(key);
         package.AddStep(async token =>
         {
@@ -194,13 +239,13 @@ public partial class MainWindow
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
         using var step = new CompleteFolderScanStep(this, directory,
             schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport);
-        if (priority == SchedulerPriority.ManualAction &&
-            !requirePendingInitialImport)
+        if (priority == SchedulerPriority.ManualAction)
         {
             var package = new SchedulerTaskPackage(key);
             package.AddStep(step.ExecuteAsync);
             var payload = System.Text.Json.JsonSerializer.Serialize(
-                new ManualScanRecipe(directory, expectedMonitoredFolderId));
+                new ManualScanRecipe(directory, expectedMonitoredFolderId,
+                    requirePendingInitialImport));
             await _scheduler.EnqueueDurablePackageAsync(package,
                 "manual-folder-scan-v1", payload, priority,
                 SchedulerWorkKind.CatalogScan, cancellationToken);

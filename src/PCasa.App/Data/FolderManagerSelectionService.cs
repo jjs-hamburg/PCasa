@@ -16,6 +16,39 @@ public sealed class FolderManagerSelectionService
 
     public FolderManagerSelectionService(LocalDatabase database) => _database = database;
 
+    // Explorer-originated manual scans add ONE monitored root through the
+    // same transactional Apply() boundary as an Ordnermanager OK. Existing
+    // roots, exclusions, sync flags and catalog state are preserved.
+    // A nested selected root is allowed to override an excluded parent.
+    public bool EnsureMonitoredFolder(string path,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalized = FolderExclusionRules.Normalize(path);
+        var repository = new FolderRepository(_database);
+        var roots = repository.GetAll();
+        var covering = FolderExclusionRules.FindOwner(normalized, roots);
+        if (covering is not null &&
+            !FolderExclusionRules.IsExcluded(normalized,
+                repository.GetExcludedPaths(covering.Id)))
+            return false;
+
+        var choices = roots.Select(root => new FolderManagerRootChoice(
+            root.LocalPath, repository.GetExcludedPaths(root.Id).ToArray(),
+            root.ServerSyncEnabled)).ToList();
+        if (choices.Any(choice => string.Equals(
+                FolderExclusionRules.Normalize(choice.LocalPath), normalized,
+                StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Ein ausgeschlossener Überwachungsordner muss im Ordnermanager " +
+                "wieder aktiviert werden.");
+        choices.Add(new FolderManagerRootChoice(normalized, [], false));
+        // Apply is the ONLY root-commit path. All validation, source
+        // generations and publication eligibility stay in that service.
+        return Apply(new FolderManagerSelection(choices,
+            BackgroundScanSettings.Load().Enabled), cancellationToken);
+    }
+
     public bool Apply(FolderManagerSelection selection, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(selection);

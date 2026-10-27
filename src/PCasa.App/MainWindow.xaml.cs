@@ -332,6 +332,7 @@ public partial class MainWindow : Window
 
         ApplyFolderAvailabilityToTree();
         UpdateGalleryFolderVisibility(preserveGalleryAnchor);
+        ExplorerCatalogTreeRebuilt();
         }
         finally
         {

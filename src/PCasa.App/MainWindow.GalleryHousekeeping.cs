@@ -134,6 +134,13 @@ public partial class MainWindow
     {
         if (_bulkFolderExpansion || _rebuildingFolderTree || !_folderTreeInitialized)
             return;
+        if (_allFolderProjectionRootPath is not null)
+        {
+            // Explorer's expansion does not change gallery visibility,
+            // persisted catalog-tree state, or sorting.
+            ExplorerFolders_Expanded(e);
+            return;
+        }
         SaveFolderTreeState();
         if (_appearance.HideCollapsedFolders)
             UpdateGalleryFolderVisibility();
