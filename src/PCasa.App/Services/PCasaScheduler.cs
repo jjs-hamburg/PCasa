@@ -4,7 +4,7 @@ namespace PCasa.App.Services;
 
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
-public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe }
+public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport }
 
 public sealed record SchedulerJobSnapshot(
     long Id, string Key, SchedulerPriority Priority, SchedulerJobState State,
@@ -38,6 +38,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneSourceProbe = 7;
     private const int LaneManualSourceProbe = 8;
     private const int LaneInteractiveSourceProbe = 9;
+    // First imports can wait on a particular NAS/file lock without
+    // blocking reconciliation of unrelated, already-imported roots.
+    private const int LaneInitialImport = 10;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
     private readonly HashSet<Task> _durableCompletions = new();
@@ -47,7 +50,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, 10).Select(_ => new SemaphoreSlim(0)).ToArray();
+        Enumerable.Range(0, 11).Select(_ => new SemaphoreSlim(0)).ToArray();
     private readonly WorkItem?[] _runningPriorityJobs = new WorkItem?[3];
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
@@ -66,6 +69,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         _workers = new[]
         {
             Task.Run(() => RunAsync(LaneBackground)),
+            // Same coordinator, same durable/source fences, separate bounded
+            // capacity. An unfinished first import owns only its own root.
+            Task.Run(() => RunAsync(LaneInitialImport)),
             Task.Run(() => RunAsync(LaneUserAction)),
             // A manually requested scan must not wait for blocked initial SMB I/O.
             Task.Run(() => RunAsync(LaneManual)),
@@ -238,6 +244,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             SchedulerWorkKind.ViewerRead => LaneViewer,
             SchedulerWorkKind.CatalogRead => LaneCatalogRead,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
+            SchedulerWorkKind.InitialImport => LaneInitialImport,
             SchedulerWorkKind.SourceProbe => priority switch
             {
                 SchedulerPriority.ManualAction => LaneManualSourceProbe,
@@ -467,7 +474,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // a higher-priority catalog request is pending or running.
                     // Otherwise parallel workers can reverse the logical order.
                     var blockedByHigherPriority =
-                        lane == LaneBackground &&
+                        (lane == LaneBackground || lane == LaneInitialImport) &&
                         (_unresolvedDurableManualCount > 0 ||
                          _catalogForegroundRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
@@ -639,6 +646,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                         x.Priority <= SchedulerPriority.UserAction) &&
                                     _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneBackground))
                                     _signals[LaneBackground].Release();
+                                if (_catalogForegroundRunning == 0 &&
+                                    _unresolvedDurableManualCount == 0 &&
+                                    !HasManualSourceProbeUnsafe() &&
+                                    !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
+                                        x.Priority <= SchedulerPriority.UserAction) &&
+                                    _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneInitialImport))
+                                    _signals[LaneInitialImport].Release();
                             }
                         }
                     }

@@ -474,6 +474,10 @@ internal static class FolderAddFlow
                     is not null,
                 "Explorer scanned folder was not published without rebuilding the tree.");
 
+            if (roots.GetPendingInitialScans().Any(root =>
+                SamePath(root.LocalPath, initialRoot)))
+                throw new Exception(
+                    "Successful targeted reactivation stranded a full-root pending first import.");
             if (!ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
                 !treeBefore.IsExpanded)

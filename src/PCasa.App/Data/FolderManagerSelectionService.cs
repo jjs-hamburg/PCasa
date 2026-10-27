@@ -16,7 +16,8 @@ public sealed class FolderManagerSelectionService
 
     public FolderManagerSelectionService(LocalDatabase database) => _database = database;
 
-    public readonly record struct ExplorerRegistration(bool Changed, bool CreatedRoot);
+    public readonly record struct ExplorerRegistration(
+        bool Changed, bool CreatedRoot, bool AcknowledgeTargetedPending = false);
 
     // The manager's one transaction is also the only Explorer registration
     // path. An excluded direct child belongs to its existing monitored root:
@@ -35,6 +36,8 @@ public sealed class FolderManagerSelectionService
             root.ServerSyncEnabled)).ToList();
         if (covering is not null)
         {
+            var pendingBefore = repository.GetPendingInitialScans().Any(
+                pending => pending.Id == covering.Id);
             var exclusions = repository.GetExcludedPaths(covering.Id);
             if (!FolderExclusionRules.IsExcluded(normalized, exclusions))
                 return new ExplorerRegistration(false, false);
@@ -66,9 +69,15 @@ public sealed class FolderManagerSelectionService
                             .ToArray()
                     }
                     : choice).ToList();
-            return new ExplorerRegistration(Apply(new FolderManagerSelection(
+            var changed = Apply(new FolderManagerSelection(
                 choices, BackgroundScanSettings.Load().Enabled),
-                cancellationToken), false);
+                cancellationToken);
+            // Reactivating one previously excluded child creates a durable
+            // initial-import marker for its parent. If its parent was already
+            // fully imported, the successful targeted manual scan can
+            // acknowledge that NEW marker. Pre-existing pending imports remain.
+            return new ExplorerRegistration(changed, false,
+                AcknowledgeTargetedPending: changed && !pendingBefore);
         }
 
         // No monitored ancestor exists: only now is this a new root.

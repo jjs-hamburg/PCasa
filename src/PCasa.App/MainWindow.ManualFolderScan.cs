@@ -91,6 +91,7 @@ public partial class MainWindow
             // FolderManagerSelectionService.Apply. The scheduler owns that
             // root transition and the subsequent durable manual scan.
             bool newRoot = false;
+            bool acknowledgeTargetedPending = false;
             long? expectedRootId = null;
             if (_allFolderProjectionRootPath is not null)
             {
@@ -109,11 +110,13 @@ public partial class MainWindow
                             ?? throw new InvalidOperationException(
                                 "Der Ordner konnte nicht als Bildordner registriert werden.");
                         return (registration.Changed, registration.CreatedRoot,
+                            registration.AcknowledgeTargetedPending,
                             RootId: root.Id, Snapshot: snapshot);
                     }, cancellationToken: cancellation.Token,
                     workKind: SchedulerWorkKind.Catalog);
 
                 newRoot = registration.CreatedRoot;
+                acknowledgeTargetedPending = registration.AcknowledgeTargetedPending;
                 expectedRootId = registration.RootId;
                 if (registration.Changed)
                 {
@@ -142,7 +145,8 @@ public partial class MainWindow
                 directory, SchedulerPriority.ManualAction, progress, cancellation.Token,
                 expectedMonitoredFolderId: expectedRootId,
                 requirePendingInitialImport: newRoot,
-                operationKey: operationKey);
+                operationKey: operationKey,
+                acknowledgeTargetedPending: acknowledgeTargetedPending);
             TrackFolderActivity(directory,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
@@ -207,7 +211,8 @@ public partial class MainWindow
     }
 
     private sealed record ManualScanRecipe(string Directory,
-        long? MonitoredRootId, bool RequirePendingInitialImport = false);
+        long? MonitoredRootId, bool RequirePendingInitialImport = false,
+        bool AcknowledgeTargetedPending = false);
 
     private SchedulerTaskPackage BuildManualFolderScanPackage(string key, string payload)
     {
@@ -215,7 +220,8 @@ public partial class MainWindow
             ?? throw new InvalidDataException("Ungültiger manueller Scan-Auftrag.");
         var step = new CompleteFolderScanStep(this, recipe.Directory,
             new ScanJobProgress(_scheduler, key, null), recipe.MonitoredRootId,
-            recipe.RequirePendingInitialImport);
+            recipe.RequirePendingInitialImport,
+            recipe.AcknowledgeTargetedPending);
         var package = new SchedulerTaskPackage(key);
         package.AddStep(async token =>
         {
@@ -238,19 +244,21 @@ public partial class MainWindow
         IProgress<ScanProgress>? progress, CancellationToken cancellationToken,
         long? expectedMonitoredFolderId = null,
         bool requirePendingInitialImport = false,
-        string? operationKey = null)
+        string? operationKey = null,
+        bool acknowledgeTargetedPending = false)
     {
         var key = operationKey ?? $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
         using var step = new CompleteFolderScanStep(this, directory,
-            schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport);
+            schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport,
+            acknowledgeTargetedPending);
         if (priority == SchedulerPriority.ManualAction)
         {
             var package = new SchedulerTaskPackage(key);
             package.AddStep(step.ExecuteAsync);
             var payload = System.Text.Json.JsonSerializer.Serialize(
                 new ManualScanRecipe(directory, expectedMonitoredFolderId,
-                    requirePendingInitialImport));
+                    requirePendingInitialImport, acknowledgeTargetedPending));
             await _scheduler.EnqueueDurablePackageAsync(package,
                 "manual-folder-scan-v1", payload, priority,
                 SchedulerWorkKind.CatalogScan, cancellationToken);
@@ -259,7 +267,10 @@ public partial class MainWindow
         {
             await _scheduler.EnqueueAsync(key, priority, step.ExecuteAsync,
                 cancellationToken: cancellationToken,
-                workKind: SchedulerWorkKind.CatalogScan);
+                workKind: requirePendingInitialImport &&
+                    priority == SchedulerPriority.Background
+                    ? SchedulerWorkKind.InitialImport
+                    : SchedulerWorkKind.CatalogScan);
         }
         return step.Result ?? throw new OperationCanceledException();
     }
@@ -270,10 +281,12 @@ public partial class MainWindow
     private sealed class CompleteFolderScanStep(
         MainWindow owner, string directory, IProgress<ScanProgress>? progress,
         long? expectedMonitoredFolderId = null,
-        bool requirePendingInitialImport = false) : IDisposable
+        bool requirePendingInitialImport = false,
+        bool acknowledgeTargetedPending = false) : IDisposable
     {
         private readonly FolderScanner.ScanResumeState _resume = new();
         private bool _manualGenerationStarted;
+        private long? _manualScanEpoch;
         private long? _initialSourceGeneration;
         private string? _sourceCanonicalPath;
 
@@ -316,7 +329,8 @@ public partial class MainWindow
                 // An automatic first import must retain its durable scan epoch
                 // after restart; explicit manual rescans still supersede it.
                 if (!requirePendingInitialImport)
-                    owner._folderRepository.BeginManualScan(folder.CanonicalPath);
+                    _manualScanEpoch =
+                        owner._folderRepository.BeginManualScan(folder.CanonicalPath);
                 _manualGenerationStarted = true;
             }
 
@@ -325,6 +339,17 @@ public partial class MainWindow
             Result = owner._folderScanner.ScanDirectory(
                 folder, directory, recursive: true, progress, token, _resume,
                 durableInitialImport: requirePendingInitialImport);
+            if (Result.Failed == 0 && acknowledgeTargetedPending &&
+                _initialSourceGeneration is long expectedGeneration &&
+                _manualScanEpoch is long scanEpoch)
+            {
+                token.ThrowIfCancellationRequested();
+                // Only the pending obligation created by reactivating this
+                // child can be acknowledged. Generation and epoch CAS keep
+                // older packets from erasing a newer root's pending work.
+                owner._folderRepository.CompleteInitialScan(
+                    folder.Id, expectedGeneration, scanEpoch);
+            }
             if (Result.Failed == 0 && !requirePendingInitialImport)
             {
                 var noLongerExisting = owner._folderRepository
