@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 
 namespace PCasa.App.Services;
 
@@ -51,7 +52,6 @@ internal static class ExifToolProcessRegistry
     {
         try { return !child.HasExited; }
         catch (InvalidOperationException) { return false; }
-        catch (ObjectDisposedException) { return false; }
     }
 
     // Under Gate from both callers. No handle is forgotten while the native
