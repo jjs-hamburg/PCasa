@@ -62,27 +62,77 @@ internal static class Program
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
 
-            // Texture pixels must remain physical screen pixels, even at
-            // 125%, 150% and 200% display scaling (DIPs are not pixels).
-            var canvasFactory = typeof(PCasa.App.MainWindow).GetMethod(
-                "MakeCanvasBrush", System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Static)
-                ?? throw new Exception("Canvas brush factory missing.");
-            foreach (var light in new[] { true, false })
-            foreach (var scale in new[] { 1.0, 1.25, 1.5, 2.0 })
+            // All bundled textures must be external, discoverable JPGs,
+            // selectable by filename and native-sized across DPI settings.
+            var textures = PCasa.App.Services.GalleryTextureLibrary.GetFiles();
+            if (textures.Count < 4 ||
+                textures.Any(p => !p.StartsWith(
+                    PCasa.App.Services.GalleryTextureLibrary.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase)) ||
+                !textures.Any(p => p.EndsWith("Leinwand hell - fein.jpg",
+                    StringComparison.OrdinalIgnoreCase)) ||
+                !textures.Any(p => p.EndsWith("Leinwand dunkel - fein.jpg",
+                    StringComparison.OrdinalIgnoreCase)) ||
+                PCasa.App.Services.GalleryTextureLibrary.FindFile("../wrong.jpg") is not null)
+                throw new Exception("External JPG texture directory is missing or unsafe.");
+            foreach (var path in textures)
             {
-                var canvas = canvasFactory.Invoke(null, [light, new DpiScale(scale, scale)])
-                    as ImageBrush
-                    ?? throw new Exception("Canvas background is not image-backed.");
-                if (canvas.TileMode != TileMode.FlipXY ||
-                    canvas.ViewportUnits != BrushMappingMode.Absolute ||
-                    canvas.ImageSource is not System.Windows.Media.Imaging.BitmapSource bitmap ||
-                    bitmap.PixelWidth != 128 || bitmap.PixelHeight != 128 ||
-                    Math.Abs(canvas.Viewport.Width * scale - bitmap.PixelWidth) > .001 ||
-                    Math.Abs(canvas.Viewport.Height * scale - bitmap.PixelHeight) > .001)
-                    throw new Exception("Canvas has been stretched beyond its original pixel size.");
+                var bitmap = PCasa.App.Services.GalleryTextureLibrary.LoadBitmap(path);
+                foreach (var scale in new[] { 1.0, 1.25, 1.5, 2.0 })
+                {
+                    var brush = PCasa.App.Services.GalleryTextureLibrary.CreateBrush(
+                        bitmap, new DpiScale(scale, scale));
+                    if (brush.TileMode != TileMode.FlipXY ||
+                        brush.ViewportUnits != BrushMappingMode.Absolute ||
+                        Math.Abs(brush.Viewport.Width * scale - bitmap.PixelWidth) > .001 ||
+                        Math.Abs(brush.Viewport.Height * scale - bitmap.PixelHeight) > .001)
+                        throw new Exception("A JPG texture has been enlarged by display scaling.");
+                }
             }
-            Console.WriteLine("PASS: Light/dark canvas textures remain native-sized at all DPI scales.");
+            var applyTexture = typeof(PCasa.App.MainWindow).GetMethod(
+                "ApplyGalleryTextureSelection", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Texture selection path missing.");
+            var chosen = System.IO.Path.GetFileName(textures[0]);
+            applyTexture.Invoke(window, [chosen]);
+            var selectedTexture = (MenuItem?)window.FindName("GalleryBackgroundTextureMenu")
+                ?? throw new Exception("Single Texture background menu missing.");
+            if (!selectedTexture.IsChecked ||
+                window.FindName("GalleryBackgroundCanvasMenu") is not null ||
+                window.FindName("GalleryBackgroundCanvasDarkMenu") is not null)
+                throw new Exception("Legacy hard-coded Leinwand choices remain visible.");
+            var savedPath = typeof(PCasa.App.MainWindow).GetField(
+                "_appearanceFile", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)?.GetValue(window) as string
+                ?? throw new Exception("Appearance file path missing.");
+            using (var saved = System.Text.Json.JsonDocument.Parse(
+                System.IO.File.ReadAllText(savedPath)))
+            {
+                if (saved.RootElement.GetProperty("Background").GetString() != "Texture" ||
+                    saved.RootElement.GetProperty("TextureFileName").GetString() != chosen)
+                    throw new Exception("JPG texture choice did not persist.");
+            }
+            Console.WriteLine("PASS: Editable JPG textures, native pixels and one persisted menu entry.");
+
+            // Light UI: checked Tags/Alle must be legible over charcoal;
+            // unchecked options retain the normal dark foreground.
+            var lightMenu = (MenuItem?)window.FindName("ThemeLightMenu")
+                ?? throw new Exception("Light theme menu missing.");
+            lightMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, lightMenu));
+            var checkedTags = (RadioButton?)window.FindName("SearchTagsMode");
+            var checkedAll = (RadioButton?)window.FindName("SearchAllScope");
+            var uncheckedName = (RadioButton?)window.FindName("SearchFileNameMode");
+            if (checkedTags?.Foreground is not SolidColorBrush activeColor ||
+                checkedAll?.Foreground is not SolidColorBrush activeScopeColor ||
+                uncheckedName?.Foreground is not SolidColorBrush inactiveColor ||
+                activeColor.Color.R < 230 ||
+                activeScopeColor.Color.R < 230 ||
+                inactiveColor.Color.R > 100)
+                throw new Exception("Light search controls have unreadable checked labels.");
+            var darkMenu = (MenuItem?)window.FindName("ThemeDarkMenu")
+                ?? throw new Exception("Dark theme menu missing.");
+            darkMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, darkMenu));
+            Console.WriteLine("PASS: Light theme checked search labels remain high contrast.");
 
             // Real menu action must update the one gallery renderer and persist.
             var filenameBoldMenu = (MenuItem?)window.FindName("ThumbnailBoldFileNamesMenu")

@@ -16,8 +16,15 @@
     <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
   
+  <!-- User-editable JPG texture directory beside the published EXE. -->
   <ItemGroup>
-    <Resource Include="Assets/CanvasLight.jpg" />
-    <Resource Include="Assets/CanvasDark.jpg" />
+    <Content Include="Assets/CanvasLight.jpg" Link="Texturen/Leinwand hell.jpg"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/CanvasDark.jpg" Link="Texturen/Leinwand dunkel.jpg"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/CanvasLightFine.jpg" Link="Texturen/Leinwand hell - fein.jpg"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/CanvasDarkFine.jpg" Link="Texturen/Leinwand dunkel - fein.jpg"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

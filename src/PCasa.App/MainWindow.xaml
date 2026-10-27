@@ -117,6 +117,9 @@
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="ChoiceBorder" Property="Background" Value="#424447"/>
                                 <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="#D75A5A"/>
+                                <!-- The checked background is charcoal even in the light
+                                     theme; never inherit its dark caption color. -->
+                                <Setter Property="Foreground" Value="#F5F5F5"/>
                                 <Setter TargetName="SelectedTick" Property="Visibility" Value="Visible"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
@@ -486,8 +489,7 @@
                                 <Separator />
                                 <MenuItem x:Name="GalleryBackgroundDarkMenu" Header="Einfarbig dunkel" IsCheckable="True" Tag="Dark" Click="AppearanceBackground_Click" />
                                 <MenuItem x:Name="GalleryBackgroundLightMenu" Header="Einfarbig hell" IsCheckable="True" Tag="Light" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundCanvasMenu" Header="Leinwand hell" IsCheckable="True" Tag="Canvas" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundCanvasDarkMenu" Header="Leinwand dunkel" IsCheckable="True" Tag="CanvasDark" Click="AppearanceBackground_Click" />
+                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="Textur..." IsCheckable="True" Click="GalleryTexture_Click" />
                             </MenuItem>
                             <MenuItem x:Name="RestoreGalleryPositionMenu" Header="Galerieposition beim Start wiederherstellen" IsCheckable="True" Click="AppearanceRestorePosition_Click" />
                             <Separator />

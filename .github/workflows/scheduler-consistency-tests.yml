@@ -86,6 +86,9 @@ jobs:
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
           if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
+          $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
+          if ($textures.Count -lt 4) { throw "JPG texture directory is incomplete" }
+          Write-Host "Published $($textures.Count) selectable JPG textures"
       - name: Upload scheduler acceptance test package
         uses: actions/upload-artifact@v4
         with:

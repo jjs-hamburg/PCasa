@@ -17,6 +17,9 @@ public partial class MainWindow
     {
         public string Theme { get; set; } = "Dark";
         public string Background { get; set; } = "Auto";
+        // Only the JPG filename, never an absolute path. The folder is beside
+        // PCasa.App.exe so the user's textures remain portable.
+        public string? TextureFileName { get; set; }
         // User-approved default: Name ascending, per folder. No per-folder
         // configuration and no separate sorting persistence mechanism.
         public string GallerySortBy { get; set; } = "Name";
@@ -62,6 +65,15 @@ public partial class MainWindow
                     File.ReadAllText(_appearanceFile)) ?? new AppearanceState();
         }
         catch (Exception ex) { PCasaDiagnostics.Write("Appearance.Load", ex); }
+        // Preserve older Leinwand selections in the single configurable
+        // texture path. Start with the finer supplied JPGs.
+        if (_appearance.Background is "Canvas" or "CanvasDark")
+        {
+            _appearance.TextureFileName = _appearance.Background == "Canvas"
+                ? "Leinwand hell - fein.jpg" : "Leinwand dunkel - fein.jpg";
+            _appearance.Background = "Texture";
+            SaveAppearance();
+        }
         if (_appearance.ShowThumbnailShadows is null)
         {
             // One-time, non-destructive migration from the old separate
@@ -238,6 +250,28 @@ public partial class MainWindow
         SaveAppearance();
     }
 
+    private void GalleryTexture_Click(object sender, RoutedEventArgs e)
+    {
+        var chooser = new GalleryTexturePickerWindow(_appearance.TextureFileName)
+        {
+            Owner = this
+        };
+        if (chooser.ShowDialog() == true &&
+            chooser.SelectedFileName is string filename)
+            ApplyGalleryTextureSelection(filename);
+    }
+
+    private void ApplyGalleryTextureSelection(string filename)
+    {
+        // A dialog result must reference one of the actual JPG files,
+        // not a free-form path. The same function is used for every choice.
+        if (GalleryTextureLibrary.FindFile(filename) is null) return;
+        _appearance.Background = "Texture";
+        _appearance.TextureFileName = filename;
+        ApplyAppearance();
+        SaveAppearance();
+    }
+
     private void FolderStatusMode_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string mode }) return;
@@ -286,13 +320,12 @@ public partial class MainWindow
         SetColor("PcasaHoverBrush", useLight ? "#E0EBF4" : "#303235");
         var actualBackground = _appearance.Background == "Auto"
             ? (useLight ? "Light" : "Dark") : _appearance.Background;
-        BrowseSurface.SetLightTheme(actualBackground is "Light" or "Canvas");
+
 
         GalleryBackgroundAutoMenu.IsChecked = _appearance.Background == "Auto";
         GalleryBackgroundDarkMenu.IsChecked = _appearance.Background == "Dark";
         GalleryBackgroundLightMenu.IsChecked = _appearance.Background == "Light";
-        GalleryBackgroundCanvasMenu.IsChecked = _appearance.Background == "Canvas";
-        GalleryBackgroundCanvasDarkMenu.IsChecked = _appearance.Background == "CanvasDark";
+        GalleryBackgroundTextureMenu.IsChecked = _appearance.Background == "Texture";
         RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
         UpdateAllFoldersButtonState();
@@ -308,13 +341,9 @@ public partial class MainWindow
         if (ThumbnailSpacingSlider is not null)
             ThumbnailSpacingSlider.Value = _appearance.ThumbnailSpacing;
         BrowseSurface.SetThumbnailSpacing(_appearance.ThumbnailSpacing);
-        var background = actualBackground switch
-        {
-            "Light" => new SolidColorBrush(Color.FromRgb(239, 238, 234)),
-            "Canvas" => MakeCanvasBrush(light: true, VisualTreeHelper.GetDpi(BrowseSurface)),
-            "CanvasDark" => MakeCanvasBrush(light: false, VisualTreeHelper.GetDpi(BrowseSurface)),
-            _ => new SolidColorBrush(Color.FromRgb(32, 33, 34))
-        };
+        var background = ResolveGalleryBackground(actualBackground,
+            VisualTreeHelper.GetDpi(BrowseSurface), useLight, out var isLight);
+        BrowseSurface.SetLightTheme(isLight);
         BrowseScrollViewer.Background = background;
         BrowseSurface.SetGalleryBackground(background);
     }
@@ -339,55 +368,48 @@ public partial class MainWindow
             new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
     }
 
-    // The original texture samples are 128 x 128 pixels. Cache the decoded
-    // bitmaps, not the WPF brushes: a brush's viewport depends on monitor DPI.
-    private static readonly Lazy<BitmapSource> LightCanvasBitmap =
-        new(() => LoadCanvasBitmap("CanvasLight.jpg"));
-    private static readonly Lazy<BitmapSource> DarkCanvasBitmap =
-        new(() => LoadCanvasBitmap("CanvasDark.jpg"));
-
-    private static BitmapSource LoadCanvasBitmap(string filename)
+    private Brush ResolveGalleryBackground(string mode, DpiScale dpi,
+        bool designIsLight, out bool isLight)
     {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.UriSource = new Uri(
-            "pack://application:,,,/PCasa.App;component/Assets/" + filename,
-            UriKind.Absolute);
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.EndInit();
-        bitmap.Freeze();
-        return bitmap;
-    }
-
-    private static Brush MakeCanvasBrush(bool light, DpiScale dpi)
-    {
-        var bitmap = light ? LightCanvasBitmap.Value : DarkCanvasBitmap.Value;
-        // Viewport is specified in device-independent units, not physical
-        // pixels. Compensating for DPI means exactly one image pixel is drawn
-        // per screen pixel at 100%, 125%, 150%, 200%, etc.
-        var brush = new ImageBrush(bitmap)
+        isLight = mode == "Light" || (mode == "Auto" && designIsLight);
+        if (mode != "Texture")
+            return mode == "Light"
+                ? new SolidColorBrush(Color.FromRgb(239, 238, 234))
+                : new SolidColorBrush(Color.FromRgb(32, 33, 34));
+        var selected = GalleryTextureLibrary.FindFile(_appearance.TextureFileName);
+        if (selected is not null)
         {
-            TileMode = TileMode.FlipXY,
-            ViewportUnits = BrushMappingMode.Absolute,
-            Viewport = new Rect(0, 0,
-                bitmap.PixelWidth / dpi.DpiScaleX,
-                bitmap.PixelHeight / dpi.DpiScaleY),
-            Stretch = Stretch.Fill
-        };
-        brush.Freeze();
-        return brush;
+            try
+            {
+                var bitmap = GalleryTextureLibrary.LoadBitmap(selected);
+                isLight = GalleryTextureLibrary.IsLight(bitmap);
+                return GalleryTextureLibrary.CreateBrush(bitmap, dpi);
+            }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Appearance.Texture", ex);
+            }
+        }
+        // Missing/invalid user file: retain the selection in settings so it
+        // can be restored, but always keep the gallery usable.
+        isLight = designIsLight;
+        return designIsLight
+            ? new SolidColorBrush(Color.FromRgb(239, 238, 234))
+            : new SolidColorBrush(Color.FromRgb(32, 33, 34));
     }
 
     protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
     {
         base.OnDpiChanged(oldDpi, newDpi);
-        // Moving between monitors must not rescale the fixed-pixel weave.
-        // Update only the two backgrounds; never trigger a gallery relayout.
         if (BrowseSurface is null || BrowseScrollViewer is null ||
-            _appearance.Background is not ("Canvas" or "CanvasDark")) return;
-        var brush = MakeCanvasBrush(_appearance.Background == "Canvas", newDpi);
-        BrowseScrollViewer.Background = brush;
-        BrowseSurface.SetGalleryBackground(brush);
+            _appearance.Background != "Texture") return;
+        var useLight = _appearance.Theme == "Light" ||
+            (_appearance.Theme == "System" && IsWindowsLightTheme());
+        var background = ResolveGalleryBackground("Texture", newDpi,
+            useLight, out var isLight);
+        BrowseSurface.SetLightTheme(isLight);
+        BrowseScrollViewer.Background = background;
+        BrowseSurface.SetGalleryBackground(background);
     }
 
     private void SaveGalleryPosition()
