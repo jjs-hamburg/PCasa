@@ -160,15 +160,18 @@ public partial class MainWindow
 
     private void AddExplorerExpanders(ItemsControl parent)
     {
+        // Include the selected start node itself. Previously only children
+        // received placeholders, leaving an empty selected folder unable to
+        // expand and never querying its immediate children.
+        if (parent is TreeViewItem { Tag: FolderTreeTag } parentItem &&
+            parentItem.Items.Count == 0)
+            parentItem.Items.Add(new TreeViewItem
+            {
+                Header = "Ordner laden …", IsEnabled = false
+            });
         foreach (var item in parent.Items.OfType<TreeViewItem>())
         {
-            if (item.Tag is not FolderTreeTag) continue;
-            if (item.Items.Count == 0)
-                item.Items.Add(new TreeViewItem
-                {
-                    Header = "Ordner laden …", IsEnabled = false
-                });
-            else
+            if (item.Tag is FolderTreeTag)
                 AddExplorerExpanders(item);
         }
     }
@@ -179,6 +182,10 @@ public partial class MainWindow
         if (FindFolderTreeItemByPath(FoldersTree,
                 _allFolderProjectionRootPath) is not { } scopeRoot)
             return;
+        // Opened() walks children, so explicitly enumerate the selected
+        // start node as well; everything ABOVE or BESIDE it stays untouched.
+        if (scopeRoot.IsExpanded)
+            _ = LoadExplorerChildrenAsync(scopeRoot);
         foreach (var node in Opened(scopeRoot))
             _ = LoadExplorerChildrenAsync(node);
 
