@@ -942,9 +942,12 @@ internal static class Program
             window.Close();
             var progress = Application.Current.Windows
                 .OfType<PCasa.App.ShutdownProgressWindow>().SingleOrDefault();
-            if (!window.IsVisible || window.IsEnabled ||
+            var mainLayout = (Grid?)window.FindName("MainLayout");
+            if (!window.IsVisible || !window.IsEnabled ||
+                mainLayout is null || mainLayout.IsHitTestVisible ||
                 progress is null || !progress.IsVisible)
-                throw new Exception("Shutdown blocked UI or did not show immediate progress.");
+                throw new Exception(
+                    "Shutdown failed to block interaction without washing out the main UI.");
             // Repeated Close does not create another shutdown or dialog.
             window.Close();
             if (Application.Current.Windows

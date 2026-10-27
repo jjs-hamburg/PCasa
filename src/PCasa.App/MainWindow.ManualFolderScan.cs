@@ -39,10 +39,23 @@ public partial class MainWindow
             return;
         }
 
-        if (FoldersTree.SelectedItem is not TreeViewItem item ||
+        var selectedTree = _allFolderProjectionRootPath is null
+            ? FoldersTree : ExplorerTree;
+        if (selectedTree.SelectedItem is not TreeViewItem item ||
             item.Tag is not FolderTreeTag tag)
         {
             StatusText.Text = "Bitte zuerst den einzulesenden Ordner auswählen.";
+            return;
+        }
+
+        // Unmonitored Explorer directories are navigable but are not
+        // implicitly imported by clicking Scan; folder manager remains
+        // the sole authority for choosing monitored roots.
+        if (DisplayedMonitoredRoot(tag.FullPath) is not { } monitored ||
+            FolderExclusionRules.IsExcluded(tag.FullPath,
+                DisplayedExcludedPaths(monitored.Id)))
+        {
+            StatusText.Text = "Dieser Ordner wird nicht überwacht – bitte im Ordnermanager auswählen.";
             return;
         }
 
@@ -94,6 +107,14 @@ public partial class MainWindow
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: true);
             RefreshFolderTree();
+            RefreshExplorerIndexedFolders();
+            if (_allFolderProjectionRootPath is not null &&
+                ExplorerTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag selected } &&
+                string.Equals(selected.FullPath, directory,
+                    StringComparison.OrdinalIgnoreCase) &&
+                selected.PhotoFolderId is long newFolderId)
+                await NavigateToPhotoFolderAsync(
+                    (TreeViewItem)ExplorerTree.SelectedItem, newFolderId);
             StatusText.Text = result.Failed == 0
                 ? $"Scan abgeschlossen: {result.Updated:N0} aktualisiert · " +
                   $"{result.Removed:N0} verwaiste Einträge entfernt"

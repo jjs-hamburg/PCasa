@@ -21,7 +21,9 @@ public partial class MainWindow
             entry.Folder.Id == folderId).ExcludedPaths ?? Array.Empty<string>();
 
     private FolderTreeTag? ContextFolder()
-        => (FoldersTree.SelectedItem as TreeViewItem)?.Tag as FolderTreeTag;
+        => (_allFolderProjectionRootPath is null
+                ? FoldersTree.SelectedItem : ExplorerTree.SelectedItem)
+            is TreeViewItem { Tag: FolderTreeTag tag } ? tag : null;
 
     private async void FolderContext_CreateDirectory_Click(object sender, RoutedEventArgs e)
     {

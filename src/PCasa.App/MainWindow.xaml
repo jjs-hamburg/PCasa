@@ -240,7 +240,7 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <Grid>
+    <Grid x:Name="MainLayout">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -636,7 +636,7 @@
                                     <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>
-                            <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner anzeigen, auch ohne Bilder" Click="ShowAllFilesystemFolders_Click">
+                            <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Exploreransicht des ausgewählten Ordners" Click="ShowAllFilesystemFolders_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Path Data="M 2,6 L 9,6 L 11,9 L 22,9 L 22,21 L 2,21 Z" Fill="#FFCB4B" Stroke="#F5B43D" StrokeThickness="0.8"/>
                                     <Ellipse Canvas.Left="10" Canvas.Top="10" Width="7" Height="7" Stroke="#20252C" StrokeThickness="2" Fill="Transparent"/>
@@ -677,6 +677,31 @@
                                           Click="FolderContext_OpenExplorer_Click" />
                                 <MenuItem Header="Ordner auf Datenträger löschen …"
                                           Click="FolderContext_DeletePhysicalDirectory_Click" />
+                            </ContextMenu>
+                        </TreeView.ContextMenu>
+                    </TreeView>
+                    <!-- A read-only, lazy filesystem projection beside the catalog
+                         tree. Keeping FoldersTree alive prevents sort/visibility
+                         changes when Explorer mode is toggled. -->
+                    <TreeView x:Name="ExplorerTree"
+                              Grid.Row="1"
+                              Visibility="Collapsed"
+                              Background="Transparent"
+                              BorderThickness="0"
+                              ClipToBounds="True"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              Margin="7,0,7,8" Padding="0,0,12,0"
+                              PreviewMouseRightButtonDown="FoldersTree_PreviewMouseRightButtonDown"
+                              SelectedItemChanged="ExplorerTree_SelectedItemChanged"
+                              TreeViewItem.Expanded="ExplorerTree_Expanded">
+                        <TreeView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Aktuellen Ordner einlesen / aktualisieren"
+                                          Click="BrowseScanCurrentFolder_Click" />
+                                <MenuItem Header="Ordnerinformationen"
+                                          Click="FolderContext_Info_Click" />
+                                <MenuItem Header="In Windows Explorer öffnen"
+                                          Click="FolderContext_OpenExplorer_Click" />
                             </ContextMenu>
                         </TreeView.ContextMenu>
                     </TreeView>

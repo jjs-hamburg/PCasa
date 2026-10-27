@@ -128,7 +128,10 @@ public partial class MainWindow
             _scheduler.Snapshot().Any(job => job.State is
                 SchedulerJobState.Queued or SchedulerJobState.Running or
                 SchedulerJobState.YieldRequested);
-        IsEnabled = false; // Prevent new user operations during the final checkpoint.
+        // Disable pointer input, NOT the WPF window: IsEnabled=false
+        // applies the disabled visual state to every child and makes
+        // the folder tree unreadable while the shutdown dialog is shown.
+        MainLayout.IsHitTestVisible = false;
         if (busy)
         {
             _shutdownProgressWindow = new ShutdownProgressWindow { Owner = this };

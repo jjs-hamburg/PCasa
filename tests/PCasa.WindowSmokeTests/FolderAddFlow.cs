@@ -336,6 +336,75 @@ internal static class FolderAddFlow
                 roots.GetPendingInitialScans().Count == 0,
                 "Restarted durable first import failed to resume after independent automatic scans.");
             Console.WriteLine("PASS: Background image discovery and durable first-import resume coexist.");
+
+            // Explorer mode is a temporary lazy filesystem projection:
+            // show non-indexed directories, including hidden folders,
+            // without rebuilding the gallery's existing tree or rescanning
+            // a whole monitored drive. Manual scan uses the SAME P0 entrypoint.
+            var neverScanned = Path.Combine(initialRoot, "ExplorerNotIndexed");
+            var hiddenExplorer = Path.Combine(initialRoot, "ExplorerHidden");
+            Directory.CreateDirectory(neverScanned);
+            Directory.CreateDirectory(hiddenExplorer);
+            File.SetAttributes(hiddenExplorer,
+                File.GetAttributes(hiddenExplorer) | FileAttributes.Hidden);
+            WriteJpeg(Path.Combine(neverScanned, "now-visible.jpg"));
+
+            // Disable automatic monitoring for this manual-scan assertion.
+            new BackgroundScanSettings { Enabled = false }.Save();
+            var selectedRoot = Walk(tree).Single(item =>
+                SamePath(PathOf(item), initialRoot));
+            selectedRoot.IsSelected = true;
+            var treeBefore = selectedRoot;
+            var browserButton = (Button)window.FindName("ShowAllFilesystemFoldersButton");
+            var explorer = (TreeView)window.FindName("ExplorerTree");
+            browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
+            Until(window, () => explorer.Visibility == Visibility.Visible &&
+                tree.Visibility == Visibility.Collapsed &&
+                Walk(explorer).Any(item => SamePath(PathOf(item), neverScanned)) &&
+                Walk(explorer).Any(item => SamePath(PathOf(item), hiddenExplorer)),
+                "Explorer did not display all child directories on first expansion.");
+            if (!ReferenceEquals(treeBefore,
+                    Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
+                explorer.Items.Count != 1 ||
+                browserButton.Tag as string != "ActiveGold")
+                throw new Exception("Explorer mode rebuilt the catalog tree or navigated away.");
+
+            var newFolderItem = Walk(explorer).Single(item =>
+                SamePath(PathOf(item), neverScanned));
+            if (newFolderItem.Tag?.GetType().GetProperty("PhotoFolderId")?
+                    .GetValue(newFolderItem.Tag) is not null)
+                throw new Exception("Unscanned folder unexpectedly has a catalog ID.");
+            newFolderItem.IsSelected = true;
+            var scan = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseScanCurrentFolder_Click",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            scan.Invoke(window, [explorer, new RoutedEventArgs()]);
+            var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(window)!;
+            Until(window, () => scheduler.Snapshot().Any(job =>
+                    job.Key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) &&
+                    job.Key.Contains("ExplorerNotIndexed", StringComparison.Ordinal) &&
+                    job.Priority == SchedulerPriority.ManualAction),
+                "Explorer context scan did not enter the shared scheduler at P0.");
+            Until(window, () => new ImageCatalogRepository(db).GetPhotoFolders()
+                .Any(folder => SamePath(folder.LocalPath, neverScanned)) &&
+                newFolderItem.Tag?.GetType().GetProperty("PhotoFolderId")?
+                    .GetValue(newFolderItem.Tag) is long &&
+                surface.GetFolderOffset(
+                    new ImageCatalogRepository(db).GetPhotoFolders()
+                        .Single(folder => SamePath(folder.LocalPath, neverScanned)).Id)
+                    is not null,
+                "Manual scan of Explorer-only folder did not publish its image.");
+
+            browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
+            if (explorer.Visibility != Visibility.Collapsed ||
+                tree.Visibility != Visibility.Visible ||
+                browserButton.Tag is not null)
+                throw new Exception("Explorer toggle failed to restore catalog tree.");
+
+            Console.WriteLine(
+                "PASS: Lazy Explorer shows hidden/unindexed folders, P0 scan and restores original tree.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");
