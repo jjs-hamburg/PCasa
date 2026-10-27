@@ -764,6 +764,19 @@ internal static class TagFlow
                 Until(window, () => resumed.IsCompleted,
                     "Tag recovery did not resume after the file returned.");
                 resumed.GetAwaiter().GetResult();
+                // The production UI observes normal manual completions and
+                // reconciles the same durable backlog. This synthetic direct
+                // replay bypasses that observer, so invoke its real
+                // reconciliation path rather than creating a test-only queue.
+                var reconcile = typeof(PCasa.App.MainWindow).GetMethod(
+                    "StartPendingTagDrain", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new Exception("Tag recovery reconciliation missing.");
+                reconcile.Invoke(window, null);
+                if (new DurablePackageJournal(db).Pending().Any(record =>
+                        record.Type == "tag-recovery-v2"))
+                    throw new Exception(
+                        "A deferred recovery remained P0 after all of its original writes were satisfied.");
                 if (new ImageTagRepository(db).PendingEdits().Any(edit =>
                         edit.ImageId == editorIds[0] || edit.ImageId == editorIds[1]) ||
                     !(ImageTagRepository.ReadKeywords(unavailableImage) ?? "")

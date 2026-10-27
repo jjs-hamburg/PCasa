@@ -326,6 +326,17 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
+    // A deferred durable record can remain queued in SQLite after its
+    // last in-memory executor has failed. Only the scheduler may determine
+    // whether a live execution for that identity still exists.
+    public bool HasLiveExecution(string key)
+    {
+        lock (_gate)
+            return _pending.Any(item => item.Key == key) ||
+                _runningPriorityJobs.Any(item => item?.Key == key) ||
+                _runningManualSourceProbe?.Key == key;
+    }
+
     // Typed scheduler results use exactly the same queue, priority,
     // cancellation and lifetime bookkeeping as catalog mutations.
     public async Task<TResult> RunAsync<TResult>(

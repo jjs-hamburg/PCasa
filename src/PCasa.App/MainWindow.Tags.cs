@@ -664,17 +664,42 @@ public partial class MainWindow
         }
     }
 
+    // A failed V2 recovery can remain queued in the durable ledger even
+    // after a DIFFERENT later manual package has written its last pending
+    // original. Since the V2 recipe is precisely "drain pending_tag_edits",
+    // an empty authoritative backlog means that orphaned recipe is satisfied.
+    // Never retire an actively scheduled recovery or any real user edit.
+    private void ReconcileSatisfiedTagRecovery()
+    {
+        var journal = new DurablePackageJournal(_database);
+        foreach (var record in journal.Pending().Where(p =>
+                     p.Type == TagRecoveryType && p.Payload == "{}"))
+        {
+            if (_scheduler.HasLiveExecution(record.Key)) continue;
+            journal.SetState(record.Key, "completed", completed: 1);
+            _recoveredTagPresentationKeys.Remove(record.Key);
+            EndVisibleManualOperation(record.Key);
+            PCasaDiagnostics.WriteMessage("Tags.RecoverySatisfied",
+                "Offener Wiederherstellungsauftrag durch bestätigte " +
+                "SQLite-Originaldateiänderungen erledigt: " + record.Key);
+        }
+    }
+
     private void StartPendingTagDrain()
     {
-        if (_tagRecoveryQueued || Dispatcher.HasShutdownStarted ||
-            _scheduler.HasActiveDurablePackageType(TagRecoveryType) ||
-            _scheduler.HasActiveDurablePackageType("tag-recovery-v1") ||
-            // First finish the real user-written packages; recovery is for
-            // leftover pending edits, not a duplicate pass over their work.
-            _scheduler.HasActiveDurablePackageType("tag-edit-v1")) return;
+        if (Dispatcher.HasShutdownStarted) return;
         var imageIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
             .Select(edit => edit.ImageId).Distinct().ToArray();
-        if (imageIds.Length == 0) return;
+        if (imageIds.Length == 0)
+        {
+            ReconcileSatisfiedTagRecovery();
+            return;
+        }
+        if (_tagRecoveryQueued ||
+            _scheduler.HasActiveDurablePackageType(TagRecoveryType) ||
+            _scheduler.HasActiveDurablePackageType("tag-recovery-v1") ||
+            // First finish all genuine manually submitted edit packages.
+            _scheduler.HasActiveDurablePackageType("tag-edit-v1")) return;
         _tagRecoveryQueued = true;
         var key = "tags:recover:" + Guid.NewGuid().ToString("N");
         try
