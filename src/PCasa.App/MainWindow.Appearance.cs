@@ -318,6 +318,8 @@ public partial class MainWindow
         SetColor("PcasaDividerBrush", useLight ? "#CFCFCD" : "#383A3D");
         SetColor("PcasaSelectionBrush", useLight ? "#BBD8EB" : "#42474B");
         SetColor("PcasaHoverBrush", useLight ? "#E0EBF4" : "#303235");
+        SetColor("PcasaSearchActiveBrush", useLight ? "#D8D8D6" : "#424447");
+        SetColor("PcasaSearchActiveTextBrush", useLight ? "#212121" : "#F5F5F5");
         var actualBackground = _appearance.Background == "Auto"
             ? (useLight ? "Light" : "Dark") : _appearance.Background;
 

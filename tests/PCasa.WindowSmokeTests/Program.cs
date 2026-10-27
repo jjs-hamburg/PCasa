@@ -133,25 +133,51 @@ internal static class Program
                 throw new Exception("JPG swatch did not select its texture in one click.");
             Console.WriteLine("PASS: Real graphical texture picker selects JPG with one click.");
 
-            // Light UI: checked Tags/Alle must be legible over charcoal;
-            // unchecked options retain the normal dark foreground.
+            // Checked WAS/WO/NOT use the same theme-aware palette. In the
+            // light theme they must be pale gray with dark labels; in the
+            // dark theme they keep the original charcoal/white appearance.
             var lightMenu = (MenuItem?)window.FindName("ThemeLightMenu")
                 ?? throw new Exception("Light theme menu missing.");
-            lightMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, lightMenu));
-            var checkedTags = (RadioButton?)window.FindName("SearchTagsMode");
-            var checkedAll = (RadioButton?)window.FindName("SearchAllScope");
-            var uncheckedName = (RadioButton?)window.FindName("SearchFileNameMode");
-            if (checkedTags?.Foreground is not SolidColorBrush activeColor ||
-                checkedAll?.Foreground is not SolidColorBrush activeScopeColor ||
-                uncheckedName?.Foreground is not SolidColorBrush inactiveColor ||
-                activeColor.Color.R < 230 ||
-                activeScopeColor.Color.R < 230 ||
-                inactiveColor.Color.R > 100)
-                throw new Exception("Light search controls have unreadable checked labels.");
             var darkMenu = (MenuItem?)window.FindName("ThemeDarkMenu")
                 ?? throw new Exception("Dark theme menu missing.");
+            var checkedTags = (RadioButton?)window.FindName("SearchTagsMode")
+                ?? throw new Exception("Tags filter missing.");
+            var checkedAll = (RadioButton?)window.FindName("SearchAllScope")
+                ?? throw new Exception("Scope filter missing.");
+            var uncheckedName = (RadioButton?)window.FindName("SearchFileNameMode")
+                ?? throw new Exception("Name filter missing.");
+            var notForColors = (ToggleButton?)window.FindName("InvertFilterToggle")
+                ?? throw new Exception("NOT control missing.");
+            lightMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, lightMenu));
+            notForColors.IsChecked = true;
+            Flush(window);
+            foreach (var selected in new RadioButton[] { checkedTags, checkedAll })
+            {
+                var border = selected.Template.FindName("ChoiceBorder", selected) as Border;
+                if (border?.Background is not SolidColorBrush bg ||
+                    bg.Color.R < 195 || bg.Color.G < 195 || bg.Color.B < 195 ||
+                    selected.Foreground is not SolidColorBrush fg ||
+                    fg.Color.R > 85 || fg.Color.G > 85 || fg.Color.B > 85)
+                    throw new Exception("Light checked WAS/WO is not light-gray with dark text.");
+            }
+            var invertBorder = notForColors.Template.FindName("InvertBorder", notForColors)
+                as Border;
+            if (invertBorder?.Background is not SolidColorBrush notBg ||
+                notBg.Color.R < 195 ||
+                notForColors.Foreground is not SolidColorBrush notFg ||
+                notFg.Color.R > 85 ||
+                uncheckedName.Foreground is not SolidColorBrush inactiveFg ||
+                inactiveFg.Color.R > 100)
+                throw new Exception("Light NOT or inactive label has wrong contrast.");
             darkMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, darkMenu));
-            Console.WriteLine("PASS: Light theme checked search labels remain high contrast.");
+            Flush(window);
+            if (checkedTags.Foreground is not SolidColorBrush darkText ||
+                darkText.Color.R < 220 ||
+                notForColors.Foreground is not SolidColorBrush darkNotText ||
+                darkNotText.Color.R < 220)
+                throw new Exception("Dark theme selected labels lost light text.");
+            notForColors.IsChecked = false;
+            Console.WriteLine("PASS: WAS/WO/NOT active colors match both themes and remain readable.");
 
             // Real menu action must update the one gallery renderer and persist.
             var filenameBoldMenu = (MenuItem?)window.FindName("ThumbnailBoldFileNamesMenu")
@@ -735,6 +761,92 @@ internal static class Program
                 if (!dispose.IsCompleted)
                     throw new TimeoutException("Folder manager scheduler disposal stalled.");
                 dispose.GetAwaiter().GetResult();
+            }
+
+            // A fullscreen round trip is a change of viewport, not an
+            // implicit Fit->percentage conversion. Use a synthetic image
+            // description and the real WPF viewer windows, without file IO.
+            var viewerType = typeof(PCasa.App.MainWindow);
+            var reflectFlags = System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance;
+            var viewerOpenField = viewerType.GetField("_viewerOpen", reflectFlags)!;
+            var viewerInfoField = viewerType.GetField("_viewerImageInfo", reflectFlags)!;
+            var fitField = viewerType.GetField("_viewerFitToScreen", reflectFlags)!;
+            var zoomField = viewerType.GetField("_viewerZoomPercent", reflectFlags)!;
+            var fullscreenField = viewerType.GetField("_viewerFullscreenWindow", reflectFlags)!;
+            var toggleFullscreen = viewerType.GetMethod("ViewerToggleFullscreen", reflectFlags)!;
+            var leaveFullscreen = viewerType.GetMethod("LeaveViewerFullscreen", reflectFlags)!;
+            var applyLayout = viewerType.GetMethod("ApplyViewerImageLayout", reflectFlags)!;
+            var panel = (FrameworkElement?)window.FindName("PhotoViewerPanel")
+                ?? throw new Exception("Viewer panel missing.");
+            var viewerScroller = (ScrollViewer?)window.FindName("PhotoViewerScroller")
+                ?? throw new Exception("Viewer scroller missing.");
+            var viewerImage = (Image?)window.FindName("PhotoViewerImage")
+                ?? throw new Exception("Viewer image missing.");
+            try
+            {
+                viewerOpenField.SetValue(window, true);
+                viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
+                    999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 2400, 1600));
+                panel.Visibility = Visibility.Visible;
+                Flush(window);
+                fitField.SetValue(window, true);
+                zoomField.SetValue(window, 100d);
+                applyLayout.Invoke(window, null);
+                Flush(window);
+                toggleFullscreen.Invoke(window, null);
+                Flush(window);
+                if (fullscreenField.GetValue(window) is not Window)
+                    throw new Exception("Fullscreen viewer did not open.");
+                if (!(bool)fitField.GetValue(window)! ||
+                    Math.Abs((double)zoomField.GetValue(window)! - 100d) > .01)
+                    throw new Exception("Entering fullscreen changed Fit or percentage.");
+                leaveFullscreen.Invoke(window, null);
+                Flush(window);
+                if (!(bool)fitField.GetValue(window)! ||
+                    Math.Abs((double)zoomField.GetValue(window)! - 100d) > .01 ||
+                    fullscreenField.GetValue(window) is not null ||
+                    viewerImage.Width > viewerScroller.ViewportWidth + 2 ||
+                    viewerImage.Height > viewerScroller.ViewportHeight + 2)
+                    throw new Exception("Leaving fullscreen no longer fits the entire image.");
+
+                // A user-selected percentage must remain unchanged as well.
+                fitField.SetValue(window, false);
+                zoomField.SetValue(window, 135d);
+                applyLayout.Invoke(window, null);
+                Flush(window);
+                toggleFullscreen.Invoke(window, null);
+                Flush(window);
+                leaveFullscreen.Invoke(window, null);
+                Flush(window);
+                if ((bool)fitField.GetValue(window)! ||
+                    Math.Abs((double)zoomField.GetValue(window)! - 135d) > .01)
+                    throw new Exception("Fullscreen changed explicit 135% zoom.");
+
+                // Alt+F4 closes the WPF window directly, not via the
+                // right-click method. Both exit routes retain Fit.
+                fitField.SetValue(window, true);
+                zoomField.SetValue(window, 100d);
+                applyLayout.Invoke(window, null);
+                Flush(window);
+                toggleFullscreen.Invoke(window, null);
+                Flush(window);
+                (fullscreenField.GetValue(window) as Window)?.Close();
+                Flush(window);
+                if (!(bool)fitField.GetValue(window)! ||
+                    fullscreenField.GetValue(window) is not null ||
+                    viewerImage.Width > viewerScroller.ViewportWidth + 2 ||
+                    viewerImage.Height > viewerScroller.ViewportHeight + 2)
+                    throw new Exception("Closing fullscreen via window event lost Fit.");
+                Console.WriteLine("PASS: Fullscreen round trip retains Fit/explicit zoom through both exits.");
+            }
+            finally
+            {
+                if (fullscreenField.GetValue(window) is Window stillOpen)
+                    stillOpen.Close();
+                viewerOpenField.SetValue(window, false);
+                viewerInfoField.SetValue(window, null);
+                panel.Visibility = Visibility.Collapsed;
             }
 
             window.Close();

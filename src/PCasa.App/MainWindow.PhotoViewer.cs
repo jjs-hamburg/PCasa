@@ -864,14 +864,10 @@ public partial class MainWindow
             return;
         }
 
-        // Freeze the CURRENT pixels-to-monitor-pixels magnification when
-        // switching contexts. The fullscreen viewport must not silently
-        // change the zoom to its own Fit value.
+        // Fullscreen changes only the available viewport, never the selected
+        // zoom mode or explicit zoom percentage. Fit stays Fit, and a manual
+        // percentage remains the same in both windows.
         _viewerPendingImageCenter = CaptureViewerCenter();
-        _viewerZoomPercent = CurrentViewerZoomPercent();
-        // Fullscreen should use the screen area rather than preserving a
-        // smaller fit-size inherited from the in-window viewer.
-        _viewerFitToScreen = true;
         var fullscreenImage = new Image
         {
             Stretch = Stretch.Fill,
@@ -972,11 +968,6 @@ public partial class MainWindow
         }
 
         _viewerPendingImageCenter = CaptureViewerCenter();
-        if (_viewerFitToScreen)
-        {
-            _viewerZoomPercent = CurrentViewerZoomPercent();
-            _viewerFitToScreen = false;
-        }
 
         ReleaseViewerPan();
         _viewerFullscreenWindow = null;

@@ -14,6 +14,9 @@
         <SolidColorBrush x:Key="PcasaDividerBrush" po:Freeze="False" Color="#383A3D" />
         <SolidColorBrush x:Key="PcasaSelectionBrush" Color="#42474B" />
         <SolidColorBrush x:Key="PcasaHoverBrush" Color="#303235" />
+        <!-- Active search controls share one theme-aware palette. -->
+        <SolidColorBrush x:Key="PcasaSearchActiveBrush" po:Freeze="False" Color="#424447" />
+        <SolidColorBrush x:Key="PcasaSearchActiveTextBrush" po:Freeze="False" Color="#F5F5F5" />
         <SolidColorBrush x:Key="PcasaAccentBrush" Color="#25A4F4" />
 
         <!-- Controls shared by the main window, detached popups and modeless dialogs. -->

@@ -115,11 +115,9 @@
                                         Value="{DynamicResource PcasaHoverBrush}"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="ChoiceBorder" Property="Background" Value="#424447"/>
+                                <Setter TargetName="ChoiceBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
                                 <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="#D75A5A"/>
-                                <!-- The checked background is charcoal even in the light
-                                     theme; never inherit its dark caption color. -->
-                                <Setter Property="Foreground" Value="#F5F5F5"/>
+                                <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
                                 <Setter TargetName="SelectedTick" Property="Visibility" Value="Visible"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
@@ -157,7 +155,8 @@
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="InvertBorder" Property="BorderBrush" Value="#D75A5A"/>
-                                <Setter TargetName="InvertBorder" Property="Background" Value="#424447"/>
+                                <Setter TargetName="InvertBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
                                 <Setter TargetName="InvertCheck" Property="Visibility" Value="Visible"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
