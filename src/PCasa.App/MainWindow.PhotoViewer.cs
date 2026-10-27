@@ -17,6 +17,8 @@ public partial class MainWindow
 {
     private bool _viewerOpen;
     private int _viewerCurrentIndex = -1;
+    private PhotoSequence? _viewerSequence;
+    private readonly PhotoViewerSettings _viewerSettings = PhotoViewerSettings.Load();
     private double _viewerOpeningScrollOffset;
     private CancellationTokenSource? _viewerDecodeCancellation;
     private int _viewerImageRequest;
@@ -51,14 +53,17 @@ public partial class MainWindow
         object? sender,
         BrowseImageClickedEventArgs e)
     {
-        if (_viewerOpen || _browseCacheBuilding || _browseIndex.Count == 0)
-        {
+        if (_viewerOpen || _browseCacheBuilding || _displayedBrowseIndex.Count == 0)
             return;
-        }
 
-        var index = FindBrowseImageIndex(e.ImageId);
+        // Capture the SAME gallery projection as on screen, including search,
+        // sorting and collapsed-folder visibility. No second tree traversal.
+        _viewerSequence = PhotoSequence.Create(_displayedBrowseIndex,
+            BrowseSurface.HiddenFolderIds, e.ImageId, _viewerSettings.SequenceScope);
+        var index = _viewerSequence.IndexOfImage(e.ImageId);
         if (index < 0)
         {
+            _viewerSequence = null;
             return;
         }
 
@@ -88,17 +93,44 @@ public partial class MainWindow
         ShowViewerImage();
     }
 
-    private int FindBrowseImageIndex(long imageId)
+    private void SyncPhotoSequenceMenu()
     {
-        for (var i = 0; i < _browseIndex.Count; i++)
-        {
-            if (_browseIndex[i].ImageId == imageId)
-            {
-                return i;
-            }
-        }
+        PhotoSequenceFolderMenu.IsChecked =
+            _viewerSettings.SequenceScope == PhotoSequenceScope.CurrentFolder;
+        PhotoSequenceGalleryMenu.IsChecked =
+            _viewerSettings.SequenceScope == PhotoSequenceScope.Gallery;
+    }
 
-        return -1;
+    private void PhotoSequenceMode_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string tag } ||
+            !Enum.TryParse<PhotoSequenceScope>(tag, out var requested) ||
+            !Enum.IsDefined(requested))
+            return;
+        if (_viewerSettings.SequenceScope == requested) return;
+        _viewerSettings.SequenceScope = requested;
+        _viewerSettings.Save();
+        SyncPhotoSequenceMenu();
+
+        if (!_viewerOpen || _viewerSequence is null) return;
+        var currentImageId = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+        var next = PhotoSequence.Create(_displayedBrowseIndex,
+            BrowseSurface.HiddenFolderIds, currentImageId, requested);
+        var position = next.IndexOfImage(currentImageId);
+        if (position < 0) return;
+        _viewerPrefetchCancellation?.Cancel();
+        _viewerSequence = next;
+        _viewerCurrentIndex = position;
+        UpdateViewerSequenceTitle();
+    }
+
+    private void UpdateViewerSequenceTitle()
+    {
+        if (_viewerSequence is null || _viewerCurrentIndex < 0 ||
+            _viewerCurrentIndex >= _viewerSequence.Count) return;
+        var title = $"{_viewerCurrentIndex + 1:N0} / {_viewerSequence.Count:N0}";
+        ViewerToolbarImageTitle.Text = _viewerImageInfo is { FileName.Length: > 0 } info
+            ? $"{title} · {info.FileName}" : title;
     }
 
     private void SelectViewerImage(long imageId)
@@ -113,8 +145,8 @@ public partial class MainWindow
 
     private async void ShowViewerImage(bool keepCurrentAsPlaceholder = false)
     {
-        if (!_viewerOpen || _viewerCurrentIndex < 0 ||
-            _viewerCurrentIndex >= _browseIndex.Count)
+        if (!_viewerOpen || _viewerSequence is null || _viewerCurrentIndex < 0 ||
+            _viewerCurrentIndex >= _viewerSequence.Count)
         {
             return;
         }
@@ -128,8 +160,9 @@ public partial class MainWindow
         _viewerPrefetchCancellation?.Dispose();
         _viewerPrefetchCancellation = null;
         _viewerHasOriginal = false;
-        var entry = _browseIndex[_viewerCurrentIndex];
-        ViewerToolbarImageTitle.Text = $"{_viewerCurrentIndex + 1:N0} / {_browseIndex.Count:N0}";
+        var entry = _viewerSequence.At(_viewerCurrentIndex);
+        _viewerImageInfo = null;
+        UpdateViewerSequenceTitle();
         if (_viewerNavigatorImageId != entry.ImageId)
         {
             _viewerNavigatorImageId = entry.ImageId;
@@ -160,8 +193,7 @@ public partial class MainWindow
 
         if (_viewerImageInfo is { } infoForTitle)
         {
-            ViewerToolbarImageTitle.Text =
-                $"{_viewerCurrentIndex + 1:N0} / {_browseIndex.Count:N0} · {infoForTitle.FileName}";
+            UpdateViewerSequenceTitle();
         }
 
         ApplyViewerImageLayout();
@@ -179,8 +211,10 @@ public partial class MainWindow
         if (!keepCurrentAsPlaceholder)
         {
             // Display the existing Picasa browse-cache picture immediately.
-            if (_browsePageCache?.TryGet(_viewerCurrentIndex, out var cached) == true &&
-                cached is not null)
+            if (_viewerSequence.UsesGallery(_displayedBrowseIndex) &&
+                _browsePageCache?.TryGet(
+                    _viewerSequence.GalleryPositionAt(_viewerCurrentIndex),
+                    out var cached) == true && cached is not null)
             {
                 SetViewerBitmap(cached);
             }
@@ -276,15 +310,17 @@ public partial class MainWindow
     {
         // Only one prefetch chain at a time, with strictly sequential reads.
         // Visible-image decoding always begins first, so prefetch cannot block it.
-        foreach (var index in new[] { origin + 1, origin - 1 })
+        var sequence = _viewerSequence;
+        if (sequence is null || sequence.Count < 2) return;
+        foreach (var direction in new[] { 1, -1 })
         {
             if (token.IsCancellationRequested || !_viewerOpen ||
-                _viewerCurrentIndex != origin || index < 0 || index >= _browseIndex.Count)
-            {
+                _viewerCurrentIndex != origin ||
+                !ReferenceEquals(sequence, _viewerSequence))
                 return;
-            }
 
-            var id = _browseIndex[index].ImageId;
+            var index = sequence.Move(origin, direction);
+            var id = sequence.At(index).ImageId;
             if (TryGetViewerOriginal(id, requiredSize, out _))
             {
                 continue;
@@ -808,12 +844,11 @@ public partial class MainWindow
             }
 
             var required = GetViewerRequiredPixelSize();
-            if (_viewerCurrentIndex < 0 || _viewerCurrentIndex >= _browseIndex.Count)
-            {
+            if (_viewerSequence is null || _viewerCurrentIndex < 0 ||
+                _viewerCurrentIndex >= _viewerSequence.Count)
                 return;
-            }
 
-            var id = _browseIndex[_viewerCurrentIndex].ImageId;
+            var id = _viewerSequence.At(_viewerCurrentIndex).ImageId;
             if (TryGetViewerOriginal(id, required, out var bitmap) && bitmap is not null)
             {
                 SetViewerBitmap(bitmap);
@@ -839,14 +874,13 @@ public partial class MainWindow
             return;
         }
 
-        var next = _viewerCurrentIndex + direction;
-        if (next < 0 || next >= _browseIndex.Count)
-        {
-            return;
-        }
+        var sequence = _viewerSequence;
+        if (sequence is null || sequence.Count < 2) return;
+        var next = sequence.Move(_viewerCurrentIndex, direction);
+        if (next == _viewerCurrentIndex) return;
 
         _viewerCurrentIndex = next;
-        SelectViewerImage(_browseIndex[next].ImageId);
+        SelectViewerImage(sequence.At(next).ImageId);
         ShowViewerImage();
     }
 
@@ -1245,9 +1279,14 @@ public partial class MainWindow
             return;
         }
 
-        var lastImageIndex = _viewerCurrentIndex;
+        var lastImageId = _viewerSequence is not null && _viewerCurrentIndex >= 0 &&
+            _viewerCurrentIndex < _viewerSequence.Count
+            ? _viewerSequence.At(_viewerCurrentIndex).ImageId : (long?)null;
+        var lastGalleryIndex = lastImageId is long id
+            ? GallerySelection.Find(_displayedBrowseIndex, id) : -1;
         _viewerOpen = false;
         _viewerCurrentIndex = -1;
+        _viewerSequence = null;
         _viewerDecodeCancellation?.Cancel();
         _viewerDecodeCancellation?.Dispose();
         _viewerDecodeCancellation = null;
@@ -1283,13 +1322,15 @@ public partial class MainWindow
         SetViewerQualityMessage(null);
         var settings = PhotoViewerSettings.Load();
         var target = settings.ReturnPosition == ViewerReturnPosition.CurrentImage
-            ? BrowseSurface.GetImageOffset(lastImageIndex) ?? _viewerOpeningScrollOffset
+            ? (lastGalleryIndex >= 0
+                ? BrowseSurface.GetImageOffset(lastGalleryIndex) : null)
+                  ?? _viewerOpeningScrollOffset
             : _viewerOpeningScrollOffset;
 
         if (settings.ReturnPosition == ViewerReturnPosition.CurrentImage &&
-            lastImageIndex >= 0 && lastImageIndex < _browseIndex.Count)
+            lastGalleryIndex >= 0 && lastImageId is long lastId)
         {
-            SelectViewerImage(_browseIndex[lastImageIndex].ImageId);
+            SelectViewerImage(lastId);
         }
 
         if (comparisonSelection is { Length: > 0 })

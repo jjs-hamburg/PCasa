@@ -477,6 +477,13 @@
                     <MenuItem Header="Optionen" Margin="0,0,20,0" HorizontalAlignment="Left">
                         <MenuItem x:Name="TooltipsEnabledMenu" Header="Tooltips" IsCheckable="True" IsChecked="True" Click="TooltipsEnabled_Click"/>
                         <Separator/>
+                        <MenuItem Header="Bildfolge (Betrachter / Slideshow)">
+                            <MenuItem x:Name="PhotoSequenceFolderMenu" Header="Aktueller Ordner" Tag="CurrentFolder"
+                                      IsCheckable="True" Click="PhotoSequenceMode_Click"/>
+                            <MenuItem x:Name="PhotoSequenceGalleryMenu" Header="Galerieansicht" Tag="Gallery"
+                                      IsCheckable="True" Click="PhotoSequenceMode_Click"/>
+                        </MenuItem>
+                        <Separator/>
                         <MenuItem Header="Darstellung">
                             <MenuItem Header="Design">
                                 <MenuItem x:Name="ThemeLightMenu" Header="Hell" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />

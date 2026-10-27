@@ -52,6 +52,7 @@ public partial class MainWindow : Window
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
         InitializeAppearance();
+        SyncPhotoSequenceMenu();
     }
 
     private bool _folderRemovalPending;

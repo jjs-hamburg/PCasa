@@ -9,6 +9,13 @@ public enum ViewerReturnPosition
     CurrentImage
 }
 
+// Applies to the image viewer and the future slideshow alike.
+public enum PhotoSequenceScope
+{
+    CurrentFolder,
+    Gallery
+}
+
 public sealed class PhotoViewerSettings
 {
     private static readonly string SettingsPath = Path.Combine(
@@ -16,8 +23,8 @@ public sealed class PhotoViewerSettings
         "PCasa",
         "viewer-settings.json");
 
-    // The UI setting will be added when PCasa's settings menus are finalized.
     public ViewerReturnPosition ReturnPosition { get; set; } = ViewerReturnPosition.OpeningPosition;
+    public PhotoSequenceScope SequenceScope { get; set; } = PhotoSequenceScope.Gallery;
 
     public static PhotoViewerSettings Load()
     {

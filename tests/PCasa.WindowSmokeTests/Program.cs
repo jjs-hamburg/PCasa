@@ -430,6 +430,76 @@ internal static class Program
                 new PhotoFolderSummary(200, 1, @"C:\\synthetic\\second",
                     @"C:\\synthetic\\second", "Second", 240)
             };
+            // Viewer/slideshow image order comes from the already displayed
+            // gallery index, not a second traversal of sibling directories.
+            // Search results are represented by exactly the input projection.
+            var visibleOrder = new[] { synthetic[0], synthetic[240],
+                synthetic[1], synthetic[241] };
+            var allVisible = PCasa.App.Services.PhotoSequence.Create(
+                visibleOrder, new HashSet<long>(), synthetic[0].ImageId,
+                PhotoSequenceScope.Gallery);
+            if (allVisible.Count != 4 ||
+                allVisible.At(1).ImageId != synthetic[240].ImageId ||
+                allVisible.Move(3, +1) != 0 ||
+                allVisible.Move(0, -1) != 3)
+                throw new Exception("Gallery sequence does not preserve visible order and wrapping.");
+
+            var folderOnly = PCasa.App.Services.PhotoSequence.Create(
+                visibleOrder, new HashSet<long>(), synthetic[0].ImageId,
+                PhotoSequenceScope.CurrentFolder);
+            if (folderOnly.Count != 2 ||
+                folderOnly.At(0).ImageId != synthetic[0].ImageId ||
+                folderOnly.At(1).ImageId != synthetic[1].ImageId ||
+                folderOnly.Move(1, +1) != 0 ||
+                folderOnly.Move(0, -1) != 1)
+                throw new Exception("Current-folder sequence includes siblings or fails wrapping.");
+
+            var hiddenSiblings = PCasa.App.Services.PhotoSequence.Create(
+                visibleOrder, new HashSet<long> { 200 }, synthetic[0].ImageId,
+                PhotoSequenceScope.Gallery);
+            if (hiddenSiblings.Count != 2 ||
+                hiddenSiblings.At(1).ImageId != synthetic[1].ImageId ||
+                PCasa.App.Services.PhotoSequence.Create(
+                    visibleOrder, new HashSet<long> { 100 }, synthetic[0].ImageId,
+                    PhotoSequenceScope.Gallery).Count != 0)
+                throw new Exception("Gallery sequence ignored collapsed-folder visibility.");
+
+            var filteredResults = new[] { synthetic[240], synthetic[241] };
+            var filteredSequence = PCasa.App.Services.PhotoSequence.Create(
+                filteredResults, new HashSet<long>(), synthetic[241].ImageId,
+                PhotoSequenceScope.Gallery);
+            if (filteredSequence.Count != 2 ||
+                filteredSequence.IndexOfImage(synthetic[241].ImageId) != 1 ||
+                filteredSequence.IndexOfImage(synthetic[1].ImageId) >= 0)
+                throw new Exception("Filtered gallery sequence added images not shown.");
+            Console.WriteLine("PASS: Viewer sequences use gallery order, search, collapsed folders and cyclic limits.");
+
+            var viewerFolderMenu = (MenuItem?)window.FindName("PhotoSequenceFolderMenu")
+                ?? throw new Exception("Folder sequence menu missing.");
+            var viewerGalleryMenu = (MenuItem?)window.FindName("PhotoSequenceGalleryMenu")
+                ?? throw new Exception("Gallery sequence menu missing.");
+            var savedScope = PhotoViewerSettings.Load().SequenceScope;
+            try
+            {
+                viewerFolderMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent,
+                    viewerFolderMenu));
+                if (!viewerFolderMenu.IsChecked || viewerGalleryMenu.IsChecked ||
+                    PhotoViewerSettings.Load().SequenceScope != PhotoSequenceScope.CurrentFolder)
+                    throw new Exception("Folder mode did not persist or update checked menu.");
+                viewerGalleryMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent,
+                    viewerGalleryMenu));
+                if (!viewerGalleryMenu.IsChecked || viewerFolderMenu.IsChecked ||
+                    PhotoViewerSettings.Load().SequenceScope != PhotoSequenceScope.Gallery)
+                    throw new Exception("Gallery mode did not persist or update checked menu.");
+            }
+            finally
+            {
+                var restore = savedScope == PhotoSequenceScope.CurrentFolder
+                    ? viewerFolderMenu : viewerGalleryMenu;
+                restore.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, restore));
+            }
+            Console.WriteLine("PASS: One persistent image-sequence setting switches both modes.");
+
             pages.SetIndex(synthetic);
             var surface = (BrowseGallerySurface?)window.FindName("BrowseSurface")
                 ?? throw new Exception("Actual browse surface not found.");
