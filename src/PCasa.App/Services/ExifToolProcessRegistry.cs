@@ -15,6 +15,20 @@ internal static class ExifToolProcessRegistry
     static ExifToolProcessRegistry()
         => AppDomain.CurrentDomain.ProcessExit += (_, _) => StopAll();
 
+    // A fresh MainWindow may be created after a completed window shutdown
+    // (e.g. an in-process WPF restart test). Reopen only when no child from
+    // the previous session remains. Shutdown never revives itself.
+    internal static void BeginSession()
+    {
+        lock (Gate)
+        {
+            if (Owned.Any(IsAlive))
+                throw new InvalidOperationException(
+                    "Die vorige ExifTool-Sitzung ist noch nicht beendet.");
+            _stopping = false;
+        }
+    }
+
     internal static int LiveCount
     {
         get { lock (Gate) return Owned.Count(IsAlive); }

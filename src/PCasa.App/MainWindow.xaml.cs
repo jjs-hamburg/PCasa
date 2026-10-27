@@ -30,6 +30,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        ExifToolProcessRegistry.BeginSession();
         InitializeComponent();
         Closing += MainWindow_Closing;
 

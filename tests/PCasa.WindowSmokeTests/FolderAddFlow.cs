@@ -41,7 +41,11 @@ internal static class FolderAddFlow
             var roots = new FolderRepository(db);
             new BackgroundScanSettings { Enabled = false }.Save();
 
-            var app = new PCasa.App.App();
+            var app = new PCasa.App.App
+            {
+                // Two real window lifecycles in one WPF process.
+                ShutdownMode = ShutdownMode.OnExplicitShutdown
+            };
             app.InitializeComponent();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             window.Show();
@@ -263,7 +267,10 @@ internal static class FolderAddFlow
                     "Held manual source-probe never finished.");
             }
 
-            window.Close();
+            var firstWindow = window;
+            firstWindow.Close();
+            Until(firstWindow, () => !firstWindow.IsVisible,
+                "The first window's asynchronous scheduler/ExifTool shutdown did not finish.");
             window = null;
 
             // Re-open PCasa with a second persisted, unfinished user selection.
