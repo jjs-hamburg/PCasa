@@ -320,8 +320,12 @@ internal static class FolderAddFlow
                 object? Field(string name) =>
                     typeof(PCasa.App.MainWindow).GetField(name, flags)?.GetValue(window);
                 var pending = Field("_backgroundPending") as System.Collections.IDictionary;
-                var known = Field("_backgroundKnownFolderIds")
-                    as System.Collections.ICollection;
+                var known = Field("_backgroundKnownFolderIds") as HashSet<long>;
+                var configured = Field("_backgroundScanSettings")
+                    as BackgroundScanSettings;
+                var offline = Field("_backgroundOfflineRootPaths") as string[];
+                var lifetime = Field("_backgroundLifetime")
+                    as CancellationTokenSource;
                 var debounce = Field("_backgroundDebounceTimer") as DispatcherTimer;
                 var jobs = ((PCasaScheduler)Field("_scheduler")!).Snapshot()
                     .Where(job => job.State is SchedulerJobState.Running or
@@ -336,7 +340,14 @@ internal static class FolderAddFlow
                     " monitor=" + Field("_backgroundMonitorRefreshRunning") +
                     " monitorRequested=" + Field("_backgroundMonitorRefreshRequested") +
                     " initialized=" + Field("_backgroundScanInitialized") +
-                    " known=" + (known?.Count.ToString() ?? "?") +
+                    " configuredEnabled=" + configured?.Enabled +
+                    " monitoringClosing=" + Field("_backgroundMonitorClosing") +
+                    " monitorNull=" + (Field("_backgroundFolderMonitor") is null) +
+                    " lifetimeCanceled=" + lifetime?.IsCancellationRequested +
+                    " offline=" + string.Join(",", offline ?? []) +
+                    " known=" + string.Join(",", known ?? []) +
+                    " roots=" + string.Join(",", roots.GetAll().Select(root =>
+                        root.Id + ":" + root.LocalPath)) +
                     " pending=" + (pending?.Count.ToString() ?? "?") +
                     " bgWorker=" + Field("_backgroundWorkerRunning") +
                     " browseCache=" + Field("_browseCacheBuilding") +
