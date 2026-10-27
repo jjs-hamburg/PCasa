@@ -103,6 +103,23 @@ public sealed class DurablePackageJournal
         return results;
     }
 
+    // The persistent ledger is authoritative. Retryable P0 packages may
+    // remain queued here after their executor returns; automatic scans must
+    // not interpret that as an empty manual queue.
+    public bool HasPendingManualActions()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM scheduler_packages
+                WHERE priority=$priority AND state IN ('queued','running')
+            );
+            """;
+        cmd.Parameters.AddWithValue("$priority", (int)SchedulerPriority.ManualAction);
+        return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+    }
+
     public void SetState(string key, string state, int? completed = null,
         string? error = null)
     {

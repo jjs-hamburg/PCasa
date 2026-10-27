@@ -236,6 +236,26 @@ public sealed class PCasaScheduler : IAsyncDisposable
             journal.SetState(record.Key, "failed", package.CompletedSteps, ex.Message);
             throw;
         }
+        finally
+        {
+            // A background worker may have consumed its wakeup while the
+            // P0 journal record was still "running". Recheck its durable
+            // state after the final checkpoint, without any second queue.
+            if (!_shutdown.IsCancellationRequested)
+                WakeDeferredAutomaticWork();
+        }
+    }
+
+    private void WakeDeferredAutomaticWork()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            foreach (var lane in new[] { LaneBackground, LaneInitialImport,
+                         LaneUserAction })
+                if (_pending.Any(item => LaneFor(item.Priority, item.Kind) == lane))
+                    _signals[lane].Release();
+        }
     }
 
     private static int LaneFor(SchedulerPriority priority, SchedulerWorkKind kind)
@@ -466,6 +486,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
             while (true)
             {
                 await _signals[lane].WaitAsync(_shutdown.Token);
+                // Inspect the durable P0 journal outside the scheduler lock:
+                // SQLite may briefly wait on a catalogue write. Background
+                // catalogue execution is the only work gated by this rule;
+                // scheduled source probes and manual/interactive jobs remain
+                // independent and responsive.
+                var persistedManualPending =
+                    (lane is LaneBackground or LaneInitialImport or LaneUserAction) &&
+                    _durableJournal?.HasPendingManualActions() == true;
                 WorkItem? item;
                 CancellationTokenSource? yieldRequest = null;
                 lock (_gate)
@@ -475,13 +503,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // Otherwise parallel workers can reverse the logical order.
                     var blockedByHigherPriority =
                         (lane == LaneBackground || lane == LaneInitialImport) &&
-                        (_unresolvedDurableManualCount > 0 ||
+                        (persistedManualPending ||
+                         _unresolvedDurableManualCount > 0 ||
                          _catalogForegroundRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.UserAction)) ||
                         lane == LaneUserAction &&
-                        (_unresolvedDurableManualCount > 0 ||
+                        (persistedManualPending ||
+                         _unresolvedDurableManualCount > 0 ||
                          _catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&

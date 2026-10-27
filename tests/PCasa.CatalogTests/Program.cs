@@ -199,6 +199,37 @@ internal static class Program
                 catch (DurablePackageRetryException) { deferred = true; }
                 if (!deferred)
                     throw new Exception("Offline durable package was not deferred.");
+                // The durable P0 marker survives even though its task has
+                // unwound. Automatic NAS/import/scan work MUST remain held,
+                // not proceed just because the in-memory queue is empty.
+                var ranAutomatic = 0;
+                var automaticBackground = scheduler.EnqueueAsync(
+                    "test:background-behind-deferred-tag",
+                    SchedulerPriority.Background,
+                    _ => { Interlocked.Increment(ref ranAutomatic); return Task.CompletedTask; },
+                    workKind: SchedulerWorkKind.CatalogScan);
+                var automaticInventory = scheduler.EnqueueAsync(
+                    "test:inventory-behind-deferred-tag",
+                    SchedulerPriority.UserAction,
+                    _ => { Interlocked.Increment(ref ranAutomatic); return Task.CompletedTask; },
+                    workKind: SchedulerWorkKind.CatalogScan);
+                var automaticInitialImport = scheduler.EnqueueAsync(
+                    "test:first-import-behind-deferred-tag",
+                    SchedulerPriority.Background,
+                    _ => { Interlocked.Increment(ref ranAutomatic); return Task.CompletedTask; },
+                    workKind: SchedulerWorkKind.InitialImport);
+                await Task.Delay(250);
+                if (ranAutomatic != 0 || automaticBackground.IsCompleted ||
+                    automaticInventory.IsCompleted || automaticInitialImport.IsCompleted)
+                    throw new Exception(
+                        "NAS scanning overtook a still-durable deferred manual P0 package.");
+                var ranManual = false;
+                await scheduler.EnqueueAsync("test:independent-manual",
+                    SchedulerPriority.ManualAction,
+                    _ => { ranManual = true; return Task.CompletedTask; })
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                if (!ranManual)
+                    throw new Exception("Deferred P0 package blocked newer manual work.");
             }
             var saved = new DurablePackageJournal(database).Pending();
             if (saved.Count != 1 || saved[0].Key != key ||
@@ -211,19 +242,36 @@ internal static class Program
                 restarted.EnableDurablePackages(database);
                 var executed = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
+                var releaseManual = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 restarted.RegisterDurablePackageType("test-offline-v1", (id, _) =>
                 {
                     var resumed = new SchedulerTaskPackage(id);
-                    resumed.AddStep(_ =>
+                    resumed.AddStep(async token =>
                     {
                         executed.TrySetResult();
-                        return Task.CompletedTask;
+                        await releaseManual.Task.WaitAsync(token);
                     });
                     return resumed;
                 });
                 if (restarted.RecoverDurablePackages().Count != 0)
                     throw new Exception("Offline durable package was not reconstructed.");
                 await executed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                var automaticRan = false;
+                var automaticCompletion = restarted.EnqueueAsync(
+                    "test:resume-after-p0-journal-completes",
+                    SchedulerPriority.Background,
+                    _ => { automaticRan = true; return Task.CompletedTask; },
+                    workKind: SchedulerWorkKind.CatalogScan);
+                await Task.Delay(150);
+                if (automaticRan || automaticCompletion.IsCompleted)
+                    throw new Exception(
+                        "Background scan started before resumed P0 finished.");
+                releaseManual.TrySetResult();
+                await automaticCompletion.WaitAsync(TimeSpan.FromSeconds(10));
+                if (!automaticRan)
+                    throw new Exception(
+                        "Background scan never resumed after P0 journal acknowledgement.");
                 // Step execution precedes the final ledger acknowledgement.
                 // Dispose is shutdown (a safe yield), not a completion barrier
                 // for work that has not yet finished committing its result.
