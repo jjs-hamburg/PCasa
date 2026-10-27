@@ -236,6 +236,49 @@ internal static class TagFlow
                 ?? throw new Exception("Tree scope missing.");
             var current = (RadioButton?)window.FindName("SearchCurrentScope")
                 ?? throw new Exception("Current-only scope missing.");
+            // A collapsed subtree is a display option, never a search
+            // restriction. Check global tag/filename results through WPF.
+            var skipCollapsed = (MenuItem?)window.FindName("HideCollapsedFoldersMenu")
+                ?? throw new Exception("Skip-collapsed gallery option missing.");
+            search.Clear();
+            skipCollapsed.IsChecked = true;
+            skipCollapsed.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            FolderTreeNavigation.ExpandAncestors(monitoredRootItem);
+            monitoredRootItem.IsExpanded = false;
+            Until(window, () => surface.HiddenFolderIds.Contains(a.Id) &&
+                surface.HiddenFolderIds.Contains(b.Id),
+                "Collapsed ordinary gallery did not hide descendant sections.");
+
+            global.IsChecked = true;
+            tagMode.IsChecked = true;
+            search.Text = "berlin";
+            Until(window, () => SortedGallery().Count == 12 &&
+                SortedGallery().All(image => image.PhotoFolderId == b.Id) &&
+                surface.GetFolderOffset(b.Id) is not null &&
+                !surface.HiddenFolderIds.Contains(b.Id),
+                "Global tag search excluded an indexed collapsed folder.");
+            Console.WriteLine(
+                "PASS: Global tag search includes collapsed folders despite gallery-only hide option.");
+
+            fileMode.IsChecked = true;
+            search.Text = "topaz";
+            Until(window, () => SortedGallery().Count == 10 &&
+                surface.GetFolderOffset(a.Id) is not null &&
+                surface.GetFolderOffset(b.Id) is not null &&
+                surface.HiddenFolderIds.Count == 0,
+                "Global filename search excluded hidden descendant folders.");
+            Console.WriteLine(
+                "PASS: Global filename search includes all collapsed descendants.");
+
+            search.Clear();
+            Until(window, () => surface.HiddenFolderIds.Contains(a.Id) &&
+                surface.HiddenFolderIds.Contains(b.Id),
+                "Clearing search failed to restore gallery-only collapsed-folder hiding.");
+            monitoredRootItem.IsExpanded = true;
+            skipCollapsed.IsChecked = false;
+            skipCollapsed.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Until(window, () => surface.HiddenFolderIds.Count == 0,
+                "Disabling collapsed-folder option failed to restore ordinary gallery.");
             fileMode.IsChecked = true;
             global.IsChecked = true;
             search.Text = "topaz";
@@ -942,6 +985,53 @@ internal static class TagFlow
             }
             Console.WriteLine(
                 "PASS: Running original path overrides newer queued tag while series total stays cumulative.");
+            // A queued tag series must yield its CAPTION, not its priority,
+            // to actual running NAS inventory in the one shared presenter.
+            const string waitingNasKey = "tags:smoke:waiting-for-nas";
+            beginManual.Invoke(window, [waitingNasKey,
+                "Tags in Originaldateien schreiben", 7]);
+            var scanPresenter = presenterField.GetValue(window)
+                as PCasa.App.BrowseCacheProgressWindow
+                ?? throw new Exception("Shared scan presenter missing.");
+            var mayShowScan = typeof(PCasa.App.MainWindow).GetMethod(
+                "ScanMayReplaceWaitingManualPresentation",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Shared scheduler scan visibility decision missing.");
+            var scanAllowed = (bool)mayShowScan.Invoke(window, null)!;
+            if (!scanAllowed)
+                throw new Exception("Queued Tag job incorrectly suppresses NAS progress.");
+            scanPresenter.UpdateScan(new ScanProgress(5, 3, 2, 0,
+                @"S:\album\new-photo.jpg", Added: 3),
+                showWhileManualWaiting: scanAllowed);
+            var repaint = typeof(PCasa.App.MainWindow).GetMethod(
+                "RenderVisibleTagSeries",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Shared tag aggregate projection missing.");
+            repaint.Invoke(window, null);
+            if ((scanPresenter.FindName("PhaseText") as TextBlock)?.Text !=
+                    "Bilder werden eingelesen" ||
+                (scanPresenter.FindName("CurrentFileText") as TextBlock)?.Text !=
+                    "new-photo.jpg" ||
+                (scanPresenter.FindName("CountText") as TextBlock)?.Text
+                    .StartsWith("Neu: 3", StringComparison.Ordinal) != true ||
+                status.Text != scanPresenter.ProgressStatusText)
+                throw new Exception(
+                    "Queued tag overlay concealed running NAS scan or diverged from status bar.");
+            var restorePending = typeof(PCasa.App.MainWindow).GetMethod(
+                "RestoreWaitingManualPresentationAfterScan",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Pending Tag presenter restoration missing.");
+            restorePending.Invoke(window, null);
+            if (scanPresenter.ShowingScanDuringManualWait ||
+                (scanPresenter.FindName("CountText") as TextBlock)?.Text != "0 / 7")
+                throw new Exception("Completed NAS scan did not restore queued Tag series.");
+            endManual.Invoke(window, [waitingNasKey]);
+            Console.WriteLine(
+                "PASS: Active NAS scan replaces queued Tag caption and restores pending series.");
+
             // Recovery must use each immutable package's own image count.
             // Previously the UI assigned the ENTIRE pending-tag image count
             // to every recovered package and multiplied the grand total.
