@@ -489,7 +489,7 @@
                                 <Separator />
                                 <MenuItem x:Name="GalleryBackgroundDarkMenu" Header="Einfarbig dunkel" IsCheckable="True" Tag="Dark" Click="AppearanceBackground_Click" />
                                 <MenuItem x:Name="GalleryBackgroundLightMenu" Header="Einfarbig hell" IsCheckable="True" Tag="Light" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="Textur..." IsCheckable="True" Click="GalleryTexture_Click" />
+                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="Textur" IsCheckable="True" Click="GalleryTexture_Click" />
                             </MenuItem>
                             <MenuItem x:Name="RestoreGalleryPositionMenu" Header="Galerieposition beim Start wiederherstellen" IsCheckable="True" Click="AppearanceRestorePosition_Click" />
                             <Separator />

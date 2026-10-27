@@ -114,6 +114,25 @@ internal static class Program
             }
             Console.WriteLine("PASS: Editable JPG textures, native pixels and one persisted menu entry.");
 
+            // Exercise the real graphical picker: each JPG is represented by
+            // an actual clickable swatch. One click selects and closes.
+            var picker = new PCasa.App.GalleryTexturePickerWindow(chosen)
+            {
+                Owner = window
+            };
+            Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+            {
+                var preview = Descendants<Button>(picker)
+                    .FirstOrDefault(b => b.Tag is string file &&
+                        string.Equals(file, chosen, StringComparison.Ordinal));
+                if (preview is null) picker.Close();
+                else preview.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, preview));
+            }), DispatcherPriority.ContextIdle);
+            if (picker.ShowDialog() != true ||
+                picker.SelectedFileName != chosen)
+                throw new Exception("JPG swatch did not select its texture in one click.");
+            Console.WriteLine("PASS: Real graphical texture picker selects JPG with one click.");
+
             // Light UI: checked Tags/Alle must be legible over charcoal;
             // unchecked options retain the normal dark foreground.
             var lightMenu = (MenuItem?)window.FindName("ThemeLightMenu")
