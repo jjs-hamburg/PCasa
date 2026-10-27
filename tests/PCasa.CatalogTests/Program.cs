@@ -66,6 +66,7 @@ internal static class Program
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
+        Run("Running durable first import yields to manual Tag P0 and resumes", InitialImportYieldsToManualTag, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
         Run("Read-only folder-tree probe does not stop durable background image import", ReadOnlyFolderProjectionNeverBlocksInitialImport, failures);
         Run("Canceled all-folders toggle immediately retires queued scheduler probe", CanceledAllFoldersScopeRetiresQueuedProbe, failures);
@@ -1350,6 +1351,47 @@ internal static class Program
                 release.TrySetResult();
                 await initial.WaitAsync(TimeSpan.FromSeconds(5));
             }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void InitialImportYieldsToManualTag()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            // A long NAS import is already in progress BEFORE the manual
+            // Tag operation arrives. The first run must be canceled at its
+            // scheduler boundary, then the SAME job identity resumes.
+            var initial = scheduler.EnqueueAsync(
+                "initial-import:active-before-tags", SchedulerPriority.Background,
+                async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        started.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                }, workKind: SchedulerWorkKind.InitialImport);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var wroteManualTag = false;
+            await scheduler.EnqueueAsync(
+                "tags:package:preempt-running-first-import",
+                SchedulerPriority.ManualAction,
+                _ =>
+                {
+                    wroteManualTag = true;
+                    return Task.CompletedTask;
+                }).WaitAsync(TimeSpan.FromSeconds(5));
+            if (!wroteManualTag)
+                throw new Exception("Manual P0 write never started.");
+            await initial.WaitAsync(TimeSpan.FromSeconds(5));
+            if (attempts != 2)
+                throw new Exception(
+                    "Running initial import was not canceled and resumed after manual P0.");
         }
         Check().GetAwaiter().GetResult();
     }

@@ -51,13 +51,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
         Enumerable.Range(0, 11).Select(_ => new SemaphoreSlim(0)).ToArray();
-    private readonly WorkItem?[] _runningPriorityJobs = new WorkItem?[3];
+    // Track the dedicated first-import executor as well. Otherwise an
+    // already-running initial scan never receives the scheduler's yield
+    // cancellation when a new manual P0 package arrives.
+    private readonly WorkItem?[] _runningPriorityJobs =
+        new WorkItem?[LaneInitialImport + 1];
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
     private int _catalogInteractiveRunning;
     private int _manualSourceProbeRunning;
     private WorkItem? _runningManualSourceProbe;
-    private readonly CancellationTokenSource?[] _runningYield = new CancellationTokenSource?[3];
+    private readonly CancellationTokenSource?[] _runningYield =
+        new CancellationTokenSource?[LaneInitialImport + 1];
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
     private long _nextId;
@@ -440,7 +445,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 (workKind == SchedulerWorkKind.SourceProbe &&
                  priority == SchedulerPriority.ManualAction))
             {
-                for (var lane = 0; lane <= LaneManual; lane++)
+                foreach (var lane in new[] { LaneBackground, LaneUserAction,
+                             LaneManual, LaneInitialImport })
                 {
                     var active = _runningPriorityJobs[lane];
                     // An incoming user file mutation supersedes a longer
@@ -567,7 +573,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             _manualSourceProbeRunning++;
                             _runningManualSourceProbe = item;
                         }
-                        if (lane <= LaneManual)
+                        if (lane <= LaneManual || lane == LaneInitialImport)
                         {
                             yieldRequest = new CancellationTokenSource();
                             _runningPriorityJobs[lane] = item;
@@ -631,7 +637,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     {
                         lock (_gate)
                         {
-                            if (lane <= LaneManual &&
+                            if ((lane <= LaneManual || lane == LaneInitialImport) &&
                                 ReferenceEquals(_runningPriorityJobs[lane], item))
                             {
                                 _runningPriorityJobs[lane] = null;
