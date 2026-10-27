@@ -113,7 +113,8 @@ public partial class MainWindow
             var progress = new Progress<ScanProgress>(scan =>
             {
                 if (_manualFileTransferActive) return;
-                shownWindow.UpdateScan(scan);
+                shownWindow.UpdateScan(scan,
+                    showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
                 ShowScannedPhotoFolder(scan);
                 StatusText.Text =
                     $"Ordner einlesen: {folder.LocalPath} · {scan.ImageFilesSeen:N0} geprüft · " +
@@ -164,6 +165,8 @@ public partial class MainWindow
                 if (ReferenceEquals(_browseProgressWindow, progressWindow))
                     _browseProgressWindow = null;
             }
+            else if (progressWindow is not null)
+                RestoreWaitingManualPresentationAfterScan();
             if (ReferenceEquals(_activeScanCancellation, cancellation))
             {
                 _activeScanCancellation = null;

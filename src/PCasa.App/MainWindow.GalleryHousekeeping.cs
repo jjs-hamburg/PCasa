@@ -184,8 +184,10 @@ public partial class MainWindow
         var previousAnchor = preserveGalleryAnchor && _browseInitialized
             ? CaptureGalleryAnchor() : null;
         IReadOnlySet<long> hidden;
-        if (!_appearance.HideCollapsedFolders)
+        if (!_appearance.HideCollapsedFolders ||
+            !string.IsNullOrWhiteSpace(TagSearchBox?.Text))
         {
+            // Collapsed-folder hiding is exclusively an unfiltered gallery option.
             hidden = new HashSet<long>();
         }
         else

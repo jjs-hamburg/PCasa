@@ -218,6 +218,9 @@ public partial class MainWindow
             _browsePageCache.SetIndex(desired);
         }
         BrowseSurface.SetData(_displayedBrowseIndex, _photoFolders, _browsePageCache);
+        // All indexed hits must be displayed regardless of collapsed folders.
+        // The ordinary gallery-only mask is restored when the query clears.
+        UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
         BrowseSurface.SetSelection(_selectedImageIds);
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanelHeading.Text = query.Length == 0

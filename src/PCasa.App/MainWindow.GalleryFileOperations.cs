@@ -372,6 +372,22 @@ public partial class MainWindow
     // non-interruptible original-file write is genuinely executing.
     // Select the actual running scheduler job for the visible filename and
     // phase; retain the existing aggregate series counter across all jobs.
+    // A queued P0 packet does not constitute actual I/O. Present a live
+    // NAS scan until a manual scheduler worker actually begins execution.
+    private bool ScanMayReplaceWaitingManualPresentation()
+        => _visibleManualOperations.Count > 0 &&
+            !_scheduler.Snapshot().Any(job =>
+                _visibleManualOperations.ContainsKey(job.Key) &&
+                job.State == SchedulerJobState.Running);
+
+    private void RestoreWaitingManualPresentationAfterScan()
+    {
+        if (_visibleManualWindow?.ShowingScanDuringManualWait == true &&
+            _visibleManualOrder.Count > 0)
+            DisplayManualOperation(PreferredVisibleManualOperation() ??
+                _visibleManualOrder[^1]);
+    }
+
     private string? PreferredVisibleManualOperation()
     {
         var active = _scheduler.Snapshot()
@@ -481,7 +497,11 @@ public partial class MainWindow
                 !string.Equals(preferred, _visibleManualActiveKey,
                     StringComparison.Ordinal))
                 DisplayManualOperation(preferred);
-            if (status.Key == _visibleManualActiveKey)
+            if (status.State == SchedulerJobState.Running &&
+                _visibleManualWindow?.ShowingScanDuringManualWait == true)
+                DisplayManualOperation(status.Key);
+            if (status.Key == _visibleManualActiveKey &&
+                _visibleManualWindow?.ShowingScanDuringManualWait != true)
             {
                 _visibleManualWindow?.UpdateManualOperation(status);
                 RequestVisibleTagThumbnail(status);

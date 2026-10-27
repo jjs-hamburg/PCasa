@@ -54,6 +54,9 @@ public partial class BrowseCacheProgressWindow : Window
         => ProgressPresentationChanged?.Invoke(this, EventArgs.Empty);
 
     private bool _manualPresentationActive;
+    // Presentation-only: actual NAS work may replace a waiting manual caption.
+    private bool _showingScanDuringManualWait;
+    public bool ShowingScanDuringManualWait => _showingScanDuringManualWait;
     private string? _manualCurrentImagePath;
     private bool _finishRequestedWhileManual;
 
@@ -227,6 +230,7 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _manualPresentationActive = true;
+        _showingScanDuringManualWait = false;
         _hiddenByUser = false;
         PhaseText.Text = name + " · angefordert";
         Progress.IsIndeterminate = true;
@@ -244,7 +248,7 @@ public partial class BrowseCacheProgressWindow : Window
     public void UpdateManualOperation(SchedulerJobSnapshot progress)
     {
         if (_finished || !_manualPresentationActive ||
-            Dispatcher.HasShutdownStarted) return;
+            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait) return;
         var phase = progress.Phase ?? "Dateioperation läuft";
         PhaseText.Text = progress.State switch
         {
@@ -313,7 +317,7 @@ public partial class BrowseCacheProgressWindow : Window
     public void UpdateTagAggregateProgress(int processed, int total)
     {
         if (_finished || !_manualPresentationActive ||
-            Dispatcher.HasShutdownStarted) return;
+            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait) return;
         total = Math.Max(0, total);
         processed = Math.Clamp(processed, 0, total);
         Progress.IsIndeterminate = total == 0;
@@ -332,6 +336,7 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (!_manualPresentationActive) return;
         _manualPresentationActive = false;
+        _showingScanDuringManualWait = false;
         _manualCurrentImagePath = null;
         if (_finishRequestedWhileManual)
         {
@@ -367,12 +372,15 @@ public partial class BrowseCacheProgressWindow : Window
         }
     }
 
-    public void UpdateScan(ScanProgress progress)
+    public void UpdateScan(ScanProgress progress,
+        bool showWhileManualWaiting = false)
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _backgroundView = BackgroundView.Scan;
         _lastScanProgress = progress;
-        if (_manualPresentationActive) return;
+        if (_manualPresentationActive && !showWhileManualWaiting) return;
+        if (_manualPresentationActive)
+            _showingScanDuringManualWait = true;
         ShowScanProgress(progress);
     }
 

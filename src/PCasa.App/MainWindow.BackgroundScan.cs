@@ -625,7 +625,8 @@ public partial class MainWindow
                                 activityWindow.Show();
                             }
                         }
-                        activityWindow?.UpdateScan(value);
+                        activityWindow?.UpdateScan(value,
+                            showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
                         ShowScannedPhotoFolder(value);
                         StatusText.Text =
                             $"Hintergrund: {value.Added:N0} neu · {value.Changed:N0} geändert · " +
@@ -686,6 +687,7 @@ public partial class MainWindow
                 }
                 finally
                 {
+                    RestoreWaitingManualPresentationAfterScan();
                     if (ReferenceEquals(_activeScanCancellation, scanCancellation))
                     {
                         _activeScanCancellation = null;
