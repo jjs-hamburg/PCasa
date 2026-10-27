@@ -403,12 +403,19 @@ public partial class MainWindow
     {
         if (!_visibleManualOperations.TryGetValue(key, out var item)) return;
         _visibleManualActiveKey = key;
+        // BeginManualOperation clears the previous picture. Also reset the
+        // matching preview de-duplication key, including when the SAME source
+        // is processed by the next Tag package. Otherwise its preview could
+        // never reappear after the window is reset.
+        _lastManualThumbnailPath = null;
+        _lastManualThumbnailUtc = DateTime.MinValue;
         _visibleManualWindow?.BeginManualOperation(item.Title, item.Total);
         var latest = _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
         if (latest is not null)
         {
             if (IsTagSeriesKey(key)) UpdateVisibleTagSeries(latest);
             _visibleManualWindow?.UpdateManualOperation(latest);
+            RequestVisibleTagThumbnail(latest);
         }
         RenderVisibleTagSeries();
     }
@@ -478,6 +485,21 @@ public partial class MainWindow
         finally
         {
             _manualThumbnailBusy = false;
+            // A preview from the former package may have occupied the
+            // thumbnail lane while a newer package became visible. Once the
+            // old read exits, request the actual active original's cache
+            // image; no NAS read and no competing progress/scheduler.
+            if (!Dispatcher.HasShutdownStarted &&
+                _visibleManualActiveKey is string activeKey)
+            {
+                var current = _scheduler.Snapshot().LastOrDefault(
+                    snapshot => snapshot.Key == activeKey);
+                if (current?.CurrentPath is { Length: > 0 } currentPath &&
+                    (!string.Equals(activeKey, jobKey, StringComparison.Ordinal) ||
+                     !string.Equals(currentPath, source,
+                         StringComparison.OrdinalIgnoreCase)))
+                    RequestVisibleTagThumbnail(current);
+            }
         }
     }
 
