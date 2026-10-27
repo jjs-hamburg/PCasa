@@ -816,7 +816,7 @@ internal static class TagFlow
                     var presenter = presenterField.GetValue(window)
                         as PCasa.App.BrowseCacheProgressWindow;
                     var phase = (presenter?.FindName("PhaseText") as TextBlock)?.Text;
-                    var current = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
+                    var diagnosticFile = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
                     var count = (presenter?.FindName("CountText") as TextBlock)?.Text;
                     var folder = (presenter?.FindName("FolderPathText") as TextBlock)?.Text;
                     var preview = (presenter?.FindName("CurrentThumbnail") as Image)?.Source;
@@ -854,7 +854,7 @@ internal static class TagFlow
                         .Where(x => x.Key.StartsWith("tags:")).TakeLast(8)
                         .Select(x => $"{x.Key}:{x.State}:{x.Phase}:{x.Error}"));
                     throw new TimeoutException(
-                        $"{ex.Message} Phase={phase}, File={current}, Folder={folder}, " +
+                        $"{ex.Message} Phase={phase}, File={diagnosticFile}, Folder={folder}, " +
                         $"Count={count}, Preview={(preview is not null)}, " +
                         $"Visible={presenter?.IsVisible}, ActiveTags={journalState}, " +
                         $"Scheduler={schedulerState}", ex);
