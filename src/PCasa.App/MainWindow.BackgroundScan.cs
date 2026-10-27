@@ -27,6 +27,7 @@ public partial class MainWindow
     private bool _backgroundWorkerRunning;
     private bool _manualFolderScanWaiting;
     private bool _backgroundMonitorRefreshRunning;
+    private bool _backgroundMonitorRefreshRequested;
     private bool _backgroundMonitorClosing;
     private string[] _backgroundOfflineRootPaths = Array.Empty<string>();
 
@@ -158,12 +159,15 @@ public partial class MainWindow
 
     private async void RefreshBackgroundMonitor()
     {
-        if (!_backgroundScanInitialized ||
-            _backgroundMonitorClosing ||
-            _backgroundMonitorRefreshRunning ||
-            _backgroundFolderMonitor is null ||
-            _backgroundScanSettings is null)
+        if (!_backgroundScanInitialized || _backgroundMonitorClosing ||
+            _backgroundFolderMonitor is null || _backgroundScanSettings is null)
+            return;
+        if (_backgroundMonitorRefreshRunning)
         {
+            // A settings change while an older probe is in flight MUST NOT
+            // wait for the next 30-second timer tick. Coalesce one refresh
+            // request and execute it once the current scheduled probe ends.
+            _backgroundMonitorRefreshRequested = true;
             return;
         }
 
@@ -267,8 +271,11 @@ public partial class MainWindow
         {
             _backgroundMonitorRefreshRunning = false;
             if (_backgroundMonitorClosing)
-            {
                 monitor.Dispose();
+            else if (_backgroundMonitorRefreshRequested)
+            {
+                _backgroundMonitorRefreshRequested = false;
+                RefreshBackgroundMonitor();
             }
         }
     }
