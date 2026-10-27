@@ -57,28 +57,42 @@ public partial class MainWindow
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { PCasaDiagnostics.Write("Tags.PendingDots", ex); return; }
         if (version != _pendingTagDisplayVersion || Dispatcher.HasShutdownStarted) return;
+        // Red dots belong to FOLDER nodes. The one durable truth is the
+        // image-level pending_tag_edits table; no independent marker state.
+        // Build direct/ancestor lookups once instead of scanning all pending
+        // paths for EVERY tree node (quadratic on large NAS trees).
+        var direct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ancestors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in paths)
+        {
+            var own = Path.GetDirectoryName(file.Replace('/', '\\'))?.TrimEnd('\\');
+            if (string.IsNullOrWhiteSpace(own)) continue;
+            direct.Add(own);
+            var parent = Path.GetDirectoryName(own);
+            while (!string.IsNullOrWhiteSpace(parent))
+            {
+                var normalized = parent.TrimEnd('\\');
+                if (normalized.Length == 0 || !ancestors.Add(normalized))
+                    break;
+                parent = Path.GetDirectoryName(normalized);
+            }
+        }
         foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
-            SetPendingTagDot(root, paths);
+            SetPendingTagDot(root, direct, ancestors);
     }
 
-    private static void SetPendingTagDot(TreeViewItem item, IReadOnlyList<string> paths)
+    private static void SetPendingTagDot(TreeViewItem item,
+        IReadOnlySet<string> direct, IReadOnlySet<string> ancestors)
     {
         if (item.Tag is FolderTreeTag folder)
         {
-            var normalized = folder.FullPath.Replace('/', '\\').TrimEnd('\\');
-            var prefix = normalized + "\\";
-            folder.HasPendingTagWrites = paths.Any(path =>
-                string.Equals(path.Replace('/', '\\').TrimEnd('\\'),
-                    normalized, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(
-                    System.IO.Path.GetDirectoryName(path.Replace('/', '\\'))?.TrimEnd('\\'),
-                    normalized, StringComparison.OrdinalIgnoreCase));
-            folder.HasPendingChildTagWrites = !folder.HasPendingTagWrites &&
-                paths.Any(path => path.Replace('/', '\\')
-                    .StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            var path = folder.FullPath.Replace('/', '\\').TrimEnd('\\');
+            folder.HasPendingTagWrites = direct.Contains(path);
+            folder.HasPendingChildTagWrites =
+                !folder.HasPendingTagWrites && ancestors.Contains(path);
         }
         foreach (var child in item.Items.OfType<TreeViewItem>())
-            SetPendingTagDot(child, paths);
+            SetPendingTagDot(child, direct, ancestors);
     }
 
     private void ApplyFolderStatusMode()

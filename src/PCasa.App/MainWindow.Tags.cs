@@ -476,9 +476,13 @@ public partial class MainWindow
                     catch (OperationCanceledException) { throw; }
                     catch (Exception ex)
                     {
-                        // Failure remains in SQLite; continue other images
-                        // and make it visible in scheduler diagnostics.
+                        // Legacy V1 must not claim a successful scheduler
+                        // step when the physical file write failed. Preserve
+                        // its P0 cursor and still-pending SQLite intent.
                         PCasaDiagnostics.Write("Tags.RecoveryWrite", ex);
+                        throw new DurablePackageRetryException(
+                            "Tag-Schreibvorgang weiterhin offen: " +
+                            imageId + ": " + ex.Message);
                     }
                 }
                 _scheduler.ReportProgress(key, "Tags wiederherstellen",
@@ -880,9 +884,8 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
             {
                 StatusText.Text = "Tag-Schreibfehler – Änderungen in SQLite weiterhin offen";
-                // Hand the still-persisted intents to the one durable P0
-                // recovery package, without a second queue or worker.
-                StartPendingTagDrain();
+                // Final reconciliation below handles both success and
+                // failure after the last manual tag package has finished.
             }
         }
         finally
@@ -891,6 +894,10 @@ public partial class MainWindow
             {
                 EndVisibleManualOperation(key);
                 _ = RefreshPendingTagDotsAsync();
+                // Earlier failures may have been held behind other active
+                // tag-edit-v1 jobs. Only the LAST completion can start the
+                // one durable V2 drain; never create a second writer queue.
+                StartPendingTagDrain();
             }
         }
     }

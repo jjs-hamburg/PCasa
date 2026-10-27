@@ -440,24 +440,27 @@ public sealed class ImageTagRepository
         onFileStarting?.Invoke(path);
         using (SourceFileLocks.Enter(path, token))
         {
-            // Validate snapshot revisions BEFORE touching a potentially slow NAS.
+            // Refresh latest revisions under this image's source lock.
+            // An older package's snapshot can be stale after a newer manual
+            // tag edit. Silent return used to advance its durable cursor
+            // while pending_tag_edits (and the folder dot) remained.
+            // Coalesce all current tags for this image into ONE native write.
+            var currentEdits =
+                new List<(long Id, long ImageId, string Tag, bool Present, long Revision)>();
             using (var check = db.CreateCommand())
             {
                 check.CommandText = """
-                    SELECT revision,desired_present FROM pending_tag_edits
-                    WHERE image_id=$id AND tag=$tag;
+                    SELECT rowid,image_id,tag,desired_present,revision
+                    FROM pending_tag_edits WHERE image_id=$id
+                    ORDER BY updated_utc;
                     """;
                 check.Parameters.AddWithValue("$id", imageId);
-                var tagParameter = check.Parameters.Add("$tag", SqliteType.Text);
-                foreach (var edit in edits)
-                {
-                    tagParameter.Value = edit.Tag;
-                    using var row = check.ExecuteReader();
-                    if (!row.Read() || row.GetInt64(0) != edit.Revision ||
-                        (row.GetInt64(1) != 0) != edit.Present)
-                        return; // Newer user intent: re-read the backlog.
-                }
+                using var row = check.ExecuteReader();
+                while (row.Read())
+                    currentEdits.Add((row.GetInt64(0), row.GetInt64(1),
+                        row.GetString(2), row.GetInt64(3) != 0, row.GetInt64(4)));
             }
+            if (currentEdits.Count == 0) return;
             token.ThrowIfCancellationRequested();
             var before = new FileInfo(path);
             var oldSize = before.Length;
@@ -465,7 +468,7 @@ public sealed class ImageTagRepository
             var sourceKeywords = writer.ReadSnapshot(path, token);
             var tags = sourceKeywords.Combined.ToList();
             var changed = false;
-            foreach (var edit in edits)
+            foreach (var edit in currentEdits)
             {
                 if (edit.Present)
                 {
@@ -515,7 +518,7 @@ public sealed class ImageTagRepository
                 done.Parameters.AddWithValue("$id", imageId);
                 var tagParam = done.Parameters.Add("$tag", SqliteType.Text);
                 var revisionParam = done.Parameters.Add("$revision", SqliteType.Integer);
-                foreach (var edit in edits)
+                foreach (var edit in currentEdits)
                 {
                     tagParam.Value = edit.Tag;
                     revisionParam.Value = edit.Revision;

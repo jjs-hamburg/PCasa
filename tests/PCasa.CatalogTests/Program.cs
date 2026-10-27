@@ -127,6 +127,7 @@ internal static class Program
         Run("Modified source refreshes browse cache", ModifiedSourceRefreshesCache, failures);
         Run("Repeated reconciliation is idempotent", RepeatedReconciliationIsIdempotent, failures);
         Run("JPEG tag write and removal persist in original", JpegTagRoundTrip, failures);
+        Run("Overlapping Tag packages merge latest revision and clear folder pending marker", StaleTagRevisionDoesNotLeavePendingMarker, failures);
         Run("Catalog cleanup has indexed pack and root lookups", CatalogCleanupIndexesExist, failures);
         Run("Unicode JPEG keyword leaves pixels untouched", JpegUnicodeTagPreservesPixels, failures);
         Run("EXIF fields survive tag write and removal", JpegExifFieldsSurviveTags, failures);
@@ -3589,6 +3590,46 @@ internal static class Program
         command.CommandText = "SELECT COUNT(*) FROM photo_folders";
         if (Convert.ToInt32(command.ExecuteScalar()) != 1)
             throw new Exception("Repeated scan duplicated photo folder records.");
+    }
+
+    private static void StaleTagRevisionDoesNotLeavePendingMarker()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "stale-tags.jpg");
+        WriteJpeg(path);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        using var connection = db.OpenConnection();
+        using var lookup = connection.CreateCommand();
+        lookup.CommandText = "SELECT id FROM images LIMIT 1;";
+        var imageId = Convert.ToInt64(lookup.ExecuteScalar());
+        var tags = new ImageTagRepository(db);
+        if (tags.QueueTagEdit(new[] { imageId }, "Revision Alpha", false) != 1)
+            throw new Exception("Cannot stage original tag change.");
+        var stale = tags.PendingEditsForImage(imageId);
+        if (stale.Count != 1)
+            throw new Exception("Initial image intent missing.");
+        // Latest user intent wins; three versions of one tag must remain
+        // just one SQLite row and the distinct second tag its own row.
+        if (tags.QueueTagEdit(new[] { imageId }, "Revision Alpha", true) != 1 ||
+            tags.QueueTagEdit(new[] { imageId }, "Revision Alpha", false) != 1 ||
+            tags.QueueTagEdit(new[] { imageId }, "Revision Beta", false) != 1)
+            throw new Exception("Cannot stage overlapping tag changes.");
+        if (tags.PendingEditsForImage(imageId).Count != 2)
+            throw new Exception("Overlapping edits fragmented the image backlog.");
+        using (var writer = new ExifToolKeywordWriter.Session())
+            tags.ApplyPendingImageEdits(imageId, stale, writer,
+                CancellationToken.None);
+        if (tags.PendingEditsForImage(imageId).Count != 0 ||
+            tags.PendingTagPaths().Contains(path, StringComparer.OrdinalIgnoreCase))
+            throw new Exception(
+                "Stale original package left the folder red after current edits were confirmed.");
+        using var verifier = new ExifToolKeywordWriter.Session();
+        var snapshot = verifier.ReadSnapshot(path);
+        foreach (var field in new[] { snapshot.Xmp, snapshot.Iptc })
+            if (!field.Contains("Revision Alpha", StringComparer.OrdinalIgnoreCase) ||
+                !field.Contains("Revision Beta", StringComparer.OrdinalIgnoreCase))
+                throw new Exception("Current Tag revisions were not persisted together.");
     }
 
     private static void JpegTagRoundTrip()
