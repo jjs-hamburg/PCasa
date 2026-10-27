@@ -306,11 +306,45 @@ internal static class FolderAddFlow
             var missedPhoto = Path.Combine(initialRoot, "previously-unseen.jpg");
             WriteJpeg(missedPhoto);
             new BackgroundScanSettings { Enabled = true }.Save();
-            Until(window, () =>
-                    new ImageCatalogRepository(db).CountAll() == 3 &&
-                    roots.GetPendingInitialScans().Any(root =>
-                        SamePath(root.LocalPath, afterRestart)),
-                "A separate pending first import disabled the other root's automatic inventory.");
+            try
+            {
+                Until(window, () =>
+                        new ImageCatalogRepository(db).CountAll() == 3 &&
+                        roots.GetPendingInitialScans().Any(root =>
+                            SamePath(root.LocalPath, afterRestart)),
+                    "A separate pending first import disabled the other root's automatic inventory.");
+            }
+            catch (TimeoutException ex)
+            {
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                object? Field(string name) =>
+                    typeof(PCasa.App.MainWindow).GetField(name, flags)?.GetValue(window);
+                var pending = Field("_backgroundPending") as System.Collections.IDictionary;
+                var known = Field("_backgroundKnownFolderIds")
+                    as System.Collections.ICollection;
+                var debounce = Field("_backgroundDebounceTimer") as DispatcherTimer;
+                var jobs = ((PCasaScheduler)Field("_scheduler")!).Snapshot()
+                    .Where(job => job.State is SchedulerJobState.Running or
+                        SchedulerJobState.Queued or SchedulerJobState.YieldRequested)
+                    .Select(job => job.Key + ":" + job.State + ":" + job.Priority)
+                    .Take(16);
+                throw new TimeoutException(
+                    ex.Message + " | count=" + new ImageCatalogRepository(db).CountAll() +
+                    " pendingRoots=" + string.Join(",", roots.GetPendingInitialScans()
+                        .Select(root => root.LocalPath)) +
+                    " | bgEnabled=" + BackgroundScanSettings.Load().Enabled +
+                    " monitor=" + Field("_backgroundMonitorRefreshRunning") +
+                    " monitorRequested=" + Field("_backgroundMonitorRefreshRequested") +
+                    " initialized=" + Field("_backgroundScanInitialized") +
+                    " known=" + (known?.Count.ToString() ?? "?") +
+                    " pending=" + (pending?.Count.ToString() ?? "?") +
+                    " bgWorker=" + Field("_backgroundWorkerRunning") +
+                    " browseCache=" + Field("_browseCacheBuilding") +
+                    " manualScan=" + Field("_manualScanRunning") +
+                    " isScanning=" + Field("_isScanning") +
+                    " debounceEnabled=" + debounce?.IsEnabled +
+                    " | scheduler=" + string.Join("; ", jobs), ex);
+            }
             Console.WriteLine(
                 "PASS: Unindexed images on a completed root are discovered while another root's first import is blocked.");
 
