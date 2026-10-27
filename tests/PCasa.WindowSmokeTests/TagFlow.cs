@@ -831,15 +831,33 @@ internal static class TagFlow
                 "Tags in Originaldateien schreiben", 6]);
             FakeProgress(olderTag, 3, 4);
             FakeProgress(newerTag, 2, 6);
-            Until(window, () =>
-                (presenterField.GetValue(window)
-                    as PCasa.App.BrowseCacheProgressWindow)?
-                    .FindName("CountText") is TextBlock number &&
-                number.Text == "5 / 10" &&
-                status.Text ==
+            try
+            {
+                Until(window, () =>
                     (presenterField.GetValue(window)
-                        as PCasa.App.BrowseCacheProgressWindow)?.ProgressStatusText,
-                "Status bar and floating dialog disagree on aggregate Tag progress.");
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CountText") is TextBlock number &&
+                    number.Text == "5 / 10" &&
+                    status.Text ==
+                        (presenterField.GetValue(window)
+                            as PCasa.App.BrowseCacheProgressWindow)?.ProgressStatusText,
+                    "Status bar and floating dialog disagree on aggregate Tag progress.");
+            }
+            catch (TimeoutException ex)
+            {
+                var presenter = presenterField.GetValue(window)
+                    as PCasa.App.BrowseCacheProgressWindow;
+                var actual = (presenter?.FindName("CountText") as TextBlock)?.Text;
+                var statusValue = status.Text;
+                var presenterValue = presenter?.ProgressStatusText;
+                var seriesField = typeof(PCasa.App.MainWindow).GetField(
+                    "_visibleTagSeries", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance);
+                var series = seriesField?.GetValue(window);
+                throw new TimeoutException(
+                    $"{ex.Message} Count='{actual}', Status='{statusValue}', " +
+                    $"Presenter='{presenterValue}', Series='{series}'", ex);
+            }
             endManual.Invoke(window, [olderTag]);
             FakeProgress(newerTag, 5, 6);
             Until(window, () =>
