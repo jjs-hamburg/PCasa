@@ -809,6 +809,8 @@ internal static class TagFlow
                         new[] { editorIds[0] }, visibleTag, false) != 1)
                     throw new Exception("Cannot seed visible tag recovery.");
                 scheduleRecovery.Invoke(window, null);
+                try
+                {
                 Until(window, () =>
                 {
                     var presenter = presenterField.GetValue(window)
@@ -832,6 +834,31 @@ internal static class TagFlow
                             .OfType<PCasa.App.BrowseCacheProgressWindow>()
                             .Count(w => w.IsVisible) == 1;
                 }, "Tag progress did not show compact count, folder, Hide and cached image in one unchanged-size window.");
+                }
+                catch (TimeoutException ex)
+                {
+                    var presenter = presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow;
+                    var current = (presenter?.FindName("CurrentFileText") as TextBlock)?.Text;
+                    var phase = (presenter?.FindName("PhaseText") as TextBlock)?.Text;
+                    var count = (presenter?.FindName("CountText") as TextBlock)?.Text;
+                    var folder = (presenter?.FindName("FolderPathText") as TextBlock)?.Text;
+                    var preview = (presenter?.FindName("CurrentThumbnail") as Image)?.Source;
+                    var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                        .GetField("_scheduler", System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+                    var journalState = string.Join(";", new DurablePackageJournal(db)
+                        .Pending().Where(x => x.Key.StartsWith("tags:")).Select(x =>
+                            $"{x.Key}:{x.Type}:{x.State}:{x.CompletedSteps}:{x.Error}"));
+                    var schedulerState = string.Join(";", scheduler.Snapshot()
+                        .Where(x => x.Key.StartsWith("tags:")).TakeLast(8)
+                        .Select(x => $"{x.Key}:{x.State}:{x.Phase}:{x.Error}"));
+                    throw new TimeoutException(
+                        $"{ex.Message} Phase={phase}, File={current}, Folder={folder}, " +
+                        $"Count={count}, Preview={(preview is not null)}, " +
+                        $"Visible={presenter?.IsVisible}, ActiveTags={journalState}, " +
+                        $"Scheduler={schedulerState}", ex);
+                }
             }
             Until(window, () =>
                 new ImageTagRepository(db).PendingEdits()
