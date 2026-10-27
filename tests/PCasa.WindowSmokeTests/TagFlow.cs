@@ -795,6 +795,19 @@ internal static class TagFlow
                 "Visible tag recovery did not finish writing its original.");
             Until(window, () => !FolderShowsPending(),
                 "Red tag marker remained after the visible tag write completed.");
+            // The preceding step is a REAL durable tag job. Pending DB
+            // revisions may be committed before the UI receives the final
+            // completed/progress callbacks. Do not mix that real burst into
+            // the isolated synthetic series-wide counter assertions below.
+            var tagSeriesField = typeof(PCasa.App.MainWindow).GetField(
+                "_visibleTagSeries", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Tag series projection missing.");
+            Until(window, () =>
+                tagSeriesField.GetValue(window) is System.Collections.ICollection
+                    { Count: 0 },
+                "Real Tag progress did not finish before independent synthetic counter test.");
+
             // Several manual Tag packets must share ONE series-wide counter
             // even when an older package progresses behind the newest one.
             // The UI is a projection; no fake durable jobs or DB intents are
