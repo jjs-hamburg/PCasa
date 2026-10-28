@@ -357,7 +357,7 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("Tags.Sidebar", ex);
             if (revision == _tagSidebarRefreshVersion)
-                TagRowsPanel.Children.Add(new TextBlock { Text = "Tags konnten nicht gelesen werden." });
+                TagRowsPanel.Children.Add(new TextBlock { Text = UiLanguage.T("Tags konnten nicht gelesen werden.") });
         }
     }
 
@@ -398,7 +398,7 @@ public partial class MainWindow
             var remove = new Button
             {
                 Content = deleteGlyph,
-                ToolTip = "Tag aus allen ausgewählten Bildern entfernen",
+                ToolTip = UiLanguage.T("Tag aus allen ausgewählten Bildern entfernen"),
                 Width = 22,
                 Height = 22,
                 Background = System.Windows.Media.Brushes.Transparent,
@@ -463,7 +463,7 @@ public partial class MainWindow
         foreach (var tag in tags)
         {
             var button = new Button {
-                Content = tag, ToolTip = $"Tag '{tag}' allen ausgewählten Bildern hinzufügen",
+                Content = tag, ToolTip = UiLanguage.Format("Tag '{0}' allen ausgewählten Bildern hinzufügen", tag),
                 Margin = new Thickness(2), Padding = new Thickness(6, 3, 6, 3),
                 Style = (Style)FindResource("PcasaStatusButtonStyle")
             };
@@ -699,14 +699,14 @@ public partial class MainWindow
             PCasaDiagnostics.Write("Tags.RecoveredDeferred", ex);
             if (!Dispatcher.HasShutdownStarted)
                 StatusText.Text =
-                    "Tag-Aufträge weiter vorgemerkt – nicht alle Originaldateien erreichbar";
+                    UiLanguage.T("Tag-Aufträge weiter vorgemerkt – nicht alle Originaldateien erreichbar");
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Tags.RecoveredWrite", ex);
             if (!Dispatcher.HasShutdownStarted)
                 StatusText.Text =
-                    "Wiederhergestellter Tag-Auftrag fehlgeschlagen – offene Tags bleiben sichtbar";
+                    UiLanguage.T("Wiederhergestellter Tag-Auftrag fehlgeschlagen – offene Tags bleiben sichtbar");
         }
         finally
         {
@@ -788,13 +788,13 @@ public partial class MainWindow
             PCasaDiagnostics.Write("Tags.RecoveryDeferred", ex);
             if (!Dispatcher.HasShutdownStarted)
                 StatusText.Text =
-                    "Tags noch nicht in allen Originaldateien – Auftrag mit P0 für Wiederanlauf erhalten";
+                    UiLanguage.T("Tags noch nicht in allen Originaldateien – Auftrag mit P0 für Wiederanlauf erhalten");
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Tags.Recovery", ex);
             if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text = "Tag-Wiederherstellung fehlgeschlagen – DB-Aufträge bleiben erhalten";
+                StatusText.Text = UiLanguage.T("Tag-Wiederherstellung fehlgeschlagen – DB-Aufträge bleiben erhalten");
         }
         finally
         {
