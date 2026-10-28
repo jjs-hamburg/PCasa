@@ -231,6 +231,30 @@ public sealed class FolderRepository
 
     // A checkpoint is valid only for the same source membership and scan epoch.
     // Stale entries remain harmless and are ignored without touching catalog data.
+    // Read only the already committed directory receipts of currently
+    // pending first imports. Old scan epochs and changed root selections are
+    // excluded in the DB; an indexed picture alone is NOT proof of a scan.
+    // The existing scheduler catalog-read lane owns this snapshot.
+    public IReadOnlyList<string> GetVerifiedPendingInitialDirectories()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT d.local_path
+            FROM initial_scan_directories d
+            JOIN monitored_folders m ON m.id = d.monitored_folder_id
+            JOIN scheduler_sources s ON s.canonical_path = m.canonical_path
+            WHERE m.initial_scan_pending=1
+              AND s.desired_present=1
+              AND d.source_generation=s.generation
+              AND d.scan_epoch=s.scan_epoch;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var paths = new List<string>();
+        while (reader.Read()) paths.Add(reader.GetString(0));
+        return paths;
+    }
+
     public HashSet<string> GetCompletedInitialScanDirectories(
         long folderId, long generation, long epoch)
     {
