@@ -107,6 +107,18 @@ public partial class MainWindow
         catch (Exception ex) { PCasaDiagnostics.Write("Search.InvertResults", ex); }
     }
 
+    private async void GalleryViewFilter_Changed(object sender, RoutedEventArgs e)
+    {
+        if (GalleryViewFilterToggle is null) return;
+        _appearance.SearchGalleryViewOnly = GalleryViewFilterToggle.IsChecked == true;
+        SaveAppearance();
+        if (_browsePageCache is null || TagSearchBox is null ||
+            string.IsNullOrWhiteSpace(TagSearchBox.Text)) return;
+        try { await ApplyTagFilterAsync(true); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Search.GalleryView", ex); }
+    }
+
     private void ClearTagSearch_Click(object sender, RoutedEventArgs e)
     {
         TagSearchBox.Clear();
@@ -200,6 +212,18 @@ public partial class MainWindow
                 scope = Array.Empty<BrowseThumbnailIndexEntry>();
         }
 
+        // The selected WO? scope is narrowed to the folders which would
+        // actually be displayed by the ordinary gallery (including its
+        // "Eingeklappte Ordner ausblenden" option). NOT complements only
+        // within this resulting universe, not the entire catalog.
+        if (query.Length > 0 && GalleryViewFilterToggle.IsChecked == true)
+        {
+            var hiddenGalleryFolders = GetGalleryHiddenFolderIds();
+            if (hiddenGalleryFolders.Count > 0)
+                scope = scope.Where(image =>
+                    !hiddenGalleryFolders.Contains(image.PhotoFolderId)).ToArray();
+        }
+
         IReadOnlyList<BrowseThumbnailIndexEntry> desired =
             query.Length == 0 ? _browseIndex :
             _searchFileNames
@@ -218,8 +242,9 @@ public partial class MainWindow
             _browsePageCache.SetIndex(desired);
         }
         BrowseSurface.SetData(_displayedBrowseIndex, _photoFolders, _browsePageCache);
-        // All indexed hits must be displayed regardless of collapsed folders.
-        // The ordinary gallery-only mask is restored when the query clears.
+        // Ordinary search still ignores collapsed folders. The new optional
+        // Galerieansicht mode limits the scope above, using the same
+        // gallery mask; it never mutates the user's folder expansion state.
         UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
         BrowseSurface.SetSelection(_selectedImageIds);
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
