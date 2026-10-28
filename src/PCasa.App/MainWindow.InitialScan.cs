@@ -94,13 +94,14 @@ public partial class MainWindow
 
         BrowseCacheProgressWindow? progressWindow = null;
         var ownsWindow = false;
+        var scanActive = false;
         try
         {
             // The pending node remains visible even if its NAS is offline.
             // Network availability is checked inside the scheduler job, never
             // by a second unscheduled probe or on the WPF dispatcher.
-            TrackFolderActivity(folder.LocalPath, "Working", recursive: true);
-            RefreshFolderStatusVisuals();
+            // Starting the UI pump is not proof of a running scheduler worker.
+            // Its queued source remains Pending until actual scan progress.
             ownsWindow = _browseProgressWindow is null;
             progressWindow = _browseProgressWindow ??
                 new BrowseCacheProgressWindow { Owner = this };
@@ -110,9 +111,16 @@ public partial class MainWindow
                 progressWindow.Show();
             }
             var shownWindow = progressWindow;
+            var workerStarted = false;
             var progress = new Progress<ScanProgress>(scan =>
             {
-                if (_manualFileTransferActive) return;
+                if (_manualFileTransferActive || !scanActive) return;
+                if (!workerStarted)
+                {
+                    workerStarted = true;
+                    TrackFolderActivity(folder.LocalPath, "Working", recursive: true);
+                    RefreshFolderStatusVisuals();
+                }
                 shownWindow.UpdateScan(scan,
                     showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
                 ShowScannedPhotoFolder(scan);
@@ -130,11 +138,13 @@ public partial class MainWindow
             // this is NOT a second implementation of the import pipeline.
             // Initial imports and explicit scans share one scheduler-owned
             // scan / thumbnail / reconciliation code path.
+            scanActive = true;
             var result = await ScheduleCompleteFolderScanAsync(
                 folder.LocalPath, SchedulerPriority.Background,
                 progress, cancellation.Token, folder.Id,
                 requirePendingInitialImport: true);
 
+            scanActive = false;
             TrackFolderActivity(folder.LocalPath,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
@@ -146,6 +156,7 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
+            scanActive = false;
             // Any newer manual change (move, exclude, remove, rescan) can
             // supersede the old first-import inventory. Re-arm this request
             // for the existing pump if its durable pending marker survives;
@@ -156,6 +167,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
+            scanActive = false;
             PCasaDiagnostics.Write("Catalog.InitialScan", ex);
             StatusText.Text = $"Ordner nicht eingelesen: {folder.LocalPath} · {ex.Message}";
             TrackFolderActivity(folder.LocalPath, "Failed", recursive: true);
