@@ -43,6 +43,7 @@ internal static class Program
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
         Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
+        Run("Cyclic durable retry resumes saved cursor in the same app session", DeferredManualRetryWithinSameSession, failures);
         Run("Recovered Tag write precedes a newer manual folder scan", RecoveredTagsPrecedeManualScan, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
@@ -285,6 +286,74 @@ internal static class Program
                 if (new DurablePackageJournal(database).Pending().Count != 0)
                     throw new Exception("Resumed offline package was not acknowledged.");
             }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void DeferredManualRetryWithinSameSession()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, _, _) = sandbox.Prepare();
+            await using var scheduler = new PCasaScheduler();
+            scheduler.EnableDurablePackages(database);
+            const string key = "tags:retry-without-restart";
+            var firstStepCalls = 0;
+            var failingStepCalls = 0;
+            var finished = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            SchedulerTaskPackage Recipe(string id)
+            {
+                var package = new SchedulerTaskPackage(id);
+                package.AddStep(_ =>
+                {
+                    Interlocked.Increment(ref firstStepCalls);
+                    return Task.CompletedTask;
+                });
+                package.AddStep(_ =>
+                {
+                    if (Interlocked.Increment(ref failingStepCalls) == 1)
+                        throw new DurablePackageRetryException("Temporary NAS disconnect");
+                    finished.TrySetResult();
+                    return Task.CompletedTask;
+                });
+                return package;
+            }
+            scheduler.RegisterDurablePackageType("test-cyclic-tags-v1",
+                (id, _) => Recipe(id));
+            scheduler.RecoverDurablePackages();
+            var firstFailed = false;
+            try
+            {
+                await scheduler.EnqueueDurablePackageAsync(Recipe(key),
+                    "test-cyclic-tags-v1", "{}", SchedulerPriority.ManualAction);
+            }
+            catch (DurablePackageRetryException) { firstFailed = true; }
+            if (!firstFailed)
+                throw new Exception("Test write did not defer.");
+            var saved = new DurablePackageJournal(database).Pending().Single();
+            if (saved.State != "deferred" || saved.CompletedSteps != 1)
+                throw new Exception("Deferred write lost its confirmed step cursor.");
+            var scanRan = false;
+            await scheduler.EnqueueAsync("automatic-during-tag-retry",
+                SchedulerPriority.Background, _ =>
+                {
+                    scanRan = true;
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.CatalogScan)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            if (!scanRan)
+                throw new Exception("Deferred write still blocked automatic scanning.");
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(13));
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (new DurablePackageJournal(database).Pending().Count != 0 &&
+                   DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            if (firstStepCalls != 1 || failingStepCalls != 2 ||
+                new DurablePackageJournal(database).Pending().Count != 0)
+                throw new Exception(
+                    "Cyclic retry repeated a completed step or did not acknowledge success.");
         }
         Check().GetAwaiter().GetResult();
     }
