@@ -157,7 +157,7 @@ public partial class FolderManagerWindow : Window
 
         // Only expand actual directories as needed; never recursively enumerate
         // the whole source tree while the manager window is opening.
-        item.Items.Add(new TreeViewItem { Header = "Unterordner laden …", IsEnabled = false });
+        item.Items.Add(new TreeViewItem { Header = UiLanguage.T("Unterordner laden …"), IsEnabled = false });
         item.Expanded += Folder_Expanded;
         return item;
     }
@@ -239,7 +239,7 @@ public partial class FolderManagerWindow : Window
             item.Items.Clear();
             item.Items.Add(new TreeViewItem
             {
-                Header = "Unterordner nicht erreichbar: " + ex.Message,
+                Header = UiLanguage.T("Unterordner nicht erreichbar: ") + ex.Message,
                 IsEnabled = false
             });
         }
@@ -254,11 +254,11 @@ public partial class FolderManagerWindow : Window
 
     private void UpdateSelectedDetails()
     {
-        SelectedFolderText.Text = _selected?.LocalPath ?? "Bitte links einen Ordner auswählen.";
+        SelectedFolderText.Text = _selected?.LocalPath ?? UiLanguage.T("Bitte links einen Ordner auswählen.");
         SelectedModeText.Text = _selected is null ? ""
-            : _selected.Root is null ? "Noch nicht überwacht. Ordner im Baum aktivieren."
-            : _selected.IsRoot ? "Überwachte Wurzel. Kann über das Häkchen des Systemordners oder über „Wurzel entfernen“ abgewählt werden."
-            : IsExcluded(_selected) ? "Von der PCasa-Bibliothek ausgeschlossen."
+            : _selected.Root is null ? UiLanguage.T("Noch nicht überwacht. Ordner im Baum aktivieren.")
+            : _selected.IsRoot ? UiLanguage.T("Überwachte Wurzel. Kann über das Häkchen des Systemordners oder über „Wurzel entfernen“ abgewählt werden.")
+            : IsExcluded(_selected) ? UiLanguage.T("Von der PCasa-Bibliothek ausgeschlossen.")
             : "Dieser Ordner wird von PCasa eingelesen.";
         RemoveFolderButton.IsEnabled =
             _selected is { IsRoot: true, Root: not null } && !_busy;
