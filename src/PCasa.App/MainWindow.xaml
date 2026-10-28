@@ -1,4 +1,5 @@
 <Window x:Class="PCasa.App.MainWindow"
+        xmlns:loc="clr-namespace:PCasa.App.Services"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:PCasa.App.Controls"
@@ -327,63 +328,68 @@
                             </Setter>
                         </Style>
                     </Menu.Resources>
-                    <MenuItem Header="Datei" Margin="0,0,20,0" HorizontalAlignment="Left" />
-                    <MenuItem Header="Bearbeiten" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem Header="Auswahl invertieren (aktueller Ordner)"
-                                  InputGestureText="Strg+I" Click="GalleryInvertSelection_Click"/>
+                    <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
+                    <MenuItem Header="{loc:Tr Key='Bearbeiten'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem Header="{loc:Tr Key='Auswahl invertieren (aktueller Ordner)'}"
+                                  InputGestureText="{loc:Tr Key='Strg+I'}" Click="GalleryInvertSelection_Click"/>
                     </MenuItem>
-                    <MenuItem Header="Ordner" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem Header="Ordner-Manager..."
+                    <MenuItem Header="{loc:Tr Key='Ordner'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem Header="{loc:Tr Key='Ordner-Manager...'}"
                                   Click="BrowseFolderManager_Click" />
                         <Separator />
                         <MenuItem x:Name="ScanAllMenuItem"
-                                  Header="Alle überwachten Ordner einlesen"
+                                  Header="{loc:Tr Key='Alle überwachten Ordner einlesen'}"
                                   Click="BrowseScanAll_Click" />
                     </MenuItem>
                     <!-- The main menu always has its own row. Keep all original
                          menu commands and sorting in its search-toolbar dropdown. -->
-                    <MenuItem Header="Optionen" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem x:Name="TooltipsEnabledMenu" Header="Tooltips" IsCheckable="True" IsChecked="True" Click="TooltipsEnabled_Click"/>
+                    <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem x:Name="TooltipsEnabledMenu" Header="{loc:Tr Key='Tooltips'}" IsCheckable="True" IsChecked="True" Click="TooltipsEnabled_Click"/>
                         <Separator/>
-                        <MenuItem Header="Bildfolge (Betrachter / Slideshow)">
-                            <MenuItem x:Name="PhotoSequenceFolderMenu" Header="Aktueller Ordner" Tag="CurrentFolder"
+                        <MenuItem Header="{loc:Tr Key='Sprache'}">
+                            <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de" IsCheckable="True" Click="AppearanceLanguage_Click"/>
+                            <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en" IsCheckable="True" Click="AppearanceLanguage_Click"/>
+                        </MenuItem>
+                        <Separator/>
+                        <MenuItem Header="{loc:Tr Key='Bildfolge (Betrachter / Slideshow)'}">
+                            <MenuItem x:Name="PhotoSequenceFolderMenu" Header="{loc:Tr Key='Aktueller Ordner'}" Tag="CurrentFolder"
                                       IsCheckable="True" Click="PhotoSequenceMode_Click"/>
-                            <MenuItem x:Name="PhotoSequenceGalleryMenu" Header="Galerieansicht" Tag="Gallery"
+                            <MenuItem x:Name="PhotoSequenceGalleryMenu" Header="{loc:Tr Key='Galerieansicht'}" Tag="Gallery"
                                       IsCheckable="True" Click="PhotoSequenceMode_Click"/>
                         </MenuItem>
                         <Separator/>
-                        <MenuItem Header="Darstellung">
-                            <MenuItem Header="Design">
-                                <MenuItem x:Name="ThemeLightMenu" Header="Hell" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />
-                                <MenuItem x:Name="ThemeDarkMenu" Header="Dunkel" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Dark" />
-                                <MenuItem x:Name="ThemeSystemMenu" Header="System" IsCheckable="True" Click="AppearanceTheme_Click" Tag="System" />
+                        <MenuItem Header="{loc:Tr Key='Darstellung'}">
+                            <MenuItem Header="{loc:Tr Key='Design'}">
+                                <MenuItem x:Name="ThemeLightMenu" Header="{loc:Tr Key='Hell'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />
+                                <MenuItem x:Name="ThemeDarkMenu" Header="{loc:Tr Key='Dunkel'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Dark" />
+                                <MenuItem x:Name="ThemeSystemMenu" Header="{loc:Tr Key='System'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="System" />
                             </MenuItem>
-                            <MenuItem Header="Galeriehintergrund">
-                                <MenuItem x:Name="GalleryBackgroundAutoMenu" Header="Standard (zum Design)" IsCheckable="True" Tag="Auto" Click="AppearanceBackground_Click" />
+                            <MenuItem Header="{loc:Tr Key='Galeriehintergrund'}">
+                                <MenuItem x:Name="GalleryBackgroundAutoMenu" Header="{loc:Tr Key='Standard (zum Design)'}" IsCheckable="True" Tag="Auto" Click="AppearanceBackground_Click" />
                                 <Separator />
-                                <MenuItem x:Name="GalleryBackgroundDarkMenu" Header="Einfarbig dunkel" IsCheckable="True" Tag="Dark" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundLightMenu" Header="Einfarbig hell" IsCheckable="True" Tag="Light" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="Textur" IsCheckable="True" Click="GalleryTexture_Click" />
+                                <MenuItem x:Name="GalleryBackgroundDarkMenu" Header="{loc:Tr Key='Einfarbig dunkel'}" IsCheckable="True" Tag="Dark" Click="AppearanceBackground_Click" />
+                                <MenuItem x:Name="GalleryBackgroundLightMenu" Header="{loc:Tr Key='Einfarbig hell'}" IsCheckable="True" Tag="Light" Click="AppearanceBackground_Click" />
+                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="{loc:Tr Key='Textur'}" IsCheckable="True" Click="GalleryTexture_Click" />
                             </MenuItem>
-                            <MenuItem x:Name="RestoreGalleryPositionMenu" Header="Galerieposition beim Start wiederherstellen" IsCheckable="True" Click="AppearanceRestorePosition_Click" />
+                            <MenuItem x:Name="RestoreGalleryPositionMenu" Header="{loc:Tr Key='Galerieposition beim Start wiederherstellen'}" IsCheckable="True" Click="AppearanceRestorePosition_Click" />
                             <Separator />
-                            <MenuItem Header="Ordnerstatus">
-                                <MenuItem x:Name="FolderStatusAlwaysMenu" Header="Immer anzeigen" IsCheckable="True" Tag="Always" Click="FolderStatusMode_Click"/>
-                                <MenuItem x:Name="FolderStatusProblemsMenu" Header="Nur Aktivität und Probleme" IsCheckable="True" Tag="Problems" Click="FolderStatusMode_Click"/>
-                                <MenuItem x:Name="FolderStatusNeverMenu" Header="Nie anzeigen" IsCheckable="True" Tag="None" Click="FolderStatusMode_Click"/>
+                            <MenuItem Header="{loc:Tr Key='Ordnerstatus'}">
+                                <MenuItem x:Name="FolderStatusAlwaysMenu" Header="{loc:Tr Key='Immer anzeigen'}" IsCheckable="True" Tag="Always" Click="FolderStatusMode_Click"/>
+                                <MenuItem x:Name="FolderStatusProblemsMenu" Header="{loc:Tr Key='Nur Aktivität und Probleme'}" IsCheckable="True" Tag="Problems" Click="FolderStatusMode_Click"/>
+                                <MenuItem x:Name="FolderStatusNeverMenu" Header="{loc:Tr Key='Nie anzeigen'}" IsCheckable="True" Tag="None" Click="FolderStatusMode_Click"/>
                             </MenuItem>
-                            <MenuItem Header="Eingeklappte Ordner in Galerie ausblenden" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
-                            <MenuItem Header="Dateinamen unter Thumbnails" x:Name="ThumbnailFileNamesMenu"
+                            <MenuItem Header="{loc:Tr Key='Eingeklappte Ordner in Galerie ausblenden'}" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
+                            <MenuItem Header="{loc:Tr Key='Dateinamen unter Thumbnails'}" x:Name="ThumbnailFileNamesMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="Dateinamen fett" x:Name="ThumbnailBoldFileNamesMenu"
+                            <MenuItem Header="{loc:Tr Key='Dateinamen fett'}" x:Name="ThumbnailBoldFileNamesMenu"
                                       IsCheckable="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="GPS-, Tag- und RAW-Symbole" x:Name="ThumbnailIconsMenu"
+                            <MenuItem Header="{loc:Tr Key='GPS-, Tag- und RAW-Symbole'}" x:Name="ThumbnailIconsMenu"
                                       IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="Ordnerstatus-Legende" Click="FolderStatusLegend_Click" />
-                            <MenuItem Header="Thumbnail-Schatten" IsCheckable="True" IsChecked="False" Loaded="BrowseThumbnailShadowMenu_Loaded" Click="BrowseThumbnailShadowMenu_Click" x:Name="ThumbnailShadowMenuItem" />
+                            <MenuItem Header="{loc:Tr Key='Ordnerstatus-Legende'}" Click="FolderStatusLegend_Click" />
+                            <MenuItem Header="{loc:Tr Key='Thumbnail-Schatten'}" IsCheckable="True" IsChecked="False" Loaded="BrowseThumbnailShadowMenu_Loaded" Click="BrowseThumbnailShadowMenu_Click" x:Name="ThumbnailShadowMenuItem" />
                         </MenuItem>
                     </MenuItem>
-                    <MenuItem Header="Hilfe" Margin="0,0,20,0" HorizontalAlignment="Left" />
+                    <MenuItem Header="{loc:Tr Key='Hilfe'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
                 </Menu>
             </Border>
             <Border Grid.Row="1" MinHeight="42"
@@ -408,7 +414,7 @@
                          Width="191" Height="27"
                         Margin="2,0,8,0" VerticalAlignment="Center"
                         Style="{StaticResource PcasaSearchSortButtonStyle}"
-                        ToolTip="Bilder innerhalb jedes Ordners sortieren"
+                        ToolTip="{loc:Tr Key='Bilder innerhalb jedes Ordners sortieren'}"
                         Click="GallerySortSelector_Click">
                     <Button.Content>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -423,28 +429,28 @@
                                       StrokeLineJoin="Round"
                                       Data="M 20,2 L 20,17 M 16,13 L 20,17 L 24,13"/>
                             </Grid>
-                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name"
+                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="{loc:Tr Key='Name'}"
                                        VerticalAlignment="Center" FontSize="12"/>
                         </StackPanel>
                     </Button.Content>
                     <Button.ContextMenu>
                         <ContextMenu>
-                            <MenuItem x:Name="GallerySortNameMenu" Header="Name"
+                            <MenuItem x:Name="GallerySortNameMenu" Header="{loc:Tr Key='Name'}"
                                       Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCapturedMenu" Header="Aufnahmedatum"
+                            <MenuItem x:Name="GallerySortCapturedMenu" Header="{loc:Tr Key='Aufnahmedatum'}"
                                       Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCreatedMenu" Header="Erstellungsdatum"
+                            <MenuItem x:Name="GallerySortCreatedMenu" Header="{loc:Tr Key='Erstellungsdatum'}"
                                       Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortModifiedMenu" Header="Änderungsdatum"
+                            <MenuItem x:Name="GallerySortModifiedMenu" Header="{loc:Tr Key='Änderungsdatum'}"
                                       Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortSizeMenu" Header="Größe"
+                            <MenuItem x:Name="GallerySortSizeMenu" Header="{loc:Tr Key='Größe'}"
                                       Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDimensionsMenu" Header="Dimension"
+                            <MenuItem x:Name="GallerySortDimensionsMenu" Header="{loc:Tr Key='Dimension'}"
                                       Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/>
                             <Separator/>
-                            <MenuItem x:Name="GallerySortAscendingMenu" Header="Aufsteigend"
+                            <MenuItem x:Name="GallerySortAscendingMenu" Header="{loc:Tr Key='Aufsteigend'}"
                                       Tag="Ascending" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDescendingMenu" Header="Absteigend"
+                            <MenuItem x:Name="GallerySortDescendingMenu" Header="{loc:Tr Key='Absteigend'}"
                                       Tag="Descending" IsCheckable="True" Click="GallerySort_Click"/>
                         </ContextMenu>
                     </Button.ContextMenu>
@@ -454,16 +460,16 @@
                         BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
                         CornerRadius="5" Padding="4,2" Margin="0,0,10,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="WAS?" VerticalAlignment="Center" Margin="0,0,4,0"
+                        <TextBlock Text="{loc:Tr Key='WAS?'}" VerticalAlignment="Center" Margin="0,0,4,0"
                                    FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
                     <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  IsChecked="True" Checked="SearchMode_Changed"
-                                 Content="Tags" ToolTip="Nach Tags filtern"/>
+                                 Content="{loc:Tr Key='Tags'}" ToolTip="{loc:Tr Key='Nach Tags filtern'}"/>
                     <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  Checked="SearchMode_Changed"
-                                 Content="Name" ToolTip="Nach Dateinamen filtern"/>
+                                 Content="{loc:Tr Key='Name'}" ToolTip="{loc:Tr Key='Nach Dateinamen filtern'}"/>
                     </StackPanel>
                 </Border>
                 
@@ -471,28 +477,28 @@
                         BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
                         CornerRadius="5" Padding="4,2" Margin="0,0,6,0">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="WO?" VerticalAlignment="Center" Margin="0,0,4,0"
+                        <TextBlock Text="{loc:Tr Key='WO?'}" VerticalAlignment="Center" Margin="0,0,4,0"
                                    FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
                     <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  IsChecked="True" Checked="TagSearchScope_Changed"
-                                 Content="Alle" ToolTip="Alle überwachten Ordner"/>
+                                 Content="{loc:Tr Key='Alle'}" ToolTip="{loc:Tr Key='Alle überwachten Ordner'}"/>
                     <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  Checked="TagSearchScope_Changed"
-                                 Content="Ab hier" ToolTip="Ausgewählter Ordnerbaum einschließlich Unterordner"/>
+                                 Content="{loc:Tr Key='Ab hier'}" ToolTip="{loc:Tr Key='Ausgewählter Ordnerbaum einschließlich Unterordner'}"/>
                     <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope"
                                  Style="{StaticResource PcasaSearchChoiceStyle}"
                                  Checked="TagSearchScope_Changed"
-                                 Content="Ordner" ToolTip="Nur aktueller Ordner ohne Unterordner"/>
+                                 Content="{loc:Tr Key='Ordner'}" ToolTip="{loc:Tr Key='Nur aktueller Ordner ohne Unterordner'}"/>
                     </StackPanel>
                 </Border>
 <primitives:ToggleButton x:Name="GalleryViewFilterToggle"
                                           Margin="3,0,3,0"
                                          VerticalAlignment="Center"
                                          Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="Galerieansicht"
-                                         ToolTip="Suche auf die in der Galerie sichtbaren Ordner beschränken"
+                                         Content="{loc:Tr Key='Galerieansicht'}"
+                                         ToolTip="{loc:Tr Key='Suche auf die in der Galerie sichtbaren Ordner beschränken'}"
                                          Checked="GalleryViewFilter_Changed"
                                          Unchecked="GalleryViewFilter_Changed"/>
                 
@@ -500,15 +506,15 @@
                                           Margin="3,0,8,0"
                                          VerticalAlignment="Center"
                                          Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="NOT"
-                                         ToolTip="Treffer im gewählten Suchbereich umkehren"
+                                         Content="{loc:Tr Key='NOT'}"
+                                         ToolTip="{loc:Tr Key='Treffer im gewählten Suchbereich umkehren'}"
                                          Checked="FilterResultsInversion_Changed"
                                          Unchecked="FilterResultsInversion_Changed"/>
                 
 <Grid  Width="180" Height="27"
                       Margin="4,0,10,0" VerticalAlignment="Center">
                     <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
-                             Padding="8,0,27,0" ToolTip="Tags oder Dateinamen suchen"
+                             Padding="8,0,27,0" ToolTip="{loc:Tr Key='Tags oder Dateinamen suchen'}"
                              TextChanged="TagSearchBox_TextChanged">
                         <TextBox.Style>
                             <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
@@ -523,7 +529,7 @@
                     <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
                             HorizontalAlignment="Right" VerticalAlignment="Center"
                             Margin="0,0,2,0" Cursor="Hand"
-                            ToolTip="Suchfilter löschen" Visibility="Collapsed"
+                            ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed"
                             Click="ClearTagSearch_Click">
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
@@ -569,23 +575,23 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <Button Grid.Column="0" Content="← Zur Galerie"
+                    <Button Grid.Column="0" Content="{loc:Tr Key='← Zur Galerie'}"
                             Padding="12,4" Height="30" Margin="0,0,12,0"
                             Click="PhotoViewerBack_Click" />
 
                     <StackPanel x:Name="ViewerNavigationToolbar" Grid.Column="1" Orientation="Horizontal"
                                 VerticalAlignment="Center">
                         <Button Content="‹" Width="36" Height="30"
-                                ToolTip="Vorheriges Bild"
+                                ToolTip="{loc:Tr Key='Vorheriges Bild'}"
                                 Click="PhotoViewerPrev_Click" />
                         <Button Content="›" Width="36" Height="30"
-                                Margin="4,0,0,0" ToolTip="Nächstes Bild"
+                                Margin="4,0,0,0" ToolTip="{loc:Tr Key='Nächstes Bild'}"
                                 Click="PhotoViewerNext_Click" />
                     </StackPanel>
 
                     <StackPanel x:Name="ViewerComparisonToolbar" Grid.Column="1" Orientation="Horizontal" Visibility="Collapsed">
-                        <Button Content="A" Width="36" Height="30" ToolTip="Einzelbild" Click="ViewerSingle_Click" />
-                        <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/A" Width="42" Height="30" Margin="5,0,0,0" ToolTip="Bild doppelt anzeigen" Click="ViewerAa_Click" />
+                        <Button Content="A" Width="36" Height="30" ToolTip="{loc:Tr Key='Einzelbild'}" Click="ViewerSingle_Click" />
+                        <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/A" Width="42" Height="30" Margin="5,0,0,0" ToolTip="{loc:Tr Key='Bild doppelt anzeigen'}" Click="ViewerAa_Click" />
                     </StackPanel>
                     <TextBlock x:Name="ViewerToolbarImageTitle"
                                Grid.Column="2" Margin="16,0,12,0"
@@ -599,7 +605,7 @@
                                 Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
                         <Button Content="100 %" MinWidth="58" Height="30"
                                 Margin="0,0,12,0" Click="PhotoViewerActualSize_Click" />
-                        <TextBlock Text="Zoom" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBlock Text="{loc:Tr Key='Zoom'}" VerticalAlignment="Center" Margin="0,0,8,0" />
                         <Slider x:Name="PhotoZoomSlider" Width="175"
                                 Minimum="0" Maximum="100" Value="50"
                                 SmallChange="0.5" LargeChange="5"
@@ -636,7 +642,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="Ordner"
+                        <TextBlock Text="{loc:Tr Key='Ordner'}"
                                    FontSize="16"
                                    FontWeight="SemiBold"
                                    Margin="12,0,0,0"
@@ -644,7 +650,7 @@
                         <StackPanel Grid.Column="1" Orientation="Horizontal"
                                     HorizontalAlignment="Right"
                                     VerticalAlignment="Center" Margin="0,0,7,0">
-                            <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner aufklappen" Click="FolderExpandAll_Click">
+                            <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Alle Ordner aufklappen'}" Click="FolderExpandAll_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round" />
@@ -652,7 +658,7 @@
                                     <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                 </Canvas></Viewbox>
                             </Button>
-                            <Button x:Name="FolderCollapseAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Alle Ordner zuklappen" Click="FolderCollapseAll_Click">
+                            <Button x:Name="FolderCollapseAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Alle Ordner zuklappen'}" Click="FolderCollapseAll_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
@@ -662,14 +668,14 @@
                                           Stroke="#F04444" StrokeThickness="3.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
-                            <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Expand / Compress" Click="FolderTreeToggle_Click">
+                            <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Expand / Compress'}" Click="FolderTreeToggle_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
                                     <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="#F0F0F0" StrokeThickness="1.9" Fill="Transparent"/>
                                     <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>
-                            <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="Explorer Ansicht" Click="ShowAllFilesystemFolders_Click">
+                            <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Explorer Ansicht'}" Click="ShowAllFilesystemFolders_Click">
                                 <!-- Windows-Explorer style: simple yellow folder with blue tray. -->
                                 <Viewbox Width="23" Height="23"><Canvas Width="24" Height="24">
                                     <Path Data="M 1,5 Q 1,3 3,3 L 9,3 L 11,5 L 21,5 Q 23,5 23,7 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#EAA312"/>
@@ -699,18 +705,18 @@
                               TreeViewItem.Collapsed="FoldersTree_ExpansionChanged">
                         <TreeView.ContextMenu>
                             <ContextMenu>
-                                <MenuItem Header="Aktuellen Ordner einlesen / aktualisieren"
+                                <MenuItem Header="{loc:Tr Key='Aktuellen Ordner einlesen / aktualisieren'}"
                                           Click="BrowseScanCurrentFolder_Click" />
-                                <MenuItem Header="Ordnerinformationen"
+                                <MenuItem Header="{loc:Tr Key='Ordnerinformationen'}"
                                           Click="FolderContext_Info_Click" />
-                                <MenuItem Header="Aus PCasa entfernen"
+                                <MenuItem Header="{loc:Tr Key='Aus PCasa entfernen'}"
                                           Click="FolderContext_Exclude_Click" />
                                 <Separator />
-                                <MenuItem Header="Neuen Unterordner anlegen …"
+                                <MenuItem Header="{loc:Tr Key='Neuen Unterordner anlegen …'}"
                                           Click="FolderContext_CreateDirectory_Click"/>
-                                <MenuItem Header="In Windows Explorer öffnen"
+                                <MenuItem Header="{loc:Tr Key='In Windows Explorer öffnen'}"
                                           Click="FolderContext_OpenExplorer_Click" />
-                                <MenuItem Header="Ordner auf Datenträger löschen …"
+                                <MenuItem Header="{loc:Tr Key='Ordner auf Datenträger löschen …'}"
                                           Click="FolderContext_DeletePhysicalDirectory_Click" />
                             </ContextMenu>
                         </TreeView.ContextMenu>
@@ -721,12 +727,12 @@
                         <RowDefinition Height="44" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <TextBlock Text="Bearbeiten" FontSize="16" FontWeight="SemiBold"
+                    <TextBlock Text="{loc:Tr Key='Bearbeiten'}" FontSize="16" FontWeight="SemiBold"
                                Margin="16,0,0,0" VerticalAlignment="Center" />
                     <StackPanel Grid.Row="1" Margin="16,12,16,0">
-                        <TextBlock Text="Bildbearbeitung"
+                        <TextBlock Text="{loc:Tr Key='Bildbearbeitung'}"
                                    FontWeight="SemiBold" FontSize="14" />
-                        <TextBlock Text="Hier erscheinen die Bearbeitungswerkzeuge."
+                        <TextBlock Text="{loc:Tr Key='Hier erscheinen die Bearbeitungswerkzeuge.'}"
                                    TextWrapping="Wrap" Margin="0,10,0,0"
                                    Foreground="{DynamicResource PcasaMutedTextBrush}" />
                     </StackPanel>
@@ -824,11 +830,11 @@
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
                                 Visibility="Collapsed">
-                        <TextBlock x:Name="EmptyPanelHeading" Text="Noch keine Bilder im Katalog"
+                        <TextBlock x:Name="EmptyPanelHeading" Text="{loc:Tr Key='Noch keine Bilder im Katalog'}"
                                    FontSize="20"
                                    FontWeight="SemiBold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock x:Name="EmptyPanelDescription" Text="Ordner im Menü einlesen, um die Galerie zu füllen."
+                        <TextBlock x:Name="EmptyPanelDescription" Text="{loc:Tr Key='Ordner im Menü einlesen, um die Galerie zu füllen.'}"
                                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                                    Margin="0,8,0,0"
                                    HorizontalAlignment="Center" />
@@ -842,7 +848,7 @@
                             CornerRadius="4"
                             Visibility="Collapsed">
                         <StackPanel Width="440">
-                            <TextBlock Text="Vorschaudaten werden vorbereitet"
+                            <TextBlock Text="{loc:Tr Key='Vorschaudaten werden vorbereitet'}"
                                        FontSize="17"
                                        FontWeight="SemiBold"
                                        HorizontalAlignment="Center" />
@@ -875,9 +881,9 @@
                     </Grid.RowDefinitions>
                     <DockPanel Margin="4,0,0,12">
                         <Button DockPanel.Dock="Right" Content="✕" Width="24" Height="24"
-                                HorizontalAlignment="Right" ToolTip="Seitenleiste schließen"
+                                HorizontalAlignment="Right" ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
                                 Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
-                        <TextBlock x:Name="SidePanelHeading" Text="Bildinformationen" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="SidePanelHeading" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </DockPanel>
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
@@ -891,14 +897,14 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock Text="Tag hinzufügen" FontSize="12" Margin="3,0,0,5"/>
+                        <TextBlock Text="{loc:Tr Key='Tag hinzufügen'}" FontSize="12" Margin="3,0,0,5"/>
                         <Grid Grid.Row="1" Margin="2,0,2,10">
                             <DockPanel>
                             <Button x:Name="TagAddButton" DockPanel.Dock="Right" Content="+" Width="30" Height="27"
-                                    Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="Tag zu ausgewählten Bildern hinzufügen"
+                                    Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Tag zu ausgewählten Bildern hinzufügen'}"
                                     Click="TagAdd_Click"/>
                             <TextBox x:Name="TagEntryBox" Margin="0,0,4,0"
-                                     VerticalContentAlignment="Center" ToolTip="Tag eingeben – vorhandene Tags werden vorgeschlagen"
+                                     VerticalContentAlignment="Center" ToolTip="{loc:Tr Key='Tag eingeben – vorhandene Tags werden vorgeschlagen'}"
                                      TextChanged="TagEntry_TextChanged" PreviewKeyDown="TagEntry_KeyDown"/>
                             </DockPanel>
                             <Popup x:Name="TagSuggestionsPopup"
@@ -920,15 +926,15 @@
                         <DockPanel Grid.Row="2" Margin="2,0,2,7">
                             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                                 <RadioButton x:Name="TagLogicOr" GroupName="TagListLogic" Style="{StaticResource PcasaLogicSymbolStyle}" IsChecked="True"
-                                             Checked="TagLogic_Changed" ToolTip="ODER: alle Tags der ausgewählten Bilder">
+                                             Checked="TagLogic_Changed" ToolTip="{loc:Tr Key='ODER: alle Tags der ausgewählten Bilder'}">
                                     <TextBlock Text="∨" FontFamily="Cambria Math" FontSize="16" HorizontalAlignment="Center" TextAlignment="Center"/>
                                 </RadioButton>
                                 <RadioButton x:Name="TagLogicAnd" GroupName="TagListLogic" Style="{StaticResource PcasaLogicSymbolStyle}"
-                                             Checked="TagLogic_Changed" ToolTip="UND: nur Tags, die alle ausgewählten Bilder gemeinsam haben">
+                                             Checked="TagLogic_Changed" ToolTip="{loc:Tr Key='UND: nur Tags, die alle ausgewählten Bilder gemeinsam haben'}">
                                     <TextBlock Text="∧" FontFamily="Cambria Math" FontSize="16" HorizontalAlignment="Center" TextAlignment="Center"/>
                                 </RadioButton>
                             </StackPanel>
-                            <TextBlock x:Name="TagSelectionCaption" Text="Tags der Auswahl" FontSize="12"
+                            <TextBlock x:Name="TagSelectionCaption" Text="{loc:Tr Key='Tags der Auswahl'}" FontSize="12"
                                        VerticalAlignment="Center" TextWrapping="Wrap"/>
                         </DockPanel>
                         <Border Grid.Row="3" BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
@@ -938,16 +944,16 @@
                             </ScrollViewer>
                         </Border>
                         <StackPanel Grid.Row="4" Margin="2,7,2,0" MinHeight="96">
-                            <TextBlock Text="Schnell-Tags" FontSize="12" Margin="0,0,0,5"/>
+                            <TextBlock Text="{loc:Tr Key='Schnell-Tags'}" FontSize="12" Margin="0,0,0,5"/>
                             <WrapPanel x:Name="TagQuickPanel"/>
                         </StackPanel>
                         <StackPanel Grid.Row="5" Margin="2,7,2,0">
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="TagDraftCancelButton" Content="Abbrechen" MinWidth="80"
+                                <Button x:Name="TagDraftCancelButton" Content="{loc:Tr Key='Abbrechen'}" MinWidth="80"
                                         Margin="0,0,6,0" IsEnabled="False"
                                         Style="{StaticResource PcasaStatusButtonStyle}"
                                         Click="TagDraftCancel_Click"/>
-                                <Button x:Name="TagDraftOkButton" Content="OK" MinWidth="65" IsEnabled="False"
+                                <Button x:Name="TagDraftOkButton" Content="{loc:Tr Key='OK'}" MinWidth="65" IsEnabled="False"
                                         Style="{StaticResource PcasaStatusButtonStyle}"
                                         Click="TagDraftOk_Click"/>
                             </StackPanel>
@@ -968,13 +974,13 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock x:Name="StatusText"
                            MouseLeftButtonUp="BrowseStatus_Click"
-                           Cursor="Hand" ToolTip="Laufenden Fortschritt anzeigen"
+                           Cursor="Hand" ToolTip="{loc:Tr Key='Laufenden Fortschritt anzeigen'}"
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource PcasaMutedTextBrush}"
-                           Text="0 Bilder" />
+                           Text="{loc:Tr Key='0 Bilder'}" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <StackPanel x:Name="ThumbnailSizeToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,11,0">
-                        <Viewbox Width="23" Height="23" Margin="0,0,4,0" ToolTip="Thumbnailgröße">
+                        <Viewbox Width="23" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailgröße'}">
                             <Canvas Width="24" Height="24">
                                 <Rectangle Canvas.Left="2" Canvas.Top="2" Width="20" Height="20" RadiusX="1"
                                            Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
@@ -986,10 +992,10 @@
                         <Slider x:Name="ThumbnailSizeSlider" Style="{StaticResource PcasaNeutralSliderStyle}" Width="120" Minimum="72" Maximum="600"
                                 Value="190" Loaded="CompactThumbnailSlider_Loaded"
                                 ValueChanged="BrowseThumbnailSizeSlider_ValueChanged"
-                                VerticalAlignment="Center" ToolTip="Thumbnailgröße" />
+                                VerticalAlignment="Center" ToolTip="{loc:Tr Key='Thumbnailgröße'}" />
                     </StackPanel>
                     <StackPanel x:Name="ThumbnailSpacingToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,13,0">
-                        <Viewbox Width="30" Height="23" Margin="0,0,4,0" ToolTip="Thumbnailabstand">
+                        <Viewbox Width="30" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailabstand'}">
                             <Canvas Width="34" Height="24">
                                 <Rectangle Canvas.Left="1.5" Canvas.Top="5" Width="9" Height="14"
                                            Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
@@ -1004,14 +1010,14 @@
                         <Slider x:Name="ThumbnailSpacingSlider" Style="{StaticResource PcasaNeutralSliderStyle}" Width="112" Minimum="0" Maximum="160" Value="10"
                                 Loaded="CompactThumbnailSlider_Loaded"
                                 ValueChanged="ThumbnailSpacingSlider_ValueChanged"
-                                VerticalAlignment="Center" ToolTip="Thumbnailabstand" />
+                                VerticalAlignment="Center" ToolTip="{loc:Tr Key='Thumbnailabstand'}" />
                     </StackPanel>
                     <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/B" Width="51" Height="25"
                             Padding="4,1" FontSize="12" Margin="0,0,10,0"
-                            ToolTip="Zwei ausgewählte Bilder vergleichen"
+                            ToolTip="{loc:Tr Key='Zwei ausgewählte Bilder vergleichen'}"
                             x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
                     <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            ToolTip="Tags anzeigen" Tag="Tags" Click="SidebarMode_Click">
+                            ToolTip="{loc:Tr Key='Tags anzeigen'}" Tag="Tags" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
                                 <Path Data="M 2,3 L 12,3 L 22,13 L 13,22 L 2,11 Z"
@@ -1022,7 +1028,7 @@
                         </Viewbox>
                     </Button>
                     <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            ToolTip="GPS-Informationen anzeigen" Tag="GPS" Click="SidebarMode_Click">
+                            ToolTip="{loc:Tr Key='GPS-Informationen anzeigen'}" Tag="GPS" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
                                 <Path Data="M 12,1 C 6.5,1 3,5 3,10 C 3,16 12,23 12,23 C 12,23 21,16 21,10 C 21,5 17.5,1 12,1 Z"
@@ -1033,7 +1039,7 @@
                         </Viewbox>
                     </Button>
                     <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            Margin="0,0,11,0" ToolTip="Bildinformationen anzeigen" Tag="Info" Click="SidebarMode_Click">
+                            Margin="0,0,11,0" ToolTip="{loc:Tr Key='Bildinformationen anzeigen'}" Tag="Info" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
                                 <Ellipse Canvas.Left="2" Canvas.Top="2" Width="20" Height="20"
@@ -1046,7 +1052,7 @@
                     <TextBlock x:Name="SelectionText"
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource PcasaMutedTextBrush}"
-                           Text="Auswahl: 0" />
+                           Text="{loc:Tr Key='Auswahl: 0'}" />
                 </StackPanel>
             </Grid>
         </Border>
