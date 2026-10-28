@@ -256,7 +256,7 @@
 
                 <!-- The search bar has exactly two exclusive selections:
                      WAS (Tags/Name), WO (all/tree/current) and a separate
-                     NOT toggle. Keep existing control names and event paths. -->
+                     independent Galerieansicht and NOT toggles. Keep other controls unchanged. -->
                 <Grid DockPanel.Dock="Right" Width="180" Height="27"
                       Margin="4,0,10,0" VerticalAlignment="Center">
                     <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
@@ -307,6 +307,17 @@
                                          ToolTip="Treffer im gewählten Suchbereich umkehren"
                                          Checked="FilterResultsInversion_Changed"
                                          Unchecked="FilterResultsInversion_Changed"/>
+                <!-- Separate non-exclusive search universe: exactly the folders
+                     currently displayed by the normal gallery. In DockPanel
+                     child order this places Galerieansicht LEFT of NOT. -->
+                <primitives:ToggleButton x:Name="GalleryViewFilterToggle"
+                                         DockPanel.Dock="Right" Margin="3,0,3,0"
+                                         VerticalAlignment="Center"
+                                         Style="{StaticResource PcasaSearchInvertStyle}"
+                                         Content="Galerieansicht"
+                                         ToolTip="Suche auf die in der Galerie sichtbaren Ordner beschränken"
+                                         Checked="GalleryViewFilter_Changed"
+                                         Unchecked="GalleryViewFilter_Changed"/>
                 <Border DockPanel.Dock="Right" VerticalAlignment="Center"
                         BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
                         CornerRadius="5" Padding="4,2" Margin="0,0,6,0">
