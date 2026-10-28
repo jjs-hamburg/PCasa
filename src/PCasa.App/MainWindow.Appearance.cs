@@ -564,10 +564,10 @@ public partial class MainWindow
         }
         if (request.ImageId is not long imageId)
         {
-            SidePanelText.Text = "Ein Bild auswählen.";
+            SidePanelText.Text = UiLanguage.T("Ein Bild auswählen.");
             return;
         }
-        SidePanelText.Text = "Bildinformationen laden …";
+        SidePanelText.Text = UiLanguage.T("Bildinformationen laden …");
         try
         {
             var content = await _scheduler.RunAsync(
@@ -583,7 +583,7 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("Sidebar.ReadInfo", ex);
             if (_sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds))
-                SidePanelText.Text = "Informationen konnten nicht gelesen werden.";
+                SidePanelText.Text = UiLanguage.T("Informationen konnten nicht gelesen werden.");
         }
     }
 
