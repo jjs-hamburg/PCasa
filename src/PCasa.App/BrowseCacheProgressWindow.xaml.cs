@@ -43,6 +43,7 @@ public partial class BrowseCacheProgressWindow : Window
     private readonly CancellationTokenSource _previewLifetime = new();
     private DateTime _lastPreviewUpdate = DateTime.MinValue;
     private bool _previewBusy;
+    private string? _displayedPreviewImagePath;
     private bool _finished;
     public event EventHandler? ProgressPresentationChanged;
     public bool IsManualPresentationActive => _manualPresentationActive;
@@ -398,7 +399,9 @@ public partial class BrowseCacheProgressWindow : Window
         CountText.ToolTip = $"{progress.ImageFilesSeen:N0} gefunden · " +
             $"{progress.Unchanged:N0} unverändert · {progress.Changed:N0} geändert · " +
             $"{progress.CacheRepaired:N0} Cache-Reparaturen";
-        UpdateCurrentImage(progress.CurrentFile, progress.CurrentFile);
+        // The scanner has already committed this local thumbnail.
+        // An original on S:\\ over VPN is not a valid preview source.
+        UpdateCurrentImage(progress.CurrentFile, progress.CurrentThumbnailPath);
         PublishProgressStatus();
     }
 
@@ -445,6 +448,13 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void UpdateCurrentImage(string? currentPath, string? localThumb)
     {
+        if (!string.Equals(_displayedPreviewImagePath, currentPath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _displayedPreviewImagePath = currentPath;
+            // Never show the preceding image under the new file name.
+            CurrentThumbnail.Source = null;
+        }
         if (!string.IsNullOrEmpty(currentPath))
         {
             CurrentFileText.Text = Path.GetFileName(currentPath);
@@ -457,18 +467,21 @@ public partial class BrowseCacheProgressWindow : Window
             DateTime.UtcNow - _lastPreviewUpdate >= TimeSpan.FromMilliseconds(850))
         {
             _lastPreviewUpdate = DateTime.UtcNow;
-            _ = LoadPreviewAsync(localThumb, _previewLifetime.Token);
+            _ = LoadPreviewAsync(localThumb, currentPath, _previewLifetime.Token);
         }
     }
 
-    private async Task LoadPreviewAsync(string localPath, CancellationToken cancellation)
+    private async Task LoadPreviewAsync(string localPath, string? originalPath,
+        CancellationToken cancellation)
     {
         _previewBusy = true;
         try
         {
             var bitmap = await Task.Run(() =>
                 _loader.Load(localPath, 92, cancellation), cancellation);
-            if (!_finished && !cancellation.IsCancellationRequested)
+            if (!_finished && !cancellation.IsCancellationRequested &&
+                string.Equals(_displayedPreviewImagePath, originalPath,
+                    StringComparison.OrdinalIgnoreCase))
                 CurrentThumbnail.Source = bitmap;
         }
         catch (OperationCanceledException)
