@@ -77,6 +77,15 @@ public partial class MainWindow
         _bulkFolderExpansion = true;
         try
         {
+            // A temporary Explorer node becomes permanent as soon as its
+            // photo folder is committed to the catalog. This can happen while
+            // Explorer mode is open, especially for hidden/dot folders such
+            // as .picasaoriginals. Promote its WHOLE parent chain before
+            // pruning temporary-only nodes; no filesystem/SMB reads needed.
+            // The catalog is the sole authority for which paths contain
+            // indexed photos, regardless of directory name or attributes.
+            PromoteExplorerIndexedPhotoFolders();
+
             // If a temporary-only entry is selected, restore the original
             // selection before removing it. Otherwise do not change focus.
             if (FoldersTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag current } &&
@@ -131,6 +140,20 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
                 FindTreeScrollViewer(FoldersTree)?.ScrollToVerticalOffset(offset);
         }), DispatcherPriority.Loaded);
+    }
+
+    private void PromoteExplorerIndexedPhotoFolders()
+    {
+        if (_explorerInsertedPaths.Count == 0) return;
+        foreach (var folder in _photoFolders)
+        {
+            if (!IsWithinExplorerScope(folder.LocalPath)) continue;
+            // Removing only the indexed leaf would still delete it along
+            // with a temporary parent. The existing hierarchy function is
+            // the same one used by the ordinary folder tree.
+            foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
+                _explorerInsertedPaths.Remove(part.FullPath);
+        }
     }
 
     private void RemoveTemporaryExplorerNodes(ItemsControl parent)
