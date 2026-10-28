@@ -284,6 +284,9 @@ public partial class MainWindow
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> initialConfiguration =
             Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
         IReadOnlyList<string> createdDirectories = Array.Empty<string>();
+        // Durable first-import completion is the only existing proof of a
+        // previously FULL root inventory. Read it in the SAME catalog job.
+        HashSet<long> pendingInitialRootIds = new();
         var imageCount = 0;
         await _scheduler.EnqueueAsync(
             $"catalog:initial-summary:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
@@ -293,12 +296,19 @@ public partial class MainWindow
                 initialFolders = _imageCatalog.GetPhotoFolders();
                 imageCount = _imageCatalog.CountAll();
                 initialConfiguration = ReadFolderTreeConfigurationSnapshot();
+                pendingInitialRootIds = _folderRepository.GetPendingInitialScans()
+                    .Select(root => root.Id).ToHashSet();
                 createdDirectories = _folderRepository.GetCreatedDirectories();
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.CatalogRead);
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
         _dropTargetProjection = initialConfiguration;
+        foreach (var (root, _) in initialConfiguration)
+        {
+            if (!pendingInitialRootIds.Contains(root.Id))
+                _folderScanStatuses.SeedCompletedInitialImport(root.LocalPath);
+        }
         _createdEmptyFolderPaths.Clear();
         _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
