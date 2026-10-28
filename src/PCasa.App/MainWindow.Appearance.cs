@@ -24,7 +24,9 @@ public partial class MainWindow
         // configuration and no separate sorting persistence mechanism.
         public string GallerySortBy { get; set; } = "Name";
         public bool GallerySortDescending { get; set; }
-        public string FolderStatusMode { get; set; } = "Problems";
+        // New profiles show confirmed checks by default. An existing saved
+        // explicit Problems/None selection is always respected.
+        public string FolderStatusMode { get; set; } = "Always";
         public bool HideCollapsedFolders { get; set; }
         public bool SearchGalleryViewOnly { get; set; }
         public bool TooltipsEnabled { get; set; } = true;
