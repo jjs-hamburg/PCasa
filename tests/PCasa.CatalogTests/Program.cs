@@ -42,7 +42,8 @@ internal static class Program
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
-        Run("Temporary transfer failure remains recoverable at manual priority", DurableTransferRetryPreservesPriority, failures);
+        Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
+        Run("Recovered Tag write precedes a newer manual folder scan", RecoveredTagsPrecedeManualScan, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
@@ -202,9 +203,8 @@ internal static class Program
                 catch (DurablePackageRetryException) { deferred = true; }
                 if (!deferred)
                     throw new Exception("Offline durable package was not deferred.");
-                // The durable P0 marker survives even though its task has
-                // unwound. Automatic NAS/import/scan work MUST remain held,
-                // not proceed just because the in-memory queue is empty.
+                // A deferred P0 is NOT runnable until the retry deadline.
+                // The journal retains its intent while unrelated jobs proceed.
                 var ranAutomatic = 0;
                 var automaticBackground = scheduler.EnqueueAsync(
                     "test:background-behind-deferred-tag",
@@ -221,11 +221,11 @@ internal static class Program
                     SchedulerPriority.Background,
                     _ => { Interlocked.Increment(ref ranAutomatic); return Task.CompletedTask; },
                     workKind: SchedulerWorkKind.InitialImport);
-                await Task.Delay(250);
-                if (ranAutomatic != 0 || automaticBackground.IsCompleted ||
-                    automaticInventory.IsCompleted || automaticInitialImport.IsCompleted)
+                await Task.WhenAll(automaticBackground, automaticInventory,
+                    automaticInitialImport).WaitAsync(TimeSpan.FromSeconds(10));
+                if (ranAutomatic != 3)
                     throw new Exception(
-                        "NAS scanning overtook a still-durable deferred manual P0 package.");
+                        "A deferred manual P0 blocked otherwise runnable scan work.");
                 var ranManual = false;
                 await scheduler.EnqueueAsync("test:independent-manual",
                     SchedulerPriority.ManualAction,
@@ -237,7 +237,7 @@ internal static class Program
             var saved = new DurablePackageJournal(database).Pending();
             if (saved.Count != 1 || saved[0].Key != key ||
                 saved[0].Priority != SchedulerPriority.ManualAction ||
-                saved[0].CompletedSteps != 0 || saved[0].State != "queued")
+                saved[0].CompletedSteps != 0 || saved[0].State != "deferred")
                 throw new Exception("Deferred package lost its priority or resume position.");
 
             await using (var restarted = new PCasaScheduler())
@@ -285,6 +285,68 @@ internal static class Program
                 if (new DurablePackageJournal(database).Pending().Count != 0)
                     throw new Exception("Resumed offline package was not acknowledged.");
             }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void RecoveredTagsPrecedeManualScan()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, _, _) = sandbox.Prepare();
+            var journal = new DurablePackageJournal(database);
+            journal.Put("tags:recovered", "test-tag-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            journal.Put("catalog:complete-scan:recovered", "test-scan-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            await using var scheduler = new PCasaScheduler();
+            scheduler.EnableDurablePackages(database);
+            var tagStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseTag = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var scanStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            scheduler.RegisterDurablePackageType("test-tag-v1", (key, _) =>
+            {
+                var package = new SchedulerTaskPackage(key);
+                package.AddStep(async token =>
+                {
+                    tagStarted.TrySetResult();
+                    await releaseTag.Task.WaitAsync(token);
+                });
+                return package;
+            });
+            scheduler.RegisterDurablePackageType("test-scan-v1", (key, _) =>
+            {
+                var package = new SchedulerTaskPackage(key);
+                package.AddStep(_ =>
+                {
+                    scanStarted.TrySetResult();
+                    return Task.CompletedTask;
+                });
+                return package;
+            });
+            try
+            {
+                if (scheduler.RecoverDurablePackages().Count != 0)
+                    throw new Exception("Tag/scan recipes failed to reconstruct.");
+                await tagStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (scanStarted.Task.IsCompleted)
+                    throw new Exception("A newer manual scan bypassed pending Tag writes.");
+            }
+            finally
+            {
+                releaseTag.TrySetResult();
+            }
+            await scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (new DurablePackageJournal(database).Pending().Count > 0 &&
+                   DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            if (new DurablePackageJournal(database).Pending().Count != 0)
+                throw new Exception("Tag/scan journal was not fully acknowledged.");
         }
         Check().GetAwaiter().GetResult();
     }
