@@ -255,11 +255,9 @@ internal static class Program
                 throw new Exception("Search inversion toggle is not labelled NOT.");
             Console.WriteLine("PASS: Sort selector lives only in the search toolbar beside NOT.");
 
-            // Preserve the original header controls exactly, inserting only
-            // the requested Galerieansicht toggle directly LEFT of NOT.
-            // main menu | Sort | WAS | WO | Galerieansicht | NOT | search.
-            // The menu and search field must not move or change dimensions
-            // simply because the sort control was inserted before WAS.
+            // Main menu and search occupy two PERMANENT rows. The user's
+            // resized-window screenshot exposed DockPanel starve/clipping.
+            // Keep every original command and the search control order.
             var searchField = window.FindName("TagSearchBox") as TextBox
                 ?? throw new Exception("Search field not found.");
             var what = window.FindName("SearchTagsMode") as RadioButton
@@ -284,86 +282,109 @@ internal static class Program
                 is not System.Windows.Shapes.Path)
                 throw new Exception("LAP-style sort arrow is not rendered.");
 
-            // The hosted Windows runner caps native WPF window width at
-            // 1044px even when Window.Width is set to 1500 or 2048.
-            // Validate the REAL DockPanel child order at any screen size;
-            // only assert pixel geometry if a sufficiently wide WPF desktop
-            // actually exists (do not claim unrendered widths were tested).
-            if (menu.Parent is not DockPanel header ||
-                !header.LastChildFill)
-                throw new Exception("Original single-row DockPanel was replaced.");
+            if (menu.Parent is not Border menuBorder ||
+                menuBorder.Parent is not Grid twoRowHeader ||
+                Grid.GetRow(twoRowHeader) != 0 ||
+                Grid.GetRow(menuBorder) != 0)
+                throw new Exception("The main menu is not in its own top header row.");
+            var searchScroll = window.FindName("SearchToolbarScrollViewer") as ScrollViewer
+                ?? throw new Exception("Search row needs a separate horizontal scroller.");
+            if (searchScroll.Parent is not Border searchBorder ||
+                !ReferenceEquals(searchBorder.Parent, twoRowHeader) ||
+                Grid.GetRow(searchBorder) != 1 ||
+                searchScroll.HorizontalScrollBarVisibility != ScrollBarVisibility.Auto ||
+                searchScroll.VerticalScrollBarVisibility != ScrollBarVisibility.Disabled ||
+                searchScroll.Content is not StackPanel searchRow ||
+                searchRow.Orientation != Orientation.Horizontal)
+                throw new Exception("Search is not in a permanent horizontal row under menu.");
             if (whereLabel.Parent is not StackPanel whereChoices ||
                 whereChoices.Parent is not Border whereGroup ||
                 whatLabel.Parent is not StackPanel whatChoices ||
                 whatChoices.Parent is not Border whatGroup)
-                throw new Exception("WAS and WO choices must each have their own visible group border.");
+                throw new Exception("WAS and WO choices lost their existing group borders.");
             if (Math.Abs(whereLabel.FontSize - where.FontSize) > 0.01 ||
                 Math.Abs(whatLabel.FontSize - what.FontSize) > 0.01)
-                throw new Exception("WAS/WO captions must match the choices' font size.");
-            var expectedChildren = new UIElement[]
+                throw new Exception("WAS/WO captions and choices no longer match.");
+
+            var expectedSearch = new UIElement[]
             {
-                (UIElement)searchField.Parent,
-                notToggle,
-                galleryToggle,
-                whereGroup,
-                whatGroup,
-                sortButton,
-                menu
+                sortButton, whatGroup, whereGroup, galleryToggle,
+                notToggle, (UIElement)searchField.Parent
             };
-            if (!header.Children.Cast<UIElement>().SequenceEqual(expectedChildren))
+            if (!searchRow.Children.Cast<UIElement>().SequenceEqual(expectedSearch))
                 throw new Exception(
-                    "Header order must be Search, NOT, Galerieansicht, WO, WAS, Sort, Menu.");
-            foreach (var element in expectedChildren.Take(6))
-                if (DockPanel.GetDock(element) != Dock.Right)
-                    throw new Exception("Existing right-docked search controls were repositioned.");
+                    "Second-row order must remain Sort, WAS, WO, Galerieansicht, NOT, search.");
             if (Math.Abs(searchField.ActualWidth - 180) > 1 ||
-                sortButton.Width != 191)
-                throw new Exception("Original search width or new sort width changed.");
-            if (items.Any(item => Math.Abs(item.Margin.Right - 20) > 0.01))
-                throw new Exception("Existing menu spacing margins changed.");
+                sortButton.Width != 191 ||
+                items.Any(item => Math.Abs(item.Margin.Right - 20) > .01))
+                throw new Exception("An established menu or search control was resized.");
+
             notToggle.IsChecked = true;
             Flush(window);
             if (searchField.TextDecorations.Count != 1 ||
                 searchField.TextDecorations[0].Location != TextDecorationLocation.Strikethrough)
-                throw new Exception("NOT does not strike through the actual editable search text.");
+                throw new Exception("NOT lost its strikethrough text behavior.");
             notToggle.IsChecked = false;
             Flush(window);
             if (searchField.TextDecorations.Count != 0)
                 throw new Exception("Disabling NOT did not restore normal search text.");
 
-            foreach (var requestedWidth in new[] { 1500.0, 2048.0 })
+            var narrowViewportTested = false;
+            foreach (var requestedWidth in new[] { 1000.0, 1100.0, 1500.0 })
             {
                 window.Width = requestedWidth;
                 Flush(window);
-                if (window.ActualWidth < 1450)
-                    continue; // Offscreen desktop resolution limitation.
-                var row = new[]
+                var menuBounds = Bounds(menu);
+                var sortBounds = Bounds(sortButton);
+                if (menuBounds.Right > window.ActualWidth + 1 ||
+                    menuBounds.Left < -1 ||
+                    sortBounds.Top < menuBounds.Bottom - 1)
+                    throw new Exception(
+                        $"Main menu clipped or overlapped the search row at {window.ActualWidth:F0}px.");
+                if (menu.ActualWidth < 280)
+                    throw new Exception("Resizing squeezed main menu captions away.");
+
+                var row = new FrameworkElement[]
                 {
-                    Bounds(menu), Bounds(sortButton), Bounds(whatLabel),
-                    Bounds(whereLabel), Bounds(galleryToggle),
-                    Bounds(notToggle), Bounds(searchField)
+                    sortButton, whatGroup, whereGroup, galleryToggle,
+                    notToggle, (FrameworkElement)searchField.Parent
                 };
                 for (var i = 1; i < row.Length; i++)
+                    if (Math.Abs(Bounds(row[i]).Top + Bounds(row[i]).Height / 2 -
+                                 (Bounds(row[0]).Top + Bounds(row[0]).Height / 2)) > 12)
+                        throw new Exception("Search controls wrapped into another row.");
+
+                if (window.ActualWidth <= 1110 && searchScroll.ScrollableWidth > 0)
                 {
-                    if (row[i].Left < row[i - 1].Right - 1 ||
-                        Math.Abs(row[i].Top + row[i].Height / 2 -
-                                 (row[0].Top + row[0].Height / 2)) > 12)
-                        throw new Exception(
-                            $"At rendered window width {window.ActualWidth}, " +
-                            "one-row header overlaps or wraps.");
+                    narrowViewportTested = true;
+                    searchScroll.ScrollToRightEnd();
+                    Flush(window);
+                    var viewportRight = Bounds(searchScroll).Right;
+                    if (Bounds((FrameworkElement)searchField.Parent).Right >
+                        viewportRight + 2)
+                        throw new Exception("Search textbox cannot be scrolled into view.");
+                    if (Bounds(menu).Right > window.ActualWidth + 1)
+                        throw new Exception("Scrolling the search row displaced the main menu.");
+                    searchScroll.ScrollToLeftEnd();
+                    Flush(window);
                 }
-                if (row[^1].Right > window.ActualWidth - 1)
-                    throw new Exception("Original search field extends past wide window.");
+                else if (window.ActualWidth >= 1450)
+                {
+                    if (searchScroll.ScrollableWidth > 1)
+                        throw new Exception("Wide search row scrolls unnecessarily.");
+                }
             }
+            if (!narrowViewportTested)
+                throw new Exception(
+                    "At narrow widths the search row was clipped without horizontal scrolling.");
             window.Width = 1500;
             Flush(window);
             Console.WriteLine(
-                "PASS: One-row menu | sort | WAS | WO | Galerieansicht | NOT | search order.");
+                "PASS: Permanent two-row menu and search, correct controls/order at all sizes.");
             Console.WriteLine(
-                "PASS: WAS and WO are framed with equal caption sizes; NOT toggles search strikethrough.");
-            if (window.ActualWidth < 1450)
-                Console.WriteLine(
-                    "INFO: Runner desktop is too narrow for visual wide-window validation.");
+                "PASS: Narrow search row scrolls while the complete main menu remains visible.");
+            Console.WriteLine(
+                "PASS: WAS/WO borders and NOT strikethrough remain unchanged.");
 
             options.IsSubmenuOpen = true;
             Flush(window);
