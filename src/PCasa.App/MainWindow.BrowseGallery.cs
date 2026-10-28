@@ -287,6 +287,7 @@ public partial class MainWindow
         // Durable first-import completion is the only existing proof of a
         // previously FULL root inventory. Read it in the SAME catalog job.
         HashSet<long> pendingInitialRootIds = new();
+        IReadOnlyList<string> verifiedInitialDirectories = Array.Empty<string>();
         var imageCount = 0;
         await _scheduler.EnqueueAsync(
             $"catalog:initial-summary:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
@@ -298,6 +299,8 @@ public partial class MainWindow
                 initialConfiguration = ReadFolderTreeConfigurationSnapshot();
                 pendingInitialRootIds = _folderRepository.GetPendingInitialScans()
                     .Select(root => root.Id).ToHashSet();
+                verifiedInitialDirectories = _folderRepository
+                    .GetVerifiedPendingInitialDirectories();
                 createdDirectories = _folderRepository.GetCreatedDirectories();
                 return Task.CompletedTask;
             }, workKind: SchedulerWorkKind.CatalogRead);
@@ -309,6 +312,8 @@ public partial class MainWindow
             if (!pendingInitialRootIds.Contains(root.Id))
                 _folderScanStatuses.SeedCompletedInitialImport(root.LocalPath);
         }
+        foreach (var directory in verifiedInitialDirectories)
+            _folderScanStatuses.Set(directory, "Ready");
         _createdEmptyFolderPaths.Clear();
         _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
