@@ -44,7 +44,7 @@ internal static class Program
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
         Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
         Run("Cyclic durable retry resumes saved cursor in the same app session", DeferredManualRetryWithinSameSession, failures);
-        Run("Recovered Tag write precedes a newer manual folder scan", RecoveredTagsPrecedeManualScan, failures);
+        Run("Recovered P0 packages resume newest-first including manual NAS scans", RecoveredManualScanPrecedesOlderTags, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
         Run("Scheduler coalesces duplicate pending work", SchedulerCoalescesPendingWork, failures);
@@ -358,42 +358,42 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void RecoveredTagsPrecedeManualScan()
+    private static void RecoveredManualScanPrecedesOlderTags()
     {
         static async Task Check()
         {
             using var sandbox = new Sandbox();
             var (database, _, _) = sandbox.Prepare();
             var journal = new DurablePackageJournal(database);
-            journal.Put("tags:recovered", "test-tag-v1", "{}",
+            journal.Put("tags:older-recovered", "test-tag-v1", "{}",
                 SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
-            journal.Put("catalog:complete-scan:recovered", "test-scan-v1", "{}",
+            journal.Put("catalog:complete-scan:newer-recovered", "test-scan-v1", "{}",
                 SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
             await using var scheduler = new PCasaScheduler();
             scheduler.EnableDurablePackages(database);
             var tagStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            var releaseTag = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
             var scanStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseScan = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             scheduler.RegisterDurablePackageType("test-tag-v1", (key, _) =>
             {
                 var package = new SchedulerTaskPackage(key);
-                package.AddStep(async token =>
+                package.AddStep(_ =>
                 {
                     tagStarted.TrySetResult();
-                    await releaseTag.Task.WaitAsync(token);
+                    return Task.CompletedTask;
                 });
                 return package;
             });
             scheduler.RegisterDurablePackageType("test-scan-v1", (key, _) =>
             {
                 var package = new SchedulerTaskPackage(key);
-                package.AddStep(_ =>
+                package.AddStep(async token =>
                 {
                     scanStarted.TrySetResult();
-                    return Task.CompletedTask;
+                    await releaseScan.Task.WaitAsync(token);
                 });
                 return package;
             });
@@ -401,21 +401,21 @@ internal static class Program
             {
                 if (scheduler.RecoverDurablePackages().Count != 0)
                     throw new Exception("Tag/scan recipes failed to reconstruct.");
-                await tagStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                if (scanStarted.Task.IsCompleted)
-                    throw new Exception("A newer manual scan bypassed pending Tag writes.");
+                await scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                if (tagStarted.Task.IsCompleted)
+                    throw new Exception("The older Tag package bypassed the newer manual NAS scan.");
             }
             finally
             {
-                releaseTag.TrySetResult();
+                releaseScan.TrySetResult();
             }
-            await scanStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await tagStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var deadline = DateTime.UtcNow.AddSeconds(5);
             while (new DurablePackageJournal(database).Pending().Count > 0 &&
                    DateTime.UtcNow < deadline)
                 await Task.Delay(25);
             if (new DurablePackageJournal(database).Pending().Count != 0)
-                throw new Exception("Tag/scan journal was not fully acknowledged.");
+                throw new Exception("The resumed P0 package stack was not fully acknowledged.");
         }
         Check().GetAwaiter().GetResult();
     }
