@@ -333,7 +333,7 @@ public partial class MainWindow
         }
         if (imageCount == 0)
         {
-            StatusText.Text = "0 Bilder";
+            StatusText.Text = UiLanguage.T("0 Bilder");
             return;
         }
 
@@ -358,7 +358,7 @@ public partial class MainWindow
             progressWindow.BeginCachePhase();
             // A queued background task has not started. Show the existing
             // presenter only when real cache-build progress arrives.
-            StatusText.Text = $"Vorschaudaten vorgemerkt: {missing:N0}";
+            StatusText.Text = UiLanguage.Format("Vorschaudaten vorgemerkt: {0:N0}", missing);
 
             var progress = new Progress<BrowseCacheBuildProgress>(value =>
             {
@@ -386,7 +386,7 @@ public partial class MainWindow
             catch (Exception ex)
             {
                 PCasaDiagnostics.Write("BrowseCache.BuildMissing", ex);
-                StatusText.Text = "Vorschaudaten: Konvertierung fehlgeschlagen – Details im PCasa-Fehlerprotokoll";
+                StatusText.Text = UiLanguage.T("Vorschaudaten: Konvertierung fehlgeschlagen – Details im PCasa-Fehlerprotokoll");
                 return;
             }
             finally
@@ -406,12 +406,12 @@ public partial class MainWindow
         if (result is { FailedImages: > 0 })
         {
             StatusText.Text =
-                $"{imageCount:N0} Bilder · {result.FailedImages:N0} Vorschaudaten konnten nicht erzeugt werden";
+                UiLanguage.Format("{0:N0} Bilder · {1:N0} Vorschaudaten konnten nicht erzeugt werden", imageCount, result.FailedImages);
         }
         else
         {
             if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
-            StatusText.Text = $"{imageCount:N0} Bilder";
+            StatusText.Text = UiLanguage.Format("{0:N0} Bilder", imageCount);
         }
     }
 
@@ -580,7 +580,7 @@ public partial class MainWindow
             UpdateComparisonButtons();
             _ = UpdateSidebarContentAsync();
             EmptyPanel.Visibility = Visibility.Visible;
-            StatusText.Text = "0 Bilder";
+            StatusText.Text = UiLanguage.T("0 Bilder");
             RestorePendingGalleryAnchor();
             return;
         }
@@ -716,8 +716,8 @@ public partial class MainWindow
 
         if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
             if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
-            StatusText.Text = $"{imageCount:N0} Bilder";
-        SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
+            StatusText.Text = UiLanguage.Format("{0:N0} Bilder", imageCount);
+        SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
     }
 
     // Called only on Dispatcher, with a complete paired gallery snapshot.
@@ -877,7 +877,7 @@ public partial class MainWindow
         {
             MessageBox.Show(
                 this,
-                "Im Ordnermanager sind noch keine überwachten Ordner definiert.",
+                UiLanguage.T("Im Ordnermanager sind noch keine überwachten Ordner definiert."),
                 "PCasa",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -903,7 +903,7 @@ public partial class MainWindow
         _cacheMaintenanceCancellation?.Cancel();
         _browseCacheCancellation?.Cancel();
         UpdateManualScanControls();
-        BeginVisibleManualOperation(key, "Alle Ordner einlesen", 0);
+        BeginVisibleManualOperation(key, UiLanguage.T("Alle Ordner einlesen"), 0);
 
         try
         {
@@ -914,7 +914,7 @@ public partial class MainWindow
         catch (OperationCanceledException) when (_folderRemovalPending ||
             cancellation.IsCancellationRequested)
         {
-            StatusText.Text = "Gesamtscan abgebrochen · abgeschlossene Ordner bleiben katalogisiert";
+            StatusText.Text = UiLanguage.T("Gesamtscan abgebrochen · abgeschlossene Ordner bleiben katalogisiert");
         }
         catch (Exception ex)
         {
@@ -950,7 +950,7 @@ public partial class MainWindow
         {
             MessageBox.Show(
                 this,
-                "Einige Ordner konnten nicht eingelesen werden:\n\n" +
+                UiLanguage.T("Einige Ordner konnten nicht eingelesen werden:") + "\n\n" +
                     string.Join("\n", failures),
                 "PCasa",
                 MessageBoxButton.OK,
@@ -988,7 +988,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderManager.Open", ex);
-            MessageBox.Show(this, "Der Ordnermanager konnte nicht geöffnet werden.\n\n" +
+            MessageBox.Show(this, UiLanguage.T("Der Ordnermanager konnte nicht geöffnet werden.") + "\n\n" +
                 ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
@@ -1002,7 +1002,7 @@ public partial class MainWindow
         var durableCommitted = false;
         const string operationKey = "folder-manager:commit-selection";
         _folderManagerCommitPending = true;
-        BeginVisibleManualOperation(operationKey, "Ordnerauswahl übernehmen", 1);
+        BeginVisibleManualOperation(operationKey, UiLanguage.T("Ordnerauswahl übernehmen"), 1);
         try
         {
             // One user operation owns the persisted decision, the updated
@@ -1012,7 +1012,7 @@ public partial class MainWindow
                 async token =>
                 {
                     _scheduler.ReportProgress(operationKey,
-                        "Ordnerauswahl übernehmen", 0, 1);
+                        UiLanguage.T("Ordnerauswahl übernehmen"), 0, 1);
                     var modified = new FolderManagerSelectionService(_database)
                         .Apply(selection, token);
                     durableCommitted = true;
@@ -1038,7 +1038,7 @@ public partial class MainWindow
                             _dragTargetValidity.Clear();
                             RefreshFolderTree(preserveGalleryAnchor: true);
                             StatusText.Text =
-                                "Ordnerauswahl übernommen · Einlesen mit Benutzerpriorität";
+                                UiLanguage.T("Ordnerauswahl übernommen · Einlesen mit Benutzerpriorität");
                             // Durable initial scans can enter their own
                             // scheduler lane, but cannot overtake this
                             // still-running manual catalog publication.
@@ -1048,7 +1048,7 @@ public partial class MainWindow
                         }).Task.Unwrap();
                     }
                     _scheduler.ReportProgress(operationKey,
-                        "Ordnerauswahl übernommen", 1, 1);
+                        UiLanguage.T("Ordnerauswahl übernommen"), 1, 1);
                 });
         }
         catch (Exception ex)
@@ -1058,7 +1058,7 @@ public partial class MainWindow
                 durableCommitted
                     ? "Die Ordnerauswahl wurde gespeichert, aber die Aktualisierung " +
                       "der Ansicht oder Einstellungen ist fehlgeschlagen.\n\n" + ex.Message
-                    : "Die Ordnerauswahl konnte nicht übernommen werden.\n\n" +
+                    : UiLanguage.T("Die Ordnerauswahl konnte nicht übernommen werden.") + "\n\n" +
                       ex.Message,
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -1413,7 +1413,7 @@ public partial class MainWindow
     private void ApplyGallerySelection()
     {
         BrowseSurface.SetSelection(_selectedImageIds);
-        SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
+        SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
         UpdateComparisonButtons();
         _ = UpdateSidebarContentAsync();
     }
