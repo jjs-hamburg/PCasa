@@ -752,11 +752,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         SchedulerJobSnapshot? snapshot;
         lock (_gate) snapshot = _history.LastOrDefault(x => x.Id == item.Id);
         if (snapshot is null) return;
-        if (snapshot.Priority == SchedulerPriority.ManualAction &&
-            snapshot.Key.StartsWith("tags:", StringComparison.Ordinal))
-            PCasaDiagnostics.WriteMessage("Scheduler.TagState",
-                $"Key={snapshot.Key}; State={snapshot.State}; " +
-                $"Progress={snapshot.Processed}/{snapshot.Total}; Path={snapshot.CurrentPath ?? "(none)"}");
+        if (snapshot.Priority == SchedulerPriority.ManualAction)
+            PCasaDiagnostics.WriteMessage("Scheduler.P0State",
+                $"Key={snapshot.Key}; Kind={item.Kind}; State={snapshot.State}; " +
+                $"Progress={snapshot.Processed}/{snapshot.Total}; " +
+                $"Path={snapshot.CurrentPath ?? "(none)"}");
         try { ProgressChanged?.Invoke(snapshot); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
     }
