@@ -33,11 +33,11 @@ public partial class MainWindow
         // immediately visible on Dispatcher while cancellation completes.
         var key = $"folder:remove:{folderId}:{Guid.NewGuid():N}";
         var preparation = PrepareFolderRemovalAsync(folderId, normalized);
-        BeginVisibleManualOperation(key, "Ordner entfernen", 1);
+        BeginVisibleManualOperation(key, UiLanguage.T("Ordner entfernen"), 1);
         try
         {
             HideFolderFromCurrentGallery(normalized);
-            StatusText.Text = "Ordner aus PCasa entfernen …";
+            StatusText.Text = UiLanguage.T("Ordner aus PCasa entfernen …");
             await preparation;
 
             int removed;
@@ -50,7 +50,7 @@ public partial class MainWindow
                     async token =>
                     {
                         token.ThrowIfCancellationRequested();
-                        _scheduler.ReportProgress(key, "Ordner entfernen", 0, 1, normalized);
+                        _scheduler.ReportProgress(key, UiLanguage.T("Ordner entfernen"), 0, 1, normalized);
                         var current = _folderRepository.GetAll()
                             .FirstOrDefault(root => root.Id == folderId)
                             ?? throw new OperationCanceledException(
@@ -75,7 +75,7 @@ public partial class MainWindow
                             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                                 warmViewport: false);
                         }).Task.Unwrap();
-                        _scheduler.ReportProgress(key, "Ordner entfernt", 1, 1, normalized);
+                        _scheduler.ReportProgress(key, UiLanguage.T("Ordner entfernt"), 1, 1, normalized);
                     });
             }
             else
@@ -95,7 +95,7 @@ public partial class MainWindow
 
             // Both root and subtree operations now publish inside their
             // single scheduler job, before returning to either UI entry.
-            StatusText.Text = $"{removed:N0} Bildeinträge aus PCasa entfernt";
+            StatusText.Text = UiLanguage.Format("{0:N0} Bildeinträge aus PCasa entfernt", removed);
             return removed;
         }
         catch
@@ -165,7 +165,7 @@ public partial class MainWindow
         }
         EmptyPanel.Visibility = _displayedBrowseIndex.Count == 0
             ? Visibility.Visible : Visibility.Collapsed;
-        SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
+        SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
         UpdateComparisonButtons();
 
         // The tree is not rebuilt from the still-uncommitted repository:
