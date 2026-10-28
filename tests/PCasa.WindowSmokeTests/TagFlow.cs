@@ -223,18 +223,26 @@ internal static class TagFlow
             try
             {
                 search.Text = "roma, reise hamburg";
-                Until(window, () => SortedGallery().Count == 1 &&
+                Until(window, () => status.Text.Contains("roma, reise hamburg",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    SortedGallery().Count == 1 &&
                     SortedGallery()[0].FileName == "a-00-topaz.jpg",
                     "Comma-separated Tag AND did not return exactly one matching photo.");
                 search.Text = "reise hamburg;ROM";
-                Until(window, () => SortedGallery().Count == 1 &&
+                Until(window, () => status.Text.Contains("reise hamburg;ROM",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    SortedGallery().Count == 1 &&
                     SortedGallery()[0].FileName == "a-00-topaz.jpg",
                     "Semicolon-separated Tag AND did not use case-insensitive prefixes.");
                 search.Text = "roma, berlin";
-                Until(window, () => SortedGallery().Count == 0,
+                Until(window, () => status.Text.Contains("roma, berlin",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    SortedGallery().Count == 0,
                     "Multi-Tag AND matched pictures without all required Tags.");
                 search.Text = "roma; reise hamburg, missing";
-                Until(window, () => SortedGallery().Count == 0,
+                Until(window, () => status.Text.Contains("roma; reise hamburg, missing",
+                        StringComparison.OrdinalIgnoreCase) &&
+                    SortedGallery().Count == 0,
                     "Mixed separators incorrectly ignored a missing required Tag.");
             }
             finally
@@ -242,7 +250,9 @@ internal static class TagFlow
                 SetExtraKeyword("roma");
                 search.Text = "roma";
             }
-            Until(window, () => SortedGallery().Count == 12,
+            Until(window, () => status.Text.Contains("Bilder mit Tags: roma",
+                    StringComparison.OrdinalIgnoreCase) &&
+                SortedGallery().Count == 12,
                 "Multi-Tag test did not restore the single-Tag gallery.");
             Console.WriteLine("PASS: WPF comma/semicolon multi-Tag AND search and single-Tag restoration.");
 
@@ -318,7 +328,9 @@ internal static class TagFlow
             Until(window, () => SortedGallery().Count == 0,
                 "Galerieansicht search included hidden descendants.");
             galleryNot.IsChecked = true;
-            Until(window, () => SortedGallery().Count == 0,
+            Until(window, () => status.Text.Contains("Bilder ohne Tags: berlin",
+                    StringComparison.OrdinalIgnoreCase) &&
+                SortedGallery().Count == 0,
                 "NOT included hidden descendants outside the Galerieansicht universe.");
             galleryNot.IsChecked = false;
             monitoredRootItem.IsExpanded = true;
