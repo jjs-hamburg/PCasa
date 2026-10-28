@@ -247,12 +247,17 @@ internal static class Program
                 throw new Exception("Search toolbar must offer six sort keys and two directions.");
             var notToggle = window.FindName("InvertFilterToggle") as ToggleButton
                 ?? throw new Exception("Search inversion toggle is missing.");
+            var galleryToggle = window.FindName("GalleryViewFilterToggle") as ToggleButton
+                ?? throw new Exception("Galerieansicht search toggle is missing.");
+            if (!Equals(galleryToggle.Content, "Galerieansicht"))
+                throw new Exception("Gallery search toggle has incorrect text.");
             if (!Equals(notToggle.Content, "NOT"))
                 throw new Exception("Search inversion toggle is not labelled NOT.");
             Console.WriteLine("PASS: Sort selector lives only in the search toolbar beside NOT.");
 
-            // Restore the working original header order exactly:
-            // main menu | new Sort | WAS | WO | NOT | old search field.
+            // Preserve the original header controls exactly, inserting only
+            // the requested Galerieansicht toggle directly LEFT of NOT.
+            // main menu | Sort | WAS | WO | Galerieansicht | NOT | search.
             // The menu and search field must not move or change dimensions
             // simply because the sort control was inserted before WAS.
             var searchField = window.FindName("TagSearchBox") as TextBox
@@ -299,6 +304,7 @@ internal static class Program
             {
                 (UIElement)searchField.Parent,
                 notToggle,
+                galleryToggle,
                 whereGroup,
                 whatGroup,
                 sortButton,
@@ -306,8 +312,8 @@ internal static class Program
             };
             if (!header.Children.Cast<UIElement>().SequenceEqual(expectedChildren))
                 throw new Exception(
-                    "Header order is not original Search, NOT, WO, WAS, new Sort, Menu.");
-            foreach (var element in expectedChildren.Take(5))
+                    "Header order must be Search, NOT, Galerieansicht, WO, WAS, Sort, Menu.");
+            foreach (var element in expectedChildren.Take(6))
                 if (DockPanel.GetDock(element) != Dock.Right)
                     throw new Exception("Existing right-docked search controls were repositioned.");
             if (Math.Abs(searchField.ActualWidth - 180) > 1 ||
@@ -334,7 +340,8 @@ internal static class Program
                 var row = new[]
                 {
                     Bounds(menu), Bounds(sortButton), Bounds(whatLabel),
-                    Bounds(whereLabel), Bounds(notToggle), Bounds(searchField)
+                    Bounds(whereLabel), Bounds(galleryToggle),
+                    Bounds(notToggle), Bounds(searchField)
                 };
                 for (var i = 1; i < row.Length; i++)
                 {
@@ -351,7 +358,7 @@ internal static class Program
             window.Width = 1500;
             Flush(window);
             Console.WriteLine(
-                "PASS: Original one-row menu | sort | WAS | WO | NOT | search DockPanel order.");
+                "PASS: One-row menu | sort | WAS | WO | Galerieansicht | NOT | search order.");
             Console.WriteLine(
                 "PASS: WAS and WO are framed with equal caption sizes; NOT toggles search strikethrough.");
             if (window.ActualWidth < 1450)
