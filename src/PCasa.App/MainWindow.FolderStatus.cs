@@ -19,7 +19,9 @@ public partial class MainWindow
             "!  Fehler bei der Aktualisierung\n" +
             "?  Prüfstatus noch unbekannt\n\n" +
             "Die Formen unterscheiden die Zustände unabhängig von den Farben. " +
-            "Ein grünes Häkchen bestätigt nur die bekannten Änderungen.",
+            "Ein Häkchen erscheint nur nach bestätigtem abgeschlossenem Scan.\n" +
+            "Im Modus 'Nur Aktivität und Probleme' sind Häkchen ausgeblendet.\n" +
+            "Der rote Punkt zeigt unabhängig davon noch offene Tag-Schreibvorgänge.",
             "PCasa – Ordnerstatus",
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Information);
@@ -164,7 +166,9 @@ public partial class MainWindow
         tag.StatusCode = code;
         tag.StatusDescription = code switch
         {
-            "Ready" => "Bekannte Änderungen verarbeitet: " + state.UpdatedUtc.ToLocalTime().ToString("g"),
+            "Ready" => state.UpdatedUtc == DateTime.MinValue
+                ? "Vollständiger Erstscan früher bestätigt (Katalog)"
+                : "Bekannte Änderungen verarbeitet: " + state.UpdatedUtc.ToLocalTime().ToString("g"),
             "Working" => "Ordner wird gerade aktualisiert",
             "Pending" => "Aktualisierung steht aus",
             "Failed" => "Letzte Aktualisierung fehlgeschlagen",
