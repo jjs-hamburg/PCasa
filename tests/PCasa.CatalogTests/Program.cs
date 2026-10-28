@@ -162,6 +162,8 @@ internal static class Program
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
+        Run("Folder activity propagates upward only and green checks require verified scans",
+            FolderStatusDistinguishesVerifiedAndRunning, failures);
         if (ExclusionTestScheduler.IsValueCreated)
             ExclusionTestScheduler.Value.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Console.WriteLine($"RESULT: catalog regression suite complete, {failures.Count} failed");
@@ -5241,6 +5243,64 @@ internal static class Program
                 throw new Exception("Catalog-only removal deleted an original photo.");
         scanner.Scan(root);
         Require(db, 1);
+    }
+
+    private static void FolderStatusDistinguishesVerifiedAndRunning()
+    {
+        using var sandbox = new Sandbox();
+        var root = sandbox.Images;
+        var checkedChild = Path.Combine(root, "Checked");
+        var anotherChild = Path.Combine(root, "Unvisited");
+        var nested = Path.Combine(checkedChild, "Nested");
+        var tracker = new FolderScanStatusTracker();
+
+        tracker.Set(checkedChild, "Ready");
+        if (tracker.Get(root)?.Code == "Ready" ||
+            tracker.Get(anotherChild)?.Code is "Ready" or "Working")
+            throw new Exception(
+                "Checking one photo directory falsely verified its parent/siblings.");
+
+        // A root scan is ONE active scheduler worker, not 1000 parallel
+        // child workers. Descendants are pending rather than spinning.
+        tracker.Set(root, "Working", recursive: true);
+        if (tracker.Get(root)?.Code != "Working" ||
+            tracker.Get(anotherChild)?.Code != "Pending" ||
+            tracker.Get(checkedChild)?.Code != "Ready" ||
+            tracker.Get(nested)?.Code != "Pending")
+            throw new Exception(
+                "The current root scan incorrectly marked all descendants Working.");
+
+        tracker.Set(anotherChild, "Working");
+        if (tracker.Get(anotherChild)?.Code != "Working" ||
+            tracker.Get(checkedChild)?.Code != "Ready")
+            throw new Exception("Sibling active scan contaminated other folder indicators.");
+
+        tracker.Set(anotherChild, "Ready");
+        tracker.Set(root, "Ready", recursive: true);
+        if (tracker.Get(root)?.Code != "Ready" ||
+            tracker.Get(nested)?.Code != "Ready")
+            throw new Exception("Verified recursive scan did not produce green checks.");
+
+        tracker.Set(root, "Working", recursive: true);
+        if (tracker.Get(nested)?.Code != "Ready")
+            throw new Exception("Fresh scan erased existing verified descendant evidence.");
+        tracker.Set(root, "Pending", recursive: true);
+        if (tracker.Get(nested)?.Code != "Pending")
+            throw new Exception("Queued recursive scan left an old green confirmation.");
+
+        var seeded = new FolderScanStatusTracker();
+        seeded.SeedCompletedInitialImport(root);
+        if (seeded.Get(root)?.Code != "Ready" ||
+            seeded.Get(nested)?.Code != "Ready" ||
+            seeded.Get(root)?.UpdatedUtc != DateTime.MinValue)
+            throw new Exception("Durably completed first import was not restored on restart.");
+        seeded.Set(anotherChild, "Failed");
+        if (seeded.Get(root)?.Code != "Failed" ||
+            seeded.Get(checkedChild)?.Code != "Ready")
+            throw new Exception("Real child failure was hidden by a successful parent baseline.");
+        seeded.Forget(root);
+        if (seeded.Get(root) is not null || seeded.Get(nested) is not null)
+            throw new Exception("Removed root retained stale status data.");
     }
 
     private static void RecursiveScanResolvesOldFolderErrors()
