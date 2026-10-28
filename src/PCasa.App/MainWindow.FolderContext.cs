@@ -182,8 +182,7 @@ public partial class MainWindow
             FolderExclusionRules.IsAtOrBelow(entry.Folder.LocalPath, path)))
         {
             MessageBox.Show(this,
-                UiLanguage.T("Dieser Ordner enthält einen weiteren überwachten Stammordner. Die Ordner müssen zuerst getrennt werden.") +
-                "",
+                UiLanguage.T("Dieser Ordner enthält einen weiteren überwachten Stammordner. Die Ordner müssen zuerst getrennt werden."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -192,13 +191,10 @@ public partial class MainWindow
             FolderExclusionRules.IsAtOrBelow(f.LocalPath, path))
             .Sum(f => f.ImageCount);
         if (MessageBox.Show(this,
-            "Ordner einschließlich sämtlicher Unterordner und Dateien " +
-            "DAUERHAFT auf dem Datenträger löschen?\n\n" +
+            UiLanguage.T("Ordner einschließlich sämtlicher Unterordner und Dateien DAUERHAFT auf dem Datenträger löschen?") + "\n\n" +
             path + "\n\n" +
-            $"{count:N0} katalogisierte Bilder sind betroffen. " +
-            "Zusätzlich werden alle anderen Dateien in diesem Ordner gelöscht.\n\n" +
-            "Dies ist NICHT nur ein Entfernen aus PCasa. " +
-            "Auf Netzlaufwerken ist möglicherweise kein Papierkorb verfügbar.",
+            UiLanguage.Format("{0:N0} katalogisierte Bilder sind betroffen. Zusätzlich werden alle anderen Dateien in diesem Ordner gelöscht.", count) + "\n\n" +
+            UiLanguage.T("Dies ist NICHT nur ein Entfernen aus PCasa. Auf Netzlaufwerken ist möglicherweise kein Papierkorb verfügbar."),
             UiLanguage.T("Ordner endgültig löschen"), MessageBoxButton.YesNo,
             MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
             return;
@@ -304,10 +300,8 @@ public partial class MainWindow
         var state = root is null ? UiLanguage.T("Nicht überwacht") :
             excluded ? UiLanguage.T("Im Ordnermanager deaktiviert") : UiLanguage.T("Überwacht");
         MessageBox.Show(this,
-            $"Pfad: {tag.FullPath}\n\n" +
-            $"Bilder (einschließlich Unterordner): {total:N0}\n" +
-            $"Bildordner: {folders.Length:N0}\n" +
-            $"Status: {state}",
+            UiLanguage.Format("Pfad: {0}\n\nBilder (einschließlich Unterordner): {1:N0}\nBildordner: {2:N0}\nStatus: {3}",
+                tag.FullPath, total, folders.Length, state),
             UiLanguage.T("PCasa – Ordnerinformationen"), MessageBoxButton.OK,
             MessageBoxImage.Information);
     }
@@ -340,9 +334,8 @@ public partial class MainWindow
             ? UiLanguage.T("Der überwachte Ordner wird auch aus dem Ordnermanager entfernt.")
             : UiLanguage.T("Der Unterordner bleibt im Ordnermanager deaktiviert auswählbar.");
         var answer = MessageBox.Show(this,
-            $"Ordner einschließlich Unterordnern aus PCasa entfernen?\n\n{path}\n\n" +
-            $"{count:N0} katalogisierte Bilder verschwinden sofort aus PCasa.\n" +
-            "Die Originaldateien bleiben unverändert. " + actionDescription,
+            UiLanguage.Format("Ordner einschließlich Unterordnern aus PCasa entfernen?\n\n{0}\n\n{1:N0} katalogisierte Bilder verschwinden sofort aus PCasa.\n", path, count) +
+            UiLanguage.T("Die Originaldateien bleiben unverändert. ") + actionDescription,
             UiLanguage.T("Aus PCasa entfernen"), MessageBoxButton.YesNo, MessageBoxImage.Warning,
             MessageBoxResult.No);
         if (answer != MessageBoxResult.Yes) return;
