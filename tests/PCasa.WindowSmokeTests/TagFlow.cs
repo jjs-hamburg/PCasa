@@ -1074,6 +1074,29 @@ internal static class TagFlow
             endManual.Invoke(window, [waitingNasKey]);
             Console.WriteLine(
                 "PASS: Active NAS scan replaces queued Tag caption and restores pending series.");
+            // The scan dialog must render its already committed LOCAL
+            // thumbnail, even if the original file lives on a slow NAS.
+            string? localPreview;
+            using (var connection = db.OpenConnection())
+            using (var lookup = connection.CreateCommand())
+            {
+                lookup.CommandText = """
+                    SELECT thumbnail_path FROM images
+                    WHERE local_path=$path COLLATE NOCASE LIMIT 1;
+                    """;
+                lookup.Parameters.AddWithValue("$path", firstOriginal);
+                localPreview = lookup.ExecuteScalar() as string;
+            }
+            if (string.IsNullOrWhiteSpace(localPreview) || !File.Exists(localPreview))
+                throw new Exception("Smoke image has no committed local scan thumbnail.");
+            scanPresenter.UpdateScan(new ScanProgress(6, 4, 2, 0,
+                firstOriginal, CurrentThumbnailPath: localPreview));
+            Until(window, () =>
+                (scanPresenter.FindName("CurrentThumbnail") as Image)?.Source
+                is ImageSource source && source.Width > 0 && source.Height > 0,
+                "Scan progress did not display the committed local image.");
+            Console.WriteLine("PASS: Live scan progress shows its local cached picture.");
+
 
             // Recovered P0 manual scans must appear in the same progress
             // window as recovered Tags. Otherwise a new scan may correctly
