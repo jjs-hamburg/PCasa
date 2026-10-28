@@ -256,15 +256,14 @@ public partial class MainWindow
             {
                 EndVisibleManualOperation(key);
             }
-            StatusText.Text = "Ordner dauerhaft gelöscht: " + path;
+            StatusText.Text = UiLanguage.T("Ordner dauerhaft gelöscht: ") + path;
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderContext.PhysicalDelete", ex);
             MessageBox.Show(this,
-                "Der Dateisystemordner konnte nicht vollständig gelöscht werden. " +
-                "Die PCasa-Katalogentfernung wurde möglicherweise bereits durchgeführt.\n\n" +
-                ex.Message, "Ordner löschen", MessageBoxButton.OK, MessageBoxImage.Error);
+                UiLanguage.T("Der Dateisystemordner konnte nicht vollständig gelöscht werden. Die PCasa-Katalogentfernung wurde möglicherweise bereits durchgeführt.") + "\n\n" +
+                ex.Message, UiLanguage.T("Ordner löschen"), MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
