@@ -129,7 +129,8 @@ public sealed class FolderScanStatusTracker
                     result = inherited;
                 else if (inherited.Code is "Pending" or "Working" &&
                     (result is null ||
-                     (inherited.Code == "Pending" && result.Value.Code == "Ready" &&
+                     ((inherited.Code == "Pending" || inherited.RescanPending) &&
+                      result.Value.Code == "Ready" &&
                       result.Value.Sequence < inherited.Sequence)))
                 {
                     // A newly QUEUED recursive pass invalidates an older
