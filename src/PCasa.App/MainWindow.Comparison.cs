@@ -93,7 +93,7 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("Comparison.Load", ex);
             if (request == _comparisonRequest)
-                MessageBox.Show(this, "Mindestens eines der Bilder konnte nicht geöffnet werden.",
+                MessageBox.Show(this, UiLanguage.T("Mindestens eines der Bilder konnte nicht geöffnet werden."),
                     "PCasa", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
