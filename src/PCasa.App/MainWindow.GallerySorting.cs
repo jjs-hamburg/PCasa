@@ -44,7 +44,9 @@ public partial class MainWindow
         GallerySortDirectionIcon.Data = Geometry.Parse(option.Descending
             ? "M 20,17 L 20,2 M 16,6 L 20,2 L 24,6"
             : "M 20,2 L 20,17 M 16,13 L 20,17 L 24,13");
-        GallerySortSelectedFieldLabel.Text = option.Field switch
+        // Sort field names are runtime values, not fixed XAML strings.
+        // Use the ONE translation service for the selected label and tooltip.
+        GallerySortSelectedFieldLabel.Text = UiLanguage.T(option.Field switch
         {
             GallerySortField.Captured => "Aufnahmedatum",
             GallerySortField.Created => "Erstellungsdatum",
@@ -52,10 +54,12 @@ public partial class MainWindow
             GallerySortField.Size => "Größe",
             GallerySortField.Dimensions => "Dimension",
             _ => "Name"
-        };
-        GallerySortSelectorButton.ToolTip =
-            $"Sortierung: {GallerySortSelectedFieldLabel.Text}, " +
-            (option.Descending ? "absteigend" : "aufsteigend");
+        });
+        GallerySortSelectorButton.ToolTip = UiLanguage.Format(
+            option.Descending
+                ? "Sortierung: {0}, absteigend"
+                : "Sortierung: {0}, aufsteigend",
+            GallerySortSelectedFieldLabel.Text);
     }
 
     private void GallerySortSelector_Click(object sender, RoutedEventArgs e)

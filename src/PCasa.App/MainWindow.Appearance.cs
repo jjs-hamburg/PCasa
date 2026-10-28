@@ -105,6 +105,7 @@ public partial class MainWindow
         ApplyAppearance();
         ApplyTooltipSetting();
         SyncGallerySortMenu();
+        UiLanguage.Current.PropertyChanged += AppearanceUiLanguageChanged;
         RestoreWindowPlacement();
         SystemEvents.UserPreferenceChanged += AppearanceUserPreferenceChanged;
         Closed += AppearanceWindowClosed;
@@ -244,6 +245,7 @@ public partial class MainWindow
     private void AppearanceWindowClosed(object? sender, EventArgs e)
     {
         SystemEvents.UserPreferenceChanged -= AppearanceUserPreferenceChanged;
+        UiLanguage.Current.PropertyChanged -= AppearanceUiLanguageChanged;
     }
 
     private void AppearanceUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
@@ -294,6 +296,18 @@ public partial class MainWindow
         if (LanguageGermanMenu is null || LanguageEnglishMenu is null) return;
         LanguageGermanMenu.IsChecked = UiLanguage.Current.Code == "de";
         LanguageEnglishMenu.IsChecked = UiLanguage.Current.Code == "en";
+    }
+
+    // The sort selector shows the currently chosen field. Its text is generated
+    // at runtime, so changing language must refresh it just like XAML bindings.
+    private void AppearanceUiLanguageChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(UiLanguage.Revision) ||
+            Dispatcher.HasShutdownStarted) return;
+        if (Dispatcher.CheckAccess())
+            SyncGallerySortMenu();
+        else
+            Dispatcher.BeginInvoke(SyncGallerySortMenu);
     }
 
     private void AppearanceTheme_Click(object sender, RoutedEventArgs e)

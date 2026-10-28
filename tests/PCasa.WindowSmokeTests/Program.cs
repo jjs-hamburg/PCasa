@@ -71,6 +71,26 @@ internal static class Program
                 ?? throw new Exception("German language selector is missing.");
             if (!germanMenu.IsChecked || englishMenu.IsChecked)
                 throw new Exception("German should be the initial UI language.");
+            // A runtime-generated selection must respond to language changes
+            // as reliably as the XAML-bound sort menu items.
+            var localizedSortButton = window.FindName("GallerySortSelectorButton") as Button
+                ?? throw new Exception("Sort selector missing during language test.");
+            var localizedSortLabel = window.FindName("GallerySortSelectedFieldLabel") as TextBlock
+                ?? throw new Exception("Sort field label missing during language test.");
+            var localizedSortChoices = localizedSortButton.ContextMenu?.Items
+                .OfType<MenuItem>().ToArray()
+                ?? throw new Exception("Sort choices missing during language test.");
+            MenuItem Choice(string key) => localizedSortChoices.Single(
+                item => Equals(item.Tag, key));
+            Choice("Ascending").RaiseEvent(
+                new RoutedEventArgs(MenuItem.ClickEvent, Choice("Ascending")));
+            Choice("Captured").RaiseEvent(
+                new RoutedEventArgs(MenuItem.ClickEvent, Choice("Captured")));
+            Flush(window);
+            if (localizedSortLabel.Text != "Aufnahmedatum" ||
+                localizedSortButton.ToolTip?.ToString() !=
+                    "Sortierung: Aufnahmedatum, aufsteigend")
+                throw new Exception("German selected sort field/tooltip is incorrect.");
             englishMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, englishMenu));
             Flush(window);
             if (UiLanguage.Current.Code != "en" ||
@@ -82,6 +102,13 @@ internal static class Program
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
                     ?.Content?.ToString() != "Gallery view")
                 throw new Exception("Open WPF search bar did not switch to English.");
+            if (localizedSortLabel.Text != "Date taken" ||
+                localizedSortButton.ToolTip?.ToString() !=
+                    "Sort: Date taken, ascending" ||
+                !Equals(Choice("Captured").Header, "Date taken") ||
+                !Equals(Choice("Modified").Header, "Date modified") ||
+                !Equals(Choice("Descending").Header, "Descending"))
+                throw new Exception("Selected sort field, tooltip or choices did not switch to English.");
             var localeConfig = (string?)typeof(PCasa.App.MainWindow).GetField(
                 "_appearanceFile", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)?.GetValue(window)
@@ -99,8 +126,15 @@ internal static class Program
                 englishMenu.IsChecked ||
                 menu.Items.OfType<MenuItem>().First().Header?.ToString() != "Datei")
                 throw new Exception("Returning to German did not refresh the UI.");
+            if (localizedSortLabel.Text != "Aufnahmedatum" ||
+                localizedSortButton.ToolTip?.ToString() !=
+                    "Sortierung: Aufnahmedatum, aufsteigend")
+                throw new Exception("Sort selector did not return to German.");
+            Choice("Name").RaiseEvent(
+                new RoutedEventArgs(MenuItem.ClickEvent, Choice("Name")));
+            Flush(window);
             Console.WriteLine(
-                "PASS: Central English/German UI live switch and appearance persistence.");
+                "PASS: Central English/German UI live switch, sort selector and appearance persistence.");
 
 
             // All bundled textures must be external, discoverable JPGs,

@@ -213,6 +213,8 @@
   "Server-Synchronisierung dieser Wurzel": "Server synchronization for this root",
   "SMB-Ordner derzeit nicht erreichbar. Der Katalog bleibt erhalten.": "SMB folder currently unreachable. Catalog entries are preserved.",
   "Sortierung fehlgeschlagen": "Sorting failed",
+  "Sortierung: {0}, absteigend": "Sort: {0}, descending",
+  "Sortierung: {0}, aufsteigend": "Sort: {0}, ascending",
   "Sprache": "Language",
   "Standard (zum Design)": "Default (match theme)",
   "Strg+I": "Ctrl+I",

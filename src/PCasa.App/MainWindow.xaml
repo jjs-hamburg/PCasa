@@ -429,7 +429,7 @@
                                       StrokeLineJoin="Round"
                                       Data="M 20,2 L 20,17 M 16,13 L 20,17 L 24,13"/>
                             </Grid>
-                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="{loc:Tr Key='Name'}"
+                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name"
                                        VerticalAlignment="Center" FontSize="12"/>
                         </StackPanel>
                     </Button.Content>
