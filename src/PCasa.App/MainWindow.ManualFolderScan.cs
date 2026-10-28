@@ -80,6 +80,11 @@ public partial class MainWindow
         var progress = new Progress<ScanProgress>(scan =>
         {
             if (cancellation.IsCancellationRequested || !scanActive) return;
+            if (scan.VerifiedDirectoryPath is { Length: > 0 } verifiedDirectory)
+            {
+                TrackFolderActivity(verifiedDirectory, "Ready");
+                RefreshFolderStatusVisuals();
+            }
             if (_folderScanStatuses.Get(directory)?.Code != "Working")
             {
                 TrackFolderActivity(directory, "Working", recursive: true);
