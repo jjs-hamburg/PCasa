@@ -235,10 +235,10 @@ public partial class BrowseCacheProgressWindow : Window
         _manualPresentationActive = true;
         _showingScanDuringManualWait = false;
         _hiddenByUser = false;
-        PhaseText.Text = name + " · angefordert";
+        PhaseText.Text = UiLanguage.T(name) + " · " + UiLanguage.T("angefordert");
         Progress.IsIndeterminate = true;
         CountText.Text = $"0 / {total:N0}";
-        CurrentFileText.Text = "Warte auf Scheduler";
+        CurrentFileText.Text = UiLanguage.T("Warte auf Scheduler");
         CurrentFileText.ToolTip = null;
         FolderPathText.Text = string.Empty;
         FolderPathText.ToolTip = null;
@@ -252,11 +252,11 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || !_manualPresentationActive ||
             Dispatcher.HasShutdownStarted || _showingScanDuringManualWait) return;
-        var phase = progress.Phase ?? "Dateioperation läuft";
+        var phase = UiLanguage.T(progress.Phase ?? "Dateioperation läuft");
         PhaseText.Text = progress.State switch
         {
-            SchedulerJobState.Queued => phase + " · wartet",
-            SchedulerJobState.YieldRequested => phase + " · pausiert",
+            SchedulerJobState.Queued => phase + " · " + UiLanguage.T("wartet"),
+            SchedulerJobState.YieldRequested => phase + " · " + UiLanguage.T("pausiert"),
             _ => phase
         };
         Progress.IsIndeterminate = progress.Total == 0;
@@ -269,7 +269,7 @@ public partial class BrowseCacheProgressWindow : Window
         else
         {
             // A recursive NAS scan has no known total until enumeration ends.
-            CountText.Text = $"{progress.Processed:N0} geprüft";
+            CountText.Text = UiLanguage.Format("{0:N0} geprüft", progress.Processed);
         }
         if (progress.CurrentPath is not { Length: > 0 })
         {
@@ -335,7 +335,7 @@ public partial class BrowseCacheProgressWindow : Window
         }
         CountText.Text = $"{processed:N0} / {total:N0}";
         CountText.ToolTip =
-            "Gesamtfortschritt aller Tag-Pakete dieser Arbeitsserie";
+            UiLanguage.T("Gesamtfortschritt aller Tag-Pakete dieser Arbeitsserie");
         PublishProgressStatus();
     }
 
@@ -369,9 +369,9 @@ public partial class BrowseCacheProgressWindow : Window
                 ShowCacheProgress(cache);
                 break;
             default:
-                PhaseText.Text = "Hintergrundvorgang läuft";
+                PhaseText.Text = UiLanguage.T("Hintergrundvorgang läuft");
                 Progress.IsIndeterminate = true;
-                CurrentFileText.Text = "Warte auf Hintergrundfortschritt";
+                CurrentFileText.Text = UiLanguage.T("Warte auf Hintergrundfortschritt");
                 FolderPathText.Text = string.Empty;
                 FolderPathText.ToolTip = null;
                 CurrentThumbnail.Source = null;
@@ -393,14 +393,12 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void ShowScanProgress(ScanProgress progress)
     {
-        PhaseText.Text = "Bilder werden eingelesen";
+        PhaseText.Text = UiLanguage.T("Bilder werden eingelesen");
         Progress.IsIndeterminate = true;
         var processed = progress.Updated + progress.Unchanged + progress.Failed;
-        CountText.Text = $"Neu: {progress.Added:N0} · geprüft: {processed:N0}" +
-            (progress.Failed > 0 ? $" · Fehler: {progress.Failed:N0}" : string.Empty);
-        CountText.ToolTip = $"{progress.ImageFilesSeen:N0} gefunden · " +
-            $"{progress.Unchanged:N0} unverändert · {progress.Changed:N0} geändert · " +
-            $"{progress.CacheRepaired:N0} Cache-Reparaturen";
+        CountText.Text = UiLanguage.Format("Neu: {0:N0} · geprüft: {1:N0}", progress.Added, processed) +
+            (progress.Failed > 0 ? UiLanguage.Format(" · Fehler: {0:N0}", progress.Failed) : string.Empty);
+        CountText.ToolTip = UiLanguage.Format("{0:N0} gefunden · {1:N0} unverändert · {2:N0} geändert · {3:N0} Cache-Reparaturen", progress.ImageFilesSeen, progress.Unchanged, progress.Changed, progress.CacheRepaired);
         // The scanner has already committed this local thumbnail.
         // An original on S:\\ over VPN is not a valid preview source.
         UpdateCurrentImage(progress.CurrentFile, progress.CurrentThumbnailPath);
@@ -443,7 +441,7 @@ public partial class BrowseCacheProgressWindow : Window
         Progress.Value = Math.Min(Progress.Maximum, progress.ProcessedImages);
         CountText.Text = $"{progress.ProcessedImages:N0} / {progress.TotalImages:N0}" +
             (progress.FailedImages > 0
-                ? $" · {progress.FailedImages:N0} Fehler" : string.Empty);
+                ? UiLanguage.Format(" · {0:N0} Fehler", progress.FailedImages) : string.Empty);
 
         UpdateCurrentImage(progress.CurrentPath, progress.CurrentThumbnailPath);
     }
