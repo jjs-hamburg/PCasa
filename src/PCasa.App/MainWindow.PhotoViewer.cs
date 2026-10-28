@@ -138,7 +138,7 @@ public partial class MainWindow
         _selectedImageIds.Clear();
         _selectedImageIds.Add(imageId);
         BrowseSurface.SetSelection(_selectedImageIds);
-        SelectionText.Text = "Auswahl: 1";
+        SelectionText.Text = UiLanguage.T("Auswahl: 1");
         UpdateComparisonButtons();
         _ = UpdateSidebarContentAsync();
     }
@@ -950,7 +950,7 @@ public partial class MainWindow
         var window = new Window
         {
             Owner = this,
-            Title = "PCasa – Vollbild",
+            Title = UiLanguage.T("PCasa – Vollbild"),
             WindowStyle = WindowStyle.None,
             ResizeMode = ResizeMode.NoResize,
             WindowState = WindowState.Maximized,
@@ -1338,7 +1338,7 @@ public partial class MainWindow
             _selectedImageIds.Clear();
             foreach (var imageId in comparisonSelection) _selectedImageIds.Add(imageId);
             BrowseSurface.SetSelection(_selectedImageIds);
-            SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
+            SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
             UpdateComparisonButtons();
         }
 
