@@ -268,17 +268,21 @@ public partial class BrowseCacheProgressWindow : Window
             // A recursive NAS scan has no known total until enumeration ends.
             CountText.Text = $"{progress.Processed:N0} geprüft";
         }
-        if (progress.CurrentPath is not { Length: > 0 } &&
-            _manualCurrentImagePath is null)
+        if (progress.CurrentPath is not { Length: > 0 })
         {
-            // A running catalog step is work, not a wait for the scheduler.
-            // Do not claim that a file is being written before its path has
-            // actually been reported by the same scheduler snapshot.
+            // A retry/yield may switch away from the previous original.
+            // Do not leave its thumbnail/path attached to a waiting job.
+            _manualCurrentImagePath = null;
+            CurrentThumbnail.Source = null;
+            CurrentFileText.ToolTip = null;
+            FolderPathText.Text = string.Empty;
+            FolderPathText.ToolTip = null;
             CurrentFileText.Text = progress.State switch
             {
                 SchedulerJobState.Running => "Auftrag wird bearbeitet",
                 SchedulerJobState.YieldRequested => "Wartet auf neueren Auftrag",
                 SchedulerJobState.Queued => "Warte auf Scheduler",
+                SchedulerJobState.Failed => progress.Error ?? "Auftrag fehlgeschlagen",
                 _ => CurrentFileText.Text
             };
         }
