@@ -583,24 +583,88 @@ public sealed class ImageTagRepository
         }
     }
 
+    // Commas/semicolons separate distinct Tag requirements. Matching is
+    // AND across all supplied terms; no file/ExifTool/NAS reads are involved.
+    // A single unseparated query retains its established FTS-prefix behavior.
     public HashSet<long> SearchImageIds(string text)
     {
-        var tokens = Regex.Matches(text, @"[\p{L}\p{N}_]+")
-            .Select(m => m.Value)
-            .Where(v => v.Length > 0)
+        var tagParts = text.Split([',', ';'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (tagParts.Length == 0) return new HashSet<long>();
+        var groupedWords = tagParts.Select(part =>
+                Regex.Matches(part, @"[\p{L}\p{N}_]+")
+                    .Select(m => m.Value).ToArray())
             .ToArray();
-        if (tokens.Length == 0) return new HashSet<long>();
-        // Quoted terms prevent FTS syntax injection; '*' enables fast prefixes.
-        var expression = string.Join(" AND ",
-            tokens.Select(token => "\"" + token.Replace("\"", "\"\"") + "\"*"));
+        if (groupedWords.Any(group => group.Length == 0))
+            return new HashSet<long>();
+        // Quoted words neutralize FTS syntax, while the existing prefix match
+        // narrows candidate rows efficiently even in very large libraries.
+        var expression = string.Join(" AND ", groupedWords.Select(group =>
+            "(" + string.Join(" AND ", group.Select(word =>
+                "\"" + word.Replace("\"", "\"\"") + "\"*")) + ")"));
         using var db = _database.OpenConnection();
         using var cmd = db.CreateCommand();
-        cmd.CommandText =
-            "SELECT rowid FROM image_tags_fts WHERE image_tags_fts MATCH $terms;";
+        cmd.CommandText = tagParts.Length == 1
+            ? "SELECT rowid FROM image_tags_fts WHERE image_tags_fts MATCH $terms;"
+            : """
+                SELECT f.rowid,t.keywords
+                FROM image_tags_fts f
+                JOIN image_tags t ON t.image_id=f.rowid
+                WHERE image_tags_fts MATCH $terms;
+                """;
         cmd.Parameters.AddWithValue("$terms", expression);
         using var reader = cmd.ExecuteReader();
         var matches = new HashSet<long>();
-        while (reader.Read()) matches.Add(reader.GetInt64(0));
+        while (reader.Read())
+        {
+            if (tagParts.Length == 1)
+            {
+                matches.Add(reader.GetInt64(0));
+                continue;
+            }
+            // FTS narrows the rows, but AND between words alone could match
+            // two different words in an unrelated long Tag. Require every
+            // input term to match an individual stored Tag (prefix of word
+            // sequence), without consuming one Tag twice.
+            var stored = reader.IsDBNull(1) ? Array.Empty<string>()
+                : reader.GetString(1).Split('\n',
+                    StringSplitOptions.RemoveEmptyEntries |
+                    StringSplitOptions.TrimEntries);
+            var tokensByTag = stored.Select(tag => Regex.Matches(tag,
+                    @"[\p{L}\p{N}_]+").Select(m => m.Value).ToArray())
+                .ToArray();
+            var assigned = new bool[stored.Length];
+            bool MatchesEvery(int termIndex)
+            {
+                if (termIndex == groupedWords.Length) return true;
+                var words = groupedWords[termIndex];
+                for (var tagIndex = 0; tagIndex < tokensByTag.Length; tagIndex++)
+                {
+                    if (assigned[tagIndex]) continue;
+                    var tokens = tokensByTag[tagIndex];
+                    var matchesPhrase = false;
+                    for (var start = 0; start + words.Length <= tokens.Length; start++)
+                    {
+                        var all = true;
+                        for (var word = 0; word < words.Length; word++)
+                            if (!tokens[start + word].StartsWith(words[word],
+                                StringComparison.OrdinalIgnoreCase))
+                            {
+                                all = false;
+                                break;
+                            }
+                        if (all) { matchesPhrase = true; break; }
+                    }
+                    if (!matchesPhrase) continue;
+                    assigned[tagIndex] = true;
+                    if (MatchesEvery(termIndex + 1)) return true;
+                    assigned[tagIndex] = false;
+                }
+                return false;
+            }
+            if (MatchesEvery(0)) matches.Add(reader.GetInt64(0));
+        }
         return matches;
     }
 
