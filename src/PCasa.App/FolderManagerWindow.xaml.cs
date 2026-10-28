@@ -259,7 +259,7 @@ public partial class FolderManagerWindow : Window
             : _selected.Root is null ? UiLanguage.T("Noch nicht überwacht. Ordner im Baum aktivieren.")
             : _selected.IsRoot ? UiLanguage.T("Überwachte Wurzel. Kann über das Häkchen des Systemordners oder über „Wurzel entfernen“ abgewählt werden.")
             : IsExcluded(_selected) ? UiLanguage.T("Von der PCasa-Bibliothek ausgeschlossen.")
-            : "Dieser Ordner wird von PCasa eingelesen.";
+            : UiLanguage.T("Dieser Ordner wird von PCasa eingelesen.");
         RemoveFolderButton.IsEnabled =
             _selected is { IsRoot: true, Root: not null } && !_busy;
         if (_selected is { IsRoot: true, Root: { } serverRoot } &&
