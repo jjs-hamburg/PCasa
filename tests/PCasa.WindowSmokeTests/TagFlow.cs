@@ -894,6 +894,110 @@ internal static class TagFlow
                     { Count: 0 },
                 "Real Tag progress did not finish before independent synthetic counter test.");
 
+            // An offline NAS volume must not trap reachable local tag
+            // writes behind the old fixed-list retry cursor. This runs the
+            // actual V2 package through PCasa's existing scheduler and native
+            // ExifTool writer; all sources remain part of the same DB intent
+            // table, never a second queue.
+            var unavailableA = Path.Combine(albumA, "a-09.jpg");
+            var unavailableB = Path.Combine(albumA, "a-10.jpg");
+            var reachable = Path.Combine(albumB, "b-11.jpg");
+            var unavailableAId = catalog.GetImageId(unavailableA)
+                ?? throw new Exception("First offline test photo missing.");
+            var unavailableBId = catalog.GetImageId(unavailableB)
+                ?? throw new Exception("Second offline test photo missing.");
+            var reachableId = catalog.GetImageId(reachable)
+                ?? throw new Exception("Local test photo missing.");
+            const string sourceOfflineTag = "PCasa-offline-root-resume";
+            if (Directory.Exists(@"Z:\\"))
+                throw new Exception("Test machine unexpectedly has the isolated Z drive.");
+            var testRepo = new ImageTagRepository(db);
+            if (testRepo.QueueTagEdit(
+                    new[] { unavailableAId, unavailableBId, reachableId },
+                    sourceOfflineTag, false) != 3)
+                throw new Exception("Failed to stage two offline and one local tag.");
+            using (var connection = db.OpenConnection())
+            using (var update = connection.CreateCommand())
+            {
+                update.CommandText =
+                    "UPDATE images SET local_path=$path WHERE id=$id;";
+                update.Parameters.Add("$path", SqliteType.Text);
+                update.Parameters.Add("$id", SqliteType.Integer);
+                for (var i = 0; i < 2; i++)
+                {
+                    update.Parameters["$path"].Value = @"Z:\\PCasa-unavailable-test\\" +
+                        (i == 0 ? "a.jpg" : "b.jpg");
+                    update.Parameters["$id"].Value =
+                        i == 0 ? unavailableAId : unavailableBId;
+                    update.ExecuteNonQuery();
+                }
+            }
+            var createV2 = typeof(PCasa.App.MainWindow).GetMethod(
+                "BuildTagRecoveryPackageV2",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("V2 recovery factory missing.");
+            const string sourceRecoveryKey = "tags:smoke:offline-root-v2";
+            var sourceRecovery = (SchedulerTaskPackage?)createV2.Invoke(
+                window, [sourceRecoveryKey, "{}"])
+                ?? throw new Exception("Failed to construct the V2 recovery.");
+            var sourceScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+            try
+            {
+                var sourceRecoveryTask = sourceScheduler.EnqueuePackageAsync(
+                    sourceRecovery, SchedulerPriority.ManualAction);
+                Until(window, () => sourceRecoveryTask.IsCompleted,
+                    "Offline-source recovery never finished its bounded pass.");
+                if (sourceRecoveryTask.Exception is null ||
+                    !sourceRecoveryTask.Exception.Flatten().InnerExceptions
+                        .Any(ex => ex is DurablePackageRetryException))
+                    throw new Exception(
+                        "Offline originals were incorrectly marked as fully written.");
+                if (testRepo.PendingEditsForImage(reachableId).Count != 0 ||
+                    !(ImageTagRepository.ReadKeywords(reachable) ?? "")
+                        .Contains(sourceOfflineTag, StringComparison.Ordinal))
+                    throw new Exception(
+                        "Offline NAS originals blocked the reachable local Tag write.");
+                if (testRepo.PendingEditsForImage(unavailableAId).Count != 1 ||
+                    testRepo.PendingEditsForImage(unavailableBId).Count != 1)
+                    throw new Exception(
+                        "Unreachable NAS edits were lost instead of remaining red/pending.");
+            }
+            finally
+            {
+                // Test-only cleanup for ephemeral WindowSmoke DB. Real PCasa
+                // NEVER drops pending user intents on offline source errors.
+                using var connection = db.OpenConnection();
+                using var tx = connection.BeginTransaction();
+                using (var delete = connection.CreateCommand())
+                {
+                    delete.Transaction = tx;
+                    delete.CommandText =
+                        "DELETE FROM pending_tag_edits WHERE tag=$tag;";
+                    delete.Parameters.AddWithValue("$tag", sourceOfflineTag);
+                    delete.ExecuteNonQuery();
+                }
+                using (var restore = connection.CreateCommand())
+                {
+                    restore.Transaction = tx;
+                    restore.CommandText =
+                        "UPDATE images SET local_path=$path WHERE id=$id;";
+                    restore.Parameters.Add("$path", SqliteType.Text);
+                    restore.Parameters.Add("$id", SqliteType.Integer);
+                    restore.Parameters["$path"].Value = unavailableA;
+                    restore.Parameters["$id"].Value = unavailableAId;
+                    restore.ExecuteNonQuery();
+                    restore.Parameters["$path"].Value = unavailableB;
+                    restore.Parameters["$id"].Value = unavailableBId;
+                    restore.ExecuteNonQuery();
+                }
+                tx.Commit();
+            }
+            Console.WriteLine(
+                "PASS: A single V2 pass writes local C: tags despite two offline NAS originals.");
+
             // Several manual Tag packets must share ONE series-wide counter
             // even when an older package progresses behind the newest one.
             // The UI is a projection; no fake durable jobs or DB intents are
