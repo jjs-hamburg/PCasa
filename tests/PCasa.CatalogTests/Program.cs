@@ -44,6 +44,7 @@ internal static class Program
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
         Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
         Run("Cyclic durable retry resumes saved cursor in the same app session", DeferredManualRetryWithinSameSession, failures);
+        Run("Legacy V1 recovery migrates without losing P0 or pending image tags", LegacyTagRecoveryMigrationPreservesIntents, failures);
         Run("Recovered P0 packages resume newest-first including manual NAS scans", RecoveredManualScanPrecedesOlderTags, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
         Run("Scheduler cancels stale source work", SchedulerRejectsStaleGeneration, failures);
@@ -357,6 +358,47 @@ internal static class Program
                     "Cyclic retry repeated a completed step or did not acknowledge success.");
         }
         Check().GetAwaiter().GetResult();
+    }
+
+    private static void LegacyTagRecoveryMigrationPreservesIntents()
+    {
+        using var sandbox = new Sandbox();
+        var image = Path.Combine(sandbox.Images, "legacy-recovery.jpg");
+        WriteJpeg(image);
+        var (database, root, scanner) = sandbox.Prepare();
+        if (scanner.Scan(root).Failed != 0)
+            throw new Exception("Cannot seed a legacy recovery image.");
+        var id = new ImageCatalogRepository(database).GetImageId(image)
+            ?? throw new Exception("Legacy recovery image was not indexed.");
+        var tags = new ImageTagRepository(database);
+        if (tags.QueueTagEdit(new[] { id }, "legacy-unconfirmed-tag", false) != 1)
+            throw new Exception("Could not queue the pending original tag.");
+        var journal = new DurablePackageJournal(database);
+        const string key = "tags:recover:legacy-migration";
+        // Reproduce the user's actual stuck state: saved cursor 314/828,
+        // an offline NAS source and a newer manual scan in the same ledger.
+        var old = journal.Put(key, "tag-recovery-v1",
+            System.Text.Json.JsonSerializer.Serialize(
+                Enumerable.Repeat(id, 828).ToArray()),
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.SetState(key, "running", 314);
+        journal.Defer(key, 314, "NAS offline");
+        var scan = journal.Put("catalog:scan:newer", "manual-folder-scan-v1",
+            "{}", SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        if (journal.UpgradeLegacyTagRecovery() != 1 ||
+            journal.UpgradeLegacyTagRecovery() != 0)
+            throw new Exception("Versioned Tag migration was not idempotent.");
+        var saved = journal.Pending().Single(p => p.Key == key);
+        var savedScan = journal.Pending().Single(p => p.Key == scan.Key);
+        if (saved.Type != "tag-recovery-v2" || saved.Payload != "{}" ||
+            saved.CompletedSteps != 0 || saved.State != "queued" ||
+            saved.Priority != old.Priority || saved.Sequence != old.Sequence ||
+            saved.WorkKind != old.WorkKind || saved.Key != old.Key ||
+            savedScan.Sequence != scan.Sequence ||
+            tags.PendingEditsForImage(id).Count != 1)
+            throw new Exception(
+                "Migrating old 314/828 recovery lost a pending intent, " +
+                "changed LIFO order, or discarded its persisted identity.");
     }
 
     private static void RecoveredManualScanPrecedesOlderTags()
