@@ -594,6 +594,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     }
                 }
                 if (item is null) continue;
+                // The presenter must learn that the worker actually started,
+                // even if the first SQLite/SMB/ExifTool call is still blocked
+                // and has not yet reached its first ReportProgress boundary.
+                PublishState(item);
                 using (yieldRequest)
                 using (var linked = yieldRequest is null
                     ? CancellationTokenSource.CreateLinkedTokenSource(
@@ -638,6 +642,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 item.Completion.TrySetCanceled();
                             }
                         }
+                        // A cooperative yield can make this same package queued
+                        // again without issuing another progress callback.
+                        PublishState(item);
                     }
                     catch (Exception ex)
                     {
@@ -723,6 +730,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private void SetState(WorkItem item, SchedulerJobState state, string? error = null)
     {
         lock (_gate) SetStateUnsafe(item, state, error);
+        PublishState(item);
+    }
+
+    // A scheduler lifecycle transition is progress too. Invoke observers
+    // OUTSIDE _gate, just as ReportProgress does; no UI queue or shadow state.
+    private void PublishState(WorkItem item)
+    {
+        SchedulerJobSnapshot? snapshot;
+        lock (_gate) snapshot = _history.LastOrDefault(x => x.Id == item.Id);
+        if (snapshot is null) return;
+        try { ProgressChanged?.Invoke(snapshot); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
     }
 
     private void SetStateUnsafe(WorkItem item, SchedulerJobState state, string? error = null)
@@ -736,7 +755,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
             StartedAt = state == SchedulerJobState.Running
                 ? _history[index].StartedAt ?? now : _history[index].StartedAt,
             FinishedAt = state is SchedulerJobState.Completed or
-                SchedulerJobState.Failed or SchedulerJobState.Canceled ? now : null
+                SchedulerJobState.Failed or SchedulerJobState.Canceled ? now : null,
+            // A yielded package must not claim that it is STILL writing the
+            // last file when it re-enters the queue or starts a new attempt.
+            CurrentPath = state is SchedulerJobState.Queued or SchedulerJobState.Running
+                ? null : _history[index].CurrentPath,
+            Phase = state is SchedulerJobState.Queued or SchedulerJobState.Running
+                ? null : _history[index].Phase
         };
         TrimHistoryUnsafe();
     }
