@@ -42,7 +42,8 @@ public partial class MainWindow
         _backgroundScanSettings = BackgroundScanSettings.Load();
         _catalogRemovalService = new CatalogRemovalService(_database);
         _backgroundLifetime = new CancellationTokenSource();
-        _backgroundFolderMonitor = new BackgroundFolderMonitor();
+        _backgroundFolderMonitor = new BackgroundFolderMonitor(
+            sources: _scheduler.SourceAvailability);
         _backgroundFolderMonitor.Changed += BackgroundFolderMonitor_Changed;
         BackgroundScanSettings.Changed += BackgroundScanSettings_Changed;
 
@@ -483,6 +484,8 @@ public partial class MainWindow
 
                 if (request.Kind == BackgroundFolderChangeKind.RemovePath)
                 {
+                    if (!_scheduler.SourceAvailability.CanAccess(folder.LocalPath,
+                            _backgroundLifetime.Token)) continue;
                     // A disconnected SMB share must NEVER be interpreted
                     // as a user deleting its entire photo library.
                     if (IsPathKnownOffline(folder.LocalPath))
@@ -498,6 +501,8 @@ public partial class MainWindow
                         workKind: SchedulerWorkKind.SourceProbe);
                     if (!rootReachable)
                     {
+                        _scheduler.SourceAvailability.CheckAfterSourceError(
+                            folder.LocalPath, _backgroundLifetime.Token);
                         continue;
                     }
 
@@ -566,7 +571,8 @@ public partial class MainWindow
                 var scanPath = request.Kind == BackgroundFolderChangeKind.RescanRoot
                     ? folder.LocalPath
                     : request.Path;
-                if (IsPathKnownOffline(scanPath))
+                if (!_scheduler.SourceAvailability.CanAccess(scanPath,
+                        _backgroundLifetime.Token) || IsPathKnownOffline(scanPath))
                 {
                     continue;
                 }
@@ -586,6 +592,8 @@ public partial class MainWindow
                     workKind: SchedulerWorkKind.SourceProbe);
                 if (!scanPathExists)
                 {
+                    _scheduler.SourceAvailability.CheckAfterSourceError(
+                        scanPath, _backgroundLifetime.Token);
                     continue;
                 }
                 // Directory.Exists can outlive cancellation on a dead NAS.
