@@ -318,8 +318,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            PCasaDiagnostics.Write("Scheduler.PackageFailed:" + record.Key, ex);
-            journal.SetState(record.Key, "failed", package.CompletedSteps, ex.Message);
+            // A durable step failing is not proof that the user's operation
+            // should be abandoned. Filesystem/network faults and old recipe
+            // limitations must remain recoverable, without holding all lower
+            // priority jobs hostage between bounded retries.
+            PCasaDiagnostics.Write("Scheduler.PackageDeferred:" + record.Key, ex);
+            journal.Defer(record.Key, package.CompletedSteps, ex.Message);
             throw;
         }
         finally
