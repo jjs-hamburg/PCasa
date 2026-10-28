@@ -389,6 +389,28 @@ public sealed class ImageTagRepository
         return result;
     }
 
+    // The single SQLite intent table determines recovery, not a stale
+    // immutable list from an earlier software version. Include source paths
+    // so one offline volume can be skipped for this attempt while reachable
+    // images on other volumes continue to be written.
+    public IReadOnlyList<(long ImageId, string Path)> PendingImagePaths()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT p.image_id,i.local_path
+            FROM pending_tag_edits p
+            JOIN images i ON i.id=p.image_id
+            GROUP BY p.image_id
+            ORDER BY MIN(p.updated_utc),p.image_id;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var results = new List<(long, string)>();
+        while (reader.Read())
+            results.Add((reader.GetInt64(0), reader.GetString(1)));
+        return results;
+    }
+
     public IReadOnlyList<(long Id, long ImageId, string Tag, bool Present, long Revision)>
         PendingEditsForImage(long imageId)
     {
