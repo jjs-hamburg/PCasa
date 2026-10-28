@@ -901,7 +901,7 @@ internal static class TagFlow
             // table, never a second queue.
             var unavailableA = Path.Combine(albumA, "a-09.jpg");
             var unavailableB = Path.Combine(albumA, "a-10.jpg");
-            var reachable = Path.Combine(albumB, "b-11.jpg");
+            var reachable = firstOriginal; // known indexed and present after earlier tag tests
             var unavailableAId = catalog.GetImageId(unavailableA)
                 ?? throw new Exception("First offline test photo missing.");
             var unavailableBId = catalog.GetImageId(unavailableB)
