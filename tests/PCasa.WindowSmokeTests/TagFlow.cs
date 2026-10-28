@@ -201,6 +201,51 @@ internal static class TagFlow
             if (!ReferenceEquals(tree.SelectedItem, monitoredRootItem))
                 throw new Exception("Tag search changed the original parent focus.");
             Console.WriteLine("PASS: Real tag search filters SQLite-indexed photos without changing tree focus.");
+            // Exercise the actual WPF typing/debounce and SQLite search for
+            // multi-keyword AND. There is exactly one photo with BOTH tags.
+            // Restore its original catalog keyword before all later tests.
+            var extraTaggedImage = Path.Combine(albumA, "a-00-topaz.jpg");
+            void SetExtraKeyword(string keywords)
+            {
+                using var connection = db.OpenConnection();
+                using var update = connection.CreateCommand();
+                update.CommandText = """
+                    UPDATE image_tags SET keywords=$keywords
+                    WHERE image_id=(SELECT id FROM images
+                                    WHERE local_path=$path COLLATE NOCASE);
+                    """;
+                update.Parameters.AddWithValue("$keywords", keywords);
+                update.Parameters.AddWithValue("$path", extraTaggedImage);
+                if (update.ExecuteNonQuery() != 1)
+                    throw new Exception("Could not seed multi-Tag search fixture.");
+            }
+            SetExtraKeyword("roma\nReise Hamburg");
+            try
+            {
+                search.Text = "roma, reise hamburg";
+                Until(window, () => SortedGallery().Count == 1 &&
+                    SortedGallery()[0].FileName == "a-00-topaz.jpg",
+                    "Comma-separated Tag AND did not return exactly one matching photo.");
+                search.Text = "reise hamburg;ROM";
+                Until(window, () => SortedGallery().Count == 1 &&
+                    SortedGallery()[0].FileName == "a-00-topaz.jpg",
+                    "Semicolon-separated Tag AND did not use case-insensitive prefixes.");
+                search.Text = "roma, berlin";
+                Until(window, () => SortedGallery().Count == 0,
+                    "Multi-Tag AND matched pictures without all required Tags.");
+                search.Text = "roma; reise hamburg, missing";
+                Until(window, () => SortedGallery().Count == 0,
+                    "Mixed separators incorrectly ignored a missing required Tag.");
+            }
+            finally
+            {
+                SetExtraKeyword("roma");
+                search.Text = "roma";
+            }
+            Until(window, () => SortedGallery().Count == 12,
+                "Multi-Tag test did not restore the single-Tag gallery.");
+            Console.WriteLine("PASS: WPF comma/semicolon multi-Tag AND search and single-Tag restoration.");
+
 
             FolderTreeNavigation.ExpandAncestors(albumBItem);
             albumBItem.IsSelected = true;
@@ -259,6 +304,42 @@ internal static class TagFlow
                 "Global tag search excluded an indexed collapsed folder.");
             Console.WriteLine(
                 "PASS: Global tag search includes collapsed folders despite gallery-only hide option.");
+            // The new independent toggle limits the search universe to the
+            // very same collapsed-folder mask as the ordinary gallery.
+            // Existing global Tag searches must remain unrestricted when
+            // the toggle is off.
+            var galleryOnly = (System.Windows.Controls.Primitives.ToggleButton?)
+                window.FindName("GalleryViewFilterToggle")
+                ?? throw new Exception("Galerieansicht search toggle missing.");
+            var galleryNot = (System.Windows.Controls.Primitives.ToggleButton?)
+                window.FindName("InvertFilterToggle")
+                ?? throw new Exception("NOT toggle missing.");
+            galleryOnly.IsChecked = true;
+            Until(window, () => SortedGallery().Count == 0,
+                "Galerieansicht search included hidden descendants.");
+            galleryNot.IsChecked = true;
+            Until(window, () => SortedGallery().Count == 0,
+                "NOT included hidden descendants outside the Galerieansicht universe.");
+            galleryNot.IsChecked = false;
+            monitoredRootItem.IsExpanded = true;
+            Until(window, () => SortedGallery().Count == 12 &&
+                SortedGallery().All(image => image.PhotoFolderId == b.Id),
+                "Expanding the folder did not refresh Galerieansicht Tag hits.");
+            galleryNot.IsChecked = true;
+            Until(window, () => SortedGallery().Count == 12 &&
+                SortedGallery().All(image => image.PhotoFolderId == a.Id),
+                "NOT did not complement Tags within Galerieansicht.");
+            galleryNot.IsChecked = false;
+            monitoredRootItem.IsExpanded = false;
+            Until(window, () => SortedGallery().Count == 0,
+                "Collapsing the folder did not refresh Galerieansicht search.");
+            galleryOnly.IsChecked = false;
+            Until(window, () => SortedGallery().Count == 12 &&
+                SortedGallery().All(image => image.PhotoFolderId == b.Id),
+                "Disabling Galerieansicht did not restore unrestricted global hits.");
+            Console.WriteLine(
+                "PASS: Galerieansicht respects folder expansion; NOT stays inside visible universe.");
+
 
             fileMode.IsChecked = true;
             search.Text = "topaz";
