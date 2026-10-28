@@ -426,7 +426,11 @@ public partial class MainWindow
 
     private void RequestVisibleTagThumbnail(SchedulerJobSnapshot status)
     {
-        if (!status.Key.StartsWith("tags:", StringComparison.Ordinal) ||
+        // The same local-cache preview serves Tag writes AND recovered
+        // manual scans. Never decode a NAS original in the presenter.
+        if (!(status.Key.StartsWith("tags:", StringComparison.Ordinal) ||
+              status.Key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
+              status.Key.StartsWith("catalog:scan-all:", StringComparison.Ordinal)) ||
             status.CurrentPath is not { Length: > 0 } source ||
             _manualThumbnailBusy ||
             string.Equals(_lastManualThumbnailPath, source,
