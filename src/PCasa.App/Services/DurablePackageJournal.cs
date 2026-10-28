@@ -31,12 +31,35 @@ public sealed class DurablePackageJournal
                 completed_steps INTEGER NOT NULL DEFAULT 0,
                 state TEXT NOT NULL DEFAULT 'queued',
                 error TEXT,
+                retry_attempts INTEGER NOT NULL DEFAULT 0,
+                retry_after_utc TEXT,
                 updated_utc TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_scheduler_packages_active
                 ON scheduler_packages(state, priority, sequence);
             """;
         cmd.ExecuteNonQuery();
+        // Older PCasa installations already have scheduler_packages. Migrate
+        // its durable ledger in place; do not rebuild or discard pending work.
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var schema = db.CreateCommand())
+        {
+            schema.CommandText = "PRAGMA table_info(scheduler_packages);";
+            using var reader = schema.ExecuteReader();
+            while (reader.Read()) columns.Add(reader.GetString(1));
+        }
+        if (!columns.Contains("retry_attempts"))
+        {
+            using var add = db.CreateCommand();
+            add.CommandText = "ALTER TABLE scheduler_packages ADD COLUMN retry_attempts INTEGER NOT NULL DEFAULT 0;";
+            add.ExecuteNonQuery();
+        }
+        if (!columns.Contains("retry_after_utc"))
+        {
+            using var add = db.CreateCommand();
+            add.CommandText = "ALTER TABLE scheduler_packages ADD COLUMN retry_after_utc TEXT;";
+            add.ExecuteNonQuery();
+        }
     }
 
     public DurablePackageRecord Put(string key, string type, string payload,
@@ -88,7 +111,7 @@ public sealed class DurablePackageJournal
         cmd.CommandText = """
             SELECT package_key,package_type,payload_json,priority,work_kind,
                    sequence,completed_steps,state,error
-              FROM scheduler_packages WHERE state IN ('queued','running')
+              FROM scheduler_packages WHERE state IN ('queued','running','deferred')
              ORDER BY priority ASC, sequence ASC;
             """;
         using var reader = cmd.ExecuteReader();
@@ -103,9 +126,9 @@ public sealed class DurablePackageJournal
         return results;
     }
 
-    // The persistent ledger is authoritative. Retryable P0 packages may
-    // remain queued here after their executor returns; automatic scans must
-    // not interpret that as an empty manual queue.
+    // Only runnable P0 packets prevent automatic work from starting.
+    // A deferred original-file write is still in Pending() and retains its
+    // priority/cursor, but cannot hold the scanner hostage until NAS returns.
     public bool HasPendingManualActions()
     {
         using var db = _database.OpenConnection();
@@ -118,6 +141,88 @@ public sealed class DurablePackageJournal
             """;
         cmd.Parameters.AddWithValue("$priority", (int)SchedulerPriority.ManualAction);
         return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+    }
+
+    // A failed attempt is not a finished or canceled user action. The
+    // next attempt is durable, bounded, and owned by the existing scheduler.
+    // Backoff stops a permanently unavailable NAS monopolizing the worker.
+    public void Defer(string key, int completed, string error,
+        TimeSpan? firstAttemptDelay = null)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        long attempts;
+        using (var lookup = db.CreateCommand())
+        {
+            lookup.Transaction = tx;
+            lookup.CommandText =
+                "SELECT retry_attempts FROM scheduler_packages WHERE package_key=$key;";
+            lookup.Parameters.AddWithValue("$key", key);
+            var previous = lookup.ExecuteScalar();
+            if (previous is null) throw new InvalidOperationException(
+                "Unbekannter persistenter Auftrag: " + key);
+            attempts = Convert.ToInt64(previous);
+        }
+        var seconds = Math.Min(120, 5 * (1L << (int)Math.Min(attempts, 5)));
+        var retryAfter = DateTimeOffset.UtcNow +
+            (firstAttemptDelay ?? TimeSpan.FromSeconds(seconds));
+        using (var command = db.CreateCommand())
+        {
+            command.Transaction = tx;
+            command.CommandText = """
+                UPDATE scheduler_packages
+                   SET state='deferred',
+                       completed_steps=MAX(completed_steps,$step),
+                       retry_attempts=retry_attempts+1,
+                       retry_after_utc=$retry,
+                       error=$error, updated_utc=$now
+                 WHERE package_key=$key
+                   AND state NOT IN ('completed','failed','canceled');
+                """;
+            command.Parameters.AddWithValue("$key", key);
+            command.Parameters.AddWithValue("$step", completed);
+            command.Parameters.AddWithValue("$error", error);
+            command.Parameters.AddWithValue("$retry", retryAfter.UtcDateTime.ToString("O"));
+            command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            command.ExecuteNonQuery();
+        }
+        tx.Commit();
+    }
+
+    public IReadOnlyList<string> DueDeferredKeys()
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            SELECT package_key
+              FROM scheduler_packages
+             WHERE state='deferred'
+               AND (retry_after_utc IS NULL OR retry_after_utc <= $now)
+             ORDER BY priority ASC, sequence DESC;
+            """;
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        using var reader = command.ExecuteReader();
+        var keys = new List<string>();
+        while (reader.Read()) keys.Add(reader.GetString(0));
+        return keys;
+    }
+
+    // Called only by the one scheduler retry coordinator; SQLite CAS keeps
+    // two racing observations or restarts from scheduling duplicate writers.
+    public DurablePackageRecord? ActivateDueDeferred(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            UPDATE scheduler_packages
+               SET state='queued',retry_after_utc=NULL,updated_utc=$now
+             WHERE package_key=$key AND state='deferred'
+               AND (retry_after_utc IS NULL OR retry_after_utc <= $now);
+            """;
+        command.Parameters.AddWithValue("$key", key);
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        if (command.ExecuteNonQuery() == 0) return null;
+        return Pending().FirstOrDefault(p => p.Key == key);
     }
 
     public void SetState(string key, string state, int? completed = null,
