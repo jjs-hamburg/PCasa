@@ -1170,6 +1170,17 @@ internal static class TagFlow
             int ActiveChildren() => (int)liveCount.GetValue(null)!;
             if (ActiveChildren() < 2)
                 throw new Exception("ExifTool shutdown test did not start two children.");
+            // The normal shutdown test only checks a graceful exit. Assert
+            // Windows also owns the kernel job which kills ExifTool children
+            // when PCasa is terminated before WPF can dispose its readers.
+            var jobField = registryType.GetField("_processJob",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Crash-safe ExifTool process job missing.");
+            var processJob = jobField.GetValue(null) as System.Runtime.InteropServices.SafeHandle;
+            if (OperatingSystem.IsWindows() &&
+                (processJob is null || processJob.IsInvalid || processJob.IsClosed))
+                throw new Exception("PCasa did not create its ExifTool kill-on-close job.");
             window.Close();
             Until(window, () => !window.IsVisible,
                 "PCasa did not finish shutdown after writing tags.");
