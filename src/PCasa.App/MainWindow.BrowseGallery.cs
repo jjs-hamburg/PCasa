@@ -64,18 +64,34 @@ public partial class MainWindow
         // BEFORE the scheduler starts replaying them. This is the same
         // progress presenter used by ordinary manual file operations.
         RestoreVisiblePendingTagPackages();
+        // Recovered manual scans are real P0 work, too. Reconstruct their
+        // read-only progress projection before the scheduler starts replay.
+        // Otherwise an older pending Tag package appears to be stuck on
+        // "Warte auf Scheduler" while a newer P0 scan actually owns the lane.
+        var recoveredScanKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var record in new DurablePackageJournal(_database).Pending()
+            .Where(p => p.Type is "manual-folder-scan-v1" or "manual-scan-all-v1"))
+        {
+            recoveredScanKeys.Add(record.Key);
+            BeginVisibleManualOperation(record.Key,
+                record.Type == "manual-scan-all-v1"
+                    ? "Alle Ordner einlesen" : "Ordner aktualisieren", 0);
+        }
         var unresolvedPackages = _scheduler.RecoverDurablePackages(
             (key, task) =>
             {
                 if (_recoveredTagPresentationKeys.Contains(key))
                     _ = ObserveRecoveredTagOperationAsync(task, key);
+                else if (recoveredScanKeys.Contains(key))
+                    _ = ObserveRecoveredManualScanAsync(task, key);
             });
         // A recipe or journal cursor that cannot be reconstructed is NOT a
         // queued scheduler operation. Keep it durable for inspection, but do
         // not leave a fake "Warte auf Scheduler" progress dialog forever.
         foreach (var unresolved in unresolvedPackages)
         {
-            if (_recoveredTagPresentationKeys.Remove(unresolved.Key))
+            if (_recoveredTagPresentationKeys.Remove(unresolved.Key) ||
+                recoveredScanKeys.Remove(unresolved.Key))
                 EndVisibleManualOperation(unresolved.Key);
             PCasaDiagnostics.WriteMessage("Scheduler.UnresolvedPackage",
                 $"Key={unresolved.Key}; Type={unresolved.Type}; " +
@@ -97,6 +113,25 @@ public partial class MainWindow
         StartTagBackfill();
     }
 
+
+    private async Task ObserveRecoveredManualScanAsync(Task completion, string key)
+    {
+        try { await completion; }
+        catch (OperationCanceledException) { }
+        catch (DurablePackageRetryException ex)
+        {
+            PCasaDiagnostics.Write("Catalog.RecoveredManualScanDeferred", ex);
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Catalog.RecoveredManualScanFailed", ex);
+        }
+        finally
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                EndVisibleManualOperation(key);
+        }
+    }
 
     private async Task ReconcilePersistedExclusionsAsync()
     {
