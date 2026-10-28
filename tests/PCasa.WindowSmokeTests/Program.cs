@@ -62,6 +62,47 @@ internal static class Program
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
 
+            // Exercise the real menu action, live resource bindings and
+            // appearance.json persistence. This must work WITHOUT restarting
+            // WPF and without creating a second UI-translation mechanism.
+            var englishMenu = window.FindName("LanguageEnglishMenu") as MenuItem
+                ?? throw new Exception("English language selector is missing.");
+            var germanMenu = window.FindName("LanguageGermanMenu") as MenuItem
+                ?? throw new Exception("German language selector is missing.");
+            if (!germanMenu.IsChecked || englishMenu.IsChecked)
+                throw new Exception("German should be the initial UI language.");
+            englishMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, englishMenu));
+            Flush(window);
+            if (UiLanguage.Current.Code != "en" ||
+                !englishMenu.IsChecked || germanMenu.IsChecked ||
+                !menu.Items.OfType<MenuItem>()
+                    .Select(item => item.Header?.ToString())
+                    .SequenceEqual(new[] { "File", "Edit", "Folder", "Options", "Help" }))
+                throw new Exception("English translations were not applied live.");
+            if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
+                    ?.Content?.ToString() != "Gallery view")
+                throw new Exception("Open WPF search bar did not switch to English.");
+            var localeConfig = (string?)typeof(PCasa.App.MainWindow).GetField(
+                "_appearanceFile", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)?.GetValue(window)
+                ?? throw new Exception("Appearance settings path missing.");
+            using (var languageSettings = System.Text.Json.JsonDocument.Parse(
+                System.IO.File.ReadAllText(localeConfig)))
+            {
+                if (languageSettings.RootElement.GetProperty("Language")
+                    .GetString() != "en")
+                    throw new Exception("Selected language was not persisted.");
+            }
+            germanMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, germanMenu));
+            Flush(window);
+            if (UiLanguage.Current.Code != "de" || !germanMenu.IsChecked ||
+                englishMenu.IsChecked ||
+                menu.Items.OfType<MenuItem>().First().Header?.ToString() != "Datei")
+                throw new Exception("Returning to German did not refresh the UI.");
+            Console.WriteLine(
+                "PASS: Central English/German UI live switch and appearance persistence.");
+
+
             // All bundled textures must be external, discoverable JPGs,
             // selectable by filename and native-sized across DPI settings.
             var textures = PCasa.App.Services.GalleryTextureLibrary.GetFiles();
