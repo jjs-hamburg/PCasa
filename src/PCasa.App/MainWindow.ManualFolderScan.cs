@@ -68,15 +68,23 @@ public partial class MainWindow
         _manualContextCancellation = cancellation;
         _activeScanCancellation = cancellation;
         _activeScanFolderId = null;
-        TrackFolderActivity(directory, "Working", recursive: true);
+        // Requesting work is not the same as executing it. A newer P0
+        // package may still be ahead of this scan on the LIFO stack.
+        TrackFolderActivity(directory, "Pending", recursive: true);
         RefreshFolderStatusVisuals();
 
         var operationKey = $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
         BeginVisibleManualOperation(operationKey, "Ordner aktualisieren", 0);
         StatusText.Text = $"Manueller Scan angefordert (höchste Priorität): {directory}";
+        var scanActive = false;
         var progress = new Progress<ScanProgress>(scan =>
         {
-            if (cancellation.IsCancellationRequested) return;
+            if (cancellation.IsCancellationRequested || !scanActive) return;
+            if (_folderScanStatuses.Get(directory)?.Code != "Working")
+            {
+                TrackFolderActivity(directory, "Working", recursive: true);
+                RefreshFolderStatusVisuals();
+            }
             ShowScannedPhotoFolder(scan);
             StatusText.Text =
                 $"Ordner aktualisieren: {scan.ImageFilesSeen:N0} geprüft · " +
@@ -141,12 +149,14 @@ public partial class MainWindow
                         "Dieser Ordner muss zuerst im Ordnermanager ausgewählt werden.");
             }
 
+            scanActive = true;
             var result = await ScheduleCompleteFolderScanAsync(
                 directory, SchedulerPriority.ManualAction, progress, cancellation.Token,
                 expectedMonitoredFolderId: expectedRootId,
                 requirePendingInitialImport: newRoot,
                 operationKey: operationKey,
                 acknowledgeTargetedPending: acknowledgeTargetedPending);
+            scanActive = false;
             TrackFolderActivity(directory,
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
@@ -175,12 +185,14 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
+            scanActive = false;
             TrackFolderActivity(directory, "Pending", recursive: true);
             RefreshFolderStatusVisuals();
             StatusText.Text = $"Manueller Scan abgebrochen: {directory}";
         }
         catch (Exception ex)
         {
+            scanActive = false;
             TrackFolderActivity(directory, "Failed", recursive: true);
             RefreshFolderStatusVisuals();
             PCasaDiagnostics.Write("Catalog.ManualFolderScan", ex);
