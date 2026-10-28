@@ -15,7 +15,8 @@ public sealed record ScanProgress(
     int Changed = 0,
     int CacheRepaired = 0,
     long? DiscoveredPhotoFolderId = null,
-    string? DiscoveredPhotoFolderPath = null);
+    string? DiscoveredPhotoFolderPath = null,
+    string? CurrentThumbnailPath = null);
 
 public sealed record ScanResult(
     int ImageFilesSeen,
@@ -330,6 +331,9 @@ public sealed class FolderScanner
 
                 long? discoveredFolderId = null;
                 string? discoveredFolderPath = null;
+                // Only local cache paths belong in the progress preview.
+                // Never ask the progress dialog to decode an SMB original.
+                string? currentThumbnailPath = null;
 
                 try
                 {
@@ -415,6 +419,7 @@ public sealed class FolderScanner
                             metadataUpdated++;
                         }
 
+                        currentThumbnailPath = existing.ThumbnailPath;
                         unchanged++;
                         if (firstFileInThisScanFolder)
                         {
@@ -485,6 +490,7 @@ public sealed class FolderScanner
                             packStore.Dispose();
                         }
 
+                        currentThumbnailPath = thumbnail.Path;
                         updated++;
                         // The gallery observes catalog commits, not scanner
                         // progress, tree state or scan completion. Publication
@@ -578,7 +584,7 @@ public sealed class FolderScanner
                 // Show each newly discovered folder and regularly refresh
                 // progress; presentation cannot own the scanner cursor.
                 ReportProgress(localPath, force: discoveredFolderId is not null,
-                    discoveredFolderId, discoveredFolderPath);
+                    discoveredFolderId, discoveredFolderPath, currentThumbnailPath);
             }
         }
         catch (OperationCanceledException)
@@ -661,7 +667,8 @@ public sealed class FolderScanner
         return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed, metadataUpdated);
 
         void ReportProgress(string? currentFile, bool force = false,
-            long? discoveredFolderId = null, string? discoveredFolderPath = null)
+            long? discoveredFolderId = null, string? discoveredFolderPath = null,
+            string? localPreviewPath = null)
         {
             if (!force && progressClock.ElapsedMilliseconds < 250)
             {
@@ -679,7 +686,8 @@ public sealed class FolderScanner
                 changed,
                 cacheRepaired,
                 discoveredFolderId,
-                discoveredFolderPath));
+                discoveredFolderPath,
+                localPreviewPath));
         }
     }
 
