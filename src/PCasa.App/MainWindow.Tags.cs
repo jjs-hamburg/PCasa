@@ -576,10 +576,18 @@ public partial class MainWindow
         new(StringComparer.Ordinal);
 
     private void RestoreVisiblePendingTagPackages()
+        => RestoreVisiblePendingTagPackagesCore(null);
+
+    private void RestoreVisiblePendingTagPackage(string key)
+        => RestoreVisiblePendingTagPackagesCore(key);
+
+    private void RestoreVisiblePendingTagPackagesCore(string? onlyKey)
     {
         var pending = new DurablePackageJournal(_database).Pending()
-            .Where(p => p.Type is "tag-edit-v1" or
-                "tag-recovery-v1" or "tag-recovery-v2")
+            .Where(p => p.State != "deferred" &&
+                (p.Type is "tag-edit-v1" or
+                    "tag-recovery-v1" or "tag-recovery-v2") &&
+                (onlyKey is null || p.Key == onlyKey))
             .ToArray();
         if (pending.Length == 0) return;
         // The OLD UI multiplied the entire database backlog by the number
