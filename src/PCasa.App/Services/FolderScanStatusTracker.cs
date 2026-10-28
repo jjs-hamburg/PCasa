@@ -128,10 +128,14 @@ public sealed class FolderScanStatusTracker
                 if (inherited.Code == "Ready" && result is null)
                     result = inherited;
                 else if (inherited.Code is "Pending" or "Working" &&
-                    result is null)
+                    (result is null ||
+                     (inherited.Code == "Pending" && result.Value.Code == "Ready" &&
+                      result.Value.Sequence < inherited.Sequence)))
                 {
-                    // Descendant is waiting for the parent's ongoing pass,
-                    // not itself being scanned by the worker.
+                    // A newly QUEUED recursive pass invalidates an older
+                    // inherited green confirmation, but a parent merely
+                    // RUNNING does not pretend every child is executing.
+                    // A specific completed child with a newer receipt wins.
                     result = inherited with { Code = "Pending" };
                 }
             }
