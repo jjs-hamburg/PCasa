@@ -126,12 +126,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal ??
             throw new InvalidOperationException("Paketjournal nicht aktiviert.");
         var unresolved = new List<DurablePackageRecord>();
+        var pendingAtStartup = journal.Pending();
+        if (pendingAtStartup.Count > 0)
+        {
+            var overview = string.Join("; ", pendingAtStartup
+                .GroupBy(p => (p.Type, p.State))
+                .Select(g => g.Key.Type + "/" + g.Key.State + "=" + g.Count()));
+            PCasaDiagnostics.WriteMessage("Scheduler.Recovery",
+                $"Restoring {pendingAtStartup.Count} durable packages: {overview}");
+        }
         // The manual executor must NOT start the oldest recovered package
         // while newer durable P0 packages are still being reconstructed.
         lock (_gate) _restoringDurablePackages = true;
         try
         {
-            foreach (var record in journal.Pending())
+            foreach (var record in pendingAtStartup)
             {
                 if (!_packageFactories.TryGetValue(record.Type, out var factory))
                 {
@@ -230,6 +239,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         catch (DurablePackageRetryException ex)
         {
+            PCasaDiagnostics.WriteMessage("Scheduler.Deferred",
+                $"Key={record.Key}; Type={record.Type}; Step={package.CompletedSteps}; {ex.Message}");
             // An offline NAS or temporarily unreachable transfer is neither
             // a completed operation nor a destructive user cancellation.
             // Preserve its original P0 order and cursor for the next startup.
@@ -238,6 +249,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            PCasaDiagnostics.Write("Scheduler.PackageFailed:" + record.Key, ex);
             journal.SetState(record.Key, "failed", package.CompletedSteps, ex.Message);
             throw;
         }
@@ -740,6 +752,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         SchedulerJobSnapshot? snapshot;
         lock (_gate) snapshot = _history.LastOrDefault(x => x.Id == item.Id);
         if (snapshot is null) return;
+        if (snapshot.Priority == SchedulerPriority.ManualAction &&
+            snapshot.Key.StartsWith("tags:", StringComparison.Ordinal))
+            PCasaDiagnostics.WriteMessage("Scheduler.TagState",
+                $"Key={snapshot.Key}; State={snapshot.State}; " +
+                $"Progress={snapshot.Processed}/{snapshot.Total}; Path={snapshot.CurrentPath ?? "(none)"}");
         try { ProgressChanged?.Invoke(snapshot); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
     }
