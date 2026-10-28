@@ -45,7 +45,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private DurablePackageJournal? _durableJournal;
     private readonly HashSet<Task> _durableCompletions = new();
     private bool _restoringDurablePackages;
-    private int _unresolvedDurableManualCount;
+    private Task? _deferredRetryWorker;
+    private Action<string, Task>? _durableRestoreObserver;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
@@ -126,6 +127,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal ??
             throw new InvalidOperationException("Paketjournal nicht aktiviert.");
         var unresolved = new List<DurablePackageRecord>();
+        _durableRestoreObserver = onRestored;
         var pendingAtStartup = journal.Pending();
         if (pendingAtStartup.Count > 0)
         {
@@ -142,8 +144,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             foreach (var record in pendingAtStartup)
             {
+                // A deferred package is durable, but not currently executable.
+                // The central retry coordinator owns its next activation.
+                if (record.State == "deferred") continue;
                 if (!_packageFactories.TryGetValue(record.Type, out var factory))
                 {
+                    journal.Defer(record.Key, record.CompletedSteps,
+                        "Wiederherstellungsfabrik fehlt: " + record.Type);
                     unresolved.Add(record);
                     continue;
                 }
@@ -162,8 +169,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 catch (Exception ex)
                 {
                     // An unreadable recipe is not a completed operation.
-                    journal.SetState(record.Key, "queued",
-                        record.CompletedSteps, ex.Message);
+                    journal.Defer(record.Key, record.CompletedSteps, ex.Message);
                     unresolved.Add(record);
                 }
             }
@@ -172,8 +178,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             lock (_gate)
             {
-                _unresolvedDurableManualCount =
-                    unresolved.Count(p => p.Priority == SchedulerPriority.ManualAction);
                 _restoringDurablePackages = false;
                 // Workers may have consumed signals during recovery.
                 foreach (var lane in new[] { LaneManual, LaneManualSourceProbe })
@@ -181,7 +185,73 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         _signals[lane].Release();
             }
         }
+        // One retry coordinator owned by this scheduler, not a second
+        // Tag, transfer, or scan queue. Start only after recovery is staged.
+        lock (_gate)
+            _deferredRetryWorker ??= Task.Run(RetryDeferredPackagesAsync);
         return unresolved;
+    }
+
+    private async Task RetryDeferredPackagesAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_shutdown.Token))
+            {
+                var journal = _durableJournal;
+                if (journal is null) continue;
+                try
+                {
+                    foreach (var key in journal.DueDeferredKeys())
+                    {
+                        _shutdown.Token.ThrowIfCancellationRequested();
+                        var record = journal.Pending().FirstOrDefault(p => p.Key == key);
+                        if (record is null || record.State != "deferred") continue;
+                        if (!_packageFactories.TryGetValue(record.Type, out var factory))
+                        {
+                            journal.Defer(key, record.CompletedSteps,
+                                "Wiederherstellungsfabrik fehlt: " + record.Type);
+                            continue;
+                        }
+                        SchedulerTaskPackage package;
+                        try
+                        {
+                            package = factory(record.Key, record.Payload);
+                            package.RestoreCursor(record.CompletedSteps);
+                        }
+                        catch (Exception ex)
+                        {
+                            journal.Defer(key, record.CompletedSteps, ex.Message);
+                            PCasaDiagnostics.Write("Scheduler.RetryRecipe:" + key, ex);
+                            continue;
+                        }
+                        var activated = journal.ActivateDueDeferred(key);
+                        if (activated is null) continue;
+                        // SAME journal identity, step cursor and P0 priority;
+                        // ordinary worker lanes still own every execution.
+                        var completion = TrackDurableCompletion(
+                            QueueDurableExisting(package, activated));
+                        try { _durableRestoreObserver?.Invoke(key, completion); }
+                        catch (Exception ex)
+                        {
+                            PCasaDiagnostics.Write("Scheduler.RetryObserver", ex);
+                        }
+                        PCasaDiagnostics.WriteMessage("Scheduler.Retry",
+                            $"Key={key}; Type={record.Type}; Step={record.CompletedSteps}");
+                    }
+                }
+                catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("Scheduler.RetryLoop", ex);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }
 
     public Task EnqueueDurablePackageAsync(SchedulerTaskPackage package,
@@ -241,10 +311,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             PCasaDiagnostics.WriteMessage("Scheduler.Deferred",
                 $"Key={record.Key}; Type={record.Type}; Step={package.CompletedSteps}; {ex.Message}");
-            // An offline NAS or temporarily unreachable transfer is neither
-            // a completed operation nor a destructive user cancellation.
-            // Preserve its original P0 order and cursor for the next startup.
-            journal.SetState(record.Key, "queued", package.CompletedSteps, ex.Message);
+            // The original priority and cursor survive. An offline source
+            // cannot block every subsequent scheduler job until app restart.
+            journal.Defer(record.Key, package.CompletedSteps, ex.Message);
             throw;
         }
         catch (Exception ex)
@@ -479,7 +548,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         priority == SchedulerPriority.ManualAction &&
                         active?.Priority == SchedulerPriority.ManualAction &&
                         active.Id < incomingId &&
-                        workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or SchedulerWorkKind.SourceProbe;
+                        (workKind != SchedulerWorkKind.CatalogScan ||
+                         active.Kind == SchedulerWorkKind.CatalogScan);
                     var supersedesManualScan =
                         priority == SchedulerPriority.ManualAction &&
                         workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe &&
@@ -533,14 +603,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var blockedByHigherPriority =
                         (lane == LaneBackground || lane == LaneInitialImport) &&
                         (persistedManualPending ||
-                         _unresolvedDurableManualCount > 0 ||
                          _catalogForegroundRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                              x.Priority <= SchedulerPriority.UserAction)) ||
                         lane == LaneUserAction &&
                         (persistedManualPending ||
-                         _unresolvedDurableManualCount > 0 ||
                          _catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
                          HasManualSourceProbeUnsafe() ||
                          _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
@@ -552,7 +620,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             // P2 within the shared manual lane. Otherwise an
                             // old yielded scan wins by ID and starves the
                             // exact user move that requested its preemption.
-                            .ThenBy(x => lane == LaneManual ? 0 :
+                            .ThenBy(x => lane == LaneManual &&
                                 x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
                             // Manual packages form a stack: newest request
                             // resumes first, older ones retain their cursor.
@@ -713,7 +781,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                     _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneBackground))
                                     _signals[LaneBackground].Release();
                                 if (_catalogForegroundRunning == 0 &&
-                                    _unresolvedDurableManualCount == 0 &&
                                     !HasManualSourceProbeUnsafe() &&
                                     !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
                                         x.Priority <= SchedulerPriority.UserAction) &&
@@ -803,6 +870,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             _disposed = true;
         }
         _shutdown.Cancel();
+        if (_deferredRetryWorker is not null)
+            await _deferredRetryWorker;
         await Task.WhenAll(_workers);
         // Worker completion can unblock the journal continuation AFTER the
         // worker exits. Do not close the app while a checkpoint is in flight.
