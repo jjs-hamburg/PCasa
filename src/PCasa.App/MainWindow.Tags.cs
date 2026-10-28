@@ -510,16 +510,23 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             var repo = new ImageTagRepository(_database);
-            var ids = repo.PendingEdits(int.MaxValue).Select(edit => edit.ImageId)
-                .Distinct().ToArray();
+            var images = repo.PendingImagePaths();
             var failures = new List<string>();
+            var unreachableRoots = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase);
             var confirmed = 0;
             _scheduler.ReportProgress(key, "Tags in Originaldateien schreiben",
-                0, ids.Length);
-            for (var i = 0; i < ids.Length; i++)
+                0, images.Count);
+            foreach (var (imageId, originalPath) in images)
             {
                 token.ThrowIfCancellationRequested();
-                var imageId = ids[i];
+                var root = Path.GetPathRoot(originalPath) ?? originalPath;
+                // A single offline mapped NAS/share must not prevent the
+                // remaining reachable originals (notably C:) from writing.
+                // This is only a per-attempt shortcut: the scheduler alone
+                // owns the durable retry and unchanged P0 priority.
+                if (unreachableRoots.Contains(root))
+                    continue;
                 try
                 {
                     var edits = repo.PendingEditsForImage(imageId);
@@ -529,7 +536,7 @@ public partial class MainWindow
                         repo.ApplyPendingImageEdits(imageId, edits, writer, token,
                             path => _scheduler.ReportProgress(key,
                                 "Tags in Originaldateien schreiben",
-                                confirmed, ids.Length, path));
+                                confirmed, images.Count, path));
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -540,6 +547,13 @@ public partial class MainWindow
                     // priority and pending DB intents for the next recovery.
                     failures.Add(imageId + ": " + ex.Message);
                     PCasaDiagnostics.Write("Tags.RecoveryWrite", ex);
+                    if (ex is IOException &&
+                        !string.IsNullOrWhiteSpace(root) &&
+                        !Directory.Exists(root) &&
+                        unreachableRoots.Add(root))
+                        PCasaDiagnostics.WriteMessage("Tags.RecoveryOfflineRoot",
+                            $"Source={root}; later originals on this source " +
+                            "skipped until next scheduler retry; other roots continue.");
                 }
                 // Count only originals whose pending revisions have been
                 // confirmed and removed from SQLite, not attempted writes.
@@ -548,7 +562,7 @@ public partial class MainWindow
                 if (repo.PendingEditsForImage(imageId).Count == 0)
                     confirmed++;
                 _scheduler.ReportProgress(key, "Tags wiederherstellen",
-                    confirmed, ids.Length);
+                    confirmed, images.Count);
                 if (!Dispatcher.HasShutdownStarted)
                     _ = Dispatcher.BeginInvoke(new Action(() =>
                         _ = RefreshPendingTagDotsAsync()));
@@ -558,7 +572,7 @@ public partial class MainWindow
             {
                 _scheduler.ReportProgress(key,
                     "Tag-Schreibfehler – Aufträge bleiben vorgemerkt",
-                    confirmed, ids.Length);
+                    confirmed, images.Count);
                 throw new DurablePackageRetryException(
                     "Tag-Schreibaufträge weiterhin offen (" +
                     failures.Count + " Fehler). " +
