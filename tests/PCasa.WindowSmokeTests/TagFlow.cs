@@ -362,6 +362,15 @@ internal static class TagFlow
                 "Global filename search excluded hidden descendant folders.");
             Console.WriteLine(
                 "PASS: Global filename search includes all collapsed descendants.");
+            galleryOnly.IsChecked = true;
+            Until(window, () => SortedGallery().Count == 0,
+                "Galerieansicht did not limit filename search to the visible tree.");
+            galleryOnly.IsChecked = false;
+            Until(window, () => SortedGallery().Count == 10,
+                "Disabling Galerieansicht did not restore filename matches.");
+            Console.WriteLine(
+                "PASS: Galerieansicht applies equally to indexed filename searches.");
+
 
             search.Clear();
             Until(window, () => surface.HiddenFolderIds.Contains(a.Id) &&
