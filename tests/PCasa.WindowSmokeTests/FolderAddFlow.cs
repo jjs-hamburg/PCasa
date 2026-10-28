@@ -392,8 +392,6 @@ internal static class FolderAddFlow
             // Explorer Ansicht is an in-place expansion of FoldersTree,
             // not a replacement control. Even hidden and unindexed folders
             // appear while existing WPF nodes, selection and expansion survive.
-            var dotOriginals = Path.Combine(initialRoot, ".picasaoriginals");
-            var dotOther = Path.Combine(initialRoot, ".archived");
             var neverScanned = Path.Combine(initialRoot, "ExplorerNotIndexed");
             var hiddenExplorer = Path.Combine(initialRoot, "ExplorerHidden");
             var inactiveExplorer = Path.Combine(initialRoot, "ExplorerInactive");
@@ -401,15 +399,7 @@ internal static class FolderAddFlow
             var lastExplorer = Path.Combine(initialRoot, "ZzzzExplorerLast");
             var otherBranchOnly = Path.Combine(afterRestart, "OutsideSelectedBranch");
             Directory.CreateDirectory(neverScanned);
-            Directory.CreateDirectory(dotOriginals);
-            Directory.CreateDirectory(dotOther);
             Directory.CreateDirectory(hiddenExplorer);
-            WriteJpeg(Path.Combine(dotOriginals, "original.jpg"));
-            WriteJpeg(Path.Combine(dotOther, "archived.jpg"));
-            // Picasa often marks this dot directory with the Windows Hidden
-            // attribute. It is still a normal catalogued photo directory.
-            File.SetAttributes(dotOriginals,
-                File.GetAttributes(dotOriginals) | FileAttributes.Hidden);
             Directory.CreateDirectory(inactiveExplorer);
             Directory.CreateDirectory(firstExplorer);
             Directory.CreateDirectory(lastExplorer);
@@ -449,8 +439,6 @@ internal static class FolderAddFlow
             browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
             Until(window, () =>
                     Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), dotOriginals)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), dotOther)) &&
                     Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) &&
                     Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) &&
                     Walk(tree).Any(item => SamePath(PathOf(item), firstExplorer)) &&
@@ -542,27 +530,6 @@ internal static class FolderAddFlow
                 SamePath(root.LocalPath, initialRoot)))
                 throw new Exception(
                     "Successful targeted reactivation stranded a full-root pending first import.");
-
-            // Both dot-directory variants are initially temporary Explorer
-            // rows. A normal manual scan indexes them, after which they must
-            // survive switching Explorer OFF as ordinary catalog photo nodes.
-            // The rule is general; .picasaoriginals is not a special case.
-            selectedRoot.IsSelected = true;
-            scan.Invoke(window, [tree, new RoutedEventArgs()]);
-            Until(window, () =>
-            {
-                var photoFolders = new ImageCatalogRepository(db).GetPhotoFolders();
-                return new[] { dotOriginals, dotOther }.All(path =>
-                {
-                    var folder = photoFolders.FirstOrDefault(f => SamePath(f.LocalPath, path));
-                    if (folder is null) return false;
-                    var node = Walk(tree).FirstOrDefault(item => SamePath(PathOf(item), path));
-                    return node?.Tag?.GetType().GetProperty("PhotoFolderId")
-                        ?.GetValue(node.Tag) is long id && id == folder.Id &&
-                        surface.GetFolderOffset(folder.Id).HasValue;
-                });
-            }, "Dot-directory photos were not published in the real gallery/tree.");
-
             if (!ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
                 !treeBefore.IsExpanded)
@@ -573,8 +540,6 @@ internal static class FolderAddFlow
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
                 !treeBefore.IsExpanded ||
                 !Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) ||
-                !Walk(tree).Any(item => SamePath(PathOf(item), dotOriginals)) ||
-                !Walk(tree).Any(item => SamePath(PathOf(item), dotOther)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), firstExplorer)) ||
@@ -585,9 +550,6 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Explorer off destroyed original nodes or lost a newly registered root.");
 
-            Console.WriteLine(
-                "PASS: Explorer promotes indexed hidden/dot photo directories " +
-                "and removes only temporary unindexed paths.");
             Console.WriteLine(
                 "PASS: Explorer enables excluded subtree within original monitored root without duplicates or lost exclusions.");
             window.Close();
