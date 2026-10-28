@@ -256,9 +256,15 @@ public partial class MainWindow
             ? "Ordner im Menü einlesen, um die Galerie zu füllen."
             : _searchFileNames ? "Gesucht wird in den katalogisierten Dateinamen."
                 : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
-        StatusText.Text = query.Length > 0
+        var searchStatus = query.Length > 0
             ? $"{desired.Count:N0} Bilder {(_invertFilterResults ? "ohne" : "mit")} {(_searchFileNames ? "Dateiname" : "Tags")}: {query}"
             : $"{_lastCatalogImageCount:N0} Bilder";
+        // A search refresh is still allowed while Tag files are being
+        // written. The manual progress presenter owns the status bar for the
+        // duration of that work, so a late debounced search update must not
+        // silently replace its live overall count with "24 Bilder".
+        StatusText.Text = _visibleManualWindow is { IsManualPresentationActive: true } manual
+            ? manual.ProgressStatusText : searchStatus;
         _lastAppliedTagQuery = query;
         BrowseScrollViewer.UpdateLayout();
         if (leavingSearch)
