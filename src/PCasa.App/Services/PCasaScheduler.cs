@@ -98,6 +98,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         };
     }
 
+    // Shared by all source-related operations and the existing background
+    // monitor. This is a cached readiness decision, never a parallel job lane.
+    public SourceAvailabilityGate SourceAvailability { get; } = new();
+
     public void EnableDurablePackages(LocalDatabase database)
     {
         if (_durableJournal is not null)
