@@ -44,6 +44,7 @@ internal static class Program
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
         Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
         Run("Cyclic durable retry resumes saved cursor in the same app session", DeferredManualRetryWithinSameSession, failures);
+        Run("NAS source failure is probed once for many folders and files", OfflineSourceGateCoalescesQueries, failures);
         Run("Legacy V1 recovery migrates without losing P0 or pending image tags", LegacyTagRecoveryMigrationPreservesIntents, failures);
         Run("Recovered P0 packages resume newest-first including manual NAS scans", RecoveredManualScanPrecedesOlderTags, failures);
         Run("Durable packages reject non-reconstructable dynamic steps", DurablePackageRejectsDynamicSteps, failures);
@@ -358,6 +359,63 @@ internal static class Program
                     "Cyclic retry repeated a completed step or did not acknowledge success.");
         }
         Check().GetAwaiter().GetResult();
+    }
+
+    private static void OfflineSourceGateCoalescesQueries()
+    {
+        // This is deliberately deterministic and does not depend on whether
+        // the GitHub runner has an actual mapped S: drive.
+        var now = new DateTimeOffset(2026, 10, 28, 15, 0, 0, TimeSpan.Zero);
+        var sProbes = 0;
+        var cProbes = 0;
+        var remoteIsOnline = false;
+        var gate = new SourceAvailabilityGate(root =>
+        {
+            if (root.StartsWith("S:", StringComparison.OrdinalIgnoreCase))
+            {
+                Interlocked.Increment(ref sProbes);
+                return remoteIsOnline;
+            }
+            Interlocked.Increment(ref cProbes);
+            return true;
+        }, () => now, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+
+        for (var i = 0; i < 2_000; i++)
+        {
+            var file = $@"S:\\Archive\\{i / 20}\\photo-{i}.jpg";
+            if (gate.CanAccess(file))
+                throw new Exception("Offline NAS was reported reachable.");
+        }
+        if (sProbes != 1)
+            throw new Exception($"2,000 offline images triggered {sProbes} root probes.");
+        if (!gate.CanAccess(@"C:\\Pictures\\local.jpg") || cProbes != 1)
+            throw new Exception("Offline NAS held a reachable local source hostage.");
+        now += TimeSpan.FromSeconds(25);
+        if (gate.CanAccess(@"S:\\Archive\\other.jpg") || sProbes != 1)
+            throw new Exception("NAS cooldown triggered another expensive probe.");
+
+        // A returning VPN is detected by the ONE periodic root probe.
+        remoteIsOnline = true;
+        now += TimeSpan.FromSeconds(6);
+        if (!gate.CanAccess(@"S:\\Archive\\reconnected.jpg") || sProbes != 2)
+            throw new Exception("Source failed to reconnect after its cooldown.");
+        for (var i = 0; i < 100; i++)
+        {
+            if (!gate.CanAccess($@"S:\\Archive\\New\\{i}.jpg"))
+                throw new Exception("Healthy source was wrongly suppressed.");
+        }
+        if (sProbes != 2)
+            throw new Exception("Healthy source was probed per image.");
+
+        // A single missing file on a healthy source must not poison the
+        // entire root; error-confirmation is also rate-limited.
+        if (!gate.CheckAfterSourceError(@"S:\\Archive\\missing.jpg"))
+            throw new Exception("Missing individual image disabled its drive.");
+        for (var i = 0; i < 100; i++)
+            if (!gate.CheckAfterSourceError($@"S:\\Archive\\missing-{i}.jpg"))
+                throw new Exception("A missing file disabled a reachable share.");
+        if (sProbes != 3)
+            throw new Exception("One hundred errors repeated the network root probe.");
     }
 
     private static void LegacyTagRecoveryMigrationPreservesIntents()
