@@ -150,7 +150,7 @@ public partial class MainWindow
         if (IsPathKnownOffline(tag.FullPath))
         {
             tag.StatusCode = "Offline";
-            tag.StatusDescription = "SMB-Ordner derzeit nicht erreichbar. Der Katalog bleibt erhalten.";
+            tag.StatusDescription = UiLanguage.T("SMB-Ordner derzeit nicht erreichbar. Der Katalog bleibt erhalten.");
             return;
         }
 
@@ -167,13 +167,13 @@ public partial class MainWindow
         tag.StatusDescription = code switch
         {
             "Ready" => state.UpdatedUtc == DateTime.MinValue
-                ? "Vollständiger Erstscan früher bestätigt (Katalog)"
-                : "Bekannte Änderungen verarbeitet: " + state.UpdatedUtc.ToLocalTime().ToString("g"),
-            "Working" => "Ordner wird gerade aktualisiert",
-            "Pending" => "Aktualisierung steht aus",
-            "Failed" => "Letzte Aktualisierung fehlgeschlagen",
-            "Offline" => "Netzwerkverbindung derzeit unterbrochen",
-            "Unknown" => "Noch kein Prüfstatus aus dieser Sitzung vorhanden",
+                ? UiLanguage.T("Vollständiger Erstscan früher bestätigt (Katalog)")
+                : UiLanguage.T("Bekannte Änderungen verarbeitet: ") + state.UpdatedUtc.ToLocalTime().ToString("g"),
+            "Working" => UiLanguage.T("Ordner wird gerade aktualisiert"),
+            "Pending" => UiLanguage.T("Aktualisierung steht aus"),
+            "Failed" => UiLanguage.T("Letzte Aktualisierung fehlgeschlagen"),
+            "Offline" => UiLanguage.T("Netzwerkverbindung derzeit unterbrochen"),
+            "Unknown" => UiLanguage.T("Noch kein Prüfstatus aus dieser Sitzung vorhanden"),
             _ => ""
         };
     }
