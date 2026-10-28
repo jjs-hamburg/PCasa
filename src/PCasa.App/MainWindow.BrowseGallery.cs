@@ -70,13 +70,7 @@ public partial class MainWindow
         // "Warte auf Scheduler" while a newer P0 scan actually owns the lane.
         RestoreVisiblePendingManualScans();
         var unresolvedPackages = _scheduler.RecoverDurablePackages(
-            (key, task) =>
-            {
-                if (_recoveredTagPresentationKeys.Contains(key))
-                    _ = ObserveRecoveredTagOperationAsync(task, key);
-                else if (_recoveredManualScanPresentationKeys.Contains(key))
-                    _ = ObserveRecoveredManualScanAsync(task, key);
-            });
+            ObserveRecoveredDurablePackage);
         // A recipe or journal cursor that cannot be reconstructed is NOT a
         // queued scheduler operation. Keep it durable for inspection, but do
         // not leave a fake "Warte auf Scheduler" progress dialog forever.
@@ -94,28 +88,53 @@ public partial class MainWindow
         // Register all persistent relocation intents before any automatic scan
         // is queued, so recovered manual work keeps precedence on startup.
         await RecoverPendingFileTransfersAsync();
-        // A persistent but unrecognised P0 recipe cannot be silently
-        // demoted beneath a background scan.
-        if (unresolvedPackages.Count == 0)
-            QueuePendingInitialScans();
-        else
-            StatusText.Text = $"{unresolvedPackages.Count} Paket(e) benötigen Wiederherstellungsprüfung – automatischer Scan angehalten";
+        // Unreadable or unsupported recipes remain durable and are retried
+        // centrally, but cannot permanently prevent all catalog work.
+        QueuePendingInitialScans();
+        if (unresolvedPackages.Count > 0)
+            StatusText.Text = $"{unresolvedPackages.Count} Paket(e) für spätere Wiederherstellung vorgemerkt";
         _ = ReconcilePersistedExclusionsAsync();
         await EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();
     }
 
 
+    // This callback is also used by the scheduler's central periodic retry
+    // worker. It must return to WPF before changing any presentation state.
+    private void ObserveRecoveredDurablePackage(string key, Task completion)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+                ObserveRecoveredDurablePackage(key, completion)));
+            return;
+        }
+        if (key.StartsWith("tags:", StringComparison.Ordinal))
+        {
+            RestoreVisiblePendingTagPackage(key);
+            if (_recoveredTagPresentationKeys.Contains(key))
+                _ = ObserveRecoveredTagOperationAsync(completion, key);
+        }
+        else if (key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
+                 key.StartsWith("catalog:scan-all:", StringComparison.Ordinal))
+        {
+            RestoreVisiblePendingManualScans();
+            if (_recoveredManualScanPresentationKeys.Contains(key))
+                _ = ObserveRecoveredManualScanAsync(completion, key);
+        }
+    }
+
     // Same presenter and scheduler identity as regular user-started scans.
-    // A restored scan is not a background import and must be visible when it
-    // overtakes an older tag-recovery package under the agreed LIFO order.
+    // Only actually runnable restored scans are shown as active jobs.
     private readonly HashSet<string> _recoveredManualScanPresentationKeys =
         new(StringComparer.Ordinal);
 
     private void RestoreVisiblePendingManualScans()
     {
         foreach (var record in new DurablePackageJournal(_database).Pending()
-            .Where(p => p.Type is "manual-folder-scan-v1" or "manual-scan-all-v1"))
+            .Where(p => p.State != "deferred" &&
+                (p.Type is "manual-folder-scan-v1" or "manual-scan-all-v1")))
         {
             if (!_recoveredManualScanPresentationKeys.Add(record.Key)) continue;
             BeginVisibleManualOperation(record.Key,
