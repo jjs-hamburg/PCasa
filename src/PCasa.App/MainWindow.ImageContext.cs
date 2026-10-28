@@ -36,7 +36,7 @@ public partial class MainWindow
 
     private static void AddContextAction(ContextMenu menu, string title, Action action)
     {
-        var item = new MenuItem { Header = title };
+        var item = new MenuItem { Header = UiLanguage.T(title) };
         item.Click += (_, _) => action();
         menu.Items.Add(item);
     }
@@ -122,7 +122,7 @@ public partial class MainWindow
     private void ShowFileActionError(Exception ex)
     {
         PCasaDiagnostics.Write("Context.FileAction", ex);
-        MessageBox.Show(this, ex.Message, "Dateiaktion fehlgeschlagen",
+        MessageBox.Show(this, ex.Message, UiLanguage.T("Dateiaktion fehlgeschlagen"),
             MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 }
