@@ -44,6 +44,8 @@ public partial class BrowseCacheProgressWindow : Window
     private DateTime _lastPreviewUpdate = DateTime.MinValue;
     private bool _previewBusy;
     private string? _displayedPreviewImagePath;
+    private string? _pendingLocalPreviewPath;
+    private string? _pendingOriginalPreviewPath;
     private bool _finished;
     public event EventHandler? ProgressPresentationChanged;
     public bool IsManualPresentationActive => _manualPresentationActive;
@@ -448,48 +450,69 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void UpdateCurrentImage(string? currentPath, string? localThumb)
     {
-        if (!string.Equals(_displayedPreviewImagePath, currentPath,
-                StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(currentPath))
         {
-            _displayedPreviewImagePath = currentPath;
-            // Never show the preceding image under the new file name.
-            CurrentThumbnail.Source = null;
-        }
-        if (!string.IsNullOrEmpty(currentPath))
-        {
+            if (!string.Equals(_displayedPreviewImagePath, currentPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _displayedPreviewImagePath = currentPath;
+                _pendingLocalPreviewPath = null;
+                _pendingOriginalPreviewPath = null;
+                // Do not show the previous photo under the next filename.
+                CurrentThumbnail.Source = null;
+            }
             CurrentFileText.Text = Path.GetFileName(currentPath);
             CurrentFileText.ToolTip = currentPath;
             FolderPathText.Text = Path.GetDirectoryName(currentPath) ?? string.Empty;
             FolderPathText.ToolTip = currentPath;
         }
 
-        if (!string.IsNullOrWhiteSpace(localThumb) && !_previewBusy &&
-            DateTime.UtcNow - _lastPreviewUpdate >= TimeSpan.FromMilliseconds(850))
+        if (!string.IsNullOrWhiteSpace(localThumb) &&
+            !string.IsNullOrWhiteSpace(currentPath))
         {
-            _lastPreviewUpdate = DateTime.UtcNow;
-            _ = LoadPreviewAsync(localThumb, currentPath, _previewLifetime.Token);
+            // Latest-image-only UI preview: cache filenames come from a
+            // successful scanner commit. Never read originals via NAS/VPN.
+            // Coalesce rapid progress updates while a previous preview loads;
+            // otherwise the last reported image could remain blank.
+            _pendingOriginalPreviewPath = currentPath;
+            _pendingLocalPreviewPath = localThumb;
+            if (!_previewBusy)
+                _ = LoadPreviewAsync(_previewLifetime.Token);
         }
     }
 
-    private async Task LoadPreviewAsync(string localPath, string? originalPath,
-        CancellationToken cancellation)
+    private async Task LoadPreviewAsync(CancellationToken cancellation)
     {
         _previewBusy = true;
         try
         {
-            var bitmap = await Task.Run(() =>
-                _loader.Load(localPath, 92, cancellation), cancellation);
-            if (!_finished && !cancellation.IsCancellationRequested &&
-                string.Equals(_displayedPreviewImagePath, originalPath,
-                    StringComparison.OrdinalIgnoreCase))
-                CurrentThumbnail.Source = bitmap;
+            while (!_finished && !cancellation.IsCancellationRequested &&
+                   _pendingLocalPreviewPath is not null)
+            {
+                var remaining = TimeSpan.FromMilliseconds(550) -
+                    (DateTime.UtcNow - _lastPreviewUpdate);
+                if (remaining > TimeSpan.Zero)
+                    await Task.Delay(remaining, cancellation);
+                // Pick the MOST RECENT image after any delay. Stale requests
+                // never force their pixels onto a newer filename.
+                var path = _pendingLocalPreviewPath;
+                var original = _pendingOriginalPreviewPath;
+                _pendingLocalPreviewPath = null;
+                _pendingOriginalPreviewPath = null;
+                if (path is null) continue;
+                _lastPreviewUpdate = DateTime.UtcNow;
+                var bitmap = await Task.Run(() =>
+                    _loader.Load(path, 92, cancellation), cancellation);
+                if (!_finished && !cancellation.IsCancellationRequested &&
+                    string.Equals(_displayedPreviewImagePath, original,
+                        StringComparison.OrdinalIgnoreCase))
+                    CurrentThumbnail.Source = bitmap;
+            }
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) { }
         catch (Exception)
         {
-            // A missing thumbnail must not interrupt the cache conversion.
+            // A missing local thumbnail does not interrupt catalog scanning.
         }
         finally
         {
