@@ -126,6 +126,78 @@ public sealed class DurablePackageJournal
         return results;
     }
 
+    // One-time versioned migration for already journaled V1 recovery.
+    // V1 stored a fixed image list and a position within that list. A single
+    // offline NAS image blocks all later LOCAL images in that same package.
+    // V2 instead uses pending_tag_edits (the authoritative, durable list of
+    // still-unconfirmed original writes) and retries every independent image.
+    // Preserve original key, sequence, priority and work kind transactionally;
+    // ONLY the obsolete recipe encoding/cursor are replaced. No user edit or
+    // confirmed file write is invented or removed by this migration.
+    public int UpgradeLegacyTagRecovery()
+    {
+        using var db = _database.OpenConnection();
+        using var transaction = db.BeginTransaction();
+        var legacy = new List<(string Key, string Payload, int Cursor)>();
+        using (var query = db.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT package_key,payload_json,completed_steps
+                FROM scheduler_packages
+                WHERE package_type='tag-recovery-v1'
+                  AND state IN ('queued','running','deferred');
+                """;
+            using var reader = query.ExecuteReader();
+            while (reader.Read())
+                legacy.Add((reader.GetString(0), reader.GetString(1),
+                    reader.GetInt32(2)));
+        }
+        var migrated = 0;
+        foreach (var (key, payload, cursor) in legacy)
+        {
+            // Corrupt or unsupported recipes are left untouched for
+            // diagnosis. Never silently acknowledge an unreadable journal.
+            long[] ids;
+            try
+            {
+                ids = System.Text.Json.JsonSerializer.Deserialize<long[]>(payload)
+                    ?? throw new InvalidDataException("Leeres V1-Tag-Paket.");
+                if (cursor < 0 || cursor > ids.Length)
+                    throw new InvalidDataException("Ungültiger V1-Schrittcursor.");
+            }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Scheduler.LegacyTagMigration:" + key, ex);
+                continue;
+            }
+            using var update = db.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE scheduler_packages
+                SET package_type='tag-recovery-v2',
+                    payload_json='{}',
+                    completed_steps=0,
+                    state='queued',
+                    retry_attempts=0,
+                    retry_after_utc=NULL,
+                    error=NULL,
+                    updated_utc=$now
+                WHERE package_key=$key AND package_type='tag-recovery-v1'
+                  AND state IN ('queued','running','deferred');
+                """;
+            update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            update.Parameters.AddWithValue("$key", key);
+            migrated += update.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        if (migrated > 0)
+            PCasaDiagnostics.WriteMessage("Scheduler.LegacyTagMigration",
+                $"Converted {migrated} V1 packages to V2 in place. " +
+                "Original priority/order preserved; pending edits untouched.");
+        return migrated;
+    }
+
     // Only runnable P0 packets prevent automatic work from starting.
     // A deferred original-file write is still in Pending() and retains its
     // priority/cursor, but cannot hold the scanner hostage until NAS returns.
