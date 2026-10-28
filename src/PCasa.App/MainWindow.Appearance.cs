@@ -26,6 +26,7 @@ public partial class MainWindow
         public bool GallerySortDescending { get; set; }
         public string FolderStatusMode { get; set; } = "Problems";
         public bool HideCollapsedFolders { get; set; }
+        public bool SearchGalleryViewOnly { get; set; }
         public bool TooltipsEnabled { get; set; } = true;
         public double ThumbnailSpacing { get; set; } = 10;
         public double ThumbnailWidth { get; set; } = 190;
@@ -367,6 +368,7 @@ public partial class MainWindow
         GalleryBackgroundTextureMenu.IsChecked = _appearance.Background == "Texture";
         RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
         HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
+        GalleryViewFilterToggle.IsChecked = _appearance.SearchGalleryViewOnly;
         UpdateAllFoldersButtonState();
         ThumbnailFileNamesMenu.IsChecked = _appearance.ShowThumbnailFileNames;
         ThumbnailBoldFileNamesMenu.IsChecked = _appearance.BoldThumbnailFileNames;
