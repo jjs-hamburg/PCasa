@@ -979,19 +979,19 @@ internal static class TagFlow
                     delete.Parameters.AddWithValue("$tag", sourceOfflineTag);
                     delete.ExecuteNonQuery();
                 }
-                using (var restore = connection.CreateCommand())
+                using (var restorePaths = connection.CreateCommand())
                 {
-                    restore.Transaction = tx;
-                    restore.CommandText =
+                    restorePaths.Transaction = tx;
+                    restorePaths.CommandText =
                         "UPDATE images SET local_path=$path WHERE id=$id;";
-                    restore.Parameters.Add("$path", SqliteType.Text);
-                    restore.Parameters.Add("$id", SqliteType.Integer);
-                    restore.Parameters["$path"].Value = unavailableA;
-                    restore.Parameters["$id"].Value = unavailableAId;
-                    restore.ExecuteNonQuery();
-                    restore.Parameters["$path"].Value = unavailableB;
-                    restore.Parameters["$id"].Value = unavailableBId;
-                    restore.ExecuteNonQuery();
+                    restorePaths.Parameters.Add("$path", SqliteType.Text);
+                    restorePaths.Parameters.Add("$id", SqliteType.Integer);
+                    restorePaths.Parameters["$path"].Value = unavailableA;
+                    restorePaths.Parameters["$id"].Value = unavailableAId;
+                    restorePaths.ExecuteNonQuery();
+                    restorePaths.Parameters["$path"].Value = unavailableB;
+                    restorePaths.Parameters["$id"].Value = unavailableBId;
+                    restorePaths.ExecuteNonQuery();
                 }
                 tx.Commit();
             }
