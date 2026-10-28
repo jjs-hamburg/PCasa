@@ -899,7 +899,7 @@
                                     Click="TagAdd_Click"/>
                             <TextBox x:Name="TagEntryBox" Margin="0,0,4,0"
                                      VerticalContentAlignment="Center" ToolTip="Tag eingeben – vorhandene Tags werden vorgeschlagen"
-                                     TextChanged="TagEntry_TextChanged" KeyDown="TagEntry_KeyDown"/>
+                                     TextChanged="TagEntry_TextChanged" PreviewKeyDown="TagEntry_KeyDown"/>
                             </DockPanel>
                             <Popup x:Name="TagSuggestionsPopup"
                                    PlacementTarget="{Binding ElementName=TagEntryBox}"
@@ -912,7 +912,8 @@
                                         Width="{Binding ActualWidth, ElementName=TagEntryBox}">
                                     <ListBox x:Name="TagSuggestionsList" MaxHeight="190"
                                              BorderThickness="0" FontSize="12"
-                                             PreviewMouseLeftButtonUp="TagSuggestion_MouseUp"/>
+                                             PreviewMouseLeftButtonUp="TagSuggestion_MouseUp"
+                                             PreviewKeyDown="TagEntry_KeyDown"/>
                                 </Border>
                             </Popup>
                         </Grid>
