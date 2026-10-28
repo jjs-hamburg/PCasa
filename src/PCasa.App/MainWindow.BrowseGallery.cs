@@ -395,7 +395,7 @@ public partial class MainWindow
         }
         else
         {
-            if (!_isScanning && !_manualScanRunning)
+            if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
             StatusText.Text = $"{imageCount:N0} Bilder";
         }
     }
@@ -576,7 +576,7 @@ public partial class MainWindow
 
         if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
         {
-            if (!_isScanning && !_manualScanRunning)
+            if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
                 StatusText.Text = $"Galerieindex {tier}px laden...";
             IReadOnlyList<BrowseThumbnailIndexEntry> index = Array.Empty<BrowseThumbnailIndexEntry>();
             try
@@ -700,7 +700,7 @@ public partial class MainWindow
         }
 
         if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
-            if (!_isScanning && !_manualScanRunning)
+            if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
             StatusText.Text = $"{imageCount:N0} Bilder";
         SelectionText.Text = $"Auswahl: {_selectedImageIds.Count:N0}";
     }
