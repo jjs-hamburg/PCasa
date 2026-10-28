@@ -115,6 +115,11 @@ public partial class MainWindow
             var progress = new Progress<ScanProgress>(scan =>
             {
                 if (_manualFileTransferActive || !scanActive) return;
+                if (scan.VerifiedDirectoryPath is { Length: > 0 } verifiedDirectory)
+                {
+                    TrackFolderActivity(verifiedDirectory, "Ready");
+                    RefreshFolderStatusVisuals();
+                }
                 if (!workerStarted)
                 {
                     workerStarted = true;
