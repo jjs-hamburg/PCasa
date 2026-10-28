@@ -706,6 +706,70 @@ internal static class TagFlow
             tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
             Console.WriteLine("PASS: Tag suggestions stage on one Enter or mouse click, without early writes.");
 
+            // The editable TextBox consumes ordinary bubbling Up/Down
+            // KeyDown events for caret navigation. Raise the REAL WPF
+            // tunneling event to prove keyboard navigation reaches the UI;
+            // directly invoking TagEntry_KeyDown would miss this regression.
+            using (var connection = db.OpenConnection())
+            using (var seed = connection.CreateCommand())
+            {
+                seed.CommandText = """
+                    INSERT OR REPLACE INTO recent_tags(tag,last_used_utc)
+                    VALUES ('PCasa UI M Keyboard Alpha', '2026-10-28T20:00:01Z'),
+                           ('PCasa UI M Keyboard Beta', '2026-10-28T20:00:02Z');
+                    """;
+                seed.ExecuteNonQuery();
+            }
+            tagInput.Focus();
+            Keyboard.Focus(tagInput);
+            tagInput.Text = "PCasa UI M";
+            Until(window, () => suggestionsPopup.IsOpen &&
+                suggestions.Items.Count >= 3 && suggestions.SelectedIndex == 0,
+                "Arrow-key test has no multiple selectable Tag suggestions.");
+            void PressSuggestionKey(UIElement target, Key key)
+            {
+                var eventArgs = new KeyEventArgs(
+                    Keyboard.PrimaryDevice, PresentationSource.FromVisual(target)!, 0, key)
+                {
+                    RoutedEvent = Keyboard.PreviewKeyDownEvent
+                };
+                target.RaiseEvent(eventArgs);
+                if (!eventArgs.Handled)
+                    throw new Exception(
+                        $"Tag suggestion did not intercept {key} before native TextBox navigation.");
+            }
+            PressSuggestionKey(tagInput, Key.Down);
+            if (suggestions.SelectedIndex != 1 || tagInput.Text != "PCasa UI M")
+                throw new Exception("Down key failed to select second suggestion.");
+            PressSuggestionKey(tagInput, Key.Down);
+            if (suggestions.SelectedIndex != 2)
+                throw new Exception("Second Down key did not advance suggestion.");
+            PressSuggestionKey(tagInput, Key.Up);
+            if (suggestions.SelectedIndex != 1)
+                throw new Exception("Up key did not move back one suggestion.");
+            var keyboardChoice = (string)suggestions.SelectedItem!;
+            PressSuggestionKey(tagInput, Key.Enter);
+            if (tagInput.Text.Length != 0 || suggestionsPopup.IsOpen ||
+                !tagOk.IsEnabled || !tagRows.Children.OfType<DockPanel>()
+                    .Any(row => row.Children.OfType<TextBlock>()
+                        .Any(label => label.Text.Contains(keyboardChoice,
+                            StringComparison.Ordinal))))
+                throw new Exception("Enter did not stage the keyboard-highlighted Tag.");
+            tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
+
+            tagInput.Focus();
+            Keyboard.Focus(tagInput);
+            tagInput.Text = "PCasa UI M";
+            Until(window, () => suggestionsPopup.IsOpen && suggestions.Items.Count >= 3,
+                "Suggestions did not reopen for Escape key test.");
+            PressSuggestionKey(tagInput, Key.Escape);
+            if (suggestionsPopup.IsOpen || tagInput.Text != "PCasa UI M")
+                throw new Exception("Escape did not dismiss suggestions without editing input.");
+            tagInput.Clear();
+            Console.WriteLine(
+                "PASS: Routed WPF Up/Down changes highlighted Tag, Enter stages it, Escape closes popup.");
+
+
             tagAnd.IsChecked = true;
             Until(window, () => tagRows.Children.OfType<DockPanel>()
                 .Any(row => row.Children.OfType<TextBlock>().Any(label =>
