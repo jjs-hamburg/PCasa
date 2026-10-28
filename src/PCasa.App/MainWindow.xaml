@@ -397,10 +397,12 @@
                               VerticalScrollBarVisibility="Disabled"
                               PanningMode="HorizontalOnly"
                               Focusable="False"
+                              HorizontalContentAlignment="Right"
                               CanContentScroll="False"
                               Padding="10,5,10,5">
                     <StackPanel x:Name="SearchToolbarPanel"
                                 Orientation="Horizontal"
+                                HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
                         <Button x:Name="GallerySortSelectorButton"
                          Width="191" Height="27"
