@@ -496,15 +496,19 @@ public partial class MainWindow
                     var rootReachable = await _scheduler.RunAsync(
                         $"background:root-reachable:{folder.Id}:{Guid.NewGuid():N}",
                         SchedulerPriority.Background,
-                        token => { token.ThrowIfCancellationRequested(); return Directory.Exists(folder.LocalPath); },
+                        token =>
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var exists = Directory.Exists(folder.LocalPath);
+                            if (!exists)
+                                _scheduler.SourceAvailability.CheckAfterSourceError(
+                                    folder.LocalPath, token);
+                            return exists;
+                        },
                         cancellationToken: _backgroundLifetime.Token,
                         workKind: SchedulerWorkKind.SourceProbe);
                     if (!rootReachable)
-                    {
-                        _scheduler.SourceAvailability.CheckAfterSourceError(
-                            folder.LocalPath, _backgroundLifetime.Token);
                         continue;
-                    }
 
                     // SMB watcher notifications can arrive late. Never prune
                     // an image that has reappeared, or when the parent cannot
@@ -585,17 +589,17 @@ public partial class MainWindow
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
-                        return request.Kind == BackgroundFolderChangeKind.ScanFile
+                        var exists = request.Kind == BackgroundFolderChangeKind.ScanFile
                             ? File.Exists(scanPath)
                             : Directory.Exists(scanPath);
+                        if (!exists)
+                            _scheduler.SourceAvailability.CheckAfterSourceError(
+                                scanPath, token);
+                        return exists;
                     }, cancellationToken: _backgroundLifetime.Token,
                     workKind: SchedulerWorkKind.SourceProbe);
                 if (!scanPathExists)
-                {
-                    _scheduler.SourceAvailability.CheckAfterSourceError(
-                        scanPath, _backgroundLifetime.Token);
                     continue;
-                }
                 // Directory.Exists can outlive cancellation on a dead NAS.
                 // A manual request that arrived during the probe must still
                 // supersede this background request before it gets scheduled.
