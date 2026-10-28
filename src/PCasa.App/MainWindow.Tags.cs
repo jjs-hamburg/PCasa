@@ -527,6 +527,12 @@ public partial class MainWindow
                 // owns the durable retry and unchanged P0 priority.
                 if (unreachableRoots.Contains(root))
                     continue;
+                if (!_scheduler.SourceAvailability.CanAccess(originalPath, token))
+                {
+                    if (unreachableRoots.Add(root))
+                        failures.Add("Quelle nicht erreichbar: " + root);
+                    continue;
+                }
                 try
                 {
                     var edits = repo.PendingEditsForImage(imageId);
@@ -547,13 +553,12 @@ public partial class MainWindow
                     // priority and pending DB intents for the next recovery.
                     failures.Add(imageId + ": " + ex.Message);
                     PCasaDiagnostics.Write("Tags.RecoveryWrite", ex);
-                    if (ex is IOException &&
-                        !string.IsNullOrWhiteSpace(root) &&
-                        !Directory.Exists(root) &&
-                        unreachableRoots.Add(root))
+                    if (ex is IOException or UnauthorizedAccessException &&
+                        !_scheduler.SourceAvailability.CheckAfterSourceError(
+                            originalPath, token) && unreachableRoots.Add(root))
                         PCasaDiagnostics.WriteMessage("Tags.RecoveryOfflineRoot",
-                            $"Source={root}; later originals on this source " +
-                            "skipped until next scheduler retry; other roots continue.");
+                            $"Source={root}; remaining originals on this source " +
+                            "skipped until the common scheduler gate retries.");
                 }
                 // Count only originals whose pending revisions have been
                 // confirmed and removed from SQLite, not attempted writes.
