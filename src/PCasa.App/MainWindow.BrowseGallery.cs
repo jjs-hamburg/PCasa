@@ -60,6 +60,11 @@ public partial class MainWindow
         // Durable user imports enter the scheduler BEFORE background legacy
         // repair. Both use the SAME catalog and generation guards.
         // Recovered user edits must be queued BEFORE background folder scans.
+        // Upgrade legacy recovery before reconstructing ANY worker.
+        // The old fixed-list cursor stopped on the first offline NAS image
+        // and could starve reachable C: photos indefinitely. This migration
+        // retains the journal identity/order and does not touch pending tags.
+        new DurablePackageJournal(_database).UpgradeLegacyTagRecovery();
         // Restore the read-only view of already journaled P0 tag writes
         // BEFORE the scheduler starts replaying them. This is the same
         // progress presenter used by ordinary manual file operations.
