@@ -67,6 +67,7 @@ internal static class Program
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
         Run("Running durable first import yields to manual Tag P0 and resumes", InitialImportYieldsToManualTag, failures);
+        Run("Scheduler announces a running manual write before any file callback", SchedulerPublishesRunningManualState, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
         Run("Read-only folder-tree probe does not stop durable background image import", ReadOnlyFolderProjectionNeverBlocksInitialImport, failures);
         Run("Canceled all-folders toggle immediately retires queued scheduler probe", CanceledAllFoldersScopeRetiresQueuedProbe, failures);
@@ -1352,6 +1353,50 @@ internal static class Program
                 release.TrySetResult();
                 await initial.WaitAsync(TimeSpan.FromSeconds(5));
             }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    // In a restored tag series the UI is registered before the durable
+    // executor starts. Without this transition event it can display
+    // "Warte auf Scheduler" indefinitely while the actual writer is busy.
+    private static void SchedulerPublishesRunningManualState()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            const string key = "tags:restored-manual-without-file-progress";
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var observed = new System.Collections.Concurrent.ConcurrentQueue<SchedulerJobSnapshot>();
+            scheduler.ProgressChanged += status =>
+            {
+                if (status.Key == key) observed.Enqueue(status);
+            };
+            var completion = scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
+                async token =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                });
+            try
+            {
+                await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!observed.Any(status =>
+                        status.State == SchedulerJobState.Running &&
+                        status.CurrentPath is null))
+                    throw new Exception(
+                        "A manual worker started but the progress presenter was never told.");
+            }
+            finally
+            {
+                release.TrySetResult();
+                await completion.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            if (!observed.Any(status => status.State == SchedulerJobState.Completed))
+                throw new Exception("The scheduler did not publish manual completion.");
         }
         Check().GetAwaiter().GetResult();
     }
