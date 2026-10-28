@@ -1135,7 +1135,7 @@ internal static class TagFlow
                 Until(window, () => restoredScanEntered.Task.IsCompleted,
                     "Recovered manual scan never reached scheduler worker.");
                 actualScheduler.ReportProgress(recoveredScanKey,
-                    "Bilder einlesen", 7, 0, @"S:\\album\\scan-photo.jpg");
+                    "Bilder einlesen", 7, 0, firstOriginal);
                 Until(window, () =>
                     (presenterField.GetValue(window)
                         as PCasa.App.BrowseCacheProgressWindow)?
@@ -1144,8 +1144,12 @@ internal static class TagFlow
                     (presenterField.GetValue(window)
                         as PCasa.App.BrowseCacheProgressWindow)?
                         .FindName("CurrentFileText") is TextBlock file &&
-                    file.Text == "scan-photo.jpg",
-                    "Recovered manual scan did not replace waiting Tag caption.");
+                    file.Text == Path.GetFileName(firstOriginal) &&
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CurrentThumbnail") is Image image &&
+                    image.Source is ImageSource,
+                    "Restored manual scan did not show its real cached photo.");
             }
             finally
             {
