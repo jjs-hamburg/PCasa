@@ -68,21 +68,13 @@ public partial class MainWindow
         // read-only progress projection before the scheduler starts replay.
         // Otherwise an older pending Tag package appears to be stuck on
         // "Warte auf Scheduler" while a newer P0 scan actually owns the lane.
-        var recoveredScanKeys = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var record in new DurablePackageJournal(_database).Pending()
-            .Where(p => p.Type is "manual-folder-scan-v1" or "manual-scan-all-v1"))
-        {
-            recoveredScanKeys.Add(record.Key);
-            BeginVisibleManualOperation(record.Key,
-                record.Type == "manual-scan-all-v1"
-                    ? "Alle Ordner einlesen" : "Ordner aktualisieren", 0);
-        }
+        RestoreVisiblePendingManualScans();
         var unresolvedPackages = _scheduler.RecoverDurablePackages(
             (key, task) =>
             {
                 if (_recoveredTagPresentationKeys.Contains(key))
                     _ = ObserveRecoveredTagOperationAsync(task, key);
-                else if (recoveredScanKeys.Contains(key))
+                else if (_recoveredManualScanPresentationKeys.Contains(key))
                     _ = ObserveRecoveredManualScanAsync(task, key);
             });
         // A recipe or journal cursor that cannot be reconstructed is NOT a
@@ -91,7 +83,7 @@ public partial class MainWindow
         foreach (var unresolved in unresolvedPackages)
         {
             if (_recoveredTagPresentationKeys.Remove(unresolved.Key) ||
-                recoveredScanKeys.Remove(unresolved.Key))
+                _recoveredManualScanPresentationKeys.Remove(unresolved.Key))
                 EndVisibleManualOperation(unresolved.Key);
             PCasaDiagnostics.WriteMessage("Scheduler.UnresolvedPackage",
                 $"Key={unresolved.Key}; Type={unresolved.Type}; " +
@@ -114,6 +106,24 @@ public partial class MainWindow
     }
 
 
+    // Same presenter and scheduler identity as regular user-started scans.
+    // A restored scan is not a background import and must be visible when it
+    // overtakes an older tag-recovery package under the agreed LIFO order.
+    private readonly HashSet<string> _recoveredManualScanPresentationKeys =
+        new(StringComparer.Ordinal);
+
+    private void RestoreVisiblePendingManualScans()
+    {
+        foreach (var record in new DurablePackageJournal(_database).Pending()
+            .Where(p => p.Type is "manual-folder-scan-v1" or "manual-scan-all-v1"))
+        {
+            if (!_recoveredManualScanPresentationKeys.Add(record.Key)) continue;
+            BeginVisibleManualOperation(record.Key,
+                record.Type == "manual-scan-all-v1"
+                    ? "Alle Ordner einlesen" : "Ordner aktualisieren", 0);
+        }
+    }
+
     private async Task ObserveRecoveredManualScanAsync(Task completion, string key)
     {
         try { await completion; }
@@ -128,6 +138,7 @@ public partial class MainWindow
         }
         finally
         {
+            _recoveredManualScanPresentationKeys.Remove(key);
             if (!Dispatcher.HasShutdownStarted)
                 EndVisibleManualOperation(key);
         }
