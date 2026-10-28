@@ -1071,11 +1071,9 @@ internal static class TagFlow
             if (scanPresenter.ShowingScanDuringManualWait ||
                 (scanPresenter.FindName("CountText") as TextBlock)?.Text != "0 / 7")
                 throw new Exception("Completed NAS scan did not restore queued Tag series.");
-            endManual.Invoke(window, [waitingNasKey]);
-            Console.WriteLine(
-                "PASS: Active NAS scan replaces queued Tag caption and restores pending series.");
-            // The scan dialog must render its already committed LOCAL
-            // thumbnail, even if the original file lives on a slow NAS.
+            // The scan dialog must render a committed LOCAL thumbnail even
+            // while an older Tag package is queued. Do this before ending
+            // the shared presentation lifetime.
             string? localPreview;
             using (var connection = db.OpenConnection())
             using (var lookup = connection.CreateCommand())
@@ -1090,13 +1088,17 @@ internal static class TagFlow
             if (string.IsNullOrWhiteSpace(localPreview) || !File.Exists(localPreview))
                 throw new Exception("Smoke image has no committed local scan thumbnail.");
             scanPresenter.UpdateScan(new ScanProgress(6, 4, 2, 0,
-                firstOriginal, CurrentThumbnailPath: localPreview));
+                firstOriginal, CurrentThumbnailPath: localPreview),
+                showWhileManualWaiting: true);
             Until(window, () =>
                 (scanPresenter.FindName("CurrentThumbnail") as Image)?.Source
-                is ImageSource source && source.Width > 0 && source.Height > 0,
+                is ImageSource previewImage && previewImage.Width > 0 && previewImage.Height > 0,
                 "Scan progress did not display the committed local image.");
+            restorePending.Invoke(window, null);
+            endManual.Invoke(window, [waitingNasKey]);
             Console.WriteLine("PASS: Live scan progress shows its local cached picture.");
-
+            Console.WriteLine(
+                "PASS: Active NAS scan replaces queued Tag caption and restores pending series.");
 
             // Recovered P0 manual scans must appear in the same progress
             // window as recovered Tags. Otherwise a new scan may correctly
