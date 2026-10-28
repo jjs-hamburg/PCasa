@@ -766,6 +766,17 @@ internal static class TagFlow
             if (suggestionsPopup.IsOpen || tagInput.Text != "PCasa UI M")
                 throw new Exception("Escape did not dismiss suggestions without editing input.");
             tagInput.Clear();
+            // Keep the later Tag-sidebar smoke cases free of test-only
+            // recents; no changes to originals or the pending write journal.
+            using (var connection = db.OpenConnection())
+            using (var cleanup = connection.CreateCommand())
+            {
+                cleanup.CommandText = """
+                    DELETE FROM recent_tags WHERE tag IN
+                      ('PCasa UI M Keyboard Alpha', 'PCasa UI M Keyboard Beta');
+                    """;
+                cleanup.ExecuteNonQuery();
+            }
             Console.WriteLine(
                 "PASS: Routed WPF Up/Down changes highlighted Tag, Enter stages it, Escape closes popup.");
 
