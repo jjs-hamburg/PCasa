@@ -165,7 +165,7 @@ public partial class MainWindow
         if (!Clipboard.ContainsFileDropList()) return;
         if (SelectedGalleryDirectory() is not string target)
         {
-            StatusText.Text = "Zum Einfügen einen Zielordner im Ordnerbaum auswählen";
+            StatusText.Text = UiLanguage.T("Zum Einfügen einen Zielordner im Ordnerbaum auswählen");
             return;
         }
         var paths = Clipboard.GetFileDropList().Cast<string>().ToArray();
@@ -230,7 +230,7 @@ public partial class MainWindow
         var dialog = new Window
         {
             Owner = this,
-            Title = "Datei bereits vorhanden",
+            Title = UiLanguage.T("Datei bereits vorhanden"),
             Width = 520,
             Height = 184,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
@@ -241,7 +241,7 @@ public partial class MainWindow
         var panel = new StackPanel { Margin = new Thickness(18) };
         var message = new TextBlock
         {
-            Text = "Am Ziel existiert bereits:\n" + Path.GetFileName(path),
+            Text = UiLanguage.T("Am Ziel existiert bereits:") + "\n" + Path.GetFileName(path),
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 0, 0, 18)
         };
@@ -250,10 +250,10 @@ public partial class MainWindow
         var buttons = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
         foreach (var (title, value) in new[]
         {
-            ("Ersetzen", NameConflict.Replace),
-            ("Beide behalten", NameConflict.KeepBoth),
-            ("Überspringen", NameConflict.Skip),
-            ("Abbrechen", NameConflict.Cancel)
+            (UiLanguage.T("Ersetzen"), NameConflict.Replace),
+            (UiLanguage.T("Beide behalten"), NameConflict.KeepBoth),
+            (UiLanguage.T("Überspringen"), NameConflict.Skip),
+            (UiLanguage.T("Abbrechen"), NameConflict.Cancel)
         })
         {
             var button = new Button
@@ -598,7 +598,7 @@ public partial class MainWindow
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             if (requested.Length == 0)
             {
-                StatusText.Text = "Keine unterstützten Bilddateien für die Ablage";
+                StatusText.Text = UiLanguage.T("Keine unterstützten Bilddateien für die Ablage");
                 return;
             }
             target = Path.GetFullPath(targetDirectory);
@@ -631,7 +631,7 @@ public partial class MainWindow
         {
             if (!Dispatcher.HasShutdownStarted)
                 await RefreshBrowseGalleryAsync(forceIndexReload: true);
-            StatusText.Text = "Dateiübertragung abgebrochen";
+            StatusText.Text = UiLanguage.T("Dateiübertragung abgebrochen");
         }
         catch (Exception ex)
         {
@@ -721,7 +721,7 @@ public partial class MainWindow
                     errors?.Add(Path.GetFileName(path) + ": " + ex.Message);
                     PCasaDiagnostics.Write("Gallery.Delete", ex);
                 }
-                _scheduler.ReportProgress(key, "Bilder löschen",
+                _scheduler.ReportProgress(key, UiLanguage.T("Bilder löschen"),
                     ordinal, selected.Length, path);
                 return Task.CompletedTask;
             });
@@ -753,9 +753,9 @@ public partial class MainWindow
 
         var prompt = anyNetwork
             ? $"{selected.Length:N0} Bilddatei(en) löschen?\n\n" +
-              "Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht."
+              UiLanguage.T("Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht.")
             : $"{selected.Length:N0} Bilddatei(en) in den Windows-Papierkorb verschieben?";
-        if (MessageBox.Show(this, prompt, "Bilder löschen",
+        if (MessageBox.Show(this, prompt, UiLanguage.T("Bilder löschen"),
                 MessageBoxButton.YesNo, MessageBoxImage.Warning,
                 MessageBoxResult.No) != MessageBoxResult.Yes) return;
 
@@ -765,7 +765,7 @@ public partial class MainWindow
         var errors = new List<string>();
         try
         {
-            BeginVisibleManualOperation(key, "Bilder löschen", selected.Length);
+            BeginVisibleManualOperation(key, UiLanguage.T("Bilder löschen"), selected.Length);
             var payload = System.Text.Json.JsonSerializer.Serialize(
                 selected.Select(image => new DurableDeleteItem(image.Id, image.Path)).ToArray());
             var package = BuildDurableDeletePackage(key, payload, succeeded, errors);
@@ -779,7 +779,7 @@ public partial class MainWindow
                 (errors.Count == 0 ? "" : $" · {errors.Count:N0} Fehler");
             if (errors.Count > 0)
                 MessageBox.Show(this, string.Join("\n", errors.Take(15)),
-                    "Einige Dateien konnten nicht gelöscht werden",
+                    UiLanguage.T("Einige Dateien konnten nicht gelöscht werden"),
                     MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (OperationCanceledException)
