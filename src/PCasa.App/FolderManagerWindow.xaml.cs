@@ -382,7 +382,7 @@ public partial class FolderManagerWindow : Window
         if (_busy) return;
         var dialog = new OpenFolderDialog
         {
-            Title = "Ordner zur dauerhaften Überwachung auswählen"
+            Title = UiLanguage.T("Ordner zur dauerhaften Überwachung auswählen")
         };
         if (dialog.ShowDialog(this) != true) return;
         try
@@ -392,7 +392,7 @@ public partial class FolderManagerWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, "Ordner konnte nicht vorgemerkt werden.\n\n" +
+            MessageBox.Show(this, UiLanguage.T("Ordner konnte nicht vorgemerkt werden.") + "\n\n" +
                 ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
