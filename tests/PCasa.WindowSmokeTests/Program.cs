@@ -343,6 +343,17 @@ internal static class Program
                         $"Main menu clipped or overlapped the search row at {window.ActualWidth:F0}px.");
                 if (menu.ActualWidth < 280)
                     throw new Exception("Resizing squeezed main menu captions away.");
+                if (searchScroll.ScrollableWidth < 1)
+                {
+                    var trailingGap = Bounds(searchScroll).Right -
+                        Bounds((FrameworkElement)searchField.Parent).Right;
+                    // The textbox has a 10px trailing margin plus the
+                    // ScrollViewer's padding. It should be at the RIGHT,
+                    // not at the left edge leaving hundreds of blank pixels.
+                    if (trailingGap is < 0 or > 45)
+                        throw new Exception(
+                            $"Search row is not right-aligned: gap={trailingGap:F1}px");
+                }
 
                 var row = new FrameworkElement[]
                 {
