@@ -198,7 +198,7 @@ public sealed class DurablePackageJournal
               FROM scheduler_packages
              WHERE state='deferred'
                AND (retry_after_utc IS NULL OR retry_after_utc <= $now)
-             ORDER BY priority ASC, sequence DESC;
+             ORDER BY priority ASC, sequence ASC;
             """;
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
         using var reader = command.ExecuteReader();
