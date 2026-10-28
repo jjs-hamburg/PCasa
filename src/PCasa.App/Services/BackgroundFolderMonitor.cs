@@ -66,8 +66,14 @@ public sealed class BackgroundFolderMonitor : IDisposable
             bool reachable;
             try
             {
-                reachable = (_sources?.CanAccess(folder.LocalPath) ?? true) &&
-                    Directory.Exists(folder.LocalPath);
+                var rootReady = _sources?.CanAccess(folder.LocalPath) ?? true;
+                reachable = rootReady && Directory.Exists(folder.LocalPath);
+                // A VPN may disappear AFTER a recent successful source probe.
+                // Confirm one missing monitored directory against the root;
+                // if the root is offline, every other folder on that drive
+                // skips its own expensive Directory.Exists immediately.
+                if (rootReady && !reachable && _sources is not null)
+                    _sources.CheckAfterSourceError(folder.LocalPath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
