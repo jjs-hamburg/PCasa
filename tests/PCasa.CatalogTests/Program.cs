@@ -157,6 +157,7 @@ internal static class Program
         Run("Older asynchronous gallery refresh cannot overwrite newer result", AsyncGalleryRefreshLatestWins, failures);
         Run("500000-image gallery reaches last photo", LargeGalleryLastImageReachable, failures);
         Run("Multiple selected images synchronize tag index", MultiImageTagSearchStaysConsistent, failures);
+        Run("Comma/semicolon Tag queries require every distinct keyword", MultiTagAndSearchRequiresAllTags, failures);
         Run("Concurrent scan and exclusion never repopulate deleted catalog", ConcurrentExclusionScan, failures);
         Run("Monitored folder detaches catalog before physical cache cleanup", FolderRemovalDefersPhysicalCleanup, failures);
         Run("Successful recursive scan clears obsolete nested failures", RecursiveScanResolvesOldFolderErrors, failures);
@@ -5059,6 +5060,42 @@ internal static class Program
             ?? throw new Exception("End of gallery has no visible images.");
         if (visible.Last != imageCount - 1)
             throw new Exception("Gallery does not expose the last catalog image.");
+    }
+
+    private static void MultiTagAndSearchRequiresAllTags()
+    {
+        using var sandbox = new Sandbox();
+        foreach (var name in new[] { "one.jpg", "two.jpg", "three.jpg", "four.jpg" })
+            WriteJpeg(Path.Combine(sandbox.Images, name));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 4);
+        long[] ids;
+        using (var connection = db.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT id FROM images ORDER BY file_name;";
+            using var reader = command.ExecuteReader();
+            var values = new List<long>();
+            while (reader.Read()) values.Add(reader.GetInt64(0));
+            ids = values.ToArray();
+        }
+        var tags = new ImageTagRepository(db);
+        tags.ChangeKeywords(ids[0], "Summer Trip", remove: false);
+        tags.ChangeKeywords(ids[0], "Paris", remove: false);
+        tags.ChangeKeywords(ids[1], "Summer Trip", remove: false);
+        tags.ChangeKeywords(ids[2], "Paris", remove: false);
+        tags.ChangeKeywords(ids[3], "Summer Paris", remove: false);
+        if (!tags.SearchImageIds("summer, paris").SetEquals(new[] { ids[0] }) ||
+            !tags.SearchImageIds("PAR; SUM").SetEquals(new[] { ids[0] }) ||
+            !tags.SearchImageIds(" Summer , ; Paris; ").SetEquals(new[] { ids[0] }) ||
+            !tags.SearchImageIds("Summer Trip; Paris").SetEquals(new[] { ids[0] }))
+            throw new Exception("Delimited Tag queries did not AND distinct stored tags.");
+        if (!tags.SearchImageIds("Summer").SetEquals(
+            new[] { ids[0], ids[1], ids[3] }))
+            throw new Exception("Existing single-Tag prefix search was changed.");
+        if (tags.SearchImageIds("Summer; Nice").Count != 0)
+            throw new Exception("Tag AND query accepted a missing required Tag.");
     }
 
     private static void MultiImageTagSearchStaysConsistent()
