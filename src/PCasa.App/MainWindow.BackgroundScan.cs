@@ -682,12 +682,25 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException)
                 {
+                    // A preempted scan is NOT running. The old code left
+                    // "Working" in the tree indefinitely and recursively
+                    // painted unrelated descendants with spinning arrows.
+                    // Preserve pending work; only the scheduler may run it.
+                    TrackFolderActivity(
+                        request.Kind == BackgroundFolderChangeKind.ScanFile
+                            ? Path.GetDirectoryName(scanPath) ?? scanPath
+                            : scanPath, "Pending", request.Recursive);
+                    RefreshFolderStatusVisuals();
                     if (_backgroundLifetime.IsCancellationRequested ||
                         _manualContextScanActive || _manualScanAllActive ||
                         _manualFileTransferActive || _folderRemovalPending)
                     {
                         throw;
                     }
+                    // Unexpected cancellation still needs a future attempt.
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        request.MonitoredFolderId, request.Path,
+                        request.Kind, request.Recursive));
                 }
                 catch
                 {
