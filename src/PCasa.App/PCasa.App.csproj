@@ -16,6 +16,12 @@
     <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
   
+  <!-- Single embedded translation catalog; no external deployment dependency. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/english.json"
+                      LogicalName="PCasa.App.Resources.english.json" />
+  </ItemGroup>
+
   <!-- User-editable JPG texture directory beside the published EXE. -->
   <ItemGroup>
     <Content Include="Assets/CanvasLight.jpg" Link="Texturen/Leinwand hell.jpg"
