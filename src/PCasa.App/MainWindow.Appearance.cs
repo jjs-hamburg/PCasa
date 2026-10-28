@@ -16,6 +16,7 @@ public partial class MainWindow
     private sealed class AppearanceState
     {
         public string Theme { get; set; } = "Dark";
+        public string Language { get; set; } = "de";
         public string Background { get; set; } = "Auto";
         // Only the JPG filename, never an absolute path. The folder is beside
         // PCasa.App.exe so the user's textures remain portable.
@@ -68,6 +69,10 @@ public partial class MainWindow
                     File.ReadAllText(_appearanceFile)) ?? new AppearanceState();
         }
         catch (Exception ex) { PCasaDiagnostics.Write("Appearance.Load", ex); }
+        // Language selection lives in this existing appearance state. It is
+        // safe for older profiles that have no Language key (defaults to de).
+        UiLanguage.Current.Select(_appearance.Language);
+        SyncLanguageMenu();
         // Preserve older Leinwand selections in the single configurable
         // texture path. Start with the finer supplied JPGs.
         if (_appearance.Background is "Canvas" or "CanvasDark")
@@ -272,6 +277,23 @@ public partial class MainWindow
         // labels, context menus and independently opened WPF windows too.
         App.SetTooltipsEnabled(_appearance.TooltipsEnabled);
         System.Windows.Controls.ToolTipService.SetIsEnabled(this, _appearance.TooltipsEnabled);
+    }
+
+    private void AppearanceLanguage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string code } ||
+            !UiLanguage.IsSupported(code)) return;
+        _appearance.Language = code;
+        UiLanguage.Current.Select(code);
+        SyncLanguageMenu();
+        SaveAppearance();
+    }
+
+    private void SyncLanguageMenu()
+    {
+        if (LanguageGermanMenu is null || LanguageEnglishMenu is null) return;
+        LanguageGermanMenu.IsChecked = UiLanguage.Current.Code == "de";
+        LanguageEnglishMenu.IsChecked = UiLanguage.Current.Code == "en";
     }
 
     private void AppearanceTheme_Click(object sender, RoutedEventArgs e)
