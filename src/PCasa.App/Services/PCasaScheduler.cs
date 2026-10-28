@@ -552,8 +552,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         priority == SchedulerPriority.ManualAction &&
                         active?.Priority == SchedulerPriority.ManualAction &&
                         active.Id < incomingId &&
-                        (workKind != SchedulerWorkKind.CatalogScan ||
-                         active.Kind == SchedulerWorkKind.CatalogScan);
+                        workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or SchedulerWorkKind.SourceProbe;
                     var supersedesManualScan =
                         priority == SchedulerPriority.ManualAction &&
                         workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe &&
@@ -624,7 +623,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             // P2 within the shared manual lane. Otherwise an
                             // old yielded scan wins by ID and starves the
                             // exact user move that requested its preemption.
-                            .ThenBy(x => lane == LaneManual &&
+                            .ThenBy(x => lane == LaneManual ? 0 :
                                 x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
                             // Manual packages form a stack: newest request
                             // resumes first, older ones retain their cursor.
