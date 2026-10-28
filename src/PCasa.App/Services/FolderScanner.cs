@@ -16,7 +16,8 @@ public sealed record ScanProgress(
     int CacheRepaired = 0,
     long? DiscoveredPhotoFolderId = null,
     string? DiscoveredPhotoFolderPath = null,
-    string? CurrentThumbnailPath = null);
+    string? CurrentThumbnailPath = null,
+    string? VerifiedDirectoryPath = null);
 
 public sealed record ScanResult(
     int ImageFilesSeen,
@@ -274,6 +275,10 @@ public sealed class FolderScanner
             observedPaths!.RemoveWhere(path => string.Equals(
                 Path.GetDirectoryName(path), directory,
                 StringComparison.OrdinalIgnoreCase));
+            // Publish a green verification ONLY after the scanner's durable
+            // directory checkpoint succeeded. This is not a parallel status
+            // monitor and never probes the NAS again.
+            ReportProgress(null, force: true, verifiedDirectoryPath: directory);
         }
 
         // A scheduler yield re-enters ScanDirectoryLocked with a new cancellation
@@ -668,7 +673,8 @@ public sealed class FolderScanner
 
         void ReportProgress(string? currentFile, bool force = false,
             long? discoveredFolderId = null, string? discoveredFolderPath = null,
-            string? localPreviewPath = null)
+            string? localPreviewPath = null,
+            string? verifiedDirectoryPath = null)
         {
             if (!force && progressClock.ElapsedMilliseconds < 250)
             {
@@ -687,7 +693,8 @@ public sealed class FolderScanner
                 cacheRepaired,
                 discoveredFolderId,
                 discoveredFolderPath,
-                localPreviewPath));
+                localPreviewPath,
+                verifiedDirectoryPath));
         }
     }
 
