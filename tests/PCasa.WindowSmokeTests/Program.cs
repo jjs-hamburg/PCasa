@@ -375,8 +375,26 @@ internal static class Program
                 }
             }
             if (!narrowViewportTested)
-                throw new Exception(
-                    "At narrow widths the search row was clipped without horizontal scrolling.");
+            {
+                // At 1000px the two-row toolbar may ALREADY fit completely.
+                // WPF should then avoid a useless scroll bar. Force a
+                // narrower search viewport to verify actual overflow logic,
+                // without shrinking the main menu or changing production UI.
+                searchScroll.MaxWidth = 590;
+                Flush(window);
+                if (searchScroll.ScrollableWidth <= 0)
+                    throw new Exception("Forced narrow search row lacks scrolling.");
+                searchScroll.ScrollToRightEnd();
+                Flush(window);
+                if (Bounds((FrameworkElement)searchField.Parent).Right >
+                    Bounds(searchScroll).Right + 2)
+                    throw new Exception("Overflowing search field cannot be reached.");
+                if (Bounds(menu).Right > window.ActualWidth + 1)
+                    throw new Exception("A narrow search row displaced the main menu.");
+                searchScroll.ScrollToLeftEnd();
+                searchScroll.ClearValue(FrameworkElement.MaxWidthProperty);
+                Flush(window);
+            }
             window.Width = 1500;
             Flush(window);
             Console.WriteLine(
