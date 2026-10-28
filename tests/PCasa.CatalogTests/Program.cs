@@ -138,6 +138,7 @@ internal static class Program
         Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
         Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
+        Run("Scan progress previews come from committed local thumbnails, never NAS originals", ScanProgressUsesLocalThumbnails, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
@@ -4037,6 +4038,41 @@ internal static class Program
         if (RawImageSource.IsRawPath("photo.jpg") ||
             RawImageSource.Resolve("photo.jpg") != "photo.jpg")
             throw new Exception("RAW source handler changed JPEG code path.");
+    }
+
+    private static void ScanProgressUsesLocalThumbnails()
+    {
+        using var sandbox = new Sandbox();
+        var image = Path.Combine(sandbox.Images, "scan-progress-preview.jpg");
+        WriteJpeg(image);
+        var (db, root, scanner) = sandbox.Prepare();
+
+        void Verify(bool expectUnchanged)
+        {
+            ScanProgress? observed = null;
+            var progress = new InlineProgress<ScanProgress>(p =>
+            {
+                if (!string.Equals(p.CurrentFile, image,
+                        StringComparison.OrdinalIgnoreCase)) return;
+                observed = p;
+                if (p.CurrentThumbnailPath is not string preview ||
+                    !File.Exists(preview) ||
+                    string.Equals(preview, image, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception(
+                        "Scan UI did not receive a valid committed LOCAL preview.");
+                // Preview is published only after durable image/cache commit.
+                if (new ImageCatalogRepository(db).GetImageId(image) is null)
+                    throw new Exception("Scan preview was published before catalog commit.");
+            });
+            var result = scanner.Scan(root, progress);
+            if (result.Failed != 0 || observed is null)
+                throw new Exception("Scan never published its local image preview.");
+            if (expectUnchanged && result.Unchanged != 1)
+                throw new Exception("Unchanged scan image was unnecessarily decoded.");
+        }
+
+        Verify(false);
+        Verify(true);
     }
 
     private static void ScannerPublishesFoldersIncrementally()
