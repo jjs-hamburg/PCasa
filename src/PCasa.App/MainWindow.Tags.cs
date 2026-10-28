@@ -40,14 +40,14 @@ public partial class MainWindow
                 {
                         if (count % 512 != 0 || Dispatcher.HasShutdownStarted) return;
                         _ = Dispatcher.BeginInvoke(() =>
-                            TagSearchBox.ToolTip = $"Tags suchen – {count:N0} bestehende Bilder geprüft");
+                            TagSearchBox.ToolTip = UiLanguage.Format("Tags suchen – {0:N0} bestehende Bilder geprüft", count));
                     });
                         return Task.CompletedTask;
                     }, cancellationToken: token);
                 if (!Dispatcher.HasShutdownStarted)
                     _ = Dispatcher.BeginInvoke(new Action(async () =>
                     {
-                        TagSearchBox.ToolTip = "Tags suchen (SQLite-Index)";
+                        TagSearchBox.ToolTip = UiLanguage.T("Tags suchen (SQLite-Index)");
                         // An already visible search must pick up keywords indexed
                         // after its first query; do not wait for another keystroke.
                         if (!_browseInitialized || _browsePageCache is null ||
@@ -82,7 +82,7 @@ public partial class MainWindow
             // A temporary database error must not escape an async void WPF
             // event and terminate the entire application.
             PCasaDiagnostics.Write("Tags.SearchScope", ex);
-            StatusText.Text = "Tag-Suche fehlgeschlagen";
+            StatusText.Text = UiLanguage.T("Tag-Suche fehlgeschlagen");
         }
     }
 
@@ -90,7 +90,7 @@ public partial class MainWindow
     {
         if (SearchFileNameMode is null || TagSearchBox is null) return;
         _searchFileNames = SearchFileNameMode.IsChecked == true;
-        TagSearchBox.ToolTip = _searchFileNames ? "Dateinamen suchen" : "Tags suchen";
+        TagSearchBox.ToolTip = _searchFileNames ? UiLanguage.T("Dateinamen suchen") : UiLanguage.T("Tags suchen");
         if (_browsePageCache is null) return;
         try { await ApplyTagFilterAsync(true); }
         catch (OperationCanceledException) { }
@@ -146,7 +146,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Tags.Search", ex);
-            StatusText.Text = "Tag-Suche fehlgeschlagen";
+            StatusText.Text = UiLanguage.T("Tag-Suche fehlgeschlagen");
         }
     }
 
@@ -249,16 +249,16 @@ public partial class MainWindow
         BrowseSurface.SetSelection(_selectedImageIds);
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanelHeading.Text = query.Length == 0
-            ? "Noch keine Bilder im Katalog" :
-                _invertFilterResults ? "Keine übrigen Bilder gefunden" :
-                _searchFileNames ? "Keine passenden Dateinamen gefunden" : "Keine passenden Tags gefunden";
+            ? UiLanguage.T("Noch keine Bilder im Katalog") :
+                _invertFilterResults ? UiLanguage.T("Keine übrigen Bilder gefunden") :
+                _searchFileNames ? UiLanguage.T("Keine passenden Dateinamen gefunden") : UiLanguage.T("Keine passenden Tags gefunden");
         EmptyPanelDescription.Text = query.Length == 0
-            ? "Ordner im Menü einlesen, um die Galerie zu füllen."
-            : _searchFileNames ? "Gesucht wird in den katalogisierten Dateinamen."
+            ? UiLanguage.T("Ordner im Menü einlesen, um die Galerie zu füllen.")
+            : _searchFileNames ? UiLanguage.T("Gesucht wird in den katalogisierten Dateinamen.")
                 : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
         var searchStatus = query.Length > 0
-            ? $"{desired.Count:N0} Bilder {(_invertFilterResults ? "ohne" : "mit")} {(_searchFileNames ? "Dateiname" : "Tags")}: {query}"
-            : $"{_lastCatalogImageCount:N0} Bilder";
+            ? UiLanguage.Format("{0:N0} Bilder {1} {2}: {3}", desired.Count, _invertFilterResults ? UiLanguage.T("ohne") : UiLanguage.T("mit"), _searchFileNames ? UiLanguage.T("Dateiname") : UiLanguage.T("Tags"), query)
+            : UiLanguage.Format("{0:N0} Bilder", _lastCatalogImageCount);
         // A search refresh is still allowed while Tag files are being
         // written. The manual progress presenter owns the status bar for the
         // duration of that work, so a late debounced search update must not
@@ -320,11 +320,11 @@ public partial class MainWindow
             if (TagDraftOkButton is not null) TagDraftOkButton.IsEnabled = false;
             if (TagDraftCancelButton is not null) TagDraftCancelButton.IsEnabled = false;
         }
-        TagSelectionCaption.Text = $"Tags der Auswahl ({selected.Length} Bilder)";
+        TagSelectionCaption.Text = UiLanguage.Format("Tags der Auswahl ({0} Bilder)", selected.Length);
         TagRowsPanel.Children.Clear();
         if (selected.Length == 0)
         {
-            TagRowsPanel.Children.Add(new TextBlock { Text = "Bitte Bilder auswählen.",
+            TagRowsPanel.Children.Add(new TextBlock { Text = UiLanguage.T("Bitte Bilder auswählen."),
                 Margin = new Thickness(5), TextWrapping = TextWrapping.Wrap });
             return;
         }
@@ -819,7 +819,7 @@ public partial class MainWindow
         var ids = _selectedImageIds.OrderBy(id => id).ToArray();
         if (ids.Length == 0)
         {
-            StatusText.Text = "Zuerst Bilder auswählen.";
+            StatusText.Text = UiLanguage.T("Zuerst Bilder auswählen.");
             return;
         }
         if (_tagDraftImageIds is not null && !_tagDraftImageIds.SequenceEqual(ids))
@@ -929,14 +929,14 @@ public partial class MainWindow
             _tagDraft.Clear();
             _tagDraftImageIds = null;
             TagEntryBox.Clear();
-            StatusText.Text = "Tag-Paket P0 vorgemerkt · SQLite und Originaldateien folgen";
+            StatusText.Text = UiLanguage.T("Tag-Paket P0 vorgemerkt · SQLite und Originaldateien folgen");
         }
         catch (Exception ex)
         {
             EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Tags.PackageQueue", ex);
-            StatusText.Text = "Tag-Paket konnte nicht eingeplant werden";
-            MessageBox.Show(this, ex.Message, "Tag-Änderung fehlgeschlagen",
+            StatusText.Text = UiLanguage.T("Tag-Paket konnte nicht eingeplant werden");
+            MessageBox.Show(this, ex.Message, UiLanguage.T("Tag-Änderung fehlgeschlagen"),
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -948,7 +948,7 @@ public partial class MainWindow
 
     private async Task PublishTagCommitAsync(string key, int changes)
     {
-        StatusText.Text = $"Tag-Paket: {changes} Änderungen lokal gesichert · Dateien folgen";
+        StatusText.Text = UiLanguage.Format("Tag-Paket: {0} Änderungen lokal gesichert · Dateien folgen", changes);
         RefreshQuickTags();
         await RefreshTagSidebarAsync();
         if (_browseInitialized && _browsePageCache is not null &&
@@ -966,7 +966,7 @@ public partial class MainWindow
             PCasaDiagnostics.Write("Tags.PackageWrite", ex);
             if (!Dispatcher.HasShutdownStarted)
             {
-                StatusText.Text = "Tag-Schreibfehler – Änderungen in SQLite weiterhin offen";
+                StatusText.Text = UiLanguage.T("Tag-Schreibfehler – Änderungen in SQLite weiterhin offen");
                 // Final reconciliation below handles both success and
                 // failure after the last manual tag package has finished.
             }
