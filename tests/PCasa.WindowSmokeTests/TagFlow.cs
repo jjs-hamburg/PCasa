@@ -1075,6 +1075,64 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: Active NAS scan replaces queued Tag caption and restores pending series.");
 
+            // Recovered P0 manual scans must appear in the same progress
+            // window as recovered Tags. Otherwise a new scan may correctly
+            // precede an older Tag under LIFO, but the only visible caption
+            // remains a stale 314/828 "Warte auf Scheduler".
+            var scanJournal = new DurablePackageJournal(db);
+            var recoveredScanKey =
+                "catalog:complete-scan:smoke:" + Guid.NewGuid().ToString("N");
+            scanJournal.Put(recoveredScanKey, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = albumA,
+                    MonitoredRootId = (long?)root.Id
+                }),
+                SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            var restoreScanProjection = typeof(PCasa.App.MainWindow).GetMethod(
+                "RestoreVisiblePendingManualScans",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Recovered P0 scan presenter missing.");
+            restoreScanProjection.Invoke(window, null);
+            var restoredScanEntered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseRestoredScan = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var displayingScan = actualScheduler.EnqueueAsync(recoveredScanKey,
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    restoredScanEntered.TrySetResult();
+                    await releaseRestoredScan.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                Until(window, () => restoredScanEntered.Task.IsCompleted,
+                    "Recovered manual scan never reached scheduler worker.");
+                actualScheduler.ReportProgress(recoveredScanKey,
+                    "Bilder einlesen", 7, 0, @"S:\\album\\scan-photo.jpg");
+                Until(window, () =>
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("PhaseText") is TextBlock phase &&
+                    phase.Text == "Bilder einlesen" &&
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CurrentFileText") is TextBlock file &&
+                    file.Text == "scan-photo.jpg",
+                    "Recovered manual scan did not replace waiting Tag caption.");
+            }
+            finally
+            {
+                releaseRestoredScan.TrySetResult();
+                Until(window, () => displayingScan.IsCompleted,
+                    "Synthetic recovered manual scan did not complete.");
+                scanJournal.SetState(recoveredScanKey, "completed");
+                endManual.Invoke(window, [recoveredScanKey]);
+            }
+            Console.WriteLine(
+                "PASS: Restored P0 manual scan is visible with its real active path.");
+
             // Recovery must use each immutable package's own image count.
             // Previously the UI assigned the ENTIRE pending-tag image count
             // to every recovered package and multiplied the grand total.
