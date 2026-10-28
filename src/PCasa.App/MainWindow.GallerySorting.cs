@@ -113,7 +113,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Gallery.Sort", ex);
-            StatusText.Text = "Sortierung fehlgeschlagen";
+            StatusText.Text = UiLanguage.T("Sortierung fehlgeschlagen");
             return;
         }
         if (generation != _gallerySortRequestVersion ||
