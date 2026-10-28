@@ -321,9 +321,17 @@ public partial class MainWindow
                 owner._folderRepository.GetExcludedPaths(folder.Id)))
                 throw new InvalidOperationException(
                     "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
+            if (!owner._scheduler.SourceAvailability.CanAccess(directory, token))
+                throw new DurablePackageRetryException(
+                    "Quelle vorübergehend offline; später erneut prüfen: " +
+                    SourceAvailabilityGate.RootOf(directory));
             if (!Directory.Exists(directory))
+            {
+                owner._scheduler.SourceAvailability.CheckAfterSourceError(
+                    directory, token);
                 throw new DirectoryNotFoundException(
                     $"Der Ordner ist nicht erreichbar: {directory}");
+            }
             if (!_manualGenerationStarted)
             {
                 // An automatic first import must retain its durable scan epoch
@@ -336,9 +344,19 @@ public partial class MainWindow
 
             // No duplicate import or cleanup path. The scanner owns all EXIF,
             // cache, catalog, and safe reconciliation transitions.
-            Result = owner._folderScanner.ScanDirectory(
-                folder, directory, recursive: true, progress, token, _resume,
-                durableInitialImport: requirePendingInitialImport);
+            try
+            {
+                Result = owner._folderScanner.ScanDirectory(
+                    folder, directory, recursive: true, progress, token, _resume,
+                    durableInitialImport: requirePendingInitialImport);
+                owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
+            }
+            catch (IOException)
+            {
+                owner._scheduler.SourceAvailability.CheckAfterSourceError(
+                    directory, token);
+                throw;
+            }
             if (Result.Failed == 0 && acknowledgeTargetedPending &&
                 _initialSourceGeneration is long expectedGeneration &&
                 _manualScanEpoch is long scanEpoch)
