@@ -255,7 +255,7 @@ public partial class MainWindow
         EmptyPanelDescription.Text = query.Length == 0
             ? UiLanguage.T("Ordner im Menü einlesen, um die Galerie zu füllen.")
             : _searchFileNames ? UiLanguage.T("Gesucht wird in den katalogisierten Dateinamen.")
-                : "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.";
+                : UiLanguage.T("Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.");
         var searchStatus = query.Length > 0
             ? UiLanguage.Format("{0:N0} Bilder {1} {2}: {3}", desired.Count, _invertFilterResults ? UiLanguage.T("ohne") : UiLanguage.T("mit"), _searchFileNames ? UiLanguage.T("Dateiname") : UiLanguage.T("Tags"), query)
             : UiLanguage.Format("{0:N0} Bilder", _lastCatalogImageCount);
