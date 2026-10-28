@@ -12,17 +12,17 @@ public partial class MainWindow
     {
         System.Windows.MessageBox.Show(
             this,
-            "✓  Bekanntes Material vollständig verarbeitet\n" +
-            "↻  Aktualisierung läuft\n" +
-            "◷  Aktualisierung steht aus\n" +
-            "⊘  Ordner vorübergehend nicht erreichbar\n" +
-            "!  Fehler bei der Aktualisierung\n" +
-            "?  Prüfstatus noch unbekannt\n\n" +
-            "Die Formen unterscheiden die Zustände unabhängig von den Farben. " +
-            "Ein Häkchen erscheint nur nach bestätigtem abgeschlossenem Scan.\n" +
-            "Im Modus 'Nur Aktivität und Probleme' sind Häkchen ausgeblendet.\n" +
-            "Der rote Punkt zeigt unabhängig davon noch offene Tag-Schreibvorgänge.",
-            "PCasa – Ordnerstatus",
+            UiLanguage.T("✓  Bekanntes Material vollständig verarbeitet") + "\n" +
+            UiLanguage.T("↻  Aktualisierung läuft") + "\n" +
+            UiLanguage.T("◷  Aktualisierung steht aus") + "\n" +
+            UiLanguage.T("⊘  Ordner vorübergehend nicht erreichbar") + "\n" +
+            UiLanguage.T("!  Fehler bei der Aktualisierung") + "\n" +
+            UiLanguage.T("?  Prüfstatus noch unbekannt") + "\n\n" +
+            UiLanguage.T("Die Formen unterscheiden die Zustände unabhängig von den Farben. " +
+                "Ein Häkchen erscheint nur nach bestätigtem abgeschlossenem Scan.") + "\n" +
+            UiLanguage.T("Im Modus 'Nur Aktivität und Probleme' sind Häkchen ausgeblendet.") + "\n" +
+            UiLanguage.T("Der rote Punkt zeigt unabhängig davon noch offene Tag-Schreibvorgänge."),
+            UiLanguage.T("PCasa – Ordnerstatus"),
             System.Windows.MessageBoxButton.OK,
             System.Windows.MessageBoxImage.Information);
     }
