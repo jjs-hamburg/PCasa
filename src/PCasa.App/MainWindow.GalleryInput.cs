@@ -133,7 +133,7 @@ public partial class MainWindow
         if ((FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
             FolderTreeTag { PhotoFolderId: long folderId })
         {
-            StatusText.Text = "Zum Invertieren einen Bildordner auswählen.";
+            StatusText.Text = UiLanguage.T("Zum Invertieren einen Bildordner auswählen.");
             return;
         }
 
@@ -147,7 +147,7 @@ public partial class MainWindow
         }
         _gallerySelection.Reset();
         ApplyGallerySelection();
-        StatusText.Text = $"{_selectedImageIds.Count:N0} Dateien ausgewählt (Ordner invertiert)";
+        StatusText.Text = UiLanguage.Format("{0:N0} Dateien ausgewählt (Ordner invertiert)", _selectedImageIds.Count);
     }
 
     private static T? FindAncestor<T>(DependencyObject? element)
