@@ -22,13 +22,16 @@ public sealed class BackgroundFolderMonitor : IDisposable
 {
     private readonly Dictionary<long, WatcherState> _watchers = new();
     private readonly Func<string, FileSystemWatcher> _watcherFactory;
+    private readonly SourceAvailabilityGate? _sources;
     private bool _disposed;
 
-    public BackgroundFolderMonitor(Func<string, FileSystemWatcher>? watcherFactory = null)
+    public BackgroundFolderMonitor(Func<string, FileSystemWatcher>? watcherFactory = null,
+        SourceAvailabilityGate? sources = null)
     {
-        // The factory also permits deterministic fault injection: real SMB
-        // watcher errors are otherwise impossible to reproduce reliably.
+        // A single scheduler source gate is shared with Tag and scan work.
+        // Tests can still inject a deterministic watcher factory.
         _watcherFactory = watcherFactory ?? (path => new FileSystemWatcher(path));
+        _sources = sources;
     }
 
     public event EventHandler<BackgroundFolderChange>? Changed;
@@ -63,7 +66,8 @@ public sealed class BackgroundFolderMonitor : IDisposable
             bool reachable;
             try
             {
-                reachable = Directory.Exists(folder.LocalPath);
+                reachable = (_sources?.CanAccess(folder.LocalPath) ?? true) &&
+                    Directory.Exists(folder.LocalPath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
