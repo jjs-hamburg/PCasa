@@ -35,6 +35,15 @@ public partial class App : Application
         TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
     }
 
+    protected override void OnExit(ExitEventArgs e)
+    {
+        // WPF can exit through a path other than MainWindow.Close().
+        // Always invoke the SAME ExifTool owner cleanup on application exit;
+        // the Windows kill-on-close job is the final crash-safe fallback.
+        try { ExifToolProcessRegistry.StopAll(); }
+        finally { base.OnExit(e); }
+    }
+
     // The folder tree has no hover highlighting. A full-path tooltip is
     // allowed ONLY when the displayed name is actually clipped.
     private void FolderNameText_ToolTipOpening(object sender, ToolTipEventArgs e)
