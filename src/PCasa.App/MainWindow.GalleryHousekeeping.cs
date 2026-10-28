@@ -128,6 +128,7 @@ public partial class MainWindow
         _appearance.HideCollapsedFolders = HideCollapsedFoldersMenu.IsChecked;
         SaveAppearance();
         UpdateGalleryFolderVisibility();
+        RefreshGallerySearchAfterTreeVisibilityChange();
     }
 
     private void FoldersTree_ExpansionChanged(object sender, RoutedEventArgs e)
@@ -146,6 +147,7 @@ public partial class MainWindow
         SaveFolderTreeState();
         if (_appearance.HideCollapsedFolders)
             UpdateGalleryFolderVisibility();
+        RefreshGallerySearchAfterTreeVisibilityChange();
     }
 
     private void FolderExpandAll_Click(object sender, RoutedEventArgs e)
@@ -168,6 +170,7 @@ public partial class MainWindow
         finally { _bulkFolderExpansion = false; }
         SaveFolderTreeState();
         UpdateGalleryFolderVisibility();
+        RefreshGallerySearchAfterTreeVisibilityChange();
     }
 
     private static void SetFolderExpansion(TreeViewItem item, bool expanded)
@@ -177,36 +180,57 @@ public partial class MainWindow
         item.IsExpanded = expanded;
     }
 
+    private void RefreshGallerySearchAfterTreeVisibilityChange()
+    {
+        if (_browsePageCache is null ||
+            GalleryViewFilterToggle.IsChecked != true ||
+            string.IsNullOrWhiteSpace(TagSearchBox.Text))
+            return;
+        _ = ReapplyGalleryViewSearchAsync();
+    }
+
+    private async Task ReapplyGalleryViewSearchAsync()
+    {
+        try { await ApplyTagFilterAsync(); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Search.GalleryViewRefresh", ex); }
+    }
+
+    // Single owner for the gallery-only collapsed-folder policy. Both the
+    // ordinary gallery and the optional search universe use this exact set;
+    // no second tree walk with different hide semantics.
+    private IReadOnlySet<long> GetGalleryHiddenFolderIds()
+    {
+        if (!_appearance.HideCollapsedFolders)
+            return new HashSet<long>();
+        var collapsedPaths = new List<string>();
+        foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
+            GatherCollapsedPaths(root, collapsedPaths);
+
+        // A collapsed folder's OWN pictures stay visible. Only descendants
+        // are hidden; independent of whether a search is currently running.
+        return _photoFolders
+            .Where(folder => collapsedPaths.Any(path =>
+                !string.Equals(
+                    FolderExclusionRules.Normalize(folder.LocalPath),
+                    FolderExclusionRules.Normalize(path),
+                    StringComparison.OrdinalIgnoreCase) &&
+                IsInside(folder.LocalPath, path)))
+            .Select(folder => folder.Id)
+            .ToHashSet();
+    }
+
     private void UpdateGalleryFolderVisibility(bool preserveGalleryAnchor = true)
     {
-        // An asynchronous catalog refresh owns its anchor until the new index
-        // has arrived. A direct folder visibility toggle restores immediately.
         var previousAnchor = preserveGalleryAnchor && _browseInitialized
             ? CaptureGalleryAnchor() : null;
-        IReadOnlySet<long> hidden;
-        if (!_appearance.HideCollapsedFolders ||
-            !string.IsNullOrWhiteSpace(TagSearchBox?.Text))
-        {
-            // Collapsed-folder hiding is exclusively an unfiltered gallery option.
-            hidden = new HashSet<long>();
-        }
-        else
-        {
-            var collapsedPaths = new List<string>();
-            foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
-                GatherCollapsedPaths(root, collapsedPaths);
-
-            // Keep a collapsed folder's own photos; only descendants hide.
-            hidden = _photoFolders
-                .Where(folder => collapsedPaths.Any(path =>
-                        !string.Equals(
-                            FolderExclusionRules.Normalize(folder.LocalPath),
-                            FolderExclusionRules.Normalize(path),
-                            StringComparison.OrdinalIgnoreCase) &&
-                        IsInside(folder.LocalPath, path)))
-                .Select(folder => folder.Id)
-                .ToHashSet();
-        }
+        // Ordinary searches still reveal ALL hits in collapsed descendants.
+        // Galerieansicht is explicitly constrained BEFORE publishing the
+        // index, so it never needs a second independent visual hiding rule.
+        IReadOnlySet<long> hidden =
+            !string.IsNullOrWhiteSpace(TagSearchBox?.Text)
+                ? new HashSet<long>()
+                : GetGalleryHiddenFolderIds();
 
         if (BrowseSurface.SetHiddenFolders(hidden) && previousAnchor is { } anchor)
         {
