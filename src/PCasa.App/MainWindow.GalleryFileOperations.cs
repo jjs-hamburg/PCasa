@@ -343,8 +343,13 @@ public partial class MainWindow
     private void VisibleProgressStatusChanged(object? sender, EventArgs e)
     {
         if (Dispatcher.HasShutdownStarted || sender is not BrowseCacheProgressWindow
-            presenter || !ReferenceEquals(_browseProgressWindow, presenter))
+            presenter || !ReferenceEquals(_attachedProgressPresenter, presenter) ||
+            (!ReferenceEquals(_browseProgressWindow, presenter) &&
+             !ReferenceEquals(_visibleManualWindow, presenter)))
             return;
+        // A manual operation can be displayed in a presenter that has already
+        // been detached from the background-cache window field. Its progress
+        // still owns the status bar; do not discard those notifications.
         StatusText.Text = presenter.ProgressStatusText;
     }
 
