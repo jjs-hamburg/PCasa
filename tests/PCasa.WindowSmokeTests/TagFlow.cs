@@ -737,7 +737,9 @@ internal static class TagFlow
                 if (firstProgress is null ||
                     firstProgress.Total != 2 || firstProgress.Processed != 1)
                     throw new Exception(
-                        "An offline original was falsely counted as a confirmed Tag write.");
+                        "Incorrect Tag recovery progress: " +
+                        $"Processed={firstProgress?.Processed}; Total={firstProgress?.Total}; " +
+                        $"Remaining={string.Join(",", new ImageTagRepository(db).PendingEdits().Select(e => e.ImageId))}.");
                 if (!deferred ||
                     !new ImageTagRepository(db).PendingEdits().Any(edit =>
                         edit.ImageId == editorIds[1]) ||
