@@ -24,6 +24,16 @@ public sealed class FolderScanStatusTracker
     private bool _aggregateDirty = true;
     private long _revision;
 
+    // Called from the already scheduled catalog snapshot. The durable
+    // monitored_folders.initial_scan_pending=0 receipt proves a previous
+    // complete recursive first import without inventing a completion time.
+    public void SeedCompletedInitialImport(string path)
+    {
+        var normalized = Normalize(path);
+        _verifiedRecursiveRoots.TryAdd(normalized, DateTime.MinValue);
+        _aggregateDirty = true;
+    }
+
     public void Set(string path, string code, bool recursive = false)
     {
         var normalized = Normalize(path);
@@ -92,6 +102,9 @@ public sealed class FolderScanStatusTracker
         if (_aggregateDirty) RebuildAggregate();
         State? result = _aggregate.TryGetValue(normalized, out var current)
             ? current : null;
+        if (result is null && _verifiedRecursiveRoots.TryGetValue(
+                normalized, out var ownVerification))
+            result = new State("Ready", ownVerification, true, 0);
 
         // A parent working through 20,000 files is NOT executing all its
         // descendant folders at the same time. The running icon belongs to
