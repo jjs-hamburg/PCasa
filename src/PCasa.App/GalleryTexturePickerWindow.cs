@@ -25,7 +25,7 @@ public sealed class GalleryTexturePickerWindow : Window
     public GalleryTexturePickerWindow(string? selectedName)
     {
         _selectedName = selectedName;
-        Title = "Galerietextur auswählen";
+        Title = UiLanguage.T("Galerietextur auswählen");
         Width = 725;
         Height = 530;
         MinWidth = 450;
@@ -41,7 +41,7 @@ public sealed class GalleryTexturePickerWindow : Window
 
         var explanation = new TextBlock
         {
-            Text = "JPG-Textur anklicken, um sie direkt als Galeriehintergrund zu übernehmen.",
+            Text = UiLanguage.T("JPG-Textur anklicken, um sie direkt als Galeriehintergrund zu übernehmen."),
             FontSize = 13,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(4, 0, 4, 8)
@@ -69,7 +69,7 @@ public sealed class GalleryTexturePickerWindow : Window
         DockPanel.SetDock(footer, Dock.Bottom);
         body.Children.Add(footer);
 
-        var openFolder = new Button { Content = "Ordner öffnen", Margin = new Thickness(4), Padding = new Thickness(10, 5, 10, 5) };
+        var openFolder = new Button { Content = UiLanguage.T("Ordner öffnen"), Margin = new Thickness(4), Padding = new Thickness(10, 5, 10, 5) };
         openFolder.Click += (_, _) =>
         {
             try
@@ -83,16 +83,16 @@ public sealed class GalleryTexturePickerWindow : Window
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "Texturordner", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(this, ex.Message, UiLanguage.T("Texturordner"), MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         };
         footer.Children.Add(openFolder);
 
-        var refresh = new Button { Content = "Aktualisieren", Margin = new Thickness(4), Padding = new Thickness(10, 5, 10, 5) };
+        var refresh = new Button { Content = UiLanguage.T("Aktualisieren"), Margin = new Thickness(4), Padding = new Thickness(10, 5, 10, 5) };
         refresh.Click += (_, _) => Populate();
         footer.Children.Add(refresh);
 
-        var close = new Button { Content = "Schließen", Margin = new Thickness(4), Padding = new Thickness(10, 5, 10, 5) };
+        var close = new Button { Content = UiLanguage.T("Schließen"), Margin = new Thickness(4), Padding = new Thickness(10, 5, 10, 5) };
         close.Click += (_, _) => Close();
         footer.Children.Add(close);
 
@@ -115,7 +115,7 @@ public sealed class GalleryTexturePickerWindow : Window
         _tiles.Children.Clear();
         var files = GalleryTextureLibrary.GetFiles();
         _emptyMessage.Text = files.Count == 0
-            ? "Keine JPG-Dateien vorhanden. Über „Ordner öffnen“ kannst Du eigene Texturen hinzufügen."
+            ? UiLanguage.T("Keine JPG-Dateien vorhanden. Über „Ordner öffnen“ kannst Du eigene Texturen hinzufügen.")
             : "";
         foreach (var path in files)
         {
@@ -143,7 +143,7 @@ public sealed class GalleryTexturePickerWindow : Window
                 };
                 var label = new TextBlock
                 {
-                    Text = chosen ? "✓ Ausgewählt" : "",
+                    Text = chosen ? UiLanguage.T("✓ Ausgewählt") : "",
                     FontSize = 11,
                     TextAlignment = TextAlignment.Center,
                     Margin = new Thickness(0, 3, 0, 0)
@@ -173,7 +173,7 @@ public sealed class GalleryTexturePickerWindow : Window
             {
                 var invalid = new TextBlock
                 {
-                    Text = name + "\nNicht lesbar: " + ex.Message,
+                    Text = name + "\n" + UiLanguage.T("Nicht lesbar: ") + ex.Message,
                     TextWrapping = TextWrapping.Wrap,
                     Width = 185,
                     Margin = new Thickness(8)
