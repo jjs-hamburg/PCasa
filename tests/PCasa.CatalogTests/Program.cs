@@ -38,6 +38,7 @@ internal static class Program
             }
         }
         var failures = new List<string>();
+        Run("One UI translation catalog switches de/en and preserves user metadata", LanguageSwitchPreservesUserMetadata, failures);
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
@@ -5062,6 +5063,30 @@ internal static class Program
             ?? throw new Exception("End of gallery has no visible images.");
         if (visible.Last != imageCount - 1)
             throw new Exception("Gallery does not expose the last catalog image.");
+    }
+
+    private static void LanguageSwitchPreservesUserMetadata()
+    {
+        var before = UiLanguage.Current.Code;
+        try
+        {
+            UiLanguage.Current.Select("en");
+            if (UiLanguage.T("Datei") != "File" ||
+                UiLanguage.T("Ordnerstatus-Legende") != "Folder status legend" ||
+                UiLanguage.Format("{0:N0} Bilder", 2) != "2 images" ||
+                UiLanguage.T("Urlaub") != "Urlaub" ||
+                UiLanguage.T(@"C:\\Pictures\\Originals.jpg") !=
+                    @"C:\\Pictures\\Originals.jpg" ||
+                UiLanguage.Current.Code != "en")
+                throw new Exception("English source catalog or fallback is inconsistent.");
+            UiLanguage.Current.Select("de");
+            if (UiLanguage.T("Datei") != "Datei" ||
+                UiLanguage.T("Ordnerstatus-Legende") != "Ordnerstatus-Legende" ||
+                UiLanguage.Current.Code != "de" ||
+                UiLanguage.IsSupported("fr"))
+                throw new Exception("German base catalog or language validation changed.");
+        }
+        finally { UiLanguage.Current.Select(before); }
     }
 
     private static void MultiTagAndSearchRequiresAllTags()
