@@ -141,7 +141,7 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("Gallery.StartDrag", ex);
             if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text = "Bilder konnten nicht zum Ziehen vorbereitet werden";
+                StatusText.Text = UiLanguage.T("Bilder konnten nicht zum Ziehen vorbereitet werden");
         }
     }
 
@@ -284,7 +284,7 @@ public partial class MainWindow
         {
             e.Effects = DragDropEffects.None;
             e.Handled = true;
-            StatusText.Text = "Ablage abgewiesen: kein gültiger überwachter Zielordner";
+            StatusText.Text = UiLanguage.T("Ablage abgewiesen: kein gültiger überwachter Zielordner");
             return;
         }
         e.Effects = effect;
@@ -356,7 +356,7 @@ public partial class MainWindow
         {
             e.Effects = DragDropEffects.None;
             e.Handled = true;
-            StatusText.Text = "Ablage abgewiesen: kein gültiger überwachter Zielordner";
+            StatusText.Text = UiLanguage.T("Ablage abgewiesen: kein gültiger überwachter Zielordner");
             return;
         }
         e.Effects = effect;
@@ -387,9 +387,9 @@ public partial class MainWindow
             Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint,
         };
         menu.SetResourceReference(Control.BackgroundProperty, "PcasaPanelBrush");
-        var copy = new MenuItem { Header = "Kopieren" };
-        var move = new MenuItem { Header = "Verschieben" };
-        var cancel = new MenuItem { Header = "Abbrechen" };
+        var copy = new MenuItem { Header = UiLanguage.T("Kopieren") };
+        var move = new MenuItem { Header = UiLanguage.T("Verschieben") };
+        var cancel = new MenuItem { Header = UiLanguage.T("Abbrechen") };
         copy.Click += (_, _) => _ = TransferGalleryFilesAsync(
             files, destination, move: false);
         move.Click += (_, _) => _ = TransferGalleryFilesAsync(
