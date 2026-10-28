@@ -413,7 +413,6 @@ public partial class MainWindow
         // is processed by the next Tag package. Otherwise its preview could
         // never reappear after the window is reset.
         _lastManualThumbnailPath = null;
-        _lastManualThumbnailUtc = DateTime.MinValue;
         _visibleManualWindow?.BeginManualOperation(item.Title, item.Total);
         var latest = _scheduler.Snapshot().LastOrDefault(snapshot => snapshot.Key == key);
         if (latest is not null)
@@ -426,7 +425,6 @@ public partial class MainWindow
     }
 
     private bool _manualThumbnailBusy;
-    private DateTime _lastManualThumbnailUtc = DateTime.MinValue;
     private string? _lastManualThumbnailPath;
 
     private void RequestVisibleTagThumbnail(SchedulerJobSnapshot status)
@@ -439,15 +437,13 @@ public partial class MainWindow
             status.CurrentPath is not { Length: > 0 } source ||
             _manualThumbnailBusy ||
             string.Equals(_lastManualThumbnailPath, source,
-                StringComparison.OrdinalIgnoreCase) ||
-            DateTime.UtcNow - _lastManualThumbnailUtc < TimeSpan.FromMilliseconds(850))
+                StringComparison.OrdinalIgnoreCase))
             return;
 
         // A bounded local thumbnail lookup; never decode the NAS original
         // and never start a second progress/scheduler subsystem.
         _manualThumbnailBusy = true;
         _lastManualThumbnailPath = source;
-        _lastManualThumbnailUtc = DateTime.UtcNow;
         _ = LoadVisibleTagThumbnailAsync(status.Key, source);
     }
 
@@ -462,23 +458,60 @@ public partial class MainWindow
                     using var connection = _database.OpenConnection();
                     using var lookup = connection.CreateCommand();
                     lookup.CommandText =
-                        "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                        "SELECT id, thumbnail_path FROM images " +
+                        "WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
                     lookup.Parameters.AddWithValue("$path", source);
-                    var value = lookup.ExecuteScalar();
-                    if (value is null) return (System.Windows.Media.Imaging.BitmapSource?)null;
+                    long imageId;
+                    string? localThumbnailPath;
+                    using (var result = lookup.ExecuteReader())
+                    {
+                        if (!result.Read())
+                            return (System.Windows.Media.Imaging.BitmapSource?)null;
+                        imageId = result.GetInt64(0);
+                        localThumbnailPath = result.IsDBNull(1) ? null : result.GetString(1);
+                    }
 
-                    var imageId = Convert.ToInt64(value);
+                    // First prefer the same packed thumbnail as the gallery.
+                    // An incomplete browse-cache rebuild must not leave Tag
+                    // progress blank when the legacy LOCAL cache already exists.
                     var repository = new BrowseCacheRepository(_database);
                     var tiers = _browseProfileRepository.Get().Tiers;
-                    using var reader = new PackedThumbnailReader();
-                    foreach (var tier in tiers)
+                    using (var packedReader = new PackedThumbnailReader())
                     {
-                        token.ThrowIfCancellationRequested();
-                        var entry = repository.GetIndexEntry(tier, imageId);
-                        if (entry is null) continue;
-                        return reader.Load(entry, token);
+                        foreach (var tier in tiers)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var entry = repository.GetIndexEntry(tier, imageId);
+                            if (entry is null) continue;
+                            try
+                            {
+                                var picture = packedReader.Load(entry, token);
+                                if (picture is not null) return picture;
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                // A stale or damaged pack is a preview fault,
+                                // never a reason to interrupt durable Tag writes.
+                                PCasaDiagnostics.Write("Tags.ProgressPreview.Packed", ex);
+                            }
+                        }
                     }
-                    return null;
+
+                    // Only PCasa's verified local thumbnail directory is a
+                    // valid fallback. Never open an original on SMB/NAS/VPN.
+                    if (string.IsNullOrWhiteSpace(localThumbnailPath))
+                        return null;
+                    var localRoot = Path.GetFullPath(Path.Combine(
+                        Environment.GetFolderPath(
+                            Environment.SpecialFolder.LocalApplicationData),
+                        "PCasa", "thumbnails")) + Path.DirectorySeparatorChar;
+                    var thumbnailPath = Path.GetFullPath(localThumbnailPath);
+                    if (!thumbnailPath.StartsWith(localRoot,
+                            StringComparison.OrdinalIgnoreCase) ||
+                        !File.Exists(thumbnailPath))
+                        return null;
+                    return new ThumbnailImageLoader().Load(thumbnailPath, 92, token);
                 }, workKind: SchedulerWorkKind.ThumbnailRead);
             if (!Dispatcher.HasShutdownStarted &&
                 _visibleManualActiveKey == jobKey)

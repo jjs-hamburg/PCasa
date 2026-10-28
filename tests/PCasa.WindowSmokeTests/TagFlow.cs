@@ -1519,6 +1519,73 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: Two separate Tag packages for the same photo count twice, without duplicating the recovery backlog.");
 
+            // A Tag job may target a catalogued photo before its browse-pack
+            // tiers are ready (common during a long initial NAS scan). Its
+            // previously committed LOCAL thumbnail must still be shown even
+            // while the ORIGINAL is temporarily unreachable. No source read
+            // or extra preview scheduler is allowed.
+            string legacyThumbnail;
+            using (var connection = db.OpenConnection())
+            using (var lookup = connection.CreateCommand())
+            {
+                lookup.CommandText = """
+                    SELECT thumbnail_path FROM images
+                    WHERE local_path=$path COLLATE NOCASE LIMIT 1;
+                    """;
+                lookup.Parameters.AddWithValue("$path", firstOriginal);
+                legacyThumbnail = lookup.ExecuteScalar() as string
+                    ?? throw new Exception("Legacy local thumbnail path missing.");
+                if (!File.Exists(legacyThumbnail))
+                    throw new Exception("Legacy local thumbnail file missing.");
+            }
+            using (var connection = db.OpenConnection())
+            using (var removePacked = connection.CreateCommand())
+            {
+                removePacked.CommandText = """
+                    DELETE FROM thumbnail_entries
+                    WHERE image_id=(SELECT id FROM images
+                                    WHERE local_path=$path COLLATE NOCASE);
+                    """;
+                removePacked.Parameters.AddWithValue("$path", firstOriginal);
+                if (removePacked.ExecuteNonQuery() == 0)
+                    throw new Exception("Preview regression lacks an existing packed tier.");
+            }
+            const string legacyPreviewJob = "tags:smoke:legacy-thumbnail";
+            var movedOriginal = firstOriginal + ".offline-for-preview-test";
+            File.Move(firstOriginal, movedOriginal);
+            try
+            {
+                beginManual.Invoke(window, [legacyPreviewJob,
+                    "Tags in Originaldateien schreiben", 1]);
+                var missingPackStatus = new SchedulerJobSnapshot(
+                    0, legacyPreviewJob, SchedulerPriority.ManualAction,
+                    SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
+                {
+                    Phase = "Tags in Originaldateien schreiben",
+                    CurrentPath = firstOriginal,
+                    Total = 1, Processed = 0
+                };
+                reportManual.Invoke(window, [missingPackStatus]);
+                Until(window, () =>
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CurrentThumbnail") is Image preview &&
+                    preview.Source is BitmapSource &&
+                    (presenterField.GetValue(window)
+                        as PCasa.App.BrowseCacheProgressWindow)?
+                        .FindName("CurrentFileText") is TextBlock file &&
+                    file.Text == Path.GetFileName(firstOriginal),
+                    "Tag progress could not load the LOCAL thumbnail when " +
+                    "the packed tier and original were unavailable.");
+            }
+            finally
+            {
+                endManual.Invoke(window, [legacyPreviewJob]);
+                File.Move(movedOriginal, firstOriginal);
+            }
+            Console.WriteLine(
+                "PASS: Tag progress uses local cached picture with no packed tier or accessible original.");
+
             Console.WriteLine(
                 "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
