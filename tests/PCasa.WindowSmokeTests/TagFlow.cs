@@ -54,6 +54,39 @@ internal static class TagFlow
             if (catalog.CountAll() != 24)
                 throw new Exception("Synthetic WPF catalog is incomplete.");
 
+            // One GPS photo per album. Selecting album A must keep its point
+            // visible while the context markers from album B remain present.
+            long gpsA, gpsB;
+            using (var connection = db.OpenConnection())
+            {
+                long SeedGps(long photoFolderId, double latitude, double longitude)
+                {
+                    using var insert = connection.CreateCommand();
+                    insert.CommandText = """
+                        INSERT INTO image_exif (
+                            image_id, source_modified_utc_ticks, source_file_size,
+                            exif_json, gps_latitude, gps_longitude)
+                        SELECT id, modified_utc_ticks, file_size, '{}', $lat, $lon
+                        FROM images WHERE photo_folder_id = $folder
+                        ORDER BY id LIMIT 1
+                        ON CONFLICT(image_id) DO UPDATE SET
+                            gps_latitude = excluded.gps_latitude,
+                            gps_longitude = excluded.gps_longitude;
+                        """;
+                    insert.Parameters.AddWithValue("$folder", photoFolderId);
+                    insert.Parameters.AddWithValue("$lat", latitude);
+                    insert.Parameters.AddWithValue("$lon", longitude);
+                    insert.ExecuteNonQuery();
+                    using var query = connection.CreateCommand();
+                    query.CommandText =
+                        "SELECT MIN(id) FROM images WHERE photo_folder_id = $folder";
+                    query.Parameters.AddWithValue("$folder", photoFolderId);
+                    return (long)query.ExecuteScalar()!;
+                }
+                gpsA = SeedGps(a.Id, 40.4168, -3.7038);
+                gpsB = SeedGps(b.Id, 50.108, 11.4625);
+            }
+
             using (var connection = db.OpenConnection())
             using (var update = connection.CreateCommand())
             {
@@ -530,6 +563,37 @@ internal static class TagFlow
                 throw new Exception("Unencrypted tile endpoints must be rejected.");
             var selectionBeforeLayout = selected.ToHashSet();
             Click(gpsToggle);
+            var mapButton = (Button?)window.FindName("GpsProviderButton")
+                ?? throw new Exception("Map selection button missing.");
+            Click(mapButton);
+            if (mapButton.ContextMenu?.Items.Count < 4)
+                throw new Exception("Map button lost provider profiles.");
+            mapButton.ContextMenu.IsOpen = false;
+
+            var readGps = typeof(PCasa.App.MainWindow).GetMethod("ReadGpsPoints",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("GPS catalog projection not found.");
+            var projected = ((System.Collections.IEnumerable)readGps.Invoke(
+                window, [new long[] { gpsA }, b.Id, CancellationToken.None])!)
+                .Cast<object>().ToArray();
+            bool HasPoint(long id, bool isSelected) => projected.Any(point =>
+                (long)point.GetType().GetProperty("Id")!.GetValue(point)! == id &&
+                (bool)point.GetType().GetProperty("Selected")!.GetValue(point)! == isSelected);
+            if (!HasPoint(gpsA, true) || !HasPoint(gpsB, false))
+                throw new Exception("GPS selection dropped the surrounding folder's markers.");
+
+            var filmToggle = (CheckBox?)window.FindName("GpsFilmstripToggle")
+                ?? throw new Exception("Optional GPS filmstrip toggle missing.");
+            var filmPanel = (Border?)window.FindName("GpsFilmstripPanel")
+                ?? throw new Exception("Optional GPS filmstrip view missing.");
+            filmToggle.IsChecked = true;
+            if (filmPanel.Visibility != Visibility.Visible)
+                throw new Exception("GPS filmstrip could not be enabled.");
+            filmToggle.IsChecked = false;
+            if (filmPanel.Visibility != Visibility.Collapsed)
+                throw new Exception("GPS filmstrip could not be hidden.");
+
             if (((Grid?)window.FindName("GpsMapPanel"))?.Visibility != Visibility.Visible ||
                 ((Button?)window.FindName("GpsProviderButton"))?.ContextMenu?.Items.Count < 4 ||
                 window.FindName("GpsFullscreenArrows") is not System.Windows.Shapes.Path ||
