@@ -238,14 +238,24 @@ public partial class MainWindow
                         GpsPhotoPopup.Visibility = Visibility.Collapsed;
                         ShowGpsFullscreenImage(id);
                     }
-                    else if (_appearance.ShowGpsFilmstrip)
+                    else if (_appearance.ShowGpsFilmstrip ||
+                             _gpsSelectionCount > 1)
                     {
+                        // A map point within a multi-photo selection must
+                        // NOT collapse that selection or reframe the map.
+                        // Only its visual highlight / optional strip focus
+                        // changes. This includes the no-filmstrip case.
                         _gpsHighlightedImageId = id;
-                        GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                        _gpsFilmstripUpdating = true;
-                        GpsFilmstripList.SelectedItem =
-                            _gpsFilmstripEntries.FirstOrDefault(x => x.Id == id);
-                        _gpsFilmstripUpdating = false;
+                        if (_appearance.ShowGpsFilmstrip)
+                        {
+                            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+                            _gpsFilmstripUpdating = true;
+                            GpsFilmstripList.SelectedItem =
+                                _gpsFilmstripEntries.FirstOrDefault(x => x.Id == id);
+                            _gpsFilmstripUpdating = false;
+                        }
+                        else
+                            ShowGpsPhotoPopup(id);
                         HighlightGpsPointOnMap(id);
                     }
                     else
