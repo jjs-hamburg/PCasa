@@ -40,11 +40,12 @@ Bei Tag-Schreibjobs kann die Fortschrittsanzeige auf den bereits vorhandenen **l
 
 ## Tag-Schreiben und Wiederanlauf
 
-1. Eine Tag-Aktion erzeugt eine persistente gewünschte Änderung im lokalen Katalog.
-2. Der zentrale Scheduler plant das Schreiben der Original-Metadaten über ExifTool.
-3. Eine bestätigte Originaldatei-Transaktion wird in SQLite abgeglichen; `pending_tag_edits` darf erst nach bestätigter Verarbeitung bereinigt werden.
-4. Fehlende/offline Quellen behalten ihre Intention. `scheduler_packages` bewahrt Priorität, Reihenfolge und bestätigten Cursor über Neustarts.
-5. Ein reiner Keyword-Wechsel soll keine unnötige neue Pixeldekodierung auslösen. Der ExifTool-Schreibweg erhält den Dateizeitstempel und der Katalog gleicht notwendige Dateigrößenänderungen gezielt ab.
+1. Der Tag-Editor hält Änderungen über Auswahl- und Ordnerwechsel hinweg **pro Bild nur im Speicher**. Erst OK bestätigt die Sitzung; Abbruch verwirft sie.
+2. OK erstellt **ein** dauerhaftes `tag-edit-v2`-Paket. Dessen unterschiedliche Änderungen je Bild werden mit **einer SQLite-Transaktion** im lokalen Tag-Index und in `pending_tag_edits` abgelegt. Bereits vorhandene `tag-edit-v1`-Pakete bleiben wiederherstellbar.
+3. Der zentrale Scheduler schreibt die Original-Metadaten je Bild mit ExifTool; mehrere Änderungen desselben Bildes benötigen nicht mehrere Originaldatei-Transaktionen.
+4. Nach der bestätigten Originaldatei-Transaktion wird `pending_tag_edits` abgeglichen; unerledigte Änderungen bleiben bestehen.
+5. Fehlende/offline Quellen behalten ihre Intention. `scheduler_packages` bewahrt Priorität, Reihenfolge und bestätigten Cursor über Neustarts.
+6. Ein reiner Keyword-Wechsel soll keine unnötige neue Pixeldekodierung auslösen. Der ExifTool-Schreibweg erhält den Dateizeitstempel und der Katalog gleicht notwendige Dateigrößenänderungen gezielt ab.
 
 **Nie** eine scheinbar verwaiste Datei/Tag-Intention durch manuelles Löschen der Tabellen »reparieren«, ohne zuvor eine konsistente Migration und die referenzierten Originale zu prüfen.
 

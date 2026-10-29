@@ -11,7 +11,7 @@
 - **Galerie:** Größen- und Abstandsregler, wählbare Dateinamen/Symbole, Hell/Dunkel/System, JPG-Hintergrundtexturen, Mehrfachauswahl, Drag & Drop, Kopieren/Verschieben, Ordnerstatus und Fortschrittsanzeige.
 - **Sortieren innerhalb jedes Ordners** nach Name (Standard), Aufnahme-/Erstellungs-/Änderungsdatum, Dateigröße oder Dimensionen; jeweils auf- oder absteigend.
 - **Suche** nach Tags oder Dateinamen, global/ab ausgewähltem Baum/im aktuellen Ordner, mit NOT und optionaler Einschränkung auf die sichtbare Galerie.
-- **Tags** für einzelne und mehrere Bilder: Vorschläge per Maus oder Pfeiltasten/Enter, Hinzufügen und Entfernen; lokale SQLite-Vormerkung und über ExifTool ausgeführte, dauerhaft abgesicherte Originaldatei-Schreibaufträge.
+- **Tags** für einzelne und mehrere Bilder: Vorschläge per Maus oder Pfeiltasten/Enter, Hinzufügen und Entfernen; **eine bildbezogene Bearbeitungssitzung über Auswahl- und Ordnerwechsel hinweg**, gemeinsames OK/Abbruch, atomare lokale SQLite-Vormerkung und über ExifTool ausgeführte, dauerhaft abgesicherte Originaldatei-Schreibaufträge.
 - **Bildbetrachter:** Navigation, Vollbild, Fit/Zoom und Verschieben des Bildausschnitts; RAW-Dateien können über unterstützte Decoder bzw. eingebettete Vorschaubilder betrachtet werden. RAW-Bearbeitung ist nicht Bestandteil dieses Standes.
 - **Deutsch und Englisch** über eine zentrale Sprachverwaltung, einschließlich Umschalten ohne Neustart und persistenter Auswahl.
 

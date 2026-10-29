@@ -9,7 +9,7 @@
 | Ordnerverwaltung | Implementiert | Wurzeln, Unterordner-Ausschlüsse, OK/Abbruch, Explorer, priorisierte manuelle/automatische Scans |
 | Auswahl und Dateioperationen | Implementiert | Einzel-/Bereichsauswahl, Drag & Drop, Kopieren, Verschieben, getrenntes Entfernen und Löschen |
 | Suche/Sortierung | Implementiert | Tags/Dateiname, 3 Suchbereiche, NOT, Galerieansicht-Maske, 6 Sortiermerkmale je Ordner |
-| Tagging | Implementiert | Mehrfachauswahl, Vorschläge per Maus/Tastatur, lokales Vormerken, ExifTool-Schreiben und Wiederherstellung |
+| Tagging | Implementiert | Mehrfachauswahl, Vorschläge per Maus/Tastatur, ein Entwurf pro Bild über Ordnerwechsel hinweg, ein OK für alle Änderungen, Abbruch und Schutz beim Beenden, ExifTool und Wiederherstellung |
 | EXIF, Kamera und GPS | Metadaten vorhanden | Einlesen und Anzeigen von GPS-/Kameradaten; GPS-Kartenanzeige noch offen |
 | Bildbetrachter | Implementiert | Navigation, Vollbild, Fit/Zoom/Pan, RAW-Vorschau abhängig von unterstütztem Format |
 | Sprachen | Implementiert | Deutsch/Englisch, zentrale Laufzeitumschaltung, Einstellung wird gespeichert |

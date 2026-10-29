@@ -30,6 +30,16 @@ Die Suchzeile steht dauerhaft getrennt unter dem Hauptmenü; ihre Suchgruppe ist
 - Bilder lassen sich auf Ordner im Baum oder geeignete Ziele ziehen. Das Ziel wird beim Darüberziehen markiert. Kopieren und Verschieben laufen durch die bestehenden priorisierten, wiederaufnehmbaren Dateioperationspfade; Namenskonflikte werden ausdrücklich abgefragt.
 - Externe Explorer-Dateiaktionen erfordern anschließende Abgleichlogik; ein fehlendes NAS-Laufwerk wird nicht als bestätigtes Löschen behandelt.
 
+## Tag-Bearbeitung über mehrere Bildauswahlen
+
+Im Tag-Editor werden neue oder entfernte Tags zunächst **pro Bild-ID vorgemerkt**, ohne sofort SQLite oder die Originaldateien zu ändern. Beim Wechsel der Auswahl oder des Ordners und auch bei leerer Auswahl bleibt die Sitzung erhalten.
+
+- Die Tag-Liste zeigt den wirksamen Zustand der **aktuell ausgewählten** Bilder einschließlich ihrer noch vorgemerkten Änderungen.
+- Über OK/Abbruch erscheint die Gesamtzahl der betroffenen Bilder und vorgemerkten Tag-Änderungen.
+- **OK** übernimmt alle Änderungen mit **einem** dauerhaft gespeicherten Scheduler-Paket. Die verschiedenen Tag-Intentionen werden in **einer** SQLite-Transaktion übernommen.
+- **Abbruch** verwirft die gesamte noch unbestätigte Sitzung. Beim Programmende fragt PCasa vor dem Verwerfen nach.
+- Der Wiederanlauf unterstützt neue bildbezogene `tag-edit-v2`-Pakete und bisherige `tag-edit-v1`-Pakete.
+
 ## Bilder, Ansicht und Status
 
 - Regler für Thumbnailgröße und -abstand; optionale Dateinamen (auch fett), Thumbnail-Schatten, GPS-/Tag-/RAW-Symbole.
