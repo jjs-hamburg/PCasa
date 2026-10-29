@@ -627,7 +627,7 @@ public partial class MainWindow
                     // checks existing photos or finds zero new files.
                     // The scanner is already executing when this callback
                     // arrives, so it is not a speculative queued indicator.
-                    var scanProgress = new Progress<ScanProgress>(value =>
+                    IProgress<ScanProgress> scanProgress = new Progress<ScanProgress>(value =>
                     {
                         if (!acceptsScanProgress || _manualFileTransferActive) return;
                         activityWindow ??= AcquireProgressPresenter(backgroundPresenterOwner);
