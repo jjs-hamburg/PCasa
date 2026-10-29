@@ -707,6 +707,85 @@ internal static class TagFlow
             Click(gpsFullscreen);
             if (Grid.GetColumn(sidebarPanel) != 4 || Grid.GetColumnSpan(sidebarPanel) != 1)
                 throw new Exception("Leaving GPS fullscreen did not restore the panel.");
+
+            // Regression: double-clicking a thumbnail used to enter the normal
+            // gallery viewer and SelectViewerImage cleared all other selected
+            // IDs. The GPS photo view now owns only its overlay image: a
+            // subsequent SINGLE click on a different thumbnail swaps photos.
+            // Neither action may alter the catalog selection or map viewport.
+            var multiProjection = ((System.Collections.IEnumerable)readGps.Invoke(
+                window, [new long[] { gpsA, gpsB }, b.Id, CancellationToken.None])!)
+                .Cast<object>().ToArray();
+            var multiArray = Array.CreateInstance(projectedType, multiProjection.Length);
+            for (var i = 0; i < multiProjection.Length; i++)
+                multiArray.SetValue(multiProjection[i], i);
+            var gpsPointsField = typeof(PCasa.App.MainWindow).GetField("_gpsPoints",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var viewerOpenField = typeof(PCasa.App.MainWindow).GetField("_viewerOpen",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var filmList = (ListBox?)window.FindName("GpsFilmstripList")
+                ?? throw new Exception("GPS filmstrip image list is missing.");
+            var filmDoubleClick = typeof(PCasa.App.MainWindow).GetMethod(
+                "GpsFilmstrip_MouseDoubleClick",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var previousPoints = gpsPointsField.GetValue(window);
+            var previousSelection = selected.ToHashSet();
+            try
+            {
+                gpsPointsField.SetValue(window, multiArray);
+                selected.Clear();
+                selected.Add(gpsA);
+                selected.Add(gpsB);
+                filmToggle.IsChecked = true;
+                var entries = new List<PCasa.App.MainWindow.GpsFilmstripEntry>
+                {
+                    new() { Id = gpsA, Name = "first GPS photo" },
+                    new() { Id = gpsB, Name = "second GPS photo" }
+                };
+                filmList.ItemsSource = entries;
+                filmList.SelectedItem = entries[0];
+                var keepSelection = selected.ToHashSet();
+                var doubleClick = new MouseButtonEventArgs(
+                    InputManager.Current.PrimaryMouseDevice,
+                    Environment.TickCount, MouseButton.Left) { ClickCount = 2 };
+                filmDoubleClick.Invoke(window, [filmList, doubleClick]);
+                if (gpsOverlay.Visibility != Visibility.Visible ||
+                    gpsOverlay.Tag is not long openedId || openedId != gpsA ||
+                    Grid.GetRow(gpsOverlay) != 2 ||
+                    (bool)viewerOpenField.GetValue(window)! ||
+                    !selected.SetEquals(keepSelection))
+                    throw new Exception("Filmstrip double click opened normal viewer, hid strip or lost multi-selection.");
+
+                filmList.SelectedItem = entries[1]; // exactly ONE click
+                if (gpsOverlay.Visibility != Visibility.Visible ||
+                    gpsOverlay.Tag is not long switchedId || switchedId != gpsB ||
+                    !selected.SetEquals(keepSelection) ||
+                    (bool)viewerOpenField.GetValue(window)!)
+                    throw new Exception("Filmstrip single click did not switch the OPEN photo without changing selection.");
+
+                gpsOverlay.RaiseEvent(new MouseButtonEventArgs(
+                    InputManager.Current.PrimaryMouseDevice,
+                    Environment.TickCount, MouseButton.Left)
+                { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+                if (gpsOverlay.Visibility != Visibility.Collapsed ||
+                    !selected.SetEquals(keepSelection) ||
+                    (bool)viewerOpenField.GetValue(window)!)
+                    throw new Exception("Closing GPS photo changed the multi-selection or opened the gallery viewer.");
+            }
+            finally
+            {
+                filmToggle.IsChecked = false;
+                gpsPointsField.SetValue(window, previousPoints);
+                selected.Clear();
+                foreach (var id in previousSelection) selected.Add(id);
+            }
+            if (!selected.SetEquals(selectionBeforeLayout))
+                throw new Exception("GPS photo regression test failed to restore original selection.");
+            Console.WriteLine("PASS: GPS filmstrip double click plus single-click image swap preserves multi-selection.");
+
             Click(gpsExpand);
             window.UpdateLayout();
             if (!folderPane.IsVisible || gpsColumn.ActualWidth >=
