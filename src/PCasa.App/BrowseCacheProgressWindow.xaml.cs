@@ -369,12 +369,22 @@ public partial class BrowseCacheProgressWindow : Window
                 ShowCacheProgress(cache);
                 break;
             default:
-                PhaseText.Text = UiLanguage.T("Hintergrundvorgang läuft");
-                Progress.IsIndeterminate = true;
-                CurrentFileText.Text = UiLanguage.T("Warte auf Hintergrundfortschritt");
+                // No background scan/cache phase owns this presenter. The
+                // last manual "2 / 2" does NOT mean there is remaining I/O.
+                // A borrowed window must become invisible here, rather than
+                // impersonate permanent background work with stale counts.
+                PhaseText.Text = string.Empty;
+                CountText.Text = string.Empty;
+                CountText.ToolTip = null;
+                Progress.IsIndeterminate = false;
+                Progress.Value = 0;
+                CurrentFileText.Text = string.Empty;
+                CurrentFileText.ToolTip = null;
                 FolderPathText.Text = string.Empty;
                 FolderPathText.ToolTip = null;
                 CurrentThumbnail.Source = null;
+                if (IsVisible) Hide();
+                PublishProgressStatus();
                 break;
         }
     }

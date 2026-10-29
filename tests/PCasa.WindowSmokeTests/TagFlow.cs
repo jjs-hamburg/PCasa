@@ -723,6 +723,28 @@ internal static class TagFlow
                 throw new Exception("Malformed GPS camera position was accepted.");
             Console.WriteLine("PASS: GPS address/map callbacks survive asynchronous WPF dispatch without any JSON document.");
 
+            // A GPS job can finish while a generic progress presenter was
+            // allocated for a background cache request that never produced
+            // any progress. It must not stick at "2 / 2" with a fabricated
+            // "Background operation running" label after the GPS edit ends.
+            var idleProgress = new PCasa.App.BrowseCacheProgressWindow
+                { Owner = window };
+            try
+            {
+                idleProgress.BeginManualOperation("GPS in Originaldateien schreiben", 2);
+                var count = (TextBlock?)idleProgress.FindName("CountText")
+                    ?? throw new Exception("Missing common progress count.");
+                count.Text = "2 / 2";
+                idleProgress.EndManualOperation();
+                if (idleProgress.IsManualPresentationActive ||
+                    idleProgress.IsVisible ||
+                    !string.IsNullOrEmpty(count.Text))
+                    throw new Exception(
+                        "Completed GPS job left a fake background window at 2 / 2.");
+            }
+            finally { idleProgress.Finish(); }
+            Console.WriteLine("PASS: Completed GPS operation hides idle presenter and clears stale 2/2 count.");
+
             var multiSelectionField = typeof(PCasa.App.MainWindow).GetField(
                 "_gpsSelectionCount",
                 System.Reflection.BindingFlags.NonPublic |

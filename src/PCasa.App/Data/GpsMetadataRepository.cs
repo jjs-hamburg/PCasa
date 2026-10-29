@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using Microsoft.Data.Sqlite;
 using PCasa.App.Services;
@@ -18,6 +19,8 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
         string? packageKey = null)
     {
         token.ThrowIfCancellationRequested();
+        var elapsed = Stopwatch.StartNew();
+        long readMilliseconds = 0, writeMilliseconds = 0, verifyMilliseconds = 0;
         using var db = database.OpenConnection();
         using var select = db.CreateCommand();
         select.CommandText = """
@@ -70,6 +73,7 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
 
             using var reader = new ImageExifReader();
             var source = reader.Read(path, token);
+            readMilliseconds = elapsed.ElapsedMilliseconds;
             var alreadyHasGps = source.GpsLatitude.HasValue &&
                 source.GpsLongitude.HasValue;
             // A journal replay may resume after ExifTool replaced the file
@@ -103,6 +107,7 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 writer.WriteGps(path,
                     mode == EditMode.Remove ? null : latitude,
                     mode == EditMode.Remove ? null : longitude, token);
+                writeMilliseconds = elapsed.ElapsedMilliseconds - readMilliseconds;
                 // Never cancel between the physical write and catalog commit.
                 if (File.GetLastWriteTimeUtc(path).Ticks != indexedTicks)
                     File.SetLastWriteTimeUtc(path,
@@ -110,6 +115,8 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
             }
             var after = new FileInfo(path);
             var verified = reader.Read(path, CancellationToken.None);
+            verifyMilliseconds = elapsed.ElapsedMilliseconds -
+                readMilliseconds - writeMilliseconds;
             if (shouldWrite && (mode == EditMode.Remove
                 ? verified.GpsLatitude.HasValue || verified.GpsLongitude.HasValue
                 : !Same(verified.GpsLatitude, latitude) ||
@@ -164,6 +171,10 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 exif.ExecuteNonQuery();
             }
             tx.Commit();
+            PCasaDiagnostics.WriteMessage("GPS.Edit.Timing",
+                $"ImageId={imageId}; Changed={shouldWrite}; Bytes={after.Length}; " +
+                $"ReadMs={readMilliseconds}; NativeWriteMs={writeMilliseconds}; " +
+                $"VerifyMs={verifyMilliseconds}; TotalMs={elapsed.ElapsedMilliseconds}");
         }
     }
 
