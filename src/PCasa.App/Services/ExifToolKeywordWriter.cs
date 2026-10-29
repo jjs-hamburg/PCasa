@@ -1,1408 +1,393 @@
-<Window x:Class="PCasa.App.MainWindow"
-        xmlns:loc="clr-namespace:PCasa.App.Services"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:controls="clr-namespace:PCasa.App.Controls"
-        xmlns:primitives="clr-namespace:System.Windows.Controls.Primitives;assembly=PresentationFramework"
-        Title="PCasa"
-        Width="1500"
-        Height="920"
-        MinWidth="1000"
-        MinHeight="650"
-        Background="{DynamicResource PcasaWindowBrush}"
-        Foreground="{DynamicResource PcasaTextBrush}"
-        WindowStartupLocation="CenterScreen"
-        Loaded="BackgroundScan_WindowLoaded"
-        Closed="BackgroundScan_WindowClosed"
-        PreviewKeyDown="PhotoViewerWindow_PreviewKeyDown">
-    <Window.Resources>
-        <!-- One continuous 35-mm-inspired perforation pattern. The strip
-             background is independent of item virtualization/scrolling. -->
-        <DrawingBrush x:Key="GpsFilmPerforationBrush" TileMode="Tile"
-                      Viewport="0,0,26,12" ViewportUnits="Absolute"
-                      Viewbox="0,0,26,12" ViewboxUnits="Absolute" Stretch="Fill">
-            <DrawingBrush.Drawing>
-                <GeometryDrawing Brush="#CFD1D2">
-                    <GeometryDrawing.Geometry>
-                        <RectangleGeometry Rect="6.5,2,13,8" RadiusX="1.6" RadiusY="1.6"/>
-                    </GeometryDrawing.Geometry>
-                </GeometryDrawing>
-            </DrawingBrush.Drawing>
-        </DrawingBrush>
+using System.Diagnostics;
+using System.IO;
+using System.Text;
 
-        <!-- The native ScrollViewer owns scrolling and virtualization. Its
-             scrollbar sits BELOW both uninterrupted sprocket-hole bands. -->
-        <ControlTemplate x:Key="GpsFilmstripScrollViewerTemplate"
-                         TargetType="{x:Type ScrollViewer}">
-            <Grid x:Name="GpsFilmTrack" Background="#0D0E0F">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="12"/>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="12"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <Rectangle x:Name="GpsFilmPerforationsTop" Grid.Row="0"
-                           Fill="{StaticResource GpsFilmPerforationBrush}"
-                           IsHitTestVisible="False"/>
-                <Border Grid.Row="1" Background="#17191B"
-                        BorderBrush="#292B2D" BorderThickness="0,1">
-                    <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
-                                            Content="{TemplateBinding Content}"
-                                            ContentTemplate="{TemplateBinding ContentTemplate}"
-                                            CanContentScroll="{TemplateBinding CanContentScroll}"/>
-                </Border>
-                <Rectangle x:Name="GpsFilmPerforationsBottom" Grid.Row="2"
-                           Fill="{StaticResource GpsFilmPerforationBrush}"
-                           IsHitTestVisible="False"/>
-                <ScrollBar x:Name="PART_HorizontalScrollBar" Grid.Row="3"
-                           Height="16" Orientation="Horizontal"
-                           Background="#202224"
-                           Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"
-                           Maximum="{TemplateBinding ScrollableWidth}"
-                           ViewportSize="{TemplateBinding ViewportWidth}"
-                           Value="{Binding HorizontalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"/>
-            </Grid>
-        </ControlTemplate>
+namespace PCasa.App.Services;
 
-        <ControlTemplate x:Key="GpsFilmstripListTemplate" TargetType="{x:Type ListBox}">
-            <ScrollViewer x:Name="GpsFilmScrollViewer"
-                          Focusable="False"
-                          Template="{StaticResource GpsFilmstripScrollViewerTemplate}"
-                          HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Disabled"
-                          CanContentScroll="True">
-                <ItemsPresenter/>
-            </ScrollViewer>
-        </ControlTemplate>
+/// <summary>
+/// Writes only XMP keywords through bundled ExifTool; original image pixels
+/// are never decoded or recompressed. One session serves a complete user
+/// selection instead of starting a native process for every photograph.
+/// </summary>
+public static class ExifToolKeywordWriter
+{
+    private static readonly object ActiveGate = new();
+    private static readonly HashSet<Session> ActiveSessions = new();
+    private static int _activeWrites;
 
-        <!-- Explicit item template: WPF's system ListBoxItem template paints
-             a large blue selected block. Selection is instead a subtle,
-             high-contrast border, distinguishable without color perception. -->
-        <Style x:Key="GpsFilmFrameItemStyle" TargetType="{x:Type ListBoxItem}">
-            <Setter Property="Padding" Value="0"/>
-            <Setter Property="Margin" Value="0"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#D1D3D5"/>
-            <Setter Property="HorizontalContentAlignment" Value="Center"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
-                        <Border x:Name="FilmFrame" Margin="1" Padding="0"
-                                Background="#151719" BorderBrush="#383B3E"
-                                BorderThickness="1" CornerRadius="1"
-                                SnapsToDevicePixels="True">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              ContentSource="Content"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="FilmFrame" Property="Background" Value="#252729"/>
-                                <Setter TargetName="FilmFrame" Property="BorderBrush" Value="#8B8D8F"/>
-                            </Trigger>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="FilmFrame" Property="Background" Value="#292C2E"/>
-                                <Setter TargetName="FilmFrame" Property="BorderBrush" Value="#E3E1DC"/>
-                                <Setter TargetName="FilmFrame" Property="BorderThickness" Value="2"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+    public static bool HasActiveWrites => Volatile.Read(ref _activeWrites) != 0;
 
-        <Style x:Key="PcasaLogicSymbolStyle" TargetType="RadioButton">
-            <Setter Property="Width" Value="26"/>
-            <Setter Property="Height" Value="26"/>
-            <Setter Property="Margin" Value="2,0"/>
-            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Grid Width="26" Height="26" Background="Transparent">
-                            <Ellipse x:Name="Ring" Margin="2" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.5"/>
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Ring" Property="Stroke" Value="#DD3D3D"/>
-                                <Setter TargetName="Ring" Property="StrokeThickness" Value="2"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- Shared Picasa-like 29 px icon buttons; no separate interaction model. -->
-        <Style x:Key="PcasaFooterIconButtonStyle" TargetType="Button"
-               BasedOn="{StaticResource PcasaStatusButtonStyle}">
-            <Setter Property="Width" Value="29"/>
-            <Setter Property="Height" Value="25"/>
-            <Setter Property="Margin" Value="0,0,5,0"/>
-            <Setter Property="Padding" Value="3,2"/>
-        </Style>
-        <Style x:Key="PcasaFolderIconButtonStyle" TargetType="Button"
-               BasedOn="{StaticResource PcasaFooterIconButtonStyle}">
-            <Setter Property="Width" Value="31"/>
-            <Setter Property="Height" Value="29"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Outline" CornerRadius="4"
-                                BorderThickness="1"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Margin="{TemplateBinding Padding}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="Tag" Value="Active">
-                                <Setter TargetName="Outline" Property="Background" Value="#554414"/>
-                                <Setter TargetName="Outline" Property="BorderBrush" Value="#FFD24C"/>
-                                <Setter TargetName="Outline" Property="BorderThickness" Value="2"/>
-                            </Trigger>
-                            <Trigger Property="Tag" Value="ActiveGold">
-                                <Setter TargetName="Outline" Property="Background" Value="#554414"/>
-                                <Setter TargetName="Outline" Property="BorderBrush" Value="#FFD24C"/>
-                                <Setter TargetName="Outline" Property="BorderThickness" Value="2"/>
-                            </Trigger>
-                            <MultiTrigger>
-                                <MultiTrigger.Conditions>
-                                    <Condition Property="IsMouseOver" Value="True"/>
-                                    <Condition Property="Tag" Value="{x:Null}"/>
-                                </MultiTrigger.Conditions>
-                                <Setter TargetName="Outline" Property="Background" Value="{DynamicResource PcasaHoverBrush}"/>
-                            </MultiTrigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- Search has two EXCLUSIVE groups plus one independent persistent
-             inversion toggle. Checked state has both a tick and a border:
-             active selection is not communicated through color alone. -->
-        <Style x:Key="PcasaSearchChoiceStyle" TargetType="RadioButton">
-            <Setter Property="Height" Value="27"/>
-            <Setter Property="MinWidth" Value="45"/>
-            <Setter Property="Padding" Value="7,0"/>
-            <Setter Property="Margin" Value="1,0"/>
-            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
-            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="ChoiceBorder" CornerRadius="4" BorderThickness="1"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}">
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" Margin="{TemplateBinding Padding}">
-                                <ContentPresenter VerticalAlignment="Center"/>
-                                <TextBlock x:Name="SelectedTick" Text="✓" FontSize="10"
-                                           FontWeight="SemiBold" Margin="5,0,0,0"
-                                           Foreground="{TemplateBinding Foreground}"
-                                           Visibility="Collapsed"/>
-                            </StackPanel>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ChoiceBorder" Property="Background"
-                                        Value="{DynamicResource PcasaHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="ChoiceBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
-                                <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="#D75A5A"/>
-                                <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
-                                <Setter TargetName="SelectedTick" Property="Visibility" Value="Visible"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="PcasaSearchInvertStyle" TargetType="{x:Type primitives:ToggleButton}">
-            <Setter Property="Height" Value="27"/>
-            <Setter Property="Padding" Value="8,0"/>
-            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
-            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type primitives:ToggleButton}">
-                        <Border x:Name="InvertBorder" CornerRadius="4" BorderThickness="1"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                Background="{TemplateBinding Background}">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
-                                        HorizontalAlignment="Center" Margin="{TemplateBinding Padding}">
-                                <ContentPresenter VerticalAlignment="Center"/>
-                                <TextBlock x:Name="InvertCheck" Text="✓" FontSize="11"
-                                           Margin="5,0,0,0" Visibility="Collapsed"
-                                           Foreground="{TemplateBinding Foreground}"/>
-                            </StackPanel>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="InvertBorder" Property="Background"
-                                        Value="{DynamicResource PcasaHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="InvertBorder" Property="BorderBrush" Value="#D75A5A"/>
-                                <Setter TargetName="InvertBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
-                                <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
-                                <Setter TargetName="InvertCheck" Property="Visibility" Value="Visible"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- Approved filigree slider: hairline rail and a small flat round
-             grip. A 20x24 transparent hit area keeps it comfortable to drag.
-             The existing thumb event handlers and right-hand icons are
-             intentionally untouched. -->
-        <ControlTemplate x:Key="PcasaCompactSliderThumbTemplate"
-                         TargetType="{x:Type primitives:Thumb}">
-            <Grid Width="20" Height="24" Background="Transparent"
-                  SnapsToDevicePixels="True">
-                <Ellipse Width="12" Height="12"
-                         HorizontalAlignment="Center" VerticalAlignment="Center"
-                         Stroke="#737A81" StrokeThickness="1"
-                         Fill="#C1C6CA"/>
-            </Grid>
-        </ControlTemplate>
-        <Style x:Key="PcasaNeutralSliderStyle" TargetType="Slider">
-            <Setter Property="Height" Value="26"/>
-            <Setter Property="Focusable" Value="True"/>
-            <Setter Property="IsMoveToPointEnabled" Value="True"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid Height="26" Background="Transparent"
-                              SnapsToDevicePixels="True">
-                            <Border Height="2" CornerRadius="1"
-                                    VerticalAlignment="Center"
-                                    Background="#767D84"/>
-                            <primitives:Track x:Name="PART_Track" VerticalAlignment="Center"
-                                              IsDirectionReversed="False">
-                                <primitives:Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="Slider.DecreaseLarge"
-                                                  IsTabStop="False" Opacity="0"/>
-                                </primitives:Track.DecreaseRepeatButton>
-                                <primitives:Track.Thumb>
-                                    <primitives:Thumb Width="20" Height="24"
-                                        Template="{StaticResource PcasaCompactSliderThumbTemplate}" />
-                                </primitives:Track.Thumb>
-                                <primitives:Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="Slider.IncreaseLarge"
-                                                  IsTabStop="False" Opacity="0"/>
-                                </primitives:Track.IncreaseRepeatButton>
-                            </primitives:Track>
-                        </Grid>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <!-- Search toolbar sorting dropdown, following the same compact
-             visual language as WAS/WO/Nicht without changing any sort logic. -->
-        <Style x:Key="PcasaSearchSortButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
-            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
-            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
-            <Setter Property="Padding" Value="8,0"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="SortSelectorBorder" CornerRadius="4" BorderThickness="1"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                Background="{TemplateBinding Background}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="SortSelectorBorder" Property="Background"
-                                        Value="{DynamicResource PcasaHoverBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Opacity" Value="0.5"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
-    <Grid x:Name="MainLayout">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="34" />
-        </Grid.RowDefinitions>
+    public static bool HasLiveSessions
+    {
+        get { lock (ActiveGate) return ActiveSessions.Count != 0; }
+    }
 
-        <!-- Two stable header rows; neither depends on the window width.
-             The menu is never measured as the remainder of the search bar. -->
-        <Grid Grid.Row="0" Background="{DynamicResource PcasaTopBrush}">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <Border Grid.Row="0" MinHeight="42"
-                    Background="{DynamicResource PcasaTopBrush}">
-                <Menu Background="Transparent"
-                      Foreground="{DynamicResource PcasaTextBrush}"
-                      VerticalAlignment="Center"
-                      Padding="0">
-                    <Menu.Resources>
-                        <!-- Local menu template only: no application-wide style changes. -->
-                        <Style TargetType="{x:Type MenuItem}">
-                            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
-                            <Setter Property="Background" Value="{DynamicResource PcasaPanelBrush}" />
-                            <Setter Property="FontSize" Value="13" />
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="{x:Type MenuItem}">
-                                        <Grid HorizontalAlignment="Left">
-                                            <Border x:Name="ItemBackground" Background="Transparent">
-                                                <Grid Height="28">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition x:Name="MenuCheckColumn" Width="20"/>
-                                                        <ColumnDefinition x:Name="MenuLabelColumn" Width="Auto"/>
-                                                        <ColumnDefinition x:Name="MenuArrowColumn" Width="15"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock x:Name="CheckMark" Grid.Column="0" Text="✓"
-                                                               Visibility="Collapsed" HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center" Foreground="{TemplateBinding Foreground}"/>
-                                                    <ContentPresenter x:Name="MenuHeaderPresenter" Grid.Column="1" ContentSource="Header"
-                                                                      RecognizesAccessKey="True" VerticalAlignment="Center"
-                                                                      Margin="5,0,5,0"/>
-                                                    <TextBlock x:Name="SubArrow" Grid.Column="2" Text="›"
-                                                               Visibility="Collapsed" HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center" Foreground="{TemplateBinding Foreground}"/>
-                                                </Grid>
-                                            </Border>
-                                            <Popup x:Name="PART_Popup" IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
-                                                   Placement="Custom" PlacementTarget="{Binding RelativeSource={RelativeSource TemplatedParent}}"
-                                                   Loaded="MenuPopup_Loaded" HorizontalOffset="0" VerticalOffset="0"
-                                                   AllowsTransparency="True" Focusable="False"
-                                                   PopupAnimation="None">
-                                                <Border Background="{DynamicResource PcasaPanelBrush}"
-                                                        BorderBrush="{DynamicResource PcasaDividerBrush}"
-                                                        BorderThickness="1" Padding="1">
-                                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
-                                                </Border>
-                                            </Popup>
-                                        </Grid>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="Role" Value="TopLevelHeader">
-                                                <Setter TargetName="ItemBackground" Property="MinWidth" Value="0"/>
-                                                <Setter TargetName="ItemBackground" Property="Padding" Value="0"/>
-                                                <Setter TargetName="MenuHeaderPresenter" Property="Margin" Value="0"/>
-                                                <Setter TargetName="MenuCheckColumn" Property="Width" Value="0"/>
-                                                <Setter TargetName="MenuArrowColumn" Property="Width" Value="0"/>
-                                            </Trigger>
-                                            <Trigger Property="Role" Value="SubmenuHeader">
-                                                <Setter TargetName="SubArrow" Property="Visibility" Value="Visible"/>
-                                            </Trigger>
-                                            <Trigger Property="IsChecked" Value="True">
-                                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
-                                            </Trigger>
-                                            <Trigger Property="IsHighlighted" Value="True">
-                                                <Setter TargetName="ItemBackground" Property="Background" Value="{DynamicResource PcasaHoverBrush}"/>
-                                            </Trigger>
-                                            <Trigger Property="IsEnabled" Value="False">
-                                                <Setter Property="Opacity" Value="0.55"/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </Menu.Resources>
-                    <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
-                    <MenuItem Header="{loc:Tr Key='Bearbeiten'}" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem Header="{loc:Tr Key='Auswahl invertieren (aktueller Ordner)'}"
-                                  InputGestureText="{loc:Tr Key='Strg+I'}" Click="GalleryInvertSelection_Click"/>
-                    </MenuItem>
-                    <MenuItem Header="{loc:Tr Key='Ordner'}" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem Header="{loc:Tr Key='Ordner-Manager...'}"
-                                  Click="BrowseFolderManager_Click" />
-                        <Separator />
-                        <MenuItem x:Name="ScanAllMenuItem"
-                                  Header="{loc:Tr Key='Alle überwachten Ordner einlesen'}"
-                                  Click="BrowseScanAll_Click" />
-                    </MenuItem>
-                    <!-- The main menu always has its own row. Keep all original
-                         menu commands and sorting in its search-toolbar dropdown. -->
-                    <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem x:Name="TooltipsEnabledMenu" Header="{loc:Tr Key='Tooltips'}" IsCheckable="True" IsChecked="True" Click="TooltipsEnabled_Click"/>
-                        <Separator/>
-                        <MenuItem Header="{loc:Tr Key='Sprache'}">
-                            <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de" IsCheckable="True" Click="AppearanceLanguage_Click"/>
-                            <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en" IsCheckable="True" Click="AppearanceLanguage_Click"/>
-                        </MenuItem>
-                        <Separator/>
-                        <MenuItem Header="{loc:Tr Key='Bildfolge (Betrachter / Slideshow)'}">
-                            <MenuItem x:Name="PhotoSequenceFolderMenu" Header="{loc:Tr Key='Aktueller Ordner'}" Tag="CurrentFolder"
-                                      IsCheckable="True" Click="PhotoSequenceMode_Click"/>
-                            <MenuItem x:Name="PhotoSequenceGalleryMenu" Header="{loc:Tr Key='Galerieansicht'}" Tag="Gallery"
-                                      IsCheckable="True" Click="PhotoSequenceMode_Click"/>
-                        </MenuItem>
-                        <Separator/>
-                        <MenuItem Header="{loc:Tr Key='Darstellung'}">
-                            <MenuItem Header="{loc:Tr Key='Design'}">
-                                <MenuItem x:Name="ThemeLightMenu" Header="{loc:Tr Key='Hell'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />
-                                <MenuItem x:Name="ThemeDarkMenu" Header="{loc:Tr Key='Dunkel'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Dark" />
-                                <MenuItem x:Name="ThemeSystemMenu" Header="{loc:Tr Key='System'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="System" />
-                            </MenuItem>
-                            <MenuItem Header="{loc:Tr Key='Galeriehintergrund'}">
-                                <MenuItem x:Name="GalleryBackgroundAutoMenu" Header="{loc:Tr Key='Standard (zum Design)'}" IsCheckable="True" Tag="Auto" Click="AppearanceBackground_Click" />
-                                <Separator />
-                                <MenuItem x:Name="GalleryBackgroundDarkMenu" Header="{loc:Tr Key='Einfarbig dunkel'}" IsCheckable="True" Tag="Dark" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundLightMenu" Header="{loc:Tr Key='Einfarbig hell'}" IsCheckable="True" Tag="Light" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="{loc:Tr Key='Textur'}" IsCheckable="True" Click="GalleryTexture_Click" />
-                            </MenuItem>
-                            <MenuItem x:Name="RestoreGalleryPositionMenu" Header="{loc:Tr Key='Galerieposition beim Start wiederherstellen'}" IsCheckable="True" Click="AppearanceRestorePosition_Click" />
-                            <Separator />
-                            <MenuItem Header="{loc:Tr Key='Ordnerstatus'}">
-                                <MenuItem x:Name="FolderStatusAlwaysMenu" Header="{loc:Tr Key='Immer anzeigen'}" IsCheckable="True" Tag="Always" Click="FolderStatusMode_Click"/>
-                                <MenuItem x:Name="FolderStatusProblemsMenu" Header="{loc:Tr Key='Nur Aktivität und Probleme'}" IsCheckable="True" Tag="Problems" Click="FolderStatusMode_Click"/>
-                                <MenuItem x:Name="FolderStatusNeverMenu" Header="{loc:Tr Key='Nie anzeigen'}" IsCheckable="True" Tag="None" Click="FolderStatusMode_Click"/>
-                            </MenuItem>
-                            <MenuItem Header="{loc:Tr Key='Eingeklappte Ordner in Galerie ausblenden'}" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
-                            <MenuItem Header="{loc:Tr Key='Dateinamen unter Thumbnails'}" x:Name="ThumbnailFileNamesMenu"
-                                      IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="{loc:Tr Key='Dateinamen fett'}" x:Name="ThumbnailBoldFileNamesMenu"
-                                      IsCheckable="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="{loc:Tr Key='GPS-, Tag- und RAW-Symbole'}" x:Name="ThumbnailIconsMenu"
-                                      IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="{loc:Tr Key='Ordnerstatus-Legende'}" Click="FolderStatusLegend_Click" />
-                            <MenuItem Header="{loc:Tr Key='Thumbnail-Schatten'}" IsCheckable="True" IsChecked="False" Loaded="BrowseThumbnailShadowMenu_Loaded" Click="BrowseThumbnailShadowMenu_Click" x:Name="ThumbnailShadowMenuItem" />
-                        </MenuItem>
-                    </MenuItem>
-                    <MenuItem Header="{loc:Tr Key='Hilfe'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
-                </Menu>
-            </Border>
-            <Border Grid.Row="1" MinHeight="42"
-                    Background="{DynamicResource PcasaTopBrush}"
-                    BorderBrush="{DynamicResource PcasaDividerBrush}"
-                    BorderThickness="0,1,0,1">
-                <!-- Preserve the exact controls and order. On narrow windows
-                     the search row scrolls; nothing clips or displaces menu. -->
-                <ScrollViewer x:Name="SearchToolbarScrollViewer"
-                              HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Disabled"
-                              PanningMode="HorizontalOnly"
-                              Focusable="False"
-                              HorizontalContentAlignment="Right"
-                              CanContentScroll="False"
-                              Padding="10,5,10,5">
-                    <StackPanel x:Name="SearchToolbarPanel"
-                                Orientation="Horizontal"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Center">
-                        <Button x:Name="GallerySortSelectorButton"
-                         Width="191" Height="27"
-                        Margin="2,0,8,0" VerticalAlignment="Center"
-                        Style="{StaticResource PcasaSearchSortButtonStyle}"
-                        ToolTip="{loc:Tr Key='Bilder innerhalb jedes Ordners sortieren'}"
-                        Click="GallerySortSelector_Click">
-                    <Button.Content>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <!-- LAP-like graded lines with flow-direction arrow; no extra triangle -->
-                            <Grid x:Name="GallerySortIconPanel" Width="29" Height="20" Margin="0,0,7,0">
-                                <Path Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                      Data="M 1,4 L 11,4 M 1,9 L 8,9 M 1,14 L 5,14"/>
-                                <Path x:Name="GallerySortDirectionIcon"
-                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                      StrokeLineJoin="Round"
-                                      Data="M 20,2 L 20,17 M 16,13 L 20,17 L 24,13"/>
-                            </Grid>
-                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name"
-                                       VerticalAlignment="Center" FontSize="12"/>
-                        </StackPanel>
-                    </Button.Content>
-                    <Button.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem x:Name="GallerySortNameMenu" Header="{loc:Tr Key='Name'}"
-                                      Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCapturedMenu" Header="{loc:Tr Key='Aufnahmedatum'}"
-                                      Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCreatedMenu" Header="{loc:Tr Key='Erstellungsdatum'}"
-                                      Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortModifiedMenu" Header="{loc:Tr Key='Änderungsdatum'}"
-                                      Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortSizeMenu" Header="{loc:Tr Key='Größe'}"
-                                      Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDimensionsMenu" Header="{loc:Tr Key='Dimension'}"
-                                      Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/>
-                            <Separator/>
-                            <MenuItem x:Name="GallerySortAscendingMenu" Header="{loc:Tr Key='Aufsteigend'}"
-                                      Tag="Ascending" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDescendingMenu" Header="{loc:Tr Key='Absteigend'}"
-                                      Tag="Descending" IsCheckable="True" Click="GallerySort_Click"/>
-                        </ContextMenu>
-                    </Button.ContextMenu>
-                </Button>
-                
-<Border  VerticalAlignment="Center"
-                        BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
-                        CornerRadius="5" Padding="4,2" Margin="0,0,10,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{loc:Tr Key='WAS?'}" VerticalAlignment="Center" Margin="0,0,4,0"
-                                   FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
-                    <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 IsChecked="True" Checked="SearchMode_Changed"
-                                 Content="{loc:Tr Key='Tags'}" ToolTip="{loc:Tr Key='Nach Tags filtern'}"/>
-                    <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="SearchMode_Changed"
-                                 Content="{loc:Tr Key='Name'}" ToolTip="{loc:Tr Key='Nach Dateinamen filtern'}"/>
-                    </StackPanel>
-                </Border>
-                
-<Border  VerticalAlignment="Center"
-                        BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
-                        CornerRadius="5" Padding="4,2" Margin="0,0,6,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{loc:Tr Key='WO?'}" VerticalAlignment="Center" Margin="0,0,4,0"
-                                   FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
-                    <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 IsChecked="True" Checked="TagSearchScope_Changed"
-                                 Content="{loc:Tr Key='Alle'}" ToolTip="{loc:Tr Key='Alle überwachten Ordner'}"/>
-                    <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="TagSearchScope_Changed"
-                                 Content="{loc:Tr Key='Ab hier'}" ToolTip="{loc:Tr Key='Ausgewählter Ordnerbaum einschließlich Unterordner'}"/>
-                    <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="TagSearchScope_Changed"
-                                 Content="{loc:Tr Key='Ordner'}" ToolTip="{loc:Tr Key='Nur aktueller Ordner ohne Unterordner'}"/>
-                    </StackPanel>
-                </Border>
-<primitives:ToggleButton x:Name="GalleryViewFilterToggle"
-                                          Margin="3,0,3,0"
-                                         VerticalAlignment="Center"
-                                         Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="{loc:Tr Key='Galerieansicht'}"
-                                         ToolTip="{loc:Tr Key='Suche auf die in der Galerie sichtbaren Ordner beschränken'}"
-                                         Checked="GalleryViewFilter_Changed"
-                                         Unchecked="GalleryViewFilter_Changed"/>
-                
-<primitives:ToggleButton x:Name="InvertFilterToggle"
-                                          Margin="3,0,8,0"
-                                         VerticalAlignment="Center"
-                                         Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="{loc:Tr Key='NOT'}"
-                                         ToolTip="{loc:Tr Key='Treffer im gewählten Suchbereich umkehren'}"
-                                         Checked="FilterResultsInversion_Changed"
-                                         Unchecked="FilterResultsInversion_Changed"/>
-                
-<Grid  Width="180" Height="27"
-                      Margin="4,0,10,0" VerticalAlignment="Center">
-                    <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
-                             Padding="8,0,27,0" ToolTip="{loc:Tr Key='Tags oder Dateinamen suchen'}"
-                             TextChanged="TagSearchBox_TextChanged">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsChecked, ElementName=InvertFilterToggle}" Value="True">
-                                        <Setter Property="TextDecorations" Value="Strikethrough"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
-                    <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
-                            HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,2,0" Cursor="Hand"
-                            ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed"
-                            Click="ClearTagSearch_Click">
-                        <Button.Template>
-                            <ControlTemplate TargetType="Button">
-                                <Border x:Name="ClearBackground" Background="Transparent" CornerRadius="3">
-                                    <TextBlock Text="✕" FontFamily="Segoe UI Symbol"
-                                               FontSize="17" FontWeight="Bold"
-                                               Foreground="#E34848"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"/>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="ClearBackground" Property="Background"
-                                                Value="{DynamicResource PcasaHoverBrush}"/>
-                                    </Trigger>
-                                    <Trigger Property="IsEnabled" Value="False">
-                                        <Setter Property="Opacity" Value="0.5"/>
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
-                        </Button.Template>
-                    </Button>
-                </Grid>
-                
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
-        </Grid>
+    // Only ExifTool processes owned by this application are affected.
+    public static void StopAll()
+    {
+        Session[] sessions;
+        lock (ActiveGate) sessions = ActiveSessions.ToArray();
+        foreach (var session in sessions)
+            session.Dispose();
+    }
 
-        <Border Grid.Row="1" Visibility="{Binding Visibility, ElementName=ViewerToolbar}"
-                Background="{DynamicResource PcasaPanelBrush}"
-                BorderBrush="{DynamicResource PcasaDividerBrush}"
-                BorderThickness="0,0,0,1">
-            <Grid>
-                <Grid x:Name="BrowseToolbar" Visibility="Collapsed" Height="0" />
+    public static void Write(string imagePath, IReadOnlyList<string> keywords)
+    {
+        using var session = new Session();
+        session.Write(imagePath, keywords);
+    }
 
-                <!-- Replaces the entire browsing toolbar in picture view. -->
-                <Grid x:Name="ViewerToolbar" Visibility="Collapsed" Margin="14,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+    public sealed class Session : IDisposable
+    {
+        private readonly object _operationGate = new();
+        private Process? _process;
+        private Task<string>? _errorDrain;
+        private int _nextRequestId;
+        private bool _disposed;
 
-                    <Button Grid.Column="0" Content="{loc:Tr Key='← Zur Galerie'}"
-                            Padding="12,4" Height="30" Margin="0,0,12,0"
-                            Click="PhotoViewerBack_Click" />
+        public sealed record KeywordSnapshot(IReadOnlyList<string> Xmp, IReadOnlyList<string> Iptc)
+        {
+            public IReadOnlyList<string> Combined => Xmp.Concat(Iptc)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
 
-                    <StackPanel x:Name="ViewerNavigationToolbar" Grid.Column="1" Orientation="Horizontal"
-                                VerticalAlignment="Center">
-                        <Button Content="‹" Width="36" Height="30"
-                                ToolTip="{loc:Tr Key='Vorheriges Bild'}"
-                                Click="PhotoViewerPrev_Click" />
-                        <Button Content="›" Width="36" Height="30"
-                                Margin="4,0,0,0" ToolTip="{loc:Tr Key='Nächstes Bild'}"
-                                Click="PhotoViewerNext_Click" />
-                    </StackPanel>
+        // Read both keyword fields without decoding image pixels.
+        // JSON preserves list items (including commas) without guesswork.
+        public IReadOnlyList<string> Read(string imagePath,
+            CancellationToken cancellationToken = default)
+            => ReadSnapshot(imagePath, cancellationToken).Combined;
 
-                    <StackPanel x:Name="ViewerComparisonToolbar" Grid.Column="1" Orientation="Horizontal" Visibility="Collapsed">
-                        <Button Content="A" Width="36" Height="30" ToolTip="{loc:Tr Key='Einzelbild'}" Click="ViewerSingle_Click" />
-                        <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/A" Width="42" Height="30" Margin="5,0,0,0" ToolTip="{loc:Tr Key='Bild doppelt anzeigen'}" Click="ViewerAa_Click" />
-                    </StackPanel>
-                    <TextBlock x:Name="ViewerToolbarImageTitle"
-                               Grid.Column="2" Margin="16,0,12,0"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                               Foreground="{DynamicResource PcasaMutedTextBrush}" />
+        public KeywordSnapshot ReadSnapshot(string imagePath,
+            CancellationToken cancellationToken = default)
+        {
+            lock (_operationGate)
+                return ReadSnapshotCore(imagePath, cancellationToken);
+        }
 
-                    <StackPanel x:Name="PhotoZoomToolbar" Grid.Column="3"
-                                Orientation="Horizontal" VerticalAlignment="Center"
-                                Visibility="Collapsed">
-                        <Button Content="Fit to Screen" MinWidth="103" Height="30"
-                                Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
-                        <Button Content="100 %" MinWidth="58" Height="30"
-                                Margin="0,0,12,0" Click="PhotoViewerActualSize_Click" />
-                        <TextBlock Text="{loc:Tr Key='Zoom'}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <Slider x:Name="PhotoZoomSlider" Width="175"
-                                Minimum="0" Maximum="100" Value="50"
-                                SmallChange="0.5" LargeChange="5"
-                                IsMoveToPointEnabled="True"
-                                ValueChanged="PhotoViewerZoom_ValueChanged"
-                                VerticalAlignment="Center" />
-                        <TextBlock x:Name="PhotoZoomLabel" Text="Fit"
-                                   MinWidth="73" Margin="9,0,0,0"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                </Grid>
-            </Grid>
-        </Border>
+        private KeywordSnapshot ReadSnapshotCore(string imagePath,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (imagePath.Contains('\r') || imagePath.Contains('\n'))
+                throw new ArgumentException("Dateipfade dürfen keine Zeilenumbrüche enthalten.");
+            StartIfNeeded();
+            var process = _process!;
+            using var cancellation = cancellationToken.Register(() =>
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+            });
+            var request = ++_nextRequestId;
+            process.StandardInput.WriteLine("-j");
+            process.StandardInput.WriteLine("-XMP-dc:Subject");
+            process.StandardInput.WriteLine("-IPTC:Keywords");
+            process.StandardInput.WriteLine(imagePath);
+            process.StandardInput.WriteLine("-execute" + request);
+            process.StandardInput.Flush();
+            var response = ReadResponseOrReset(process, request, cancellationToken);
+            using var document = System.Text.Json.JsonDocument.Parse(response);
+            var entry = document.RootElement.EnumerateArray().FirstOrDefault();
+            if (entry.ValueKind != System.Text.Json.JsonValueKind.Object)
+                throw new IOException("ExifTool lieferte keine lesbaren Metadaten.");
+            if (entry.TryGetProperty("Error", out var error))
+                throw new IOException("ExifTool: " + error.ToString());
+            static IReadOnlyList<string> Extract(
+                System.Text.Json.JsonElement entry, string field)
+            {
+                if (!entry.TryGetProperty(field, out var value))
+                    return Array.Empty<string>();
+                var values = value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.Array => value.EnumerateArray()
+                        .Where(v => v.ValueKind == System.Text.Json.JsonValueKind.String)
+                        .Select(v => v.GetString() ?? "").ToArray(),
+                    System.Text.Json.JsonValueKind.String =>
+                        new[] { value.GetString() ?? "" },
+                    _ => Array.Empty<string>()
+                };
+                return values.Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Select(v => v.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+            return new KeywordSnapshot(Extract(entry, "Subject"), Extract(entry, "Keywords"));
+        }
 
-        <Grid x:Name="BrowseWorkspaceGrid" Grid.Row="2">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="FolderSidebarColumn" Width="0.22*" MinWidth="170" />
-                <ColumnDefinition x:Name="FolderSidebarDividerColumn" Width="5" />
-                <ColumnDefinition x:Name="GalleryWorkspaceColumn" Width="0.78*" MinWidth="240" />
-                <ColumnDefinition x:Name="InfoSidebarDividerColumn" Width="0" />
-                <ColumnDefinition x:Name="InfoSidebarColumn" Width="0" />
-            </Grid.ColumnDefinitions>
+        // A timeout leaves ReadLineAsync outstanding. Never reuse that stream.
+        private string ReadResponseOrReset(Process process, int request,
+            CancellationToken token)
+        {
+            try { return ReadResponse(process, request, token); }
+            catch
+            {
+                ResetFailedProcess(process);
+                throw;
+            }
+        }
 
-            <Border x:Name="FolderSidebarPanel" Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}">
-                <Grid>
-                    <Grid x:Name="FolderTreePanel">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="44" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <Grid Height="44">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="{loc:Tr Key='Ordner'}"
-                                   FontSize="16"
-                                   FontWeight="SemiBold"
-                                   Margin="12,0,0,0"
-                                   VerticalAlignment="Center" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Center" Margin="0,0,7,0">
-                            <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Alle Ordner aufklappen'}" Click="FolderExpandAll_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
-                                    <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
-                                    <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round" />
-                                    <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                    <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                </Canvas></Viewbox>
-                            </Button>
-                            <Button x:Name="FolderCollapseAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Alle Ordner zuklappen'}" Click="FolderCollapseAll_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
-                                    <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
-                                    <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
-                                    <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                    <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                    <Path Data="M 15.8,10 L 23.2,22 M 23.2,10 L 15.8,22"
-                                          Stroke="#F04444" StrokeThickness="3.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                </Canvas></Viewbox>
-                            </Button>
-                            <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Expand / Compress'}" Click="FolderTreeToggle_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
-                                    <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
-                                    <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="#F0F0F0" StrokeThickness="1.9" Fill="Transparent"/>
-                                    <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
-                                </Canvas></Viewbox>
-                            </Button>
-                            <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Explorer Ansicht'}" Click="ShowAllFilesystemFolders_Click">
-                                <!-- Windows-Explorer style: simple yellow folder with blue tray. -->
-                                <Viewbox Width="23" Height="23"><Canvas Width="24" Height="24">
-                                    <Path Data="M 1,5 Q 1,3 3,3 L 9,3 L 11,5 L 21,5 Q 23,5 23,7 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#EAA312"/>
-                                    <Path Data="M 1,8 L 23,8 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#FFCE37"/>
-                                    <Path Data="M 6,14 Q 6,12 8,12 L 21,12 L 21,20 L 6,20 Z" Fill="#2679B8"/>
-                                    <Path Data="M 9,16 L 18,16" Stroke="#16466F" StrokeThickness="1.5" StrokeStartLineCap="Round"/>
-                                </Canvas></Viewbox>
-                            </Button>
-                        </StackPanel>
-                    </Grid>
-                    <TreeView x:Name="FoldersTree"
-                              Grid.Row="1"
-                              Background="Transparent"
-                              BorderThickness="0"
-                              ClipToBounds="True"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                              Margin="7,0,7,8"
-                              Padding="0,0,12,0"
-                              PreviewMouseRightButtonDown="FoldersTree_PreviewMouseRightButtonDown"
-                              SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
-                              PreviewMouseLeftButtonDown="FoldersTree_PreviewMouseLeftButtonDown"
-                              AllowDrop="True"
-                              PreviewDragOver="FolderTreeFiles_DragOver"
-                              PreviewDragLeave="DragTarget_Leave"
-                              PreviewDrop="FolderTreeFiles_Drop"
-                              TreeViewItem.Expanded="FoldersTree_ExpansionChanged"
-                              TreeViewItem.Collapsed="FoldersTree_ExpansionChanged">
-                        <TreeView.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem Header="{loc:Tr Key='Aktuellen Ordner einlesen / aktualisieren'}"
-                                          Click="BrowseScanCurrentFolder_Click" />
-                                <MenuItem Header="{loc:Tr Key='Ordnerinformationen'}"
-                                          Click="FolderContext_Info_Click" />
-                                <MenuItem Header="{loc:Tr Key='Aus PCasa entfernen'}"
-                                          Click="FolderContext_Exclude_Click" />
-                                <Separator />
-                                <MenuItem Header="{loc:Tr Key='Neuen Unterordner anlegen …'}"
-                                          Click="FolderContext_CreateDirectory_Click"/>
-                                <MenuItem Header="{loc:Tr Key='In Windows Explorer öffnen'}"
-                                          Click="FolderContext_OpenExplorer_Click" />
-                                <MenuItem Header="{loc:Tr Key='Ordner auf Datenträger löschen …'}"
-                                          Click="FolderContext_DeletePhysicalDirectory_Click" />
-                            </ContextMenu>
-                        </TreeView.ContextMenu>
-                    </TreeView>
-                </Grid>
-                <Grid x:Name="ViewerEditingPanel" Visibility="Collapsed">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="44" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <TextBlock Text="{loc:Tr Key='Bearbeiten'}" FontSize="16" FontWeight="SemiBold"
-                               Margin="16,0,0,0" VerticalAlignment="Center" />
-                    <StackPanel Grid.Row="1" Margin="16,12,16,0">
-                        <TextBlock Text="{loc:Tr Key='Bildbearbeitung'}"
-                                   FontWeight="SemiBold" FontSize="14" />
-                        <TextBlock Text="{loc:Tr Key='Hier erscheinen die Bearbeitungswerkzeuge.'}"
-                                   TextWrapping="Wrap" Margin="0,10,0,0"
-                                   Foreground="{DynamicResource PcasaMutedTextBrush}" />
-                    </StackPanel>
-                </Grid>
-                </Grid>
-            </Border>
+        private void ResetFailedProcess(Process failed)
+        {
+            if (ReferenceEquals(_process, failed)) _process = null;
+            try
+            {
+                if (!failed.HasExited)
+                {
+                    failed.Kill(entireProcessTree: true);
+                    failed.WaitForExit(3000);
+                }
+            }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            finally
+            {
+                lock (ActiveGate) ActiveSessions.Remove(this);
+                ExifToolProcessRegistry.Retire(failed);
+                _errorDrain = null;
+            }
+        }
 
-            <GridSplitter x:Name="FolderSidebarSplitter" Grid.Column="1"
-                          DragStarted="WorkspaceSplitter_DragStarted"
-                          DragCompleted="WorkspaceSplitter_DragCompleted"
-                          Width="5"
-                          HorizontalAlignment="Stretch"
-                          VerticalAlignment="Stretch"
-                          ResizeDirection="Columns"
-                          ResizeBehavior="PreviousAndNext"
-                          ShowsPreview="True"
-                          Background="{DynamicResource PcasaDividerBrush}"
-                          Cursor="SizeWE" />
+        private static string ReadResponse(Process process, int request,
+            CancellationToken cancellationToken)
+        {
+            var response = new StringBuilder();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var line = process.StandardOutput.ReadLineAsync(cancellationToken)
+                    .AsTask().WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
+                    .GetAwaiter().GetResult();
+                if (line is null)
+                    throw new IOException("ExifTool wurde vor der Bestätigung beendet.");
+                if (line.Trim() == "{ready" + request + "}") break;
+                response.AppendLine(line);
+                if (response.Length > 64_000)
+                    throw new InvalidDataException("Unerwartet große ExifTool-Antwort.");
+            }
+            return response.ToString();
+        }
 
-            <Grid Grid.Column="2" Background="{DynamicResource PcasaWindowBrush}">
-                <Grid SizeChanged="BrowseGalleryViewport_SizeChanged">
-                    <ScrollViewer x:Name="BrowseScrollViewer"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  VerticalScrollBarVisibility="Auto"
-                                  CanContentScroll="False"
-                                  PanningMode="VerticalOnly"
-                                  PreviewMouseWheel="BrowseScrollViewer_PreviewMouseWheel"
-                                  ScrollChanged="BrowseScrollViewer_ScrollChanged">
-                        <controls:BrowseGallerySurface x:Name="BrowseSurface"
-                                                       Loaded="BrowseSurface_Loaded"
-                                                       AllowDrop="True"
-                                                       DragOver="GalleryFiles_DragOver"
-                                                       DragLeave="DragTarget_Leave"
-                                                       Drop="GalleryFiles_Drop"
-                                                       HorizontalAlignment="Stretch"
-                                                       VerticalAlignment="Top" />
-                    </ScrollViewer>
+        public void Write(string imagePath, IReadOnlyList<string> keywords,
+            CancellationToken cancellationToken = default)
+        {
+            lock (_operationGate)
+            {
+                Interlocked.Increment(ref _activeWrites);
+                try { WriteCore(imagePath, keywords, cancellationToken); }
+                finally { Interlocked.Decrement(ref _activeWrites); }
+            }
+        }
 
-                    <Grid x:Name="PhotoViewerPanel"
-                          Visibility="Collapsed"
-                          Background="#1D1E20"
-                          Focusable="True"
-                          PreviewKeyDown="PhotoViewerPanel_PreviewKeyDown"
-                          IsManipulationEnabled="True"
-                          ManipulationStarting="PhotoViewer_ManipulationStarting"
-                          ManipulationDelta="PhotoViewer_ManipulationDelta"
-                          ManipulationCompleted="PhotoViewer_ManipulationCompleted"
-                          PreviewMouseLeftButtonDown="PhotoViewerPanel_MouseLeftButtonDown"
-                          PreviewMouseLeftButtonUp="PhotoViewerPan_MouseLeftButtonUp"
-                          PreviewMouseMove="PhotoViewerPan_MouseMove"
-                          MouseRightButtonDown="PhotoViewerPanel_MouseRightButtonDown">
-                        <ScrollViewer x:Name="PhotoViewerScroller"
-                                      HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Auto"
-                                      CanContentScroll="False"
-                                      Background="Transparent"
-                                      SizeChanged="PhotoViewerViewport_SizeChanged"
-                                      ScrollChanged="PhotoViewerScroller_ScrollChanged">
-                            <Grid x:Name="PhotoViewerCanvas"
-                                  HorizontalAlignment="Left" VerticalAlignment="Top"
-                                  Background="Transparent">
-                                <Image x:Name="PhotoViewerImage"
-                                       Stretch="Fill"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       IsHitTestVisible="False"
-                                       RenderOptions.BitmapScalingMode="HighQuality" />
-                            </Grid>
-                        </ScrollViewer>
-                        <Grid x:Name="ComparisonPanel" Visibility="Collapsed" Background="#1D1E20">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="5" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <Image x:Name="ComparisonImageA" Grid.Column="0" Stretch="Uniform" Margin="5" RenderOptions.BitmapScalingMode="HighQuality"/>
-                            <Border Grid.Column="1" Background="#444444"/>
-                            <Image x:Name="ComparisonImageB" Grid.Column="2" Stretch="Uniform" Margin="5" RenderOptions.BitmapScalingMode="HighQuality"/>
-                        </Grid>
-                        <controls:PhotoZoomNavigator x:Name="PhotoViewerNavigator" />
-                        <Border x:Name="PhotoViewerQualityBanner"
-                                Visibility="Collapsed"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Bottom"
-                                Margin="14"
-                                Padding="9,5"
-                                Background="#D9262729"
-                                CornerRadius="3"
-                                IsHitTestVisible="False">
-                            <TextBlock x:Name="PhotoViewerQualityText"
-                                       Foreground="#E6E6E6"
-                                       FontSize="12" />
-                        </Border>
-                    </Grid>
+        private void WriteCore(string imagePath, IReadOnlyList<string> keywords,
+            CancellationToken cancellationToken)
+        {
+            foreach (var keyword in keywords)
+                if (keyword.Contains('\r') || keyword.Contains('\n'))
+                    throw new ArgumentException("Ein Tag darf keine Zeilenumbrüche enthalten.");
+            var isSonyArw = Path.GetExtension(imagePath).Equals(".arw",
+                StringComparison.OrdinalIgnoreCase);
+            var commands = new List<string>();
+            if (keywords.Count == 0)
+            {
+                commands.Add("-XMP-dc:Subject=");
+                if (!isSonyArw) commands.Add("-IPTC:Keywords=");
+            }
+            else
+            {
+                foreach (var keyword in keywords)
+                {
+                    if (!isSonyArw && Encoding.UTF8.GetByteCount(keyword) > 64)
+                        throw new InvalidDataException(
+                            "IPTC-Schlagwort überschreitet 64 UTF-8-Bytes: " + keyword);
+                    commands.Add("-XMP-dc:Subject=" + keyword);
+                    if (!isSonyArw) commands.Add("-IPTC:Keywords=" + keyword);
+                }
+                if (!isSonyArw) commands.Add("-IPTC:CodedCharacterSet=UTF8");
+            }
+            ExecuteMetadataEdit(imagePath, commands, cancellationToken);
+        }
 
-                        <!-- The GPS photo viewer is placed in the GALLERY workspace,
-                             never on the map; its preview follows the filmstrip
-                             without replacing the main gallery selection. -->
-                        <Grid x:Name="GpsFullscreenImageOverlay" Panel.ZIndex="30"
-                              Visibility="Collapsed" Background="#F51C1D20"
-                              Cursor="Hand"
-                              MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
-                            <Image x:Name="GpsFullscreenImage" Stretch="Uniform"
-                                   Margin="18,38,18,18" IsHitTestVisible="False"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                            <TextBlock x:Name="GpsFullscreenImageStatus"
-                                       Text="{loc:Tr Key='Bild wird geladen'}"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" TextWrapping="Wrap"
-                                       Foreground="White" IsHitTestVisible="False"/>
-                            <TextBlock x:Name="GpsFullscreenImageCaption"
-                                       HorizontalAlignment="Left" VerticalAlignment="Top"
-                                       Margin="18,12" FontSize="13" Foreground="White"
-                                       IsHitTestVisible="False"/>
-                        </Grid>
+        // GPS shares the EXACT same ExifTool session, source lock (in the
+        // repository), atomic native commit and native-response validation
+        // as keyword writes. Never add -o or create an XMP sidecar.
+        public void WriteGps(string imagePath, double? latitude, double? longitude,
+            CancellationToken cancellationToken = default)
+        {
+            if (latitude.HasValue != longitude.HasValue ||
+                latitude is < -90 or > 90 || longitude is < -180 or > 180 ||
+                (latitude is double lat && !double.IsFinite(lat)) ||
+                (longitude is double lon && !double.IsFinite(lon)))
+                throw new ArgumentOutOfRangeException(nameof(latitude),
+                    "Ungültige GPS-Koordinaten.");
+            var extension = Path.GetExtension(imagePath).ToLowerInvariant();
+            if (extension is not (".jpg" or ".jpeg" or ".tif" or ".tiff"
+                or ".dng" or ".nef" or ".arw" or ".cr2"))
+                throw new NotSupportedException(
+                    "GPS-Direktschreiben für " + extension +
+                    " ist nicht verifiziert. Keine Sidecars werden erzeugt.");
+            var commands = new List<string>();
+            if (latitude is double latValue && longitude is double lonValue)
+            {
+                commands.Add("-EXIF:GPSLatitude=" +
+                    Math.Abs(latValue).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+                commands.Add("-EXIF:GPSLatitudeRef=" + (latValue < 0 ? "S" : "N"));
+                commands.Add("-EXIF:GPSLongitude=" +
+                    Math.Abs(lonValue).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+                commands.Add("-EXIF:GPSLongitudeRef=" + (lonValue < 0 ? "W" : "E"));
+                // Remove stale XMP coordinates so one photo has one position.
+                commands.Add("-XMP-exif:GPSLatitude=");
+                commands.Add("-XMP-exif:GPSLongitude=");
+            }
+            else
+            {
+                foreach (var tag in new[]
+                {
+                    "GPSLatitude", "GPSLatitudeRef", "GPSLongitude", "GPSLongitudeRef",
+                    "GPSAltitude", "GPSAltitudeRef", "GPSMapDatum", "GPSPosition",
+                    "GPSDateStamp", "GPSTimeStamp"
+                })
+                    commands.Add("-EXIF:" + tag + "=");
+                foreach (var tag in new[] { "GPSLatitude", "GPSLongitude",
+                    "GPSAltitude", "GPSMapDatum" })
+                    commands.Add("-XMP-exif:" + tag + "=");
+            }
+            lock (_operationGate)
+            {
+                Interlocked.Increment(ref _activeWrites);
+                try { ExecuteMetadataEdit(imagePath, commands, cancellationToken); }
+                finally { Interlocked.Decrement(ref _activeWrites); }
+            }
+        }
 
-                    <StackPanel x:Name="EmptyPanel"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Visibility="Collapsed">
-                        <TextBlock x:Name="EmptyPanelHeading" Text="{loc:Tr Key='Noch keine Bilder im Katalog'}"
-                                   FontSize="20"
-                                   FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock x:Name="EmptyPanelDescription" Text="{loc:Tr Key='Ordner im Menü einlesen, um die Galerie zu füllen.'}"
-                                   Foreground="{DynamicResource PcasaMutedTextBrush}"
-                                   Margin="0,8,0,0"
-                                   HorizontalAlignment="Center" />
-                    </StackPanel>
+        // Shared native write lifecycle: a scheduler yield can interrupt
+        // BEFORE the request, never during ExifTool's temporary-file swap.
+        private void ExecuteMetadataEdit(string imagePath,
+            IReadOnlyList<string> commands, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (imagePath.Contains('\r') || imagePath.Contains('\n'))
+                throw new ArgumentException("Dateipfade dürfen keine Zeilenumbrüche enthalten.");
+            StartIfNeeded();
+            var process = _process!;
+            cancellationToken.ThrowIfCancellationRequested();
+            TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.FromMinutes(30));
+            var temporaryExistedBeforeWrite =
+                File.Exists(imagePath + "_exiftool_tmp");
+            var request = ++_nextRequestId;
+            process.StandardInput.WriteLine("-P");
+            process.StandardInput.WriteLine("-overwrite_original");
+            foreach (var command in commands)
+                process.StandardInput.WriteLine(command);
+            process.StandardInput.WriteLine(imagePath);
+            process.StandardInput.WriteLine("-execute" + request);
+            process.StandardInput.Flush();
+            string response;
+            try
+            {
+                response = ReadResponseOrReset(process, request, CancellationToken.None);
+            }
+            catch
+            {
+                if (!temporaryExistedBeforeWrite)
+                    TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
+                throw;
+            }
+            if (!response.Contains("1 image files updated",
+                StringComparison.Ordinal))
+            {
+                if (!temporaryExistedBeforeWrite)
+                    TryRemoveAbandonedTemporaryOutput(imagePath, TimeSpan.Zero);
+                throw new IOException("ExifTool konnte die Datei nicht aktualisieren: " +
+                    response.Trim());
+            }
+        }
 
-                    <Border x:Name="BrowseCachePanel"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Padding="24,18"
-                            Background="#E6252628"
-                            CornerRadius="4"
-                            Visibility="Collapsed">
-                        <StackPanel Width="440">
-                            <TextBlock Text="{loc:Tr Key='Vorschaudaten werden vorbereitet'}"
-                                       FontSize="17"
-                                       FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" />
-                            <TextBlock x:Name="BrowseCacheProgressText"
-                                       Margin="0,8,0,10"
-                                       Foreground="{DynamicResource PcasaMutedTextBrush}"
-                                       HorizontalAlignment="Center"
-                                       Text="0 / 0" />
-                            <ProgressBar x:Name="BrowseCacheProgressBar"
-                                         Height="8"
-                                         Minimum="0"
-                                         Maximum="1"
-                                         Value="0" />
-                        </StackPanel>
-                    </Border>
-                </Grid>
-            </Grid>
+        // ExifTool's precise, deterministic temp name for this original.
+        // Never scan directories or touch unrelated files. A stale orphan is
+        // safe to discard ONLY if the untouched original still exists, the
+        // temp is old enough, and an exclusive open proves no writer owns it.
+        // Current in-flight output is left alone; the caller can retry the
+        // unchanged pending_tag_edits after a failed native transaction.
+        private static void TryRemoveAbandonedTemporaryOutput(
+            string imagePath, TimeSpan minimumAge)
+        {
+            try
+            {
+                if (!File.Exists(imagePath)) return;
+                var temporary = imagePath + "_exiftool_tmp";
+                var info = new FileInfo(temporary);
+                if (!info.Exists || DateTime.UtcNow - info.LastWriteTimeUtc < minimumAge)
+                    return;
+                var size = info.Length;
+                var stamp = info.LastWriteTimeUtc;
+                using (var exclusivelyHeld = new FileStream(temporary,
+                    FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    if (exclusivelyHeld.Length != size ||
+                        File.GetLastWriteTimeUtc(temporary) != stamp ||
+                        !File.Exists(imagePath))
+                        return;
+                }
+                // The source image was never removed by this cleanup.
+                File.Delete(temporary);
+            }
+            catch (IOException) { } // NAS offline, file in use or transient.
+            catch (UnauthorizedAccessException) { }
+        }
 
-            <GridSplitter x:Name="InfoSidebarSplitter" Grid.Column="3"
-                          Width="5" Visibility="Collapsed"
-                          HorizontalAlignment="Stretch"
-                          VerticalAlignment="Stretch"
-                          ResizeDirection="Columns"
-                          ResizeBehavior="PreviousAndNext"
-                          ShowsPreview="True"
-                          DragStarted="WorkspaceSplitter_DragStarted"
-                          DragCompleted="WorkspaceSplitter_DragCompleted"
-                          Background="{DynamicResource PcasaDividerBrush}"
-                          Cursor="SizeWE" />
+        private void StartIfNeeded()
+        {
+            if (_process is not null) return;
+            var executable = Environment.GetEnvironmentVariable("PCASA_EXIFTOOL_PATH");
+            if (string.IsNullOrWhiteSpace(executable))
+                executable = Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe");
+            if (!File.Exists(executable))
+                throw new FileNotFoundException(
+                    "Die mit PCasa ausgelieferte Metadatenkomponente ExifTool fehlt.", executable);
 
-            <Border x:Name="InfoSidebarPanel" Grid.Column="4"
-                    Visibility="Collapsed"
-                    Background="{DynamicResource PcasaPanelBrush}">
-                <Grid Margin="10,12">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <DockPanel Margin="4,0,0,12">
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button x:Name="GpsExpandButton" Width="43" Height="42" Padding="0"
-                                    Margin="0,0,6,0" Visibility="Collapsed"
-                                    ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}"
-                                    Click="GpsExpand_Click">
-                                <Viewbox Width="26" Height="26" Stretch="Uniform">
-                                    <Canvas Width="32" Height="32">
-                                        <Path Data="M 28,5 L 28,27"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="3.2"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                        <Path x:Name="GpsExpandArrow"
-                                              Data="M 25,16 L 6,16 M 15,7 L 6,16 L 15,25"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="3.5"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                              StrokeLineJoin="Round"/>
-                                    </Canvas>
-                                </Viewbox>
-                            </Button>
-                            <Button x:Name="GpsFullscreenButton" Width="43" Height="42" Padding="0"
-                                    Margin="0,0,6,0" Visibility="Collapsed"
-                                    ToolTip="{loc:Tr Key='GPS-Vollbild'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}"
-                                    Click="GpsFullscreen_Click">
-                                <Viewbox Width="26" Height="26" Stretch="Uniform">
-                                    <Canvas Width="32" Height="32">
-                                        <Path x:Name="GpsFullscreenCorners"
-                                              Data="M 12,4 L 4,4 L 4,12 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="3.6"
-                                              StrokeStartLineCap="Square" StrokeEndLineCap="Square"
-                                              StrokeLineJoin="Miter"/>
-                                    </Canvas>
-                                </Viewbox>
-                            </Button>
-                            <Button Content="✕" Width="35" Height="42" Padding="0"
-                                    ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
-                        </StackPanel>
-                        <TextBlock x:Name="SidePanelHeading" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    </DockPanel>
-                    <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
-                    </ScrollViewer>
-                    <Grid x:Name="GpsMapPanel" Grid.Row="1" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="0"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="0,0,0,6">
-                            <TextBlock x:Name="GpsCoordinatesText"
-                                       Text="{loc:Tr Key='GPS-Positionen werden geladen'}"
-                                       TextWrapping="Wrap" FontSize="12" Margin="0,0,0,5"/>
-                            <DockPanel LastChildFill="False">
-                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-                                    <Button x:Name="GpsProviderButton"
-                                            Width="82" Height="31" Padding="1,0"
-                                            ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
-                                            Style="{StaticResource PcasaStatusButtonStyle}"
-                                            Click="GpsProviderButton_Click">
-                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                            <TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/>
-                                            <Path Data="M 2,3 L 7,8 L 12,3" Width="11" Height="8"
-                                                  Margin="7,4,0,0" Stretch="Fill"
-                                                  Stroke="{DynamicResource PcasaTextBrush}"
-                                                  StrokeThickness="2.3"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <ToggleButton x:Name="GpsFilmstripToggle" Width="34" Height="31"
-                                                  Margin="5,0,0,0" Padding="3"
-                                                  ToolTip="{loc:Tr Key='Filmstreifen'}"
-                                                  Checked="GpsFilmstripToggle_Changed"
-                                                  Unchecked="GpsFilmstripToggle_Changed">
-                                        <Viewbox Width="21" Height="19">
-                                            <Canvas Width="28" Height="24">
-                                                <Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18"
-                                                           RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}"
-                                                           StrokeThickness="2.2"/>
-                                                <Path Data="M 8,3 V21 M 20,3 V21"
-                                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"/>
-                                                <Path Data="M 3,8 H6 M 3,16 H6 M 22,8 H25 M 22,16 H25"
-                                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.0"/>
-                                                <Path Data="M 11,8 L17,12 L11,16 Z"
-                                                      Fill="{DynamicResource PcasaTextBrush}"/>
-                                            </Canvas>
-                                        </Viewbox>
-                                    </ToggleButton>
-                                </StackPanel>
-                                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                                    <Button x:Name="GpsCopyButton" Padding="6,2"
-                                            Content="{loc:Tr Key='GPS kopieren'}"
-                                            Margin="0,0,6,0"
-                                            Click="GpsCopy_Click" IsEnabled="False"/>
-                                    <Button x:Name="GpsGoogleButton" Padding="6,2"
-                                            Content="{loc:Tr Key='Google Maps'}"
-                                            Click="GpsGoogle_Click" IsEnabled="False"/>
-                                </StackPanel>
-                            </DockPanel>
-                        </StackPanel>
-                        <Grid Grid.Row="2" x:Name="GpsMapHost" Background="{DynamicResource PcasaWindowBrush}"
-                              ClipToBounds="True">
-                            <TextBlock x:Name="GpsMapStatus"
-                                       Text="{loc:Tr Key='Karte wird geladen'}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Margin="10" TextWrapping="Wrap"/>
-                            <Border x:Name="GpsPhotoPopup" Panel.ZIndex="10"
-                                    Visibility="Collapsed" HorizontalAlignment="Left"
-                                    VerticalAlignment="Bottom" Margin="8" MaxWidth="240"
-                                    Background="{DynamicResource PcasaPanelBrush}"
-                                    BorderBrush="{DynamicResource PcasaDividerBrush}"
-                                    BorderThickness="1" Padding="7">
-                                <StackPanel>
-                                    <DockPanel>
-                                        <Button Content="✕" DockPanel.Dock="Right" Width="22"
-                                                Click="GpsPhotoClose_Click"
-                                                Style="{StaticResource PcasaStatusButtonStyle}"/>
-                                        <TextBlock x:Name="GpsPhotoName" FontWeight="SemiBold"
-                                                   MaxWidth="205" TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center"/>
-                                    </DockPanel>
-                                    <Image x:Name="GpsPhotoPreview" Stretch="Uniform"
-                                           Height="130" Margin="0,6,0,6" Visibility="Collapsed"/>
-                                    <Button Content="{loc:Tr Key='Foto anzeigen'}"
-                                            HorizontalAlignment="Stretch"
-                                            Click="GpsPhotoOpen_Click"/>
-                                </StackPanel>
-                            </Border>
-                            <Border x:Name="GpsProviderEditor" Background="{DynamicResource PcasaPanelBrush}"
-                                    BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
-                                    Visibility="Collapsed" Panel.ZIndex="12"
-                                    HorizontalAlignment="Stretch" VerticalAlignment="Top"
-                                    Padding="12" Margin="5">
-                                <StackPanel>
-                                    <TextBlock Text="{loc:Tr Key='Eigener Kartenanbieter'}"
-                                               FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                                    <TextBlock Text="{loc:Tr Key='Name'}"/>
-                                    <TextBox x:Name="GpsProviderNameBox" Margin="0,0,0,6"/>
-                                    <TextBlock Text="{loc:Tr Key='Kartenformat'}"/>
-                                    <ComboBox x:Name="GpsProviderFormatBox" SelectedIndex="0" Margin="0,0,0,6">
-                                        <ComboBoxItem Content="MapLibre Style JSON"/>
-                                        <ComboBoxItem Content="XYZ PNG/JPEG"/>
-                                    </ComboBox>
-                                    <TextBlock Text="HTTPS-URL"/>
-                                    <TextBox x:Name="GpsProviderUrlBox" Margin="0,0,0,6"/>
-                                    <TextBlock Text="{loc:Tr Key='Quellenangabe'}"/>
-                                    <TextBox x:Name="GpsProviderAttributionBox" Margin="0,0,0,6"/>
-                                    <TextBlock Text="{loc:Tr Key='API-Schlüssel optional'}"/>
-                                    <PasswordBox x:Name="GpsProviderKeyBox" Margin="0,0,0,6"/>
-                                    <TextBlock x:Name="GpsProviderError" TextWrapping="Wrap"
-                                               Margin="0,0,0,6" Foreground="#D35C55"/>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                        <Button Content="{loc:Tr Key='Entfernen'}"
-                                                Margin="0,0,6,0" Click="GpsProviderDelete_Click"/>
-                                        <Button Content="{loc:Tr Key='Abbruch'}"
-                                                Margin="0,0,6,0" Click="GpsProviderCancel_Click"/>
-                                        <Button Content="OK" Click="GpsProviderSave_Click"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-                        <Border x:Name="GpsFilmstripPanel" Grid.Row="3"
-                                Height="142" Margin="0,4,0,0"
-                                BorderBrush="#343638" BorderThickness="1"
-                                Background="#0D0E0F" Visibility="Collapsed"
-                                ClipToBounds="True">
-                            <ListBox x:Name="GpsFilmstripList"
-                                     Background="Transparent" BorderThickness="0"
-                                     Template="{StaticResource GpsFilmstripListTemplate}"
-                                     ItemContainerStyle="{StaticResource GpsFilmFrameItemStyle}"
-                                     HorizontalContentAlignment="Center"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                     ScrollViewer.CanContentScroll="True"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.VirtualizationMode="Recycling"
-                                     SelectionChanged="GpsFilmstrip_SelectionChanged"
-                                     MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
-                                     ScrollViewer.ScrollChanged="GpsFilmstrip_ScrollChanged">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <VirtualizingStackPanel Orientation="Horizontal"/>
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Width="113">
-                                            <Border Height="72" Margin="1,0"
-                                                    BorderThickness="1" BorderBrush="#353739"
-                                                    Background="#101112">
-                                                <Image Source="{Binding Bitmap}" Stretch="Uniform"
-                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                                            </Border>
-                                            <TextBlock Text="{Binding Name}" FontSize="10"
-                                                       Foreground="#D1D2D3"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       TextAlignment="Center" Margin="2,3,2,0"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                        </Border>
-                    </Grid>
-                    <Grid x:Name="TagSidebar" Grid.Row="1" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        <TextBlock Text="{loc:Tr Key='Tag hinzufügen'}" FontSize="12" Margin="3,0,0,5"/>
-                        <Grid Grid.Row="1" Margin="2,0,2,10">
-                            <DockPanel>
-                            <Button x:Name="TagAddButton" DockPanel.Dock="Right" Content="+" Width="30" Height="27"
-                                    Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Tag zu ausgewählten Bildern hinzufügen'}"
-                                    Click="TagAdd_Click"/>
-                            <TextBox x:Name="TagEntryBox" Margin="0,0,4,0"
-                                     VerticalContentAlignment="Center" ToolTip="{loc:Tr Key='Tag eingeben – vorhandene Tags werden vorgeschlagen'}"
-                                     TextChanged="TagEntry_TextChanged" PreviewKeyDown="TagEntry_KeyDown"/>
-                            </DockPanel>
-                            <Popup x:Name="TagSuggestionsPopup"
-                                   PlacementTarget="{Binding ElementName=TagEntryBox}"
-                                   Placement="Bottom" VerticalOffset="1"
-                                   StaysOpen="False" AllowsTransparency="True"
-                                   >
-                                <Border Background="{DynamicResource PcasaPanelBrush}"
-                                        BorderBrush="{DynamicResource PcasaDividerBrush}"
-                                        BorderThickness="1" CornerRadius="4" Padding="2"
-                                        Width="{Binding ActualWidth, ElementName=TagEntryBox}">
-                                    <ListBox x:Name="TagSuggestionsList" MaxHeight="190"
-                                             BorderThickness="0" FontSize="12"
-                                             PreviewMouseLeftButtonUp="TagSuggestion_MouseUp"
-                                             PreviewKeyDown="TagEntry_KeyDown"/>
-                                </Border>
-                            </Popup>
-                        </Grid>
-                        <DockPanel Grid.Row="2" Margin="2,0,2,7">
-                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                                <RadioButton x:Name="TagLogicOr" GroupName="TagListLogic" Style="{StaticResource PcasaLogicSymbolStyle}" IsChecked="True"
-                                             Checked="TagLogic_Changed" ToolTip="{loc:Tr Key='ODER: alle Tags der ausgewählten Bilder'}">
-                                    <TextBlock Text="∨" FontFamily="Cambria Math" FontSize="16" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                </RadioButton>
-                                <RadioButton x:Name="TagLogicAnd" GroupName="TagListLogic" Style="{StaticResource PcasaLogicSymbolStyle}"
-                                             Checked="TagLogic_Changed" ToolTip="{loc:Tr Key='UND: nur Tags, die alle ausgewählten Bilder gemeinsam haben'}">
-                                    <TextBlock Text="∧" FontFamily="Cambria Math" FontSize="16" HorizontalAlignment="Center" TextAlignment="Center"/>
-                                </RadioButton>
-                            </StackPanel>
-                            <TextBlock x:Name="TagSelectionCaption" Text="{loc:Tr Key='Tags der Auswahl'}" FontSize="12"
-                                       VerticalAlignment="Center" TextWrapping="Wrap"/>
-                        </DockPanel>
-                        <Border Grid.Row="3" BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
-                                Background="{DynamicResource PcasaPanelAltBrush}" CornerRadius="7" Padding="5">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <StackPanel x:Name="TagRowsPanel"/>
-                            </ScrollViewer>
-                        </Border>
-                        <StackPanel Grid.Row="4" Margin="2,7,2,0" MinHeight="96">
-                            <TextBlock Text="{loc:Tr Key='Schnell-Tags'}" FontSize="12" Margin="0,0,0,5"/>
-                            <WrapPanel x:Name="TagQuickPanel"/>
-                        </StackPanel>
-                        <StackPanel Grid.Row="5" Margin="2,7,2,0">
-                            <TextBlock x:Name="TagDraftSummaryText" FontSize="11"
-                                       HorizontalAlignment="Right" Margin="0,0,0,4"
-                                       TextWrapping="Wrap" Visibility="Collapsed"
-                                       Foreground="{DynamicResource PcasaMutedTextBrush}"/>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="TagDraftCancelButton" Content="{loc:Tr Key='Abbrechen'}" MinWidth="80"
-                                        Margin="0,0,6,0" IsEnabled="False"
-                                        Style="{StaticResource PcasaStatusButtonStyle}"
-                                        Click="TagDraftCancel_Click"/>
-                                <Button x:Name="TagDraftOkButton" Content="{loc:Tr Key='OK'}" MinWidth="65" IsEnabled="False"
-                                        Style="{StaticResource PcasaStatusButtonStyle}"
-                                        Click="TagDraftOk_Click"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </Grid>
-                </Grid>
-            </Border>
-        </Grid>
+            var start = new ProcessStartInfo(executable)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                StandardInputEncoding = new UTF8Encoding(false),
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            foreach (var arg in new[] { "-charset", "filename=UTF8",
+                "-stay_open", "True", "-@", "-" })
+                start.ArgumentList.Add(arg);
+            _process = ExifToolProcessRegistry.Start(start);
+            lock (ActiveGate) ActiveSessions.Add(this);
+            // Always drain stderr concurrently so a warning cannot deadlock
+            // a subsequent request. The final metadata read verifies success.
+            _errorDrain = _process.StandardError.ReadToEndAsync();
+        }
 
-        <Border Grid.Row="3"
-                Background="{DynamicResource PcasaPanelBrush}"
-                BorderBrush="{DynamicResource PcasaDividerBrush}"
-                BorderThickness="0,1,0,0">
-            <Grid Margin="14,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock x:Name="StatusText"
-                           MouseLeftButtonUp="BrowseStatus_Click"
-                           Cursor="Hand" ToolTip="{loc:Tr Key='Laufenden Fortschritt anzeigen'}"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource PcasaMutedTextBrush}"
-                           Text="{loc:Tr Key='0 Bilder'}" />
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <StackPanel x:Name="ThumbnailSizeToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,11,0">
-                        <Viewbox Width="23" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailgröße'}">
-                            <Canvas Width="24" Height="24">
-                                <Rectangle Canvas.Left="2" Canvas.Top="2" Width="20" Height="20" RadiusX="1"
-                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
-                                <Path Data="M 11,11 L 6,6 M 6,10 L 6,6 L 10,6 M 13,13 L 18,18 M 18,14 L 18,18 L 14,18"
-                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
-                            </Canvas>
-                        </Viewbox>
-                        <Slider x:Name="ThumbnailSizeSlider" Style="{StaticResource PcasaNeutralSliderStyle}" Width="120" Minimum="72" Maximum="600"
-                                Value="190" Loaded="CompactThumbnailSlider_Loaded"
-                                ValueChanged="BrowseThumbnailSizeSlider_ValueChanged"
-                                VerticalAlignment="Center" ToolTip="{loc:Tr Key='Thumbnailgröße'}" />
-                    </StackPanel>
-                    <StackPanel x:Name="ThumbnailSpacingToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,13,0">
-                        <Viewbox Width="30" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailabstand'}">
-                            <Canvas Width="34" Height="24">
-                                <Rectangle Canvas.Left="1.5" Canvas.Top="5" Width="9" Height="14"
-                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
-                                <Rectangle Canvas.Left="23.5" Canvas.Top="5" Width="9" Height="14"
-                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
-                                <Path Data="M 13,12 L 21,12 M 16,9 L 13,12 L 16,15 M 18,9 L 21,12 L 18,15"
-                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                      StrokeLineJoin="Round"/>
-                            </Canvas>
-                        </Viewbox>
-                        <Slider x:Name="ThumbnailSpacingSlider" Style="{StaticResource PcasaNeutralSliderStyle}" Width="112" Minimum="0" Maximum="160" Value="10"
-                                Loaded="CompactThumbnailSlider_Loaded"
-                                ValueChanged="ThumbnailSpacingSlider_ValueChanged"
-                                VerticalAlignment="Center" ToolTip="{loc:Tr Key='Thumbnailabstand'}" />
-                    </StackPanel>
-                    <Button Style="{StaticResource PcasaStatusButtonStyle}" Content="A/B" Width="51" Height="25"
-                            Padding="4,1" FontSize="12" Margin="0,0,10,0"
-                            ToolTip="{loc:Tr Key='Zwei ausgewählte Bilder vergleichen'}"
-                            x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
-                    <Button x:Name="FolderSidebarToggleButton"
-                            Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            ToolTip="{loc:Tr Key='Ordnerleiste ein-/ausblenden'}"
-                            Click="FolderSidebarToggle_Click">
-                        <Viewbox Width="22" Height="22"><Canvas Width="28" Height="28">
-                            <Rectangle Canvas.Left="2" Canvas.Top="3" Width="24" Height="22"
-                                       RadiusX="1.5" Stroke="{DynamicResource PcasaTextBrush}"
-                                       StrokeThickness="2.2"/>
-                            <Rectangle x:Name="FolderSidebarSymbolFill"
-                                       Canvas.Left="4" Canvas.Top="5" Width="9" Height="18"
-                                       Fill="{DynamicResource PcasaTextBrush}"/>
-                            <Path x:Name="FolderSidebarSymbolArrow"
-                                  Data="M 16,14 L 24,14 M 20,10 L 24,14 L 20,18"
-                                  Stroke="{DynamicResource PcasaTextBrush}"
-                                  StrokeThickness="2.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
-                        </Canvas></Viewbox>
-                    </Button>
-                    <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            ToolTip="{loc:Tr Key='Tags anzeigen'}" Tag="Tags" Click="SidebarMode_Click">
-                        <Viewbox Width="18" Height="18">
-                            <Canvas Width="24" Height="24">
-                                <Path Data="M 2,3 L 12,3 L 22,13 L 13,22 L 2,11 Z"
-                                      Fill="#4D9EDB" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1"/>
-                                <Ellipse Canvas.Left="5" Canvas.Top="6" Width="3.2" Height="3.2"
-                                         Fill="{DynamicResource PcasaPanelBrush}" />
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
-                    <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            ToolTip="{loc:Tr Key='GPS-Informationen anzeigen'}" Tag="GPS" Click="SidebarMode_Click">
-                        <Viewbox Width="18" Height="18">
-                            <Canvas Width="24" Height="24">
-                                <Path Data="M 12,1 C 6.5,1 3,5 3,10 C 3,16 12,23 12,23 C 12,23 21,16 21,10 C 21,5 17.5,1 12,1 Z"
-                                      Fill="#DF4A54" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="0.8"/>
-                                <Ellipse Canvas.Left="8.6" Canvas.Top="6.6" Width="6.8" Height="6.8"
-                                         Fill="{DynamicResource PcasaPanelBrush}"/>
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
-                    <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
-                            Margin="0,0,11,0" ToolTip="{loc:Tr Key='Bildinformationen anzeigen'}" Tag="Info" Click="SidebarMode_Click">
-                        <Viewbox Width="18" Height="18">
-                            <Canvas Width="24" Height="24">
-                                <Ellipse Canvas.Left="2" Canvas.Top="2" Width="20" Height="20"
-                                         Fill="{DynamicResource PcasaAccentBrush}"/>
-                                <Ellipse Canvas.Left="10.8" Canvas.Top="6" Width="2.4" Height="2.4" Fill="White"/>
-                                <Rectangle Canvas.Left="11" Canvas.Top="10" Width="2" Height="8" Fill="White"/>
-                            </Canvas>
-                        </Viewbox>
-                    </Button>
-                    <TextBlock x:Name="SelectionText"
-                           VerticalAlignment="Center"
-                           Foreground="{DynamicResource PcasaMutedTextBrush}"
-                           Text="{loc:Tr Key='Auswahl: 0'}" />
-                </StackPanel>
-            </Grid>
-        </Border>
-    </Grid>
-</Window>
+        public void Dispose()
+        {
+            lock (_operationGate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                var process = _process;
+                _process = null;
+                try
+                {
+                    // All reads/writes own this gate. No transaction can be
+                    // interrupted by normal Session disposal.
+                    if (process is not null)
+                        ExifToolProcessRegistry.Retire(process);
+                }
+                finally
+                {
+                    lock (ActiveGate) ActiveSessions.Remove(this);
+                    _errorDrain = null;
+                }
+            }
+        }
+    }
+}
