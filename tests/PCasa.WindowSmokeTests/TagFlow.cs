@@ -510,8 +510,31 @@ internal static class TagFlow
                 close.Invoke(window, [null, new RoutedEventArgs()]);
             }
             if (folderPane.Visibility != Visibility.Visible) Click(folderToggle);
+            // Provider credentials are encrypted under the current Windows
+            // account. Public PCasa distribution must never ship an API key.
+            var keyProvider = new GpsMapProvider
+            {
+                Name = "User licensed map",
+                Format = "xyz",
+                Url = "https://example.org/tiles/{z}/{x}/{y}.png?key={key}",
+                ProtectedKey = GpsMapProvider.EncryptKey("test-api-key")
+            };
+            if (!GpsMapProvider.IsValid(keyProvider) ||
+                !keyProvider.ResolveUrl().Contains("test-api-key") ||
+                System.Text.Json.JsonSerializer.Serialize(keyProvider)
+                    .Contains("test-api-key", StringComparison.Ordinal))
+                throw new Exception("Provider selection did not encrypt the personal API key.");
+            if (GpsMapProvider.IsValid(new GpsMapProvider
+                { Name = "Not HTTPS", Format = "xyz",
+                  Url = "http://example.org/{z}/{x}/{y}.png" }))
+                throw new Exception("Unencrypted tile endpoints must be rejected.");
             var selectionBeforeLayout = selected.ToHashSet();
             Click(gpsToggle);
+            if (((Grid?)window.FindName("GpsMapPanel"))?.Visibility != Visibility.Visible ||
+                ((ComboBox?)window.FindName("GpsProviderComboBox"))?.Items.Count < 4 ||
+                window.FindName("GpsFullscreenArrows") is not System.Windows.Shapes.Path ||
+                window.FindName("FolderSidebarSymbolArrow") is not System.Windows.Shapes.Path)
+                throw new Exception("GPS provider choices or bold vector icons missing.");
             // A previous run may have saved GPS in expanded mode.
             if (Equals(gpsExpand.Tag, "expanded")) Click(gpsExpand);
             window.UpdateLayout();

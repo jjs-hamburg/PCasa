@@ -49,3 +49,11 @@ Die Anwendung benötigt Schreibrechte für den lokalen PCasa-Datenordner und, be
 ## Noch offen
 
 Server-Datenbank/Transport, Plugin-/Werkzeugintegration, Bildbearbeitung, Kartendarstellung, Installer/Updateprozess und breite reale NAS-/VPN-Abnahme sind nicht als abgeschlossene Features zu kennzeichnen.
+
+## GPS / Karten und Weitergabe
+
+Die Kartenoberfläche verwendet **MapLibre GL JS 5.9.0** (BSD-3-Clause) in **CefSharp.Wpf.NETCore 152.0.100** (BSD) mit quelloffenem Chromium/CEF. Keine proprietäre WebView2-Runtime, kein eingebetteter API-Schlüssel. Standardkarten stammen von **OpenFreeMap** (MIT) und den **OpenStreetMap**-Daten (ODbL). Attributionen und Dienstbedingungen sind Bestandteil der App-Oberfläche.
+
+Die Lizenzkostenfreiheit von PCasa gilt für die ausgelieferte Anwendung und alle zwingenden Komponenten. Nutzer können freiwillig eigene Kartenanbieter und eigene Lizenz-/API-Zugänge konfigurieren. Die App macht aus solchen Zugangsdaten keinen Bestandteil des öffentlichen Builds. Fremde Dienste unterliegen ihren jeweiligen Nutzungsbedingungen.
+
+Aktuelle Einschränkungen: MapLibre-JS/CSS werden zur Laufzeit aus einem versionierten öffentlichen CDN geladen; die Kacheln benötigen Internet. Die Fotoauswahl-Karte ist bislang auf 5.000 Punkte pro Ansicht begrenzt, die Vollbestandskarte ist noch nicht skaliert. Geocoding, Satellitenquelle, WMS/WMTS und vollwertige Offline-Karten sind noch nicht implementiert.
