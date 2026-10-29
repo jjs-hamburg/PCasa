@@ -590,6 +590,31 @@ internal static class TagFlow
             filmToggle.IsChecked = true;
             if (filmPanel.Visibility != Visibility.Visible)
                 throw new Exception("GPS filmstrip could not be enabled.");
+
+            // The film is one continuous perforated strip (not individual
+            // frames with sprocket holes), and its selection template must
+            // override WPF's opaque system-blue ListBox highlight.
+            if (filmPanel.Child is not Grid filmTrack ||
+                filmTrack.RowDefinitions.Count != 3 ||
+                filmTrack.Children.OfType<System.Windows.Shapes.Rectangle>().Count() != 2 ||
+                window.FindResource("GpsFilmPerforationBrush") is not DrawingBrush perforations ||
+                perforations.TileMode != TileMode.Tile)
+                throw new Exception("Continuous GPS film perforations are missing.");
+            var filmListForStyle = (ListBox?)window.FindName("GpsFilmstripList")
+                ?? throw new Exception("Filmstrip list not found.");
+            var filmStyle = filmListForStyle.ItemContainerStyle;
+            var filmTemplate = filmStyle?.Setters.OfType<Setter>()
+                .FirstOrDefault(setter => setter.Property == ListBoxItem.TemplateProperty)
+                ?.Value as ControlTemplate;
+            if (filmTemplate is null ||
+                !filmTemplate.Triggers.OfType<Trigger>().Any(trigger =>
+                    trigger.Property == ListBoxItem.IsSelectedProperty &&
+                    Equals(trigger.Value, true) &&
+                    trigger.Setters.OfType<Setter>().Any(setter =>
+                        setter.TargetName == "FilmFrame" &&
+                        setter.Property == Border.BorderBrushProperty)))
+                throw new Exception("Filmstrip has no custom selection frame; blue system selection may return.");
+
             filmToggle.IsChecked = false;
             if (filmPanel.Visibility != Visibility.Collapsed)
                 throw new Exception("GPS filmstrip could not be hidden.");

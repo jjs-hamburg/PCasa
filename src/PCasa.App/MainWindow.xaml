@@ -1136,7 +1136,7 @@
                             </Border>
                         </Grid>
                         <Border x:Name="GpsFilmstripPanel" Grid.Row="3"
-                                Height="132" Margin="0,4,0,0"
+                                Height="142" Margin="0,4,0,0"
                                 BorderBrush="#4D4F51" BorderThickness="1"
                                 Background="#17191B" Visibility="Collapsed"
                                 ClipToBounds="True">
