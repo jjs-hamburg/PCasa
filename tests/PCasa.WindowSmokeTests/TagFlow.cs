@@ -599,6 +599,19 @@ internal static class TagFlow
                 window.FindName("GpsFullscreenArrows") is not System.Windows.Shapes.Path ||
                 window.FindName("FolderSidebarSymbolArrow") is not System.Windows.Shapes.Path)
                 throw new Exception("GPS provider choices or bold vector icons missing.");
+            var googleUrlBuilder = typeof(PCasa.App.MainWindow).GetMethod(
+                "BuildGoogleMapsWebsiteUrl",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+                ?? throw new Exception("Google Maps website URL formatter missing.");
+            var googleAddress = (string)googleUrlBuilder.Invoke(
+                null, [53.553333, 10.017222])!;
+            if (!googleAddress.StartsWith(
+                    "https://www.google.com/maps/search/?api=1&query=",
+                    StringComparison.Ordinal) ||
+                googleAddress.Contains("key=", StringComparison.Ordinal))
+                throw new Exception("Google Maps requires an unintended Cloud API key.");
+
             // A previous run may have saved GPS in expanded mode.
             if (Equals(gpsExpand.Tag, "expanded")) Click(gpsExpand);
             window.UpdateLayout();
@@ -621,6 +634,39 @@ internal static class TagFlow
             if (Grid.GetColumn(sidebarPanel) != 0 ||
                 Grid.GetColumnSpan(sidebarPanel) != workspace.ColumnDefinitions.Count)
                 throw new Exception("GPS fullscreen is not an in-place workspace overlay.");
+
+            // The GPS-fullscreen photo overlay reuses the existing viewer
+            // decoder/scheduler, with one-click close and intact map layout.
+            var gpsOverlay = (Grid?)window.FindName("GpsFullscreenImageOverlay")
+                ?? throw new Exception("Fullscreen photo image overlay missing.");
+            var gpsImage = (System.Windows.Controls.Image?)
+                window.FindName("GpsFullscreenImage")
+                ?? throw new Exception("Fullscreen photo surface missing.");
+            var projectedType = projected[0].GetType();
+            var pointArray = Array.CreateInstance(projectedType, projected.Length);
+            for (var i = 0; i < projected.Length; i++)
+                pointArray.SetValue(projected[i], i);
+            typeof(PCasa.App.MainWindow).GetField("_gpsPoints",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!
+                .SetValue(window, pointArray);
+            var showGpsPhoto = typeof(PCasa.App.MainWindow).GetMethod(
+                "ShowGpsFullscreenImage",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            showGpsPhoto.Invoke(window, [gpsA]);
+            if (gpsOverlay.Visibility != Visibility.Visible ||
+                !selected.SetEquals(selectionBeforeLayout) ||
+                !gpsFullscreen.IsVisible)
+                throw new Exception("Opening GPS photo destroyed the fullscreen map or selection.");
+            gpsOverlay.RaiseEvent(new MouseButtonEventArgs(
+                InputManager.Current.PrimaryMouseDevice,
+                Environment.TickCount, MouseButton.Left)
+            { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+            if (gpsOverlay.Visibility != Visibility.Collapsed ||
+                Grid.GetColumn(sidebarPanel) != 0 ||
+                !selected.SetEquals(selectionBeforeLayout))
+                throw new Exception("Single click did not close photo over GPS fullscreen.");
             Click(gpsFullscreen);
             if (Grid.GetColumn(sidebarPanel) != 4 || Grid.GetColumnSpan(sidebarPanel) != 1)
                 throw new Exception("Leaving GPS fullscreen did not restore the panel.");
