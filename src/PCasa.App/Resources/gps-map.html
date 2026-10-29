@@ -29,6 +29,17 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    center:[10,42],zoom:2,attributionControl:{compact:true}
  });
  map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
+ // MapLibre 5.9's compact attribution starts EXPANDED until the first drag.
+ // Open the photo map in the compact state from the first frame, but keep
+ // the information button and the complete source credits available.
+ function collapseAttributionInitially() {
+   const attribution = map.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact');
+   if (!attribution) return;
+   attribution.classList.remove('maplibregl-compact-show');
+   attribution.removeAttribute('open');
+ }
+ collapseAttributionInitially();
+ map.on('style.load', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
  let previousSelectedIds = null;
  const selectedMarkers = new Map();
