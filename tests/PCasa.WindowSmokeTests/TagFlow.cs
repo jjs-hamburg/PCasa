@@ -513,7 +513,7 @@ internal static class TagFlow
             var selectionBeforeLayout = selected.ToHashSet();
             Click(gpsToggle);
             // A previous run may have saved GPS in expanded mode.
-            if (Equals(gpsExpand.Content, "⇥")) Click(gpsExpand);
+            if (Equals(gpsExpand.Tag, "expanded")) Click(gpsExpand);
             window.UpdateLayout();
             if (gpsColumn.Width.GridUnitType != GridUnitType.Star ||
                 galleryColumn.Width.GridUnitType != GridUnitType.Star ||

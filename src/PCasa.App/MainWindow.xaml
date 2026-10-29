@@ -890,16 +890,37 @@
                     </Grid.RowDefinitions>
                     <DockPanel Margin="4,0,0,12">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button x:Name="GpsExpandButton" Content="⇤" Width="26" Height="24"
+                            <Button x:Name="GpsExpandButton" Width="30" Height="27"
                                     Margin="0,0,4,0" Visibility="Collapsed"
                                     ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
-                                    Click="GpsExpand_Click"/>
-                            <Button x:Name="GpsFullscreenButton" Content="⛶" Width="26" Height="24"
+                                    Click="GpsExpand_Click">
+                                <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                                    <Rectangle Canvas.Left="2" Canvas.Top="3" Width="24" Height="22" RadiusX="1.5"
+                                               Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"/>
+                                    <Rectangle Canvas.Left="16" Canvas.Top="5" Width="8" Height="18"
+                                               Fill="{DynamicResource PcasaTextBrush}"/>
+                                    <Path x:Name="GpsExpandArrow" Data="M 13,14 L 4,14 M 8,10 L 4,14 L 8,18"
+                                          Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.7"
+                                          StrokeLineCap="Round" StrokeLineJoin="Round"/>
+                                </Canvas></Viewbox>
+                            </Button>
+                            <Button x:Name="GpsFullscreenButton" Width="30" Height="27"
                                     Margin="0,0,4,0" Visibility="Collapsed"
                                     ToolTip="{loc:Tr Key='GPS-Vollbild'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
-                                    Click="GpsFullscreen_Click"/>
+                                    Click="GpsFullscreen_Click">
+                                <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                                    <Path x:Name="GpsFullscreenCorners"
+                                          Data="M 3,11 L 3,3 L 11,3 M 17,3 L 25,3 L 25,11 M 25,17 L 25,25 L 17,25 M 11,25 L 3,25 L 3,17"
+                                          Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="3.3"
+                                          StrokeLineCap="Square" StrokeLineJoin="Miter"/>
+                                    <Path x:Name="GpsFullscreenArrows"
+                                          Data="M 12,12 L 5,5 M 16,12 L 23,5 M 16,16 L 23,23 M 12,16 L 5,23"
+                                          Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"
+                                          StrokeLineCap="Round"/>
+                                </Canvas></Viewbox>
+                            </Button>
                             <Button Content="✕" Width="24" Height="24"
                                     ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
@@ -1045,16 +1066,18 @@
                             Style="{StaticResource PcasaFooterIconButtonStyle}"
                             ToolTip="{loc:Tr Key='Ordnerleiste ein-/ausblenden'}"
                             Click="FolderSidebarToggle_Click">
-                        <Viewbox Width="18" Height="18">
-                            <Canvas Width="24" Height="24">
-                                <Path Data="M 2,5 L 9,5 L 11,7 L 22,7 L 22,21 L 2,21 Z"
-                                      Stroke="{DynamicResource PcasaTextBrush}"
-                                      StrokeThickness="1.5" Fill="Transparent"/>
-                                <Path Data="M 7,11 L 18,11 M 7,15 L 16,15"
-                                      Stroke="{DynamicResource PcasaTextBrush}"
-                                      StrokeThickness="1.6"/>
-                            </Canvas>
-                        </Viewbox>
+                        <Viewbox Width="22" Height="22"><Canvas Width="28" Height="28">
+                            <Rectangle Canvas.Left="2" Canvas.Top="3" Width="24" Height="22"
+                                       RadiusX="1.5" Stroke="{DynamicResource PcasaTextBrush}"
+                                       StrokeThickness="2.2"/>
+                            <Rectangle x:Name="FolderSidebarSymbolFill"
+                                       Canvas.Left="4" Canvas.Top="5" Width="9" Height="18"
+                                       Fill="{DynamicResource PcasaTextBrush}"/>
+                            <Path x:Name="FolderSidebarSymbolArrow"
+                                  Data="M 16,14 L 24,14 M 20,10 L 24,14 L 20,18"
+                                  Stroke="{DynamicResource PcasaTextBrush}"
+                                  StrokeThickness="2.3" StrokeLineCap="Round" StrokeLineJoin="Round"/>
+                        </Canvas></Viewbox>
                     </Button>
                     <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
                             ToolTip="{loc:Tr Key='Tags anzeigen'}" Tag="Tags" Click="SidebarMode_Click">
