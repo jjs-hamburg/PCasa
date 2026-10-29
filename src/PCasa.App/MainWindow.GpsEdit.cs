@@ -60,8 +60,10 @@ public partial class MainWindow
             return;
         }
         var version = ++_gpsPlaceSearchRevision;
+        // Cancel the previous request; its own finally owns disposal.
+        // Disposing a token source while HttpClient still uses its token
+        // can break the ongoing cancellation path.
         _gpsPlaceSearchCancellation?.Cancel();
-        _gpsPlaceSearchCancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
         _gpsPlaceSearchCancellation = cancellation;
         var stopwatch = Stopwatch.StartNew();

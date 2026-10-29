@@ -243,6 +243,7 @@ public partial class MainWindow
         double? Number(string name)
         {
             if (!root.TryGetProperty(name, out var value) ||
+                value.ValueKind != JsonValueKind.Number ||
                 !value.TryGetDouble(out var number) || !double.IsFinite(number))
                 return null;
             return number;
@@ -259,6 +260,7 @@ public partial class MainWindow
             case "select":
                 return new GpsMapMessage("select", Id:
                     root.TryGetProperty("id", out var id) &&
+                    id.ValueKind == JsonValueKind.Number &&
                     id.TryGetInt64(out var parsed) ? parsed : 0);
             case "draft":
             {
