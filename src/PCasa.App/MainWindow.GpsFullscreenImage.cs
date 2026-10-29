@@ -13,10 +13,20 @@ public partial class MainWindow
 
     private void ShowGpsFullscreenImage(long imageId)
     {
-        if (_sidebarMode != "GPS" ||
-            (!_gpsFullscreen && !_appearance.ShowGpsFilmstrip)) return;
+        if (_sidebarMode != "GPS") return;
         var item = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
         if (item is null) return;
+
+        // A full-map overlay cannot show a photo in the gallery. Return to
+        // the previously agreed two-pane photo/map workspace first. Opening
+        // a photo must NEVER cover the geographic context.
+        if (_gpsFullscreen)
+        {
+            _gpsFullscreen = false;
+            _gpsExpanded = true;
+            _appearance.GpsExpanded = true;
+            UpdateWorkspaceLayoutPreservingGallery();
+        }
 
         CancelGpsFullscreenImageRead();
         var version = _gpsFullscreenImageRequest;
@@ -49,7 +59,8 @@ public partial class MainWindow
         var cancellation = new CancellationTokenSource();
         _gpsFullscreenImageCancellation = cancellation;
         var size = Math.Clamp((int)Math.Ceiling(
-            Math.Max(GpsMapPanel.ActualWidth, GpsMapPanel.ActualHeight) * 1.5),
+            Math.Max(GpsFullscreenImageOverlay.ActualWidth,
+                GpsFullscreenImageOverlay.ActualHeight) * 1.5),
             800, 4096);
         _ = LoadGpsFullscreenImageAsync(imageId, size, version, cancellation.Token);
     }
@@ -72,7 +83,7 @@ public partial class MainWindow
                 () => !token.IsCancellationRequested &&
                     version == _gpsFullscreenImageRequest &&
                     _sidebarMode == "GPS" &&
-                    (_gpsFullscreen || _appearance.ShowGpsFilmstrip),
+                    GpsFullscreenImageOverlay.Visibility == Visibility.Visible,
                 cancellationToken: token,
                 workKind: SchedulerWorkKind.ViewerRead);
             if (token.IsCancellationRequested ||

@@ -295,7 +295,6 @@ public partial class MainWindow
             });
             _gpsBrowser.ExecuteScriptAsync("window.pcasaApplyProvider(" + payload + ")");
             _gpsAppliedProviderId = p.Id;
-            GpsMapAttribution.Text = p.Attribution;
             GpsMapStatus.Visibility = Visibility.Collapsed;
         }
         catch (Exception ex)
@@ -643,7 +642,6 @@ public partial class MainWindow
         GpsMapStatus.Visibility = _gpsCurrentCoordinates is null
             ? Visibility.Visible : Visibility.Collapsed;
         GpsMapStatus.Text = UiLanguage.T("Keine GPS-Koordinaten für die Auswahl");
-        GpsMapAttribution.Text = UiLanguage.T("Google Maps – experimentelle Webansicht");
         try { browser.Load(url); }
         catch (Exception ex)
         {
@@ -660,7 +658,6 @@ public partial class MainWindow
         _gpsGoogleLoadedUrl = null;
         _gpsBrowserReady = false;
         UpdateGpsGoogleButton();
-        GpsMapAttribution.Text = CurrentGpsProvider().Attribution;
         GpsMapStatus.Visibility = Visibility.Visible;
         GpsMapStatus.Text = UiLanguage.T("Karte wird geladen");
         if (_gpsBrowser is { IsDisposed: false } browser)

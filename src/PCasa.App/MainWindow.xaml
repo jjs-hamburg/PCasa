@@ -827,6 +827,26 @@
                         </Border>
                     </Grid>
 
+                        <!-- The GPS photo viewer is placed in the GALLERY workspace,
+                             never on the map; its preview follows the filmstrip
+                             without replacing the main gallery selection. -->
+                        <Grid x:Name="GpsFullscreenImageOverlay" Panel.ZIndex="30"
+                              Visibility="Collapsed" Background="#F51C1D20"
+                              Cursor="Hand"
+                              MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
+                            <Image x:Name="GpsFullscreenImage" Stretch="Uniform"
+                                   Margin="18,38,18,18" IsHitTestVisible="False"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <TextBlock x:Name="GpsFullscreenImageStatus"
+                                       Text="{loc:Tr Key='Bild wird geladen'}"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="White" IsHitTestVisible="False"/>
+                            <TextBlock x:Name="GpsFullscreenImageCaption"
+                                       HorizontalAlignment="Left" VerticalAlignment="Top"
+                                       Margin="18,12" FontSize="13" Foreground="White"
+                                       IsHitTestVisible="False"/>
+
                     <StackPanel x:Name="EmptyPanel"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -941,27 +961,46 @@
                             <RowDefinition Height="0"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0" Margin="0,0,0,6">
                             <TextBlock x:Name="GpsCoordinatesText"
                                        Text="{loc:Tr Key='GPS-Positionen werden geladen'}"
                                        TextWrapping="Wrap" FontSize="12" Margin="0,0,0,5"/>
                             <DockPanel LastChildFill="False">
-                                <Button x:Name="GpsProviderButton" DockPanel.Dock="Right"
-                                        Width="82" Height="31" Padding="1,0"
-                                        ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
-                                        Style="{StaticResource PcasaStatusButtonStyle}"
-                                        Click="GpsProviderButton_Click">
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                        <TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/>
-                                        <Path Data="M 2,3 L 7,8 L 12,3" Width="11" Height="8"
-                                              Margin="7,4,0,0" Stretch="Fill"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="2.3"/>
-                                    </StackPanel>
-                                </Button>
+                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                                    <Button x:Name="GpsProviderButton"
+                                            Width="82" Height="31" Padding="1,0"
+                                            ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
+                                            Style="{StaticResource PcasaStatusButtonStyle}"
+                                            Click="GpsProviderButton_Click">
+                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                            <TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/>
+                                            <Path Data="M 2,3 L 7,8 L 12,3" Width="11" Height="8"
+                                                  Margin="7,4,0,0" Stretch="Fill"
+                                                  Stroke="{DynamicResource PcasaTextBrush}"
+                                                  StrokeThickness="2.3"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <ToggleButton x:Name="GpsFilmstripToggle" Width="34" Height="31"
+                                                  Margin="5,0,0,0" Padding="3"
+                                                  ToolTip="{loc:Tr Key='Filmstreifen'}"
+                                                  Checked="GpsFilmstripToggle_Changed"
+                                                  Unchecked="GpsFilmstripToggle_Changed">
+                                        <Viewbox Width="21" Height="19">
+                                            <Canvas Width="28" Height="24">
+                                                <Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18"
+                                                           RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}"
+                                                           StrokeThickness="2.2"/>
+                                                <Path Data="M 8,3 V21 M 20,3 V21"
+                                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"/>
+                                                <Path Data="M 3,8 H6 M 3,16 H6 M 22,8 H25 M 22,16 H25"
+                                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.0"/>
+                                                <Path Data="M 11,8 L17,12 L11,16 Z"
+                                                      Fill="{DynamicResource PcasaTextBrush}"/>
+                                            </Canvas>
+                                        </Viewbox>
+                                    </ToggleButton>
+                                </StackPanel>
                                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                                     <Button x:Name="GpsCopyButton" Padding="6,2"
                                             Content="{loc:Tr Key='GPS kopieren'}"
@@ -1034,12 +1073,7 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
-                        <CheckBox x:Name="GpsFilmstripToggle" Grid.Row="3"
-                                  Content="{loc:Tr Key='Filmstreifen'}"
-                                  Margin="3,7,0,4" VerticalAlignment="Center"
-                                  Checked="GpsFilmstripToggle_Changed"
-                                  Unchecked="GpsFilmstripToggle_Changed"/>
-                        <Border x:Name="GpsFilmstripPanel" Grid.Row="4" Height="116"
+                        <Border x:Name="GpsFilmstripPanel" Grid.Row="3" Height="116"
                                 Background="{DynamicResource PcasaPanelBrush}"
                                 Visibility="Collapsed">
                             <ListBox x:Name="GpsFilmstripList"
@@ -1072,32 +1106,6 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                         </Border>
-                        <TextBlock Grid.Row="5" x:Name="GpsMapAttribution"
-                                   Text="OpenFreeMap © OpenMapTiles · OpenStreetMap contributors"
-                                   FontSize="10" TextWrapping="Wrap"
-                                   Foreground="{DynamicResource PcasaMutedTextBrush}"
-                                   Margin="0,5,0,0"/>
-                        <!-- One photo surface over the MAP ONLY, keeping the
-                             selected-filmstrip thumbnails clickable. Opening
-                             or swapping photos never enters the normal gallery
-                             viewer or discards its multi-selection. -->
-                        <Grid x:Name="GpsFullscreenImageOverlay" Grid.Row="2"
-                              Panel.ZIndex="30"
-                              Visibility="Collapsed" Background="#F51C1D20"
-                              Cursor="Hand"
-                              MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
-                            <Image x:Name="GpsFullscreenImage" Stretch="Uniform"
-                                   Margin="18,38,18,18" IsHitTestVisible="False"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                            <TextBlock x:Name="GpsFullscreenImageStatus"
-                                       Text="{loc:Tr Key='Bild wird geladen'}"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" TextWrapping="Wrap"
-                                       Foreground="White" IsHitTestVisible="False"/>
-                            <TextBlock x:Name="GpsFullscreenImageCaption"
-                                       HorizontalAlignment="Left" VerticalAlignment="Top"
-                                       Margin="18,12" FontSize="13" Foreground="White"
-                                       IsHitTestVisible="False"/>
                         </Grid>
                     </Grid>
                     <Grid x:Name="TagSidebar" Grid.Row="1" Visibility="Collapsed">

@@ -122,8 +122,7 @@ public partial class MainWindow
         GeneralSidebarScroll.Visibility = _sidebarMode is "Tags" or "GPS"
             ? Visibility.Collapsed : Visibility.Visible;
         GpsMapPanel.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
-        if ((!gps || (!fullscreen && !_appearance.ShowGpsFilmstrip)) &&
-            GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+        if (!gps && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();
     }
 
@@ -148,6 +147,8 @@ public partial class MainWindow
     {
         if (_sidebarMode != "GPS") return;
         _gpsFullscreen = !_gpsFullscreen;
+        if (_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+            CloseGpsFullscreenImage();
         UpdateWorkspaceLayoutPreservingGallery();
     }
 

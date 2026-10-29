@@ -104,7 +104,7 @@ public partial class MainWindow
             p.Id == _gpsHighlightedImageId)
             ?? entries.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
         _gpsFilmstripUpdating = false;
-        GpsFilmstripToggle.Content = UiLanguage.T("Filmstreifen") +
+        GpsFilmstripToggle.ToolTip = UiLanguage.T("Filmstreifen") +
             (selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160)" : "");
 
         if (packed.Count == 0) return;
