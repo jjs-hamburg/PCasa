@@ -701,7 +701,8 @@ internal static class TagFlow
                 !selected.SetEquals(selectionBeforeLayout) ||
                 !gpsFullscreen.IsVisible ||
                 gpsOverlay.Parent is not Grid galleryPhotoRoot ||
-                Grid.GetColumn(galleryPhotoRoot) != 2 ||
+                galleryPhotoRoot.Parent is not Grid galleryWorkspace ||
+                Grid.GetColumn(galleryWorkspace) != 2 ||
                 Grid.GetColumn(sidebarPanel) != 4 ||
                 Grid.GetColumnSpan(sidebarPanel) != 1)
                 throw new Exception("Opening a GPS photo must show it in the gallery BESIDE the map.");
@@ -767,7 +768,8 @@ internal static class TagFlow
                 if (gpsOverlay.Visibility != Visibility.Visible ||
                     gpsOverlay.Tag is not long openedId || openedId != gpsA ||
                     gpsOverlay.Parent is not Grid adjacentGallery ||
-                    Grid.GetColumn(adjacentGallery) != 2 ||
+                    adjacentGallery.Parent is not Grid adjacentWorkspace ||
+                    Grid.GetColumn(adjacentWorkspace) != 2 ||
                     Grid.GetColumn(sidebarPanel) != 4 ||
                     (bool)viewerOpenField.GetValue(window)! ||
                     !selected.SetEquals(keepSelection))
