@@ -92,7 +92,11 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
          .setLngLat([p.lon,p.lat]).addTo(map);
        entry={marker,el}; selectedMarkers.set(key,entry);
      } else entry.marker.setLngLat([p.lon,p.lat]);
-     entry.el.classList.toggle('pcasa-pin-target',key===String(highlightedId));
+     const highlighted = key===String(highlightedId);
+     entry.el.classList.toggle('pcasa-pin-target',highlighted);
+     // Photos may share identical GPS coordinates. The highlighted one
+     // must render above the others instead of hiding behind the last pin.
+     entry.el.style.zIndex = highlighted ? '99' : '1';
    }
    for(const [key,entry] of selectedMarkers)
      if(!keep.has(key)){entry.marker.remove();selectedMarkers.delete(key);}
