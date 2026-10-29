@@ -329,6 +329,7 @@ public partial class MainWindow
                 GpsPickPosition_Changed(this, new RoutedEventArgs());
             }
             else if (data.Kind == "draft" &&
+                     GpsEditorToggle.IsChecked == true &&
                      data.Latitude is double dLat &&
                      data.Longitude is double dLon)
             {
@@ -455,6 +456,9 @@ public partial class MainWindow
         if (_sidebarMode != "GPS") return;
         var revision = ++_gpsQueryRevision;
         var selectedIds = _selectedImageIds.ToArray();
+        // Before any async read, discard the place/marker left by the
+        // previous photo. Mere refresh of the same selection keeps editing.
+        ResetGpsEditorOnSelectionChange(selectedIds);
         var folderId = _activePhotoFolderId;
         try
         {
@@ -509,8 +513,8 @@ public partial class MainWindow
                 : points.Count == 0
                     ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
                     : _gpsCurrentCoordinates is { } coordinate
-                        ? string.Format(CultureInfo.CurrentCulture,
-                            "{0:F6}°, {1:F6}°", coordinate.Lat, coordinate.Lon)
+                        ? UiLanguage.Format("GPS (Foto): {0:F6}°, {1:F6}°",
+                            coordinate.Lat, coordinate.Lon)
                         : UiLanguage.Format("Bilder mit GPS: {0:N0}",
                             selectedGps.Length > 0 ? selectedGps.Length : points.Count);
             if (_gpsGoogleWebsiteActive)

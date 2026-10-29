@@ -204,6 +204,11 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if (recenter) map.easeTo({center:[lon,lat],zoom:Math.max(map.getZoom(),14),duration:450});
  }
  window.pcasaSetDraft = placeDraft;
+ window.pcasaClearDraft = () => {
+   placementEnabled = false;
+   if (draftMarker) { draftMarker.remove(); draftMarker = null; }
+   map.getCanvas().style.cursor = '';
+ };
  window.pcasaEnablePlacement = enabled => {
    placementEnabled=!!enabled;
    map.getCanvas().style.cursor=placementEnabled ? 'crosshair' : '';

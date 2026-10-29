@@ -588,7 +588,8 @@ internal static class TagFlow
             foreach (var controlName in new[]
             {
                 "GpsPlaceSearchBox", "GpsPlaceSearchButton", "GpsPlaceResults",
-                "GpsPlaceResultsPopup", "GpsPickPositionToggle", "GpsApplyMissingButton",
+                "GpsPlaceResultsPopup", "GpsEditPanel", "GpsEditorToggle",
+                "GpsPickPositionToggle", "GpsApplyMissingButton",
                 "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
                 "GpsShowAreaButton", "GpsClearAreaButton"
             })
@@ -603,6 +604,19 @@ internal static class TagFlow
             // itself select a photo in the real gallery.
             if (removeGpsButton.IsEnabled && selected.Count == 0)
                 throw new Exception("GPS removal enabled without an actual selection.");
+
+            // The ordinary photo GPS view contains only a compact toolbar;
+            // place search, edit actions and area filter are opt-in tools.
+            var gpsTools = (System.Windows.Controls.Primitives.ToggleButton?)
+                window.FindName("GpsEditorToggle")
+                ?? throw new Exception("Compact GPS tools launcher missing.");
+            var gpsToolsPanel = (StackPanel?)window.FindName("GpsEditPanel")
+                ?? throw new Exception("GPS tools panel missing.");
+            if (gpsTools.IsChecked == true || gpsToolsPanel.Visibility != Visibility.Collapsed)
+                throw new Exception("GPS editor occupies space during ordinary photo viewing.");
+            gpsTools.IsChecked = true;
+            if (gpsToolsPanel.Visibility != Visibility.Visible)
+                throw new Exception("GPS tools launcher did not reveal the editor.");
 
             // Search results are a popup UNDER the search box, not an
             // ever-visible white ComboBox consuming a second sidebar row.
@@ -658,6 +672,35 @@ internal static class TagFlow
             if (resultPopup.IsOpen || resultList.ItemsSource is not null)
                 throw new Exception("GPS search retained stale results after query changed.");
             Console.WriteLine("PASS: Theme-aware GPS result popup uses click/Enter confirmation and no reserved row.");
+
+            // Switching gallery photos must never reuse the search text,
+            // pending target coordinate or marker from another photo. A
+            // second refresh of the SAME selection must preserve a live edit.
+            var changeSelection = typeof(PCasa.App.MainWindow).GetMethod(
+                "ResetGpsEditorOnSelectionChange",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("GPS editor selection lifecycle owner missing.");
+            searchBox.Text = "Burg Eltz";
+            changeSelection.Invoke(window, [new long[] { gpsA }]);
+            if (gpsTools.IsChecked == true ||
+                gpsToolsPanel.Visibility != Visibility.Collapsed ||
+                resultPopup.IsOpen || searchBox.Text.Length != 0 ||
+                resultList.ItemsSource is not null ||
+                draftField.GetValue(window) is not null ||
+                ((TextBlock)window.FindName("GpsDraftCoordinates")!).Text.Length != 0)
+                throw new Exception("Changing photo left old GPS search or target visible.");
+            gpsTools.IsChecked = true;
+            searchBox.Text = "Next target in progress";
+            changeSelection.Invoke(window, [new long[] { gpsA }]);
+            if (gpsTools.IsChecked != true ||
+                gpsToolsPanel.Visibility != Visibility.Visible ||
+                searchBox.Text != "Next target in progress")
+                throw new Exception("Refreshing the same selection discarded a draft.");
+            changeSelection.Invoke(window, [new long[] { gpsB }]);
+            if (gpsTools.IsChecked == true || searchBox.Text.Length != 0)
+                throw new Exception("Next photo did not hide the old GPS editing tools.");
+            Console.WriteLine("PASS: GPS editing is compact and draft state belongs to the selected photos.");
 
             var filmToggle = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsFilmstripToggle")
                 ?? throw new Exception("Optional GPS filmstrip toggle missing.");

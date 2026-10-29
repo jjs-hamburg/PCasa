@@ -122,6 +122,10 @@ public partial class MainWindow
         GeneralSidebarScroll.Visibility = _sidebarMode is "Tags" or "GPS"
             ? Visibility.Collapsed : Visibility.Visible;
         GpsMapPanel.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
+        // Leaving GPS also closes its temporary search/edit context.
+        // The map camera and gallery/filmstrip selection are not changed.
+        if (!gps && GpsEditorToggle.IsChecked == true)
+            GpsEditorToggle.IsChecked = false;
         if (!gps && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();
     }

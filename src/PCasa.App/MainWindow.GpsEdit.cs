@@ -40,6 +40,49 @@ public partial class MainWindow
     private long _gpsPlaceSearchRevision;
     private long _gpsAreaRevision;
     private HashSet<long>? _gpsAreaFilterIds;
+    private readonly HashSet<long> _gpsEditSelectionIds = new();
+
+    private void GpsEditorToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (GpsEditPanel is null) return;
+        var isOpen = GpsEditorToggle.IsChecked == true;
+        GpsEditPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
+        if (isOpen)
+            GpsPlaceSearchBox.Focus();
+        else
+            ClearGpsEditorDraft();
+    }
+
+    // Called synchronously before the selected photo's async GPS lookup.
+    // The draft belongs to the previous photo selection, NOT to the map
+    // camera or to the newly focused photo.
+    private void ResetGpsEditorOnSelectionChange(IReadOnlyCollection<long> selectedIds)
+    {
+        if (_gpsEditSelectionIds.SetEquals(selectedIds)) return;
+        _gpsEditSelectionIds.Clear();
+        _gpsEditSelectionIds.UnionWith(selectedIds);
+        ClearGpsEditorDraft();
+        GpsEditorToggle.IsChecked = false;
+    }
+
+    private void ClearGpsEditorDraft()
+    {
+        ++_gpsPlaceSearchRevision;
+        _gpsPlaceSearchCancellation?.Cancel();
+        GpsPlaceResultsPopup.IsOpen = false;
+        GpsPlaceResults.ItemsSource = null;
+        GpsPlaceSearchBox.Clear();
+        GpsPlaceSearchButton.IsEnabled = true;
+        _gpsDraft = null;
+        GpsDraftCoordinates.Text = string.Empty;
+        GpsEditStatus.Text = string.Empty;
+        GpsApplyMissingButton.IsEnabled = false;
+        GpsReplaceButton.IsEnabled = false;
+        GpsPickPositionToggle.IsChecked = false;
+        if (_gpsBrowserReady && !_gpsGoogleWebsiteActive &&
+            _gpsBrowser is { IsDisposed: false } browser)
+            browser.ExecuteScriptAsync("window.pcasaClearDraft?.()");
+    }
 
     private void GpsPlaceSearch_KeyDown(object sender, KeyEventArgs e)
     {
@@ -222,11 +265,14 @@ public partial class MainWindow
 
     private void SetGpsDraft(double lat, double lon, bool recenter)
     {
+        // Ignore a delayed Chromium drag event after switching to another
+        // photo or closing the GPS editing tools.
+        if (GpsEditorToggle.IsChecked != true) return;
         if (!double.IsFinite(lat) || !double.IsFinite(lon) ||
             lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
         _gpsDraft = (lat, lon);
-        GpsDraftCoordinates.Text = string.Format(CultureInfo.CurrentCulture,
-            "{0:F6}°, {1:F6}°", lat, lon);
+        GpsDraftCoordinates.Text = UiLanguage.Format(
+            "Neues GPS-Ziel: {0:F6}°, {1:F6}°", lat, lon);
         GpsEditStatus.Text = UiLanguage.T("Position bereit – GPS übernehmen oder ändern.");
         GpsApplyMissingButton.IsEnabled = _selectedImageIds.Count > 0;
         GpsReplaceButton.IsEnabled = _selectedImageIds.Count > 0;
@@ -308,8 +354,12 @@ public partial class MainWindow
             var completion = _scheduler.EnqueueDurablePackageAsync(
                 BuildGpsEditPackage(key, payload), "gps-edit-v1", payload,
                 SchedulerPriority.ManualAction);
-            GpsEditStatus.Text = UiLanguage.Format(
+            StatusText.Text = UiLanguage.Format(
                 "GPS-Auftrag für {0} Bilder gespeichert.", ids.Length);
+            // An accepted persistent package owns an immutable coordinate
+            // snapshot; keeping its draft in the editor is misleading.
+            GpsEditorToggle.IsChecked = false;
+            ClearGpsEditorDraft();
             _ = ObserveGpsEditAsync(completion, key);
         }
         catch (Exception ex)
