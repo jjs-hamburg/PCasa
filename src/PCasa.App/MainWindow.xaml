@@ -940,18 +940,19 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <DockPanel Margin="0,0,0,6">
-                            <Button DockPanel.Dock="Right" Width="29" Height="28" Content="⚙"
-                                    Margin="4,0,0,0" Style="{StaticResource PcasaStatusButtonStyle}"
-                                    ToolTip="{loc:Tr Key='Kartenanbieter konfigurieren'}"
-                                    Click="GpsProviderSettings_Click"/>
-                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-                                <TextBlock Text="{loc:Tr Key='Karte'}" Margin="0,0,6,0"
-                                           VerticalAlignment="Center"/>
-                                <ComboBox x:Name="GpsProviderComboBox" Width="175"
-                                          VerticalAlignment="Center"
-                                          ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
-                                          SelectionChanged="GpsProvider_SelectionChanged"/>
-                            </StackPanel>
+                            <Button x:Name="GpsProviderButton" DockPanel.Dock="Left"
+                                    Width="112" Height="30" HorizontalAlignment="Left"
+                                    ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
+                                    Style="{StaticResource PcasaStatusButtonStyle}"
+                                    Click="GpsProviderButton_Click">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/>
+                                    <Path Data="M 2,3 L 7,8 L 12,3" Width="12" Height="9"
+                                          Margin="9,4,0,0" Stretch="Fill"
+                                          Stroke="{DynamicResource PcasaTextBrush}"
+                                          StrokeThickness="2.3"/>
+                                </StackPanel>
+                            </Button>
                         </DockPanel>
                         <StackPanel Grid.Row="1" Margin="0,0,0,6">
                             <TextBlock x:Name="GpsCoordinatesText"

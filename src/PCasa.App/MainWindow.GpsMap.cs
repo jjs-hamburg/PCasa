@@ -31,7 +31,6 @@ public partial class MainWindow
 
     private ChromiumWebBrowser? _gpsBrowser;
     private bool _gpsBrowserReady;
-    private bool _gpsComboUpdating;
     private string? _gpsAppliedProviderId;
     private long _gpsQueryRevision;
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
@@ -69,24 +68,56 @@ public partial class MainWindow
 
     private void UpdateGpsProviderMenu()
     {
-        _gpsComboUpdating = true;
-        try
+        // One compact launcher: source selection and user-owned provider
+        // management share the same menu, never a full-width search bar.
+        var menu = GpsProviderButton.ContextMenu ?? new ContextMenu();
+        menu.Items.Clear();
+        var active = CurrentGpsProvider();
+        foreach (var provider in AllGpsProviders())
         {
-            GpsProviderComboBox.Items.Clear();
-            foreach (var p in AllGpsProviders())
-                GpsProviderComboBox.Items.Add(new ComboBoxItem
-                {
-                    Content = p.Name,
-                    Tag = p.Id,
-                    IsSelected = p.Id == CurrentGpsProvider().Id
-                });
-            GpsProviderComboBox.Items.Add(new ComboBoxItem
+            var item = new MenuItem
             {
-                Content = UiLanguage.T("Eigener Kartenanbieter") + " …",
-                Tag = "__new"
-            });
+                Header = provider.Name,
+                Tag = provider.Id,
+                IsCheckable = true,
+                IsChecked = provider.Id == active.Id
+            };
+            item.Click += GpsProviderItem_Click;
+            menu.Items.Add(item);
         }
-        finally { _gpsComboUpdating = false; }
+        menu.Items.Add(new Separator());
+        var add = new MenuItem { Header = UiLanguage.T("Eigener Kartenanbieter") + " …" };
+        add.Click += (_, _) => OpenGpsProviderEditor(null);
+        menu.Items.Add(add);
+        if (_appearance.GpsProviders.Any(p => p.Id == active.Id))
+        {
+            var edit = new MenuItem { Header = UiLanguage.T("Kartenanbieter konfigurieren") + " …" };
+            edit.Click += GpsProviderSettings_Click;
+            menu.Items.Add(edit);
+        }
+        GpsProviderButton.ContextMenu = menu;
+        GpsProviderButton.ToolTip = UiLanguage.T("Kartenanbieter auswählen") + ": " + active.Name;
+    }
+
+    private void GpsProviderButton_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateGpsProviderMenu();
+        if (GpsProviderButton.ContextMenu is { } menu)
+        {
+            menu.PlacementTarget = GpsProviderButton;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
+        }
+    }
+
+    private void GpsProviderItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string id }) return;
+        if (!AllGpsProviders().Any(p => p.Id == id)) return;
+        _appearance.ActiveGpsProviderId = id;
+        UpdateGpsProviderMenu();
+        SaveAppearance();
+        ApplyGpsMapProvider();
     }
 
     private void ActivateGpsMap()
@@ -347,21 +378,6 @@ public partial class MainWindow
         if (GpsPhotoPopup.Tag is not long id ||
             !_displayedBrowseIndex.Any(x => x.ImageId == id)) return;
         BrowseSurface_ImageOpened(this, new BrowseImageClickedEventArgs(id, ModifierKeys.None));
-    }
-
-    private void GpsProvider_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_gpsComboUpdating || GpsProviderComboBox.SelectedItem is not ComboBoxItem item ||
-            item.Tag is not string id) return;
-        if (id == "__new")
-        {
-            OpenGpsProviderEditor(null);
-            UpdateGpsProviderMenu();
-            return;
-        }
-        _appearance.ActiveGpsProviderId = id;
-        SaveAppearance();
-        ApplyGpsMapProvider();
     }
 
     private void GpsProviderSettings_Click(object sender, RoutedEventArgs e)

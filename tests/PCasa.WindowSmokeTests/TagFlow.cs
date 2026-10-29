@@ -531,7 +531,7 @@ internal static class TagFlow
             var selectionBeforeLayout = selected.ToHashSet();
             Click(gpsToggle);
             if (((Grid?)window.FindName("GpsMapPanel"))?.Visibility != Visibility.Visible ||
-                ((ComboBox?)window.FindName("GpsProviderComboBox"))?.Items.Count < 4 ||
+                ((Button?)window.FindName("GpsProviderButton"))?.ContextMenu?.Items.Count < 4 ||
                 window.FindName("GpsFullscreenArrows") is not System.Windows.Shapes.Path ||
                 window.FindName("FolderSidebarSymbolArrow") is not System.Windows.Shapes.Path)
                 throw new Exception("GPS provider choices or bold vector icons missing.");
