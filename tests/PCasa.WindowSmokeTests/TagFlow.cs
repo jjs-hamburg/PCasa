@@ -591,22 +591,43 @@ internal static class TagFlow
             if (filmPanel.Visibility != Visibility.Visible)
                 throw new Exception("GPS filmstrip could not be enabled.");
 
-            // The film is one continuous perforated strip (not individual
-            // frames with sprocket holes), and its selection template must
-            // override WPF's opaque system-blue ListBox highlight.
-            if (filmPanel.Child is not Grid filmTrack ||
-                filmTrack.RowDefinitions.Count != 3 ||
-                filmTrack.Children.OfType<System.Windows.Shapes.Rectangle>().Count() != 2 ||
+            // The scrollbar belongs UNDER the lower perforation; both bands
+            // stay fixed across the full viewport instead of moving with items.
+            if (filmPanel.Child is not ListBox filmListForStyle ||
                 window.FindResource("GpsFilmPerforationBrush") is not DrawingBrush perforations ||
-                perforations.TileMode != TileMode.Tile)
-                throw new Exception("Continuous GPS film perforations are missing.");
-            var filmListForStyle = (ListBox?)window.FindName("GpsFilmstripList")
-                ?? throw new Exception("Filmstrip list not found.");
+                perforations.TileMode != TileMode.Tile ||
+                perforations.Drawing is not GeometryDrawing holes ||
+                holes.Brush is not SolidColorBrush holeBrush ||
+                holeBrush.Color.R < 180 || holeBrush.Color.G < 180 || holeBrush.Color.B < 180)
+                throw new Exception("Continuous light GPS film perforations are missing.");
+            filmListForStyle.ApplyTemplate();
+            var filmScroller = filmListForStyle.Template.FindName(
+                "GpsFilmScrollViewer", filmListForStyle) as ScrollViewer
+                ?? throw new Exception("GPS film ScrollViewer is missing.");
+            filmScroller.ApplyTemplate();
+            var filmTrack = filmScroller.Template.FindName(
+                "GpsFilmTrack", filmScroller) as Grid;
+            var topHoles = filmScroller.Template.FindName(
+                "GpsFilmPerforationsTop", filmScroller) as System.Windows.Shapes.Rectangle;
+            var bottomHoles = filmScroller.Template.FindName(
+                "GpsFilmPerforationsBottom", filmScroller) as System.Windows.Shapes.Rectangle;
+            var horizontalScroll = filmScroller.Template.FindName(
+                "PART_HorizontalScrollBar", filmScroller) as
+                System.Windows.Controls.Primitives.ScrollBar;
+            if (filmTrack is null || filmTrack.RowDefinitions.Count != 4 ||
+                filmTrack.Children.OfType<System.Windows.Shapes.Rectangle>().Count() != 2 ||
+                topHoles is null || Grid.GetRow(topHoles) != 0 ||
+                bottomHoles is null || Grid.GetRow(bottomHoles) != 2 ||
+                horizontalScroll is null || Grid.GetRow(horizontalScroll) != 3 ||
+                filmScroller.HorizontalScrollBarVisibility != ScrollBarVisibility.Auto)
+                throw new Exception("Film scrollbar must be after BOTH uninterrupted perforation bands.");
             var filmStyle = filmListForStyle.ItemContainerStyle;
             var filmTemplate = filmStyle?.Setters.OfType<Setter>()
                 .FirstOrDefault(setter => setter.Property == ListBoxItem.TemplateProperty)
                 ?.Value as ControlTemplate;
             if (filmTemplate is null ||
+                filmTemplate.LoadContent() is not Border filmFrame ||
+                filmFrame.Margin.Left > 1 || filmFrame.Padding.Left > 0 ||
                 !filmTemplate.Triggers.OfType<Trigger>().Any(trigger =>
                     trigger.Property == ListBoxItem.IsSelectedProperty &&
                     Equals(trigger.Value, true) &&
