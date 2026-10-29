@@ -473,6 +473,94 @@ internal static class TagFlow
                 throw new Exception("Clearing filename filter lost inverted selection.");
             Console.WriteLine("PASS: Filename/tag switching, all three scopes and hidden-file inversion.");
 
+            // GPS lives in the SAME resizable workspace. Expanding hides
+            // (but does not unset) the previous folder-pane preference.
+            // Fullscreen overlays this grid, never opens a second window.
+            var workspace = (Grid?)window.FindName("BrowseWorkspaceGrid")
+                ?? throw new Exception("Shared workspace grid is missing.");
+            var folderPane = (Border?)window.FindName("FolderSidebarPanel")
+                ?? throw new Exception("Folder panel is missing.");
+            var folderColumn = (ColumnDefinition?)window.FindName("FolderSidebarColumn")
+                ?? throw new Exception("Folder column is missing.");
+            var galleryColumn = (ColumnDefinition?)window.FindName("GalleryWorkspaceColumn")
+                ?? throw new Exception("Gallery column is missing.");
+            var gpsColumn = (ColumnDefinition?)window.FindName("InfoSidebarColumn")
+                ?? throw new Exception("GPS column is missing.");
+            var folderToggle = (Button?)window.FindName("FolderSidebarToggleButton")
+                ?? throw new Exception("Folder visibility toggle is missing.");
+            var gpsToggle = (Button?)window.FindName("GpsSidebarButton")
+                ?? throw new Exception("GPS sidebar toggle is missing.");
+            var gpsExpand = (Button?)window.FindName("GpsExpandButton")
+                ?? throw new Exception("GPS expand button is missing.");
+            var gpsFullscreen = (Button?)window.FindName("GpsFullscreenButton")
+                ?? throw new Exception("GPS fullscreen button is missing.");
+            var sidebarPanel = (Border?)window.FindName("InfoSidebarPanel")
+                ?? throw new Exception("GPS panel is missing.");
+            var closeSidebar = (Button?)window.FindName("InfoSidebarButton")
+                ?? throw new Exception("Info sidebar button is missing.");
+            void Click(Button button) =>
+                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+
+            // Establish a known folder-visible state even if saved appearance
+            // from another smoke run exists on this test runner.
+            if (folderPane.Visibility != Visibility.Visible) Click(folderToggle);
+            if (sidebarPanel.Visibility == Visibility.Visible)
+            {
+                var close = typeof(PCasa.App.MainWindow).GetMethod(
+                    "CloseSidebar_Click",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!;
+                close.Invoke(window, [null, new RoutedEventArgs()]);
+            }
+            var selectionBeforeLayout = selected.ToHashSet();
+            Click(gpsToggle);
+            window.UpdateLayout();
+            if (gpsColumn.Width.GridUnitType != GridUnitType.Star ||
+                galleryColumn.Width.GridUnitType != GridUnitType.Star ||
+                gpsExpand.Visibility != Visibility.Visible ||
+                !folderPane.IsVisible)
+                throw new Exception("GPS normal layout is not relative with folders visible.");
+            var normalGpsWidth = gpsColumn.ActualWidth;
+            Click(gpsExpand);
+            window.UpdateLayout();
+            if (folderPane.Visibility != Visibility.Collapsed ||
+                folderColumn.ActualWidth != 0 ||
+                gpsColumn.ActualWidth <= normalGpsWidth ||
+                !galleryColumn.Width.IsStar ||
+                !selected.SetEquals(selectionBeforeLayout))
+                throw new Exception("GPS expansion did not free folder space or preserve selection.");
+            Click(gpsFullscreen);
+            window.UpdateLayout();
+            if (Grid.GetColumn(sidebarPanel) != 0 ||
+                Grid.GetColumnSpan(sidebarPanel) != workspace.ColumnDefinitions.Count)
+                throw new Exception("GPS fullscreen is not an in-place workspace overlay.");
+            Click(gpsFullscreen);
+            if (Grid.GetColumn(sidebarPanel) != 4 || Grid.GetColumnSpan(sidebarPanel) != 1)
+                throw new Exception("Leaving GPS fullscreen did not restore the panel.");
+            Click(gpsExpand);
+            window.UpdateLayout();
+            if (!folderPane.IsVisible || gpsColumn.ActualWidth >=
+                workspace.ActualWidth * 0.5)
+                throw new Exception("Collapsing GPS did not restore the folder layout.");
+
+            // A folder pane that was already closed must remain closed
+            // when GPS later leaves expanded mode.
+            Click(folderToggle);
+            if (folderPane.Visibility != Visibility.Collapsed)
+                throw new Exception("Folder toggle did not hide the folder list.");
+            Click(gpsExpand);
+            Click(gpsExpand);
+            if (folderPane.Visibility != Visibility.Collapsed)
+                throw new Exception("GPS resize overwrote the user's hidden-folder preference.");
+            Click(folderToggle);
+            Click(closeSidebar);
+            if (!folderPane.IsVisible ||
+                gpsColumn.Width.Value != 0 ||
+                !selected.SetEquals(selectionBeforeLayout))
+                throw new Exception("Switching sidebar did not restore the workspace layout.");
+            Console.WriteLine(
+                "PASS: Relative GPS split, expand/fullscreen, folder preference restoration and gallery selection.");
+
             // Creating an empty target must go through the scheduler, and the
             // result must exist on the filesystem before it is used for moves.
             var create = typeof(PCasa.App.MainWindow).GetMethod("CreateGallerySubfolderAsync",

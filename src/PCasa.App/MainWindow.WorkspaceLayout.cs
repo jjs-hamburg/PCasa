@@ -99,6 +99,12 @@ public partial class MainWindow
         GpsFullscreenButton.ToolTip = UiLanguage.T(fullscreen
             ? "GPS-Vollbild verlassen" : "GPS-Vollbild");
         FolderSidebarToggleButton.IsEnabled = !expanded && !fullscreen;
+        SidePanelHeading.Text = UiLanguage.T(_sidebarMode switch
+        {
+            "GPS" => "GPS",
+            "Tags" => "Tags",
+            _ => "Bildinformationen"
+        });
         TagSidebar.Visibility = _sidebarMode == "Tags"
             ? Visibility.Visible : Visibility.Collapsed;
         GeneralSidebarScroll.Visibility = _sidebarMode == "Tags"

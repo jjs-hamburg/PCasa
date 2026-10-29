@@ -582,12 +582,6 @@ public partial class MainWindow
         UpdateWorkspaceLayoutPreservingGallery();
         SaveAppearance();
         if (mode == "Tags") RefreshQuickTags();
-        SidePanelHeading.Text = mode switch
-        {
-            "Tags" => "Tags",
-            "GPS" => "GPS",
-            _ => "Bildinformationen"
-        };
         await UpdateSidebarContentAsync();
     }
 
