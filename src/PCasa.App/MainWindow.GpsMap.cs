@@ -510,14 +510,13 @@ public partial class MainWindow
     private void GpsPhotoOpen_Click(object sender, RoutedEventArgs e)
     {
         if (GpsPhotoPopup.Tag is not long id) return;
-        if (_gpsFullscreen)
-        {
-            GpsPhotoPopup.Visibility = Visibility.Collapsed;
-            ShowGpsFullscreenImage(id);
-            return;
-        }
-        if (!_displayedBrowseIndex.Any(x => x.ImageId == id)) return;
-        BrowseSurface_ImageOpened(this, new BrowseImageClickedEventArgs(id, ModifierKeys.None));
+        // The same GPS gallery display is used for filmstrip and marker
+        // previews. Do not enter the normal viewer here, which would replace
+        // the user's multi-selection and obscure the map context.
+        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+        _gpsHighlightedImageId = id;
+        HighlightGpsPointOnMap(id);
+        ShowGpsFullscreenImage(id);
     }
 
     private void GpsProviderSettings_Click(object sender, RoutedEventArgs e)
