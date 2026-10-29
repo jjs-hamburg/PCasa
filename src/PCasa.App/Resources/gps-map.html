@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+html,body,#map { margin:0; height:100%; width:100%; overflow:hidden; }
+body{font-family:Segoe UI,sans-serif;background:#dfded9}
+.maplibregl-popup-content{font-size:12px;line-height:1.5;max-width:260px;overflow-wrap:anywhere;color:#222}
+.maplibregl-ctrl-attrib{font-size:10px}
+#fallback{position:absolute;left:12px;right:12px;top:42%;color:#333;text-align:center;pointer-events:none}
+</style></head><body><div id="map"></div><div id="fallback"></div>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.js"
+ onerror="document.getElementById('fallback').textContent='MapLibre konnte nicht geladen werden.'"></script>
+<script>
+(() => {
+ 'use strict';
+ const post = (data) => { if (window.CefSharp?.PostMessage) CefSharp.PostMessage(JSON.stringify(data)); };
+ if (!window.maplibregl) { post({type:'error',message:'MapLibre library unavailable'}); return; }
+ const fallback = document.getElementById('fallback');
+ const empty = { type:'FeatureCollection',features:[] };
+ const map = new maplibregl.Map({
+   container:'map',style:'https://tiles.openfreemap.org/styles/liberty',
+   center:[10,42],zoom:2,attributionControl:true
+ });
+ map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
+ let points = [], lastSelected = [], styleReady = false, ready = false;
+ function geojson() {
+   return {type:'FeatureCollection',features:points.map(p=>({
+     type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]},
+     properties:{id:String(p.id),name:p.name||'',selected:!!p.selected}
+   }))};
+ }
+ function installPhotos() {
+   if (!map.isStyleLoaded()) return;
+   const source = map.getSource('pcasa-photos');
+   if (source) { source.setData(geojson()); return; }
+   map.addSource('pcasa-photos',{type:'geojson',data:geojson(),cluster:true,clusterRadius:46,clusterMaxZoom:15});
+   map.addLayer({id:'pcasa-clusters',type:'circle',source:'pcasa-photos',filter:['has','point_count'],
+      paint:{'circle-color':'#345e88','circle-radius':['step',['get','point_count'],17,20,21,100,27],
+             'circle-stroke-width':2.5,'circle-stroke-color':'#fff'}});
+   map.addLayer({id:'pcasa-cluster-count',type:'symbol',source:'pcasa-photos',filter:['has','point_count'],
+      layout:{'text-field':['get','point_count_abbreviated'],'text-size':13},
+      paint:{'text-color':'#fff'}});
+   map.addLayer({id:'pcasa-points',type:'circle',source:'pcasa-photos',filter:['!',['has','point_count']],
+      paint:{'circle-radius':9,'circle-color':['case',['get','selected'],'#e37732','#df4550'],
+             'circle-stroke-width':2.6,'circle-stroke-color':'#fff'}});
+ }
+ function zoomSelection() {
+   const selected = points.filter(p=>p.selected);
+   const target = selected.length ? selected : points;
+   if (!target.length) return;
+   if (target.length===1) { map.easeTo({center:[target[0].lon,target[0].lat],zoom:Math.max(map.getZoom(),12),duration:450}); return; }
+   const bounds = new maplibregl.LngLatBounds();
+   for(const p of target) bounds.extend([p.lon,p.lat]);
+   map.fitBounds(bounds,{padding:35,maxZoom:13,duration:400});
+ }
+ window.pcasaSetPoints = (data) => {
+   points = Array.isArray(data) ? data.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)) : [];
+   if (ready) { installPhotos(); zoomSelection(); }
+ };
+ window.pcasaApplyProvider = (provider) => {
+   if (!provider || !provider.url) return;
+   styleReady = false;
+   try {
+     const style=provider.format==='xyz'
+       ? {version:8,sources:{basemap:{type:'raster',tiles:[provider.url],tileSize:256,attribution:provider.attribution||''}},
+          layers:[{id:'basemap',type:'raster',source:'basemap'}]}
+       : provider.url;
+     map.setStyle(style);
+   } catch(err) { post({type:'error',message:String(err)}); }
+ };
+ map.on('style.load',()=>{styleReady=true;installPhotos();if(!ready){ready=true;post({type:'ready'});}else{zoomSelection();}});
+ map.on('error',event=>{const s=String(event.error?.message||'');if(s)post({type:'error',message:s.substring(0,250)});});
+ map.on('click','pcasa-clusters',event=>{
+   const features=map.queryRenderedFeatures(event.point,{layers:['pcasa-clusters']});
+   if(!features.length) return;
+   const id=features[0].properties.cluster_id;
+   map.getSource('pcasa-photos').getClusterExpansionZoom(id).then(
+     zoom=>map.easeTo({center:features[0].geometry.coordinates,zoom})
+   ).catch(()=>{});
+ });
+ map.on('click','pcasa-points',event=>{
+   if(!event.features?.length) return;
+   const f=event.features[0];const id=Number(f.properties.id);
+   if(!Number.isSafeInteger(id))return;
+   new maplibregl.Popup({closeButton:true}).setLngLat(f.geometry.coordinates).setText(f.properties.name||'Foto').addTo(map);
+   post({type:'select',id});
+ });
+ map.on('mouseenter','pcasa-points',()=>map.getCanvas().style.cursor='pointer');
+ map.on('mouseleave','pcasa-points',()=>map.getCanvas().style.cursor='');
+ map.on('mouseenter','pcasa-clusters',()=>map.getCanvas().style.cursor='pointer');
+ map.on('mouseleave','pcasa-clusters',()=>map.getCanvas().style.cursor='');
+ window.pcasaResize = () => map.resize();
+ map.on('load',()=>{fallback.remove();});
+})();
+</script></body></html>
