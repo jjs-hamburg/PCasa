@@ -25,6 +25,7 @@ internal static class Program
             try
             {
                 JpegTagRoundTrip();
+                JpegGpsEditRoundTrip();
                 JpegUnicodeTagPreservesPixels();
                 JpegTagTemporaryOutputsAreCleaned();
                 ExifToolOwnedWritersTerminate();
@@ -147,6 +148,7 @@ internal static class Program
         Run("Tag edit draft preserves independent images and counts across selections", MultiImageTagDraftStaysAcrossSelections, failures);
         Run("Per-image tag batch records one atomic local intent transaction", PerImageTagBatchCommitsAtomically, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
+        Run("GPS edit writes originals, verifies metadata and never creates sidecars", JpegGpsEditRoundTrip, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
@@ -3913,6 +3915,78 @@ internal static class Program
             if (!field.Contains("Revision Alpha", StringComparer.OrdinalIgnoreCase) ||
                 !field.Contains("Revision Beta", StringComparer.OrdinalIgnoreCase))
                 throw new Exception("Current Tag revisions were not persisted together.");
+    }
+
+    private static void JpegGpsEditRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "gps-edit.jpg");
+        WriteJpeg(path);
+        var pixels = PixelHash(path);
+        var originalTime = File.GetLastWriteTimeUtc(path);
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        using var connection = db.OpenConnection();
+        using var query = connection.CreateCommand();
+        query.CommandText = "SELECT id FROM images LIMIT 1";
+        var id = Convert.ToInt64(query.ExecuteScalar());
+        var edit = new GpsMetadataRepository(db);
+
+        void AssertGps(double? lat, double? lon)
+        {
+            using var reader = new ImageExifReader();
+            var source = reader.Read(path);
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                SELECT x.gps_latitude, x.gps_longitude,
+                       x.source_file_size, i.file_size,
+                       x.source_modified_utc_ticks,i.modified_utc_ticks
+                  FROM image_exif x JOIN images i ON i.id=x.image_id
+                 WHERE x.image_id=$id;
+                """;
+            cmd.Parameters.AddWithValue("$id", id);
+            using var row = cmd.ExecuteReader();
+            if (!row.Read()) throw new Exception("Missing GPS catalog projection.");
+            double? catalogLat = row.IsDBNull(0) ? null : row.GetDouble(0);
+            double? catalogLon = row.IsDBNull(1) ? null : row.GetDouble(1);
+            static bool Equal(double? a, double? b) =>
+                a is null && b is null ||
+                a is double x && b is double y && Math.Abs(x-y) < 0.0001;
+            if (!Equal(source.GpsLatitude,lat) || !Equal(source.GpsLongitude,lon) ||
+                !Equal(catalogLat,lat) || !Equal(catalogLon,lon))
+                throw new Exception("GPS original and SQLite no longer agree.");
+            if (row.GetInt64(2) != row.GetInt64(3) ||
+                row.GetInt64(4) != row.GetInt64(5))
+                throw new Exception("GPS EXIF index provenance became stale.");
+            if (File.GetLastWriteTimeUtc(path) != originalTime ||
+                !pixels.SequenceEqual(PixelHash(path)))
+                throw new Exception("GPS modification changed pixels or source timestamp.");
+            if (Directory.EnumerateFiles(sandbox.Images).Any(file =>
+                file.EndsWith(".xmp", StringComparison.OrdinalIgnoreCase) ||
+                file.EndsWith("_original", StringComparison.OrdinalIgnoreCase) ||
+                file.EndsWith("_exiftool_tmp", StringComparison.OrdinalIgnoreCase)))
+                throw new Exception("GPS editing produced a forbidden sidecar or native orphan.");
+        }
+
+        edit.Apply(id, -33.81, 151.2, GpsMetadataRepository.EditMode.MissingOnly,
+            CancellationToken.None);
+        AssertGps(-33.81,151.2);
+        edit.Apply(id, 50.1, 11.3, GpsMetadataRepository.EditMode.MissingOnly,
+            CancellationToken.None);
+        AssertGps(-33.81,151.2); // protected existing position
+        edit.Apply(id, 50.1, 11.3, GpsMetadataRepository.EditMode.Replace,
+            CancellationToken.None);
+        AssertGps(50.1,11.3);
+        edit.Apply(id, null, null, GpsMetadataRepository.EditMode.Remove,
+            CancellationToken.None);
+        AssertGps(null,null);
+        try
+        {
+            using var writer = new ExifToolKeywordWriter.Session();
+            writer.WriteGps(Path.ChangeExtension(path, ".cr3"), 1, 2);
+            throw new Exception("Unsupported GPS RAW format was accepted.");
+        }
+        catch (NotSupportedException) { }
     }
 
     private static void JpegTagRoundTrip()

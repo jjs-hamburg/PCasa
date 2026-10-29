@@ -226,6 +226,56 @@ public partial class MainWindow
                     GpsMapStatus.Visibility = Visibility.Collapsed;
                     ApplyGpsMapProvider();
                     SendGpsPointsToMap();
+                    if (_appearance.GpsMapCenterLat is double savedCenterLat &&
+                        _appearance.GpsMapCenterLon is double savedCenterLon &&
+                        _appearance.GpsMapZoom is double savedZoom)
+                        _gpsBrowser.ExecuteScriptAsync("window.pcasaRestoreViewport?.(" +
+                            savedCenterLat.ToString("R", CultureInfo.InvariantCulture) + "," +
+                            savedCenterLon.ToString("R", CultureInfo.InvariantCulture) + "," +
+                            savedZoom.ToString("R", CultureInfo.InvariantCulture) + ")");
+                    if (_gpsDraft is { } draft)
+                        SetGpsDraft(draft.Lat, draft.Lon, recenter: false);
+                    GpsPickPosition_Changed(this, new RoutedEventArgs());
+                }
+                else if (kind == "draft" &&
+                         root.TryGetProperty("lat", out var draftLat) &&
+                         root.TryGetProperty("lon", out var draftLon) &&
+                         draftLat.TryGetDouble(out var dLat) &&
+                         draftLon.TryGetDouble(out var dLon))
+                {
+                    SetGpsDraft(dLat, dLon, recenter: false);
+                }
+                else if (kind == "bounds" &&
+                         root.TryGetProperty("south", out var southValue) &&
+                         root.TryGetProperty("west", out var westValue) &&
+                         root.TryGetProperty("north", out var northValue) &&
+                         root.TryGetProperty("east", out var eastValue) &&
+                         southValue.TryGetDouble(out var south) &&
+                         westValue.TryGetDouble(out var west) &&
+                         northValue.TryGetDouble(out var north) &&
+                         eastValue.TryGetDouble(out var eastLongitude))
+                {
+                    _ = ApplyGpsBoundsAsync(south, west, north, eastLongitude);
+                }
+                else if (kind == "viewport" &&
+                         root.TryGetProperty("lat", out var cameraLat) &&
+                         root.TryGetProperty("lon", out var cameraLon) &&
+                         root.TryGetProperty("zoom", out var cameraZoom) &&
+                         cameraLat.TryGetDouble(out var savedLat) &&
+                         cameraLon.TryGetDouble(out var savedLon) &&
+                         cameraZoom.TryGetDouble(out var savedZoom) &&
+                         double.IsFinite(savedLat) && double.IsFinite(savedLon) &&
+                         double.IsFinite(savedZoom))
+                {
+                    if (savedLat >= -90 && savedLat <= 90 &&
+                        savedLon >= -180 && savedLon <= 180 && savedZoom >= 0 &&
+                        savedZoom <= 23)
+                    {
+                        _appearance.GpsMapCenterLat = savedLat;
+                        _appearance.GpsMapCenterLon = savedLon;
+                        _appearance.GpsMapZoom = savedZoom;
+                        SaveAppearance();
+                    }
                 }
                 else if (kind == "select" && id > 0 &&
                          _gpsPoints.Any(x => x.Id == id))
@@ -371,6 +421,11 @@ public partial class MainWindow
                     : selectedIds.Length == 0 && points.Count == 1
                         ? (points[0].Lat, points[0].Lon) : null;
             GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
+            GpsRemoveButton.IsEnabled = selectedIds.Length > 0;
+            GpsApplyMissingButton.IsEnabled = selectedIds.Length > 0 &&
+                _gpsDraft.HasValue;
+            GpsReplaceButton.IsEnabled = selectedIds.Length > 0 &&
+                _gpsDraft.HasValue;
             UpdateGpsGoogleButton();
             GpsCoordinatesText.Text = googleMultiSelection
                 ? UiLanguage.T("Mehrfachauswahl in PCasa-Fotokarte")

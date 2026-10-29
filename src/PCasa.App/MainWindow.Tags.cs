@@ -15,6 +15,7 @@ public partial class MainWindow
     private CancellationTokenSource? _tagBackfillCancellation;
     private int _tagSearchVersion;
     private string _lastAppliedTagQuery = string.Empty;
+    private bool _lastAppliedGpsAreaFilter;
     private bool _searchWithinTree;
     private bool _searchCurrentFolderOnly;
     private bool _searchFileNames;
@@ -181,8 +182,10 @@ public partial class MainWindow
 
         // Store the normal-gallery anchor once, before entering search mode.
         // Do not overwrite it as the user changes or scrolls search results.
-        var enteringSearch = _lastAppliedTagQuery.Length == 0 && query.Length > 0;
-        var leavingSearch = _lastAppliedTagQuery.Length > 0 && query.Length == 0;
+        var wasFiltered = _lastAppliedTagQuery.Length > 0 || _lastAppliedGpsAreaFilter;
+        var nowFiltered = query.Length > 0 || _gpsAreaFilterIds is not null;
+        var enteringSearch = !wasFiltered && nowFiltered;
+        var leavingSearch = wasFiltered && !nowFiltered;
         if (enteringSearch)
             _tagSearchNavigation.Begin(new GallerySearchNavigationSession.Snapshot(
                 CaptureGalleryAnchor(),
@@ -212,6 +215,11 @@ public partial class MainWindow
                 scope = Array.Empty<BrowseThumbnailIndexEntry>();
         }
 
+        // GPS bounds are one criterion of the existing gallery filter,
+        // not an independent list, renderer or thumbnail ownership.
+        if (_gpsAreaFilterIds is { } area)
+            scope = scope.Where(image => area.Contains(image.ImageId)).ToArray();
+
         // The selected WO? scope is narrowed to the folders which would
         // actually be displayed by the ordinary gallery (including its
         // "Eingeklappte Ordner ausblenden" option). NOT complements only
@@ -225,7 +233,7 @@ public partial class MainWindow
         }
 
         IReadOnlyList<BrowseThumbnailIndexEntry> desired =
-            query.Length == 0 ? _browseIndex :
+            query.Length == 0 ? scope :
             _searchFileNames
                 ? scope.Where(image => image.FileName.Contains(
                     query, StringComparison.OrdinalIgnoreCase)).ToArray()
@@ -266,6 +274,7 @@ public partial class MainWindow
         StatusText.Text = _visibleManualWindow is { IsManualPresentationActive: true } manual
             ? manual.ProgressStatusText : searchStatus;
         _lastAppliedTagQuery = query;
+        _lastAppliedGpsAreaFilter = _gpsAreaFilterIds is not null;
         BrowseScrollViewer.UpdateLayout();
         if (leavingSearch)
         {

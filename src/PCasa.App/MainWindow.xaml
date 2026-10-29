@@ -1066,6 +1066,63 @@
                             <TextBlock x:Name="GpsCoordinatesText"
                                        Text="{loc:Tr Key='GPS-Positionen werden geladen'}"
                                        TextWrapping="Wrap" FontSize="12" Margin="0,0,0,5"/>
+                            <!-- Search and movable draft pin never write originals.
+                                 Only the three explicit edit buttons commit GPS. -->
+                            <Grid Margin="0,2,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0"
+                                         Height="27" VerticalContentAlignment="Center"
+                                         ToolTip="{loc:Tr Key='Ort, Adresse oder Sehenswürdigkeit suchen'}"
+                                         KeyDown="GpsPlaceSearch_KeyDown"/>
+                                <Button x:Name="GpsPlaceSearchButton" Grid.Column="1"
+                                        Margin="4,0,0,0" Padding="8,2"
+                                        Content="{loc:Tr Key='Suchen'}"
+                                        Click="GpsPlaceSearch_Click"/>
+                            </Grid>
+                            <ComboBox x:Name="GpsPlaceResults"
+                                      Visibility="Collapsed" Margin="0,0,0,4"
+                                      MaxDropDownHeight="190"
+                                      ToolTip="{loc:Tr Key='Gefundenen Ort auswählen'}"
+                                      SelectionChanged="GpsPlaceResults_SelectionChanged"/>
+                            <WrapPanel Margin="0,0,0,3">
+                                <ToggleButton x:Name="GpsPickPositionToggle" Padding="6,3"
+                                              Margin="0,0,4,3"
+                                              Content="{loc:Tr Key='Position wählen'}"
+                                              ToolTip="{loc:Tr Key='Auf Karte klicken oder Marker ziehen'}"
+                                              Checked="GpsPickPosition_Changed"
+                                              Unchecked="GpsPickPosition_Changed"/>
+                                <Button x:Name="GpsApplyMissingButton" Padding="6,3"
+                                        Margin="0,0,4,3" IsEnabled="False"
+                                        Content="{loc:Tr Key='GPS übernehmen'}"
+                                        ToolTip="{loc:Tr Key='Nur Bilder ohne GPS verorten'}"
+                                        Click="GpsApplyMissing_Click"/>
+                                <Button x:Name="GpsReplaceButton" Padding="6,3"
+                                        Margin="0,0,4,3" IsEnabled="False"
+                                        Content="{loc:Tr Key='GPS ändern'}"
+                                        Click="GpsReplace_Click"/>
+                                <Button x:Name="GpsRemoveButton" Padding="6,3"
+                                        Margin="0,0,4,3" IsEnabled="False"
+                                        Content="{loc:Tr Key='GPS entfernen'}"
+                                        Click="GpsRemove_Click"/>
+                            </WrapPanel>
+                            <WrapPanel Margin="0,0,0,3">
+                                <Button x:Name="GpsShowAreaButton" Padding="6,3"
+                                        Margin="0,0,4,3"
+                                        Content="{loc:Tr Key='Fotos im Ausschnitt'}"
+                                        Click="GpsShowArea_Click"/>
+                                <Button x:Name="GpsClearAreaButton" Padding="6,3"
+                                        Margin="0,0,4,3" IsEnabled="False"
+                                        Content="{loc:Tr Key='Filter aufheben'}"
+                                        Click="GpsClearArea_Click"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="GpsDraftCoordinates" FontSize="11"
+                                       TextWrapping="Wrap" Margin="0,0,0,2"/>
+                            <TextBlock x:Name="GpsEditStatus" FontSize="11"
+                                       TextWrapping="Wrap" Margin="0,0,0,4"
+                                       Foreground="{DynamicResource PcasaTextBrush}"/>
                             <DockPanel LastChildFill="False">
                                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
                                     <Button x:Name="GpsProviderButton"

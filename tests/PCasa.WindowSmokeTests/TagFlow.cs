@@ -583,6 +583,23 @@ internal static class TagFlow
             if (!HasPoint(gpsA, true) || !HasPoint(gpsB, false))
                 throw new Exception("GPS selection dropped the surrounding folder's markers.");
 
+            // GPS edits use the existing map and selected gallery images.
+            // Search is a draft; only explicit buttons may write originals.
+            foreach (var controlName in new[]
+            {
+                "GpsPlaceSearchBox", "GpsPlaceSearchButton", "GpsPlaceResults",
+                "GpsPickPositionToggle", "GpsApplyMissingButton",
+                "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
+                "GpsShowAreaButton", "GpsClearAreaButton"
+            })
+                if (window.FindName(controlName) is null)
+                    throw new Exception("GPS editing control missing: " + controlName);
+            if (window.FindName("GpsApplyMissingButton") is not Button missingGpsButton ||
+                missingGpsButton.IsEnabled ||
+                window.FindName("GpsRemoveButton") is not Button removeGpsButton ||
+                !removeGpsButton.IsEnabled)
+                throw new Exception("GPS editor should require a draft but allow deletion of selected GPS.");
+
             var filmToggle = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsFilmstripToggle")
                 ?? throw new Exception("Optional GPS filmstrip toggle missing.");
             var filmPanel = (Border?)window.FindName("GpsFilmstripPanel")

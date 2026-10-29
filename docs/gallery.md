@@ -40,7 +40,7 @@ Der GPS-Bereich ist dieselbe rechte Seitenleiste wie Tags und Bildinformationen,
 - Der letzte Seitenleistenmodus, die vergrößerte GPS-Ansicht und die relativen Breiten bleiben erhalten. Der kurzfristige Vollbildzustand wird nicht als Fensterstartmodus gespeichert.
 - Galerieauswahl und Galeriescrollposition werden beim Wechsel der Aufteilung nicht bewusst verändert.
 
-Die aktuelle GPS-Anzeige enthält weiterhin die gespeicherten Koordinaten und die Höhe. Eine interaktive Karte und ihre Verknüpfung mit der Bildauswahl werden getrennt umgesetzt.
+Die GPS-Anzeige zeigt die gespeicherten Koordinaten und eine interaktive MapLibre-Karte.
 
 ## Tag-Bearbeitung über mehrere Bildauswahlen
 
@@ -77,3 +77,12 @@ Die GPS-Seitenleiste enthält eine eingebettete interaktive Karte auf Basis von 
 **Nicht als aktuelle Galerie-Funktion ausgeben:** fertige Bildbearbeitung, GPS-Kartenansicht, externe Plugin-Menüs oder eine abgeschlossene NAS/VPN-Lastabnahme.
 
 Siehe [Architektur](architecture.md), [Anforderungen/Status](requirements.md) und [Sprachverwaltung](localization.md).
+
+## GPS-Zuweisung und Ortssuche (ab GPS-Editor)
+
+- Ein oder mehrere Bilder auswählen, einen Ort über OpenStreetMap Nominatim suchen (nur explizite Suchanfragen) oder per „Position wählen“ in der Karte klicken. Der frei verschiebbare Entwurfsmarker schreibt **noch keine Datei**.
+- „GPS übernehmen“ ergänzt fehlende Standorte, „GPS ändern“ überschreibt Standorte mit ausdrücklicher Bestätigung, „GPS entfernen“ entfernt Koordinaten. Alle Aktionen behalten die Mehrfachauswahl.
+- Originaldateien werden mit dem **bestehenden persistenten Scheduler P0** und ExifTool bearbeitet, unter derselben Dateisperre wie Tags. Native GPS-Daten werden anschließend zurückgelesen und geprüft, erst dann wird der SQLite-GPS-Index samt Dateigröße synchronisiert. Wiederaufnahmen sind idempotent.
+- **Keine Sidecars.** Direktschreiben ist nur für JPG, JPEG, TIF, TIFF, DNG, NEF, ARW und CR2 vorgesehen; andere Endungen werden schon vor dem Paket abgewiesen. Ob ein konkretes RAW schreibbar ist, entscheidet ExifTool; ungeeignete Originale bleiben unverändert und der Auftrag sichtbar offen.
+- „Fotos im Ausschnitt“ schränkt die bestehende Galerieprojektion anhand der sichtbaren Kartenkoordinaten ein, „Filter aufheben“ stellt sie wieder her; das ist keine zweite Galerie.
+- Kartenzentrum und Zoom werden in der vorhandenen appearance.json gespeichert.

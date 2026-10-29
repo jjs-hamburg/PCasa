@@ -121,6 +121,12 @@ public partial class MainWindow
             if (_recoveredTagPresentationKeys.Contains(key))
                 _ = ObserveRecoveredTagOperationAsync(completion, key);
         }
+        else if (key.StartsWith("gps:edit:", StringComparison.Ordinal))
+        {
+            // Recovered GPS edits use the original manual scheduler job.
+            BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", 0);
+            _ = ObserveGpsEditAsync(completion, key);
+        }
         else if (key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
                  key.StartsWith("catalog:scan-all:", StringComparison.Ordinal))
         {

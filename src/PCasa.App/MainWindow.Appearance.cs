@@ -57,6 +57,9 @@ public partial class MainWindow
         public double ExpandedGpsFraction { get; set; } = 0.55;
         public bool GpsExpanded { get; set; }
         public bool ShowGpsFilmstrip { get; set; }
+        public double? GpsMapCenterLat { get; set; }
+        public double? GpsMapCenterLon { get; set; }
+        public double? GpsMapZoom { get; set; }
         public string? ActiveSidebarMode { get; set; }
         public string ActiveGpsProviderId { get; set; } = "openfreemap-liberty";
         public List<GpsMapProvider> GpsProviders { get; set; } = new();
