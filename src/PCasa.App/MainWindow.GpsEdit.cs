@@ -239,7 +239,8 @@ public partial class MainWindow
                     request.Mode, token,
                     path => _scheduler.ReportProgress(key,
                         "GPS in Originaldateien schreiben",
-                        finished - 1, request.ImageIds.Length, path));
+                        finished - 1, request.ImageIds.Length, path),
+                    packageKey: key);
                 _scheduler.ReportProgress(key, "GPS in Originaldateien schreiben",
                     finished, request.ImageIds.Length);
                 // Only committed files may appear at the next regular

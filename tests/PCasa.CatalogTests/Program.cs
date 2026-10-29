@@ -3980,6 +3980,24 @@ internal static class Program
         edit.Apply(id, null, null, GpsMetadataRepository.EditMode.Remove,
             CancellationToken.None);
         AssertGps(null,null);
+
+        // A later P0 GPS intent must remain authoritative, even after the
+        // newer package completes and the earlier one resumes after a restart.
+        var journal = new DurablePackageJournal(db);
+        var olderKey = "gps:edit:older";
+        var newerKey = "gps:edit:newer";
+        journal.Put(olderKey, "gps-edit-v1",
+            System.Text.Json.JsonSerializer.Serialize(new {ImageIds=new[] {id}}),
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.Put(newerKey, "gps-edit-v1",
+            System.Text.Json.JsonSerializer.Serialize(new {ImageIds=new[] {id}}),
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        edit.Apply(id, 44.2, 13.4, GpsMetadataRepository.EditMode.Replace,
+            CancellationToken.None, packageKey: newerKey);
+        AssertGps(44.2,13.4);
+        edit.Apply(id, 52.1, 9.9, GpsMetadataRepository.EditMode.Replace,
+            CancellationToken.None, packageKey: olderKey);
+        AssertGps(44.2,13.4);
         try
         {
             using var writer = new ExifToolKeywordWriter.Session();

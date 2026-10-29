@@ -14,7 +14,8 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
     public enum EditMode { MissingOnly, Replace, Remove }
 
     public void Apply(long imageId, double? latitude, double? longitude,
-        EditMode mode, CancellationToken token, Action<string>? starting = null)
+        EditMode mode, CancellationToken token, Action<string>? starting = null,
+        string? packageKey = null)
     {
         token.ThrowIfCancellationRequested();
         using var db = database.OpenConnection();
@@ -37,6 +38,31 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
         using (SourceFileLocks.Enter(path, token))
         {
             token.ThrowIfCancellationRequested();
+            if (packageKey is not null)
+            {
+                // The durable journal sequence is the ONE P0 ordering
+                // authority. Completed newer edits still supersede older
+                // packages that resume after NAS disconnection or yield.
+                using var superseded = db.CreateCommand();
+                superseded.CommandText = """
+                    SELECT EXISTS(
+                      SELECT 1 FROM scheduler_packages newer
+                      JOIN scheduler_packages original
+                        ON original.package_key=$key
+                     WHERE newer.package_type='gps-edit-v1'
+                       AND newer.sequence > original.sequence
+                       AND newer.state NOT IN ('canceled','failed')
+                       AND EXISTS (
+                         SELECT 1 FROM json_each(newer.payload_json,'$.ImageIds')
+                          WHERE CAST(value AS INTEGER)=$id
+                       )
+                    );
+                    """;
+                superseded.Parameters.AddWithValue("$key", packageKey);
+                superseded.Parameters.AddWithValue("$id", imageId);
+                if (Convert.ToInt32(superseded.ExecuteScalar()) != 0)
+                    return;
+            }
             // Never edit a source which another process changed after indexing.
             var before = new FileInfo(path);
             if (!before.Exists)
