@@ -63,12 +63,12 @@ public partial class BrowseCacheProgressWindow : Window
     private string? _manualCurrentImagePath;
     private bool _finishRequestedWhileManual;
 
-    // One presentation owner with a temporarily overlaid manual packet.
-    // Scanner/cache progress received during the overlay must remain visible
-    // when the manual job completes; otherwise the old "1 / 1" caption stays
-    // frozen until the next (possibly much later) NAS progress callback.
-    private enum BackgroundView { None, Scan, CachePreparing, CacheBuilding }
-    private BackgroundView _backgroundView;
+    // Background projection only; PCasaScheduler remains sole job owner.
+    // A queued cache phase MUST NOT displace a running scan. A completed
+    // scan MUST NOT be restored from a stale progress snapshot after P0 work.
+    private bool _scanPhaseActive;
+    private object? _activeScanOwner;
+    private bool _cachePhaseActive;
     private ScanProgress? _lastScanProgress;
     private BrowseCacheBuildProgress? _lastCacheProgress;
     // Owned borderless WPF windows can lose their rendered composition when
@@ -352,57 +352,83 @@ public partial class BrowseCacheProgressWindow : Window
             return;
         }
 
-        // The window was borrowed from an ongoing NAS scan/cache job. Restore
-        // its last actual progress without waiting for another network event.
-        // This is presentation of its existing data, not a second work queue.
-        switch (_backgroundView)
+        // Restore ACTUALLY active work, never the last finished operation.
+        // Manual P0 has ended, so the underlying scan has first priority
+        // over cache building. A queued cache job does not hide live scans.
+        if (_scanPhaseActive && _lastScanProgress is { } scan)
         {
-            case BackgroundView.Scan when _lastScanProgress is { } scan:
-                ShowScanProgress(scan);
-                break;
-            case BackgroundView.CachePreparing:
-                // No cache image has been processed yet. Do not resurrect a
-                // meaningless permanent "0 / 0" window after manual work.
-                if (IsVisible) Hide();
-                break;
-            case BackgroundView.CacheBuilding when _lastCacheProgress is { } cache:
-                ShowCacheProgress(cache);
-                break;
-            default:
-                // No background scan/cache phase owns this presenter. The
-                // last manual "2 / 2" does NOT mean there is remaining I/O.
-                // A borrowed window must become invisible here, rather than
-                // impersonate permanent background work with stale counts.
-                PhaseText.Text = string.Empty;
-                CountText.Text = string.Empty;
-                CountText.ToolTip = null;
-                Progress.IsIndeterminate = false;
-                Progress.Value = 0;
-                CurrentFileText.Text = string.Empty;
-                CurrentFileText.ToolTip = null;
-                FolderPathText.Text = string.Empty;
-                FolderPathText.ToolTip = null;
-                CurrentThumbnail.Source = null;
-                if (IsVisible) Hide();
-                // There is no background progress to publish. A completed
-                // manual operation (folder removal, GPS, tags, transfer)
-                // has already set its own final StatusText. Publishing an
-                // empty presenter status here would overwrite that success
-                // confirmation and make the folder-removal test time out.
-                break;
+            ShowScanProgress(scan);
+            RevealActiveProgress();
+        }
+        else if (_cachePhaseActive && _lastCacheProgress is { } cache)
+        {
+            ShowCacheProgress(cache);
+            PublishProgressStatus();
+            RevealActiveProgress();
+        }
+        else
+        {
+            ClearInactivePresentation();
         }
     }
 
+    private void RevealActiveProgress()
+    {
+        if (_hiddenByUser || IsVisible || _finished ||
+            Owner?.WindowState == WindowState.Minimized)
+            return;
+        Show();
+    }
+
+    private void ClearInactivePresentation()
+    {
+        PhaseText.Text = string.Empty;
+        CountText.Text = string.Empty;
+        CountText.ToolTip = null;
+        Progress.IsIndeterminate = false;
+        Progress.Value = 0;
+        CurrentFileText.Text = string.Empty;
+        CurrentFileText.ToolTip = null;
+        FolderPathText.Text = string.Empty;
+        FolderPathText.ToolTip = null;
+        CurrentThumbnail.Source = null;
+        // No status notification: the completed manual job already set its
+        // result caption. Publishing an empty progress label erases it.
+        if (IsVisible) Hide();
+    }
+
+    // Only worker progress, not a queued scheduler request, activates a scan.
+    // The source token prevents a completed scan from hiding a newer one.
     public void UpdateScan(ScanProgress progress,
-        bool showWhileManualWaiting = false)
+        bool showWhileManualWaiting = false, object? scanOwner = null)
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
-        _backgroundView = BackgroundView.Scan;
+        _scanPhaseActive = true;
+        _activeScanOwner = scanOwner;
         _lastScanProgress = progress;
         if (_manualPresentationActive && !showWhileManualWaiting) return;
         if (_manualPresentationActive)
             _showingScanDuringManualWait = true;
         ShowScanProgress(progress);
+        RevealActiveProgress();
+    }
+
+    public void EndScanPhase(object? scanOwner = null)
+    {
+        if (!_scanPhaseActive ||
+            !ReferenceEquals(_activeScanOwner, scanOwner)) return;
+        _scanPhaseActive = false;
+        _activeScanOwner = null;
+        _lastScanProgress = null;
+        if (_manualPresentationActive) return;
+        if (_cachePhaseActive && _lastCacheProgress is { } cache)
+        {
+            ShowCacheProgress(cache);
+            PublishProgressStatus();
+            RevealActiveProgress();
+        }
+        else
+            ClearInactivePresentation();
     }
 
     private void ShowScanProgress(ScanProgress progress)
@@ -422,30 +448,34 @@ public partial class BrowseCacheProgressWindow : Window
     public void BeginCachePhase()
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
-        _backgroundView = BackgroundView.CachePreparing;
+        _cachePhaseActive = true;
         _lastCacheProgress = null;
-        if (_manualPresentationActive) return;
-        // Cache work can be queued or blocked behind an unrelated NAS read.
-        // A 0/0 popup is NOT a running-job progress indicator; reveal the
-        // existing window only on the first real cache progress event.
-        if (IsVisible) Hide();
+        if (_manualPresentationActive || _scanPhaseActive) return;
+        // A queued cache job is NOT running. It cannot replace a live
+        // scan or open a meaningless 0/0 background window.
+        ClearInactivePresentation();
+    }
+
+    public void EndCachePhase()
+    {
+        if (!_cachePhaseActive) return;
+        _cachePhaseActive = false;
+        _lastCacheProgress = null;
+        if (!_manualPresentationActive && !_scanPhaseActive)
+            ClearInactivePresentation();
     }
 
     public void Update(BrowseCacheBuildProgress progress)
     {
-        if (_finished || Dispatcher.HasShutdownStarted) return;
-        _backgroundView = BackgroundView.CacheBuilding;
+        if (_finished || Dispatcher.HasShutdownStarted ||
+            !_cachePhaseActive) return;
         _lastCacheProgress = progress;
-        if (_manualPresentationActive) return;
-        // A startup notification without any counted images is not work
-        // progress and must not open a misleading 0 / 0 dialog.
+        if (_manualPresentationActive || _scanPhaseActive) return;
         if (progress.TotalImages == 0 && progress.ProcessedImages == 0)
             return;
         ShowCacheProgress(progress);
         PublishProgressStatus();
-        if (!_hiddenByUser && !IsVisible &&
-            Owner?.WindowState != WindowState.Minimized)
-            Show();
+        RevealActiveProgress();
     }
 
     private void ShowCacheProgress(BrowseCacheBuildProgress progress)
@@ -456,7 +486,6 @@ public partial class BrowseCacheProgressWindow : Window
         CountText.Text = $"{progress.ProcessedImages:N0} / {progress.TotalImages:N0}" +
             (progress.FailedImages > 0
                 ? UiLanguage.Format(" · {0:N0} Fehler", progress.FailedImages) : string.Empty);
-
         UpdateCurrentImage(progress.CurrentPath, progress.CurrentThumbnailPath);
     }
 
@@ -602,7 +631,10 @@ public partial class BrowseCacheProgressWindow : Window
 
     public void ShowFromStatus()
     {
-        if (_finished || Dispatcher.HasShutdownStarted) return;
+        if (_finished || Dispatcher.HasShutdownStarted ||
+            !(_manualPresentationActive || _scanPhaseActive ||
+              (_cachePhaseActive && _lastCacheProgress is not null)))
+            return;
         _hiddenByUser = false;
         if (Owner?.WindowState != WindowState.Minimized)
         {

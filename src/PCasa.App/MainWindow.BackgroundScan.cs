@@ -435,7 +435,8 @@ public partial class MainWindow
         UpdateManualScanControls();
         var catalogChanged = false;
         BrowseCacheProgressWindow? activityWindow = null;
-        var ownsActivityWindow = false;
+        var backgroundPresenterOwner = new object();
+        var scanOwner = new object();
         var nextRequestIndex = 0;
 
         try
@@ -619,26 +620,20 @@ public partial class MainWindow
                 _activeScanCancellation = scanCancellation;
                 _activeScanFolderId = folder.Id;
 
+                var acceptsScanProgress = true;
                 try
                 {
-                    // Ordinary background checks run silently. Show a dialog
-                    // only when the scan actually discovers new images.
+                    // Every active NAS scan is visible, even if it only
+                    // checks existing photos or finds zero new files.
+                    // The scanner is already executing when this callback
+                    // arrives, so it is not a speculative queued indicator.
                     var scanProgress = new Progress<ScanProgress>(value =>
                     {
-                        if (_manualFileTransferActive) return;
-                        if (value.Added > 0 && activityWindow is null)
-                        {
-                            ownsActivityWindow = _browseProgressWindow is null;
-                            activityWindow = _browseProgressWindow ??
-                                new BrowseCacheProgressWindow { Owner = this };
-                            if (ownsActivityWindow)
-                            {
-                                _browseProgressWindow = activityWindow;
-                                activityWindow.Show();
-                            }
-                        }
-                        activityWindow?.UpdateScan(value,
-                            showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
+                        if (!acceptsScanProgress || _manualFileTransferActive) return;
+                        activityWindow ??= AcquireProgressPresenter(backgroundPresenterOwner);
+                        activityWindow.UpdateScan(value,
+                            showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
+                            scanOwner: scanOwner);
                         ShowScannedPhotoFolder(value);
                         // Do not overwrite the shared Tag/scan presenter's
                         // authoritative status-bar projection.
@@ -660,6 +655,10 @@ public partial class MainWindow
                         SchedulerPriority.UserAction,
                         token =>
                         {
+                            token.ThrowIfCancellationRequested();
+                            // Running (not queued) scan: make progress visible
+                            // even before a NAS directory yields its first file.
+                            scanProgress.Report(new ScanProgress(0, 0, 0, 0, scanPath));
                             scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
                                 ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token)
                                 : _folderScanner.ScanDirectory(
@@ -715,6 +714,8 @@ public partial class MainWindow
                 }
                 finally
                 {
+                    acceptsScanProgress = false;
+                    activityWindow?.EndScanPhase(scanOwner);
                     RestoreWaitingManualPresentationAfterScan();
                     if (ReferenceEquals(_activeScanCancellation, scanCancellation))
                     {
@@ -764,11 +765,11 @@ public partial class MainWindow
         }
         finally
         {
-            if (ownsActivityWindow && activityWindow is not null)
+            if (activityWindow is not null)
             {
-                activityWindow.Finish();
-                if (ReferenceEquals(_browseProgressWindow, activityWindow))
-                    _browseProgressWindow = null;
+                activityWindow.EndScanPhase(scanOwner);
+                activityWindow.EndCachePhase();
+                ReleaseProgressPresenter(backgroundPresenterOwner);
             }
             // Do not clear a manual scan's token or progress state if the
             // background worker finishes after manual work has already started.
@@ -852,6 +853,7 @@ public partial class MainWindow
             finally
             {
                 _browseCacheBuilding = false;
+                activityWindow?.EndCachePhase();
             }
         }
 

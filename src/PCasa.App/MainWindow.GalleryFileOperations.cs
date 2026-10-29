@@ -281,7 +281,6 @@ public partial class MainWindow
     private readonly List<string> _visibleManualOrder = new();
     private string? _visibleManualActiveKey;
     private BrowseCacheProgressWindow? _visibleManualWindow;
-    private bool _visibleManualOwnsWindow;
 
     // Read-only UI projection across a continuous burst of durable Tag jobs.
     // Entries remain visible in this projection after each package finishes,
@@ -358,12 +357,7 @@ public partial class MainWindow
         if (_visibleManualOperations.ContainsKey(key)) return;
         if (_visibleManualOperations.Count == 0)
         {
-            _visibleManualOwnsWindow = _browseProgressWindow is null;
-            _visibleManualWindow = _browseProgressWindow ??
-                new BrowseCacheProgressWindow { Owner = this };
-            if (_visibleManualOwnsWindow)
-                _browseProgressWindow = _visibleManualWindow;
-            AttachProgressStatus(_visibleManualWindow);
+            _visibleManualWindow = AcquireProgressPresenter(_manualProgressOwner);
             _scheduler.ProgressChanged += VisibleManualProgressChanged;
         }
         _visibleManualOperations.Add(key, (title, total));
@@ -604,19 +598,9 @@ public partial class MainWindow
         _scheduler.ProgressChanged -= VisibleManualProgressChanged;
         _visibleManualActiveKey = null;
         var window = _visibleManualWindow;
-        var owned = _visibleManualOwnsWindow;
         _visibleManualWindow = null;
-        _visibleManualOwnsWindow = false;
         window?.EndManualOperation();
-        if (owned)
-        {
-            window?.Finish();
-            if (ReferenceEquals(_browseProgressWindow, window))
-                _browseProgressWindow = null;
-        }
-        else if (window is { IsLoaded: false } &&
-                 ReferenceEquals(_browseProgressWindow, window))
-            _browseProgressWindow = null;
+        ReleaseProgressPresenter(_manualProgressOwner);
     }
 
     private async Task TransferGalleryFilesAsync(IEnumerable<string> input,

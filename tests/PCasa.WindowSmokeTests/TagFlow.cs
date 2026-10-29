@@ -805,6 +805,94 @@ internal static class TagFlow
             finally { idleProgress.Finish(); }
             Console.WriteLine("PASS: Completed GPS operation hides idle presenter and clears stale 2/2 count.");
 
+            // Shared progress presenter: a cache request being queued must
+            // NEVER hide a live NAS scan (including 0 newly added files).
+            // A manual overlay must restore ONLY live scan activity, never
+            // the last completed scanner snapshot.
+            var scanPresentation = new PCasa.App.BrowseCacheProgressWindow
+                { Owner = window };
+            var activeScanOwner = new object();
+            try
+            {
+                scanPresentation.BeginCachePhase();
+                scanPresentation.UpdateScan(
+                    new ScanProgress(12, 0, 12, 0, null, Added: 0),
+                    scanOwner: activeScanOwner);
+                var phase = (TextBlock?)scanPresentation.FindName("PhaseText");
+                var count = (TextBlock?)scanPresentation.FindName("CountText");
+                if (!scanPresentation.IsVisible || phase is null ||
+                    !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
+                        StringComparison.OrdinalIgnoreCase) ||
+                    count?.Text.Contains("12", StringComparison.OrdinalIgnoreCase) != true)
+                    throw new Exception(
+                        "Running NAS scan with zero new photos is not visible.");
+                scanPresentation.BeginCachePhase();
+                scanPresentation.Update(
+                    new BrowseCacheBuildProgress(20, 4, 0, null, null));
+                if (!scanPresentation.IsVisible ||
+                    !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Queued cache hid the active NAS scan.");
+
+                scanPresentation.BeginManualOperation("GPS in Originaldateien schreiben", 2);
+                scanPresentation.UpdateScan(
+                    new ScanProgress(13, 0, 13, 0, null, Added: 0),
+                    scanOwner: activeScanOwner);
+                scanPresentation.EndManualOperation();
+                if (!scanPresentation.IsVisible ||
+                    !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Manual overlay did not restore the live NAS scan.");
+
+                scanPresentation.EndScanPhase(activeScanOwner);
+                if (!scanPresentation.IsVisible ||
+                    count?.Text != "4 / 20")
+                    throw new Exception("Finished NAS scan did not restore actual cache progress.");
+                scanPresentation.EndCachePhase();
+                if (scanPresentation.IsVisible || !string.IsNullOrEmpty(count?.Text))
+                    throw new Exception(
+                        "Finished cache/scan resurrected a stale progress window.");
+                scanPresentation.ShowFromStatus();
+                if (scanPresentation.IsVisible)
+                    throw new Exception("Status click reopened an idle progress presenter.");
+            }
+            finally
+            {
+                scanPresentation.EndScanPhase(activeScanOwner);
+                scanPresentation.EndCachePhase();
+                scanPresentation.Finish();
+            }
+            Console.WriteLine("PASS: NAS scan, cache and manual P0 share one priority-correct presenter.");
+
+            // The MainWindow, not the job which first created the presenter,
+            // must own its lifetime until every borrower releases it.
+            var acquirePresenter = typeof(PCasa.App.MainWindow).GetMethod(
+                "AcquireProgressPresenter",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("One progress presenter owner missing.");
+            var releasePresenter = typeof(PCasa.App.MainWindow).GetMethod(
+                "ReleaseProgressPresenter",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Progress presenter release missing.");
+            var presenterHandle = typeof(PCasa.App.MainWindow).GetField(
+                "_browseProgressWindow",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("Shared progress presenter field missing.");
+            var firstBorrower = new object();
+            var secondBorrower = new object();
+            var firstPresenter = acquirePresenter.Invoke(window, [firstBorrower]);
+            var secondPresenter = acquirePresenter.Invoke(window, [secondBorrower]);
+            if (!ReferenceEquals(firstPresenter, secondPresenter))
+                throw new Exception("Background scan and cache got different presenters.");
+            releasePresenter.Invoke(window, [firstBorrower]);
+            if (!ReferenceEquals(presenterHandle.GetValue(window), secondPresenter))
+                throw new Exception("First completed producer closed the still-owned presenter.");
+            releasePresenter.Invoke(window, [secondBorrower]);
+            Console.WriteLine("PASS: Shared progress presenter remains alive until last owner releases it.");
+
             var multiSelectionField = typeof(PCasa.App.MainWindow).GetField(
                 "_gpsSelectionCount",
                 System.Reflection.BindingFlags.NonPublic |

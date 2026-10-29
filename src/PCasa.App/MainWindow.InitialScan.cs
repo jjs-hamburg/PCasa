@@ -93,7 +93,7 @@ public partial class MainWindow
         RefreshFolderStatusVisuals();
 
         BrowseCacheProgressWindow? progressWindow = null;
-        var ownsWindow = false;
+        var scanOwner = new object();
         var scanActive = false;
         try
         {
@@ -102,14 +102,9 @@ public partial class MainWindow
             // by a second unscheduled probe or on the WPF dispatcher.
             // Starting the UI pump is not proof of a running scheduler worker.
             // Its queued source remains Pending until actual scan progress.
-            ownsWindow = _browseProgressWindow is null;
-            progressWindow = _browseProgressWindow ??
-                new BrowseCacheProgressWindow { Owner = this };
-            if (ownsWindow)
-            {
-                _browseProgressWindow = progressWindow;
-                progressWindow.Show();
-            }
+            progressWindow = AcquireProgressPresenter(scanOwner);
+            // Queued NAS source checks are not active scan progress.
+            // The first real scanner callback makes the presenter visible.
             var shownWindow = progressWindow;
             var workerStarted = false;
             var progress = new Progress<ScanProgress>(scan =>
@@ -127,7 +122,8 @@ public partial class MainWindow
                     RefreshFolderStatusVisuals();
                 }
                 shownWindow.UpdateScan(scan,
-                    showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation());
+                    showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
+                    scanOwner: scanOwner);
                 ShowScannedPhotoFolder(scan);
                 // While a queued Tag series shares this presenter, the
                 // dialog itself owns the status-bar text as well.
@@ -179,14 +175,12 @@ public partial class MainWindow
         }
         finally
         {
-            if (ownsWindow && progressWindow is not null)
+            if (progressWindow is not null)
             {
-                progressWindow.Finish();
-                if (ReferenceEquals(_browseProgressWindow, progressWindow))
-                    _browseProgressWindow = null;
-            }
-            else if (progressWindow is not null)
+                progressWindow.EndScanPhase(scanOwner);
                 RestoreWaitingManualPresentationAfterScan();
+                ReleaseProgressPresenter(scanOwner);
+            }
             if (ReferenceEquals(_activeScanCancellation, cancellation))
             {
                 _activeScanCancellation = null;

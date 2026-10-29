@@ -28,6 +28,37 @@ public partial class MainWindow
     private bool _folderManagerCommitPending;
     private BrowseCacheProgressWindow? _browseProgressWindow;
 
+    // The ONE progress presenter is shared by scanner, cache and manual
+    // callers. Its lifetime belongs to this owner, not to whichever caller
+    // happened to allocate it first. A different job finishing must never
+    // close another job's progress window.
+    private readonly HashSet<object> _progressPresenterOwners = new();
+    private readonly object _manualProgressOwner = new();
+
+    private BrowseCacheProgressWindow AcquireProgressPresenter(object owner)
+    {
+        _progressPresenterOwners.Add(owner);
+        var presenter = _browseProgressWindow ??=
+            new BrowseCacheProgressWindow { Owner = this };
+        AttachProgressStatus(presenter);
+        return presenter;
+    }
+
+    private void ReleaseProgressPresenter(object owner)
+    {
+        if (!_progressPresenterOwners.Remove(owner) ||
+            _progressPresenterOwners.Count != 0) return;
+        var presenter = _browseProgressWindow;
+        _browseProgressWindow = null;
+        if (ReferenceEquals(_attachedProgressPresenter, presenter) &&
+            presenter is not null)
+        {
+            presenter.ProgressPresentationChanged -= VisibleProgressStatusChanged;
+            _attachedProgressPresenter = null;
+        }
+        presenter?.Finish();
+    }
+
     private async void BrowseSurface_Loaded(object sender, RoutedEventArgs e)
     {
         if (_browseInitialized)
@@ -357,10 +388,8 @@ public partial class MainWindow
             // ONE presenter owns visible progress. Background cache work
             // must not replace an active manual Tag/Transfer presenter with
             // another window showing the meaningless default "Einlesen 0/0".
-            var progressWindow = _browseProgressWindow ??
-                new BrowseCacheProgressWindow { Owner = this };
-            _browseProgressWindow = progressWindow;
-            AttachProgressStatus(progressWindow);
+            var cacheOwner = new object();
+            var progressWindow = AcquireProgressPresenter(cacheOwner);
             progressWindow.BeginCachePhase();
             // A queued background task has not started. Show the existing
             // presenter only when real cache-build progress arrives.
@@ -398,12 +427,8 @@ public partial class MainWindow
             finally
             {
                 _browseCacheBuilding = false;
-                progressWindow.Finish();
-                // Finish defers closing while a manual packet overlays the
-                // cache presenter. Let EndVisibleManualOperation own cleanup.
-                if (_visibleManualWindow is null &&
-                    ReferenceEquals(_browseProgressWindow, progressWindow))
-                    _browseProgressWindow = null;
+                progressWindow.EndCachePhase();
+                ReleaseProgressPresenter(cacheOwner);
             }
         }
 

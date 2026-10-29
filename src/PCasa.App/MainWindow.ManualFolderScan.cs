@@ -361,6 +361,11 @@ public partial class MainWindow
 
             // No duplicate import or cleanup path. The scanner owns all EXIF,
             // cache, catalog, and safe reconciliation transitions.
+            // This callback is emitted only after the scheduler has entered
+            // the running scan step and validated the source. Even when NAS
+            // enumeration takes a long time to return its first file, the
+            // single progress presenter must already show the active scan.
+            progress?.Report(new ScanProgress(0, 0, 0, 0, directory));
             try
             {
                 Result = owner._folderScanner.ScanDirectory(
