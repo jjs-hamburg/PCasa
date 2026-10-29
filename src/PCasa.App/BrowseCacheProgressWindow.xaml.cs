@@ -442,7 +442,12 @@ public partial class BrowseCacheProgressWindow : Window
         CountText.ToolTip = UiLanguage.Format("{0:N0} gefunden · {1:N0} unverändert · {2:N0} geändert · {3:N0} Cache-Reparaturen", progress.ImageFilesSeen, progress.Unchanged, progress.Changed, progress.CacheRepaired);
         // The scanner has already committed this local thumbnail.
         // An original on S:\\ over VPN is not a valid preview source.
-        UpdateCurrentImage(progress.CurrentFile, progress.CurrentThumbnailPath);
+        if (progress.CurrentFile is { Length: > 0 } file)
+            UpdateCurrentImage(file, progress.CurrentThumbnailPath);
+        else if (progress.VerifiedDirectoryPath is { Length: > 0 } directory)
+            UpdateCurrentImage(directory, null);
+        else
+            ClearDisplayedProgressImage();
         PublishProgressStatus();
     }
 
@@ -498,13 +503,33 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void ShowCacheProgress(BrowseCacheBuildProgress progress)
     {
+        PhaseText.Text = UiLanguage.T("Vorschaudaten erstellen");
+        CountText.ToolTip = null;
         Progress.IsIndeterminate = false;
         Progress.Maximum = Math.Max(1, progress.TotalImages);
         Progress.Value = Math.Min(Progress.Maximum, progress.ProcessedImages);
         CountText.Text = $"{progress.ProcessedImages:N0} / {progress.TotalImages:N0}" +
             (progress.FailedImages > 0
                 ? UiLanguage.Format(" · {0:N0} Fehler", progress.FailedImages) : string.Empty);
-        UpdateCurrentImage(progress.CurrentPath, progress.CurrentThumbnailPath);
+        if (progress.CurrentPath is { Length: > 0 } path)
+            UpdateCurrentImage(path, progress.CurrentThumbnailPath);
+        else
+            ClearDisplayedProgressImage();
+    }
+
+    private void ClearDisplayedProgressImage()
+    {
+        // Scan and cache may share this presenter in sequence. Never show
+        // a filename or preview from the former operation after ownership
+        // changes or the next progress packet has no current source.
+        _displayedPreviewImagePath = null;
+        _pendingLocalPreviewPath = null;
+        _pendingOriginalPreviewPath = null;
+        CurrentFileText.Text = string.Empty;
+        CurrentFileText.ToolTip = null;
+        FolderPathText.Text = string.Empty;
+        FolderPathText.ToolTip = null;
+        CurrentThumbnail.Source = null;
     }
 
     private void UpdateCurrentImage(string? currentPath, string? localThumb)
