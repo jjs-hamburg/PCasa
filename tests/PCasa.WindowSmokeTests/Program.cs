@@ -899,6 +899,11 @@ internal static class Program
                     Console.WriteLine(
                         "PASS: Taskbar restore reconstructs progress window while respecting user Hide.");
 
+                    // The preceding test deliberately opened a running
+                    // scan and exercised taskbar restore. End that scan
+                    // explicitly before testing a merely QUEUED cache pass;
+                    // a real running NAS scan must never be hidden by it.
+                    progressWindow.EndScanPhase();
                     // A queued background cache pass must not display a
                     // permanent 'Vorschaudaten werden vorbereitet 0/0'.
                     progressWindow.BeginCachePhase();
