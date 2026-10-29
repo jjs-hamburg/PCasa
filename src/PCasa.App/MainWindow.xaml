@@ -115,6 +115,42 @@
             </Setter>
         </Style>
 
+        <!-- GPS place results use the shared PCasa palette, never the
+             system ComboBox's white collapsed field or selection chrome. -->
+        <Style x:Key="GpsPlaceResultItemStyle" TargetType="{x:Type ListBoxItem}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="8,7"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                        <Border x:Name="HitBackground"
+                                Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter ContentSource="Content"
+                                              HorizontalAlignment="Stretch"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="HitBackground" Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="HitBackground" Property="Background"
+                                        Value="{DynamicResource PcasaSelectionBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="PcasaLogicSymbolStyle" TargetType="RadioButton">
             <Setter Property="Width" Value="26"/>
             <Setter Property="Height" Value="26"/>
@@ -1076,17 +1112,45 @@
                                 <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0"
                                          Height="27" VerticalContentAlignment="Center"
                                          ToolTip="{loc:Tr Key='Ort, Adresse oder Sehenswürdigkeit suchen'}"
-                                         KeyDown="GpsPlaceSearch_KeyDown"/>
+                                         KeyDown="GpsPlaceSearch_KeyDown"
+                                         TextChanged="GpsPlaceSearch_TextChanged"/>
                                 <Button x:Name="GpsPlaceSearchButton" Grid.Column="1"
                                         Margin="4,0,0,0" Padding="8,2"
                                         Content="{loc:Tr Key='Suchen'}"
                                         Click="GpsPlaceSearch_Click"/>
+                                <!-- A floating list does not reserve a second row in
+                                     the GPS sidebar. StaysOpen=False dismisses it
+                                     on outside clicks, including a map click. -->
+                                <Popup x:Name="GpsPlaceResultsPopup" Grid.Column="0"
+                                       PlacementTarget="{Binding ElementName=GpsPlaceSearchBox}"
+                                       Placement="Bottom" VerticalOffset="2"
+                                       Width="{Binding ActualWidth, ElementName=GpsPlaceSearchBox}"
+                                       AllowsTransparency="True" StaysOpen="False">
+                                    <Border Background="{DynamicResource PcasaPanelBrush}"
+                                            BorderBrush="{DynamicResource PcasaDividerBrush}"
+                                            BorderThickness="1" CornerRadius="3">
+                                        <ListBox x:Name="GpsPlaceResults"
+                                                 MaxHeight="220"
+                                                 Background="{DynamicResource PcasaPanelBrush}"
+                                                 Foreground="{DynamicResource PcasaTextBrush}"
+                                                 BorderThickness="0"
+                                                 ItemContainerStyle="{StaticResource GpsPlaceResultItemStyle}"
+                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                 ToolTip="{loc:Tr Key='Gefundenen Ort auswählen'}"
+                                                 PreviewMouseLeftButtonUp="GpsPlaceResults_PreviewMouseLeftButtonUp"
+                                                 KeyDown="GpsPlaceResults_KeyDown">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Name}"
+                                                               Foreground="{DynamicResource PcasaTextBrush}"
+                                                               TextWrapping="Wrap"/>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </Border>
+                                </Popup>
                             </Grid>
-                            <ComboBox x:Name="GpsPlaceResults"
-                                      Visibility="Collapsed" Margin="0,0,0,4"
-                                      MaxDropDownHeight="190"
-                                      ToolTip="{loc:Tr Key='Gefundenen Ort auswählen'}"
-                                      SelectionChanged="GpsPlaceResults_SelectionChanged"/>
                             <WrapPanel Margin="0,0,0,3">
                                 <ToggleButton x:Name="GpsPickPositionToggle" Padding="6,3"
                                               Margin="0,0,4,3"

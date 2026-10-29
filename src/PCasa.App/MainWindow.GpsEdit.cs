@@ -43,9 +43,36 @@ public partial class MainWindow
 
     private void GpsPlaceSearch_KeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && GpsPlaceResultsPopup.IsOpen)
+        {
+            e.Handled = true;
+            GpsPlaceResultsPopup.IsOpen = false;
+            return;
+        }
+        if (e.Key == Key.Down && GpsPlaceResultsPopup.IsOpen &&
+            GpsPlaceResults.Items.Count > 0)
+        {
+            e.Handled = true;
+            GpsPlaceResults.SelectedIndex = 0;
+            GpsPlaceResults.Focus();
+            return;
+        }
         if (e.Key != Key.Enter) return;
         e.Handled = true;
         _ = SearchGpsPlacesAsync();
+    }
+
+    private void GpsPlaceSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        // A result belongs to the exact search text which produced it.
+        // Editing the query invalidates the old list and any in-flight HTTP
+        // response, so a stale hit cannot accidentally reposition the map.
+        if (GpsPlaceResultsPopup is null || GpsPlaceResults is null) return;
+        ++_gpsPlaceSearchRevision;
+        _gpsPlaceSearchCancellation?.Cancel();
+        GpsPlaceResultsPopup.IsOpen = false;
+        GpsPlaceResults.ItemsSource = null;
+        GpsPlaceSearchButton.IsEnabled = true;
     }
 
     private void GpsPlaceSearch_Click(object sender, RoutedEventArgs e)
@@ -60,6 +87,8 @@ public partial class MainWindow
             return;
         }
         var version = ++_gpsPlaceSearchRevision;
+        GpsPlaceResultsPopup.IsOpen = false;
+        GpsPlaceResults.ItemsSource = null;
         // Cancel the previous request; its own finally owns disposal.
         // Disposing a token source while HttpClient still uses its token
         // can break the ongoing cancellation path.
@@ -111,10 +140,9 @@ public partial class MainWindow
                 "; ElapsedMs=" + stopwatch.ElapsedMilliseconds);
             if (version != _gpsPlaceSearchRevision || _sidebarMode != "GPS") return;
             GpsPlaceResults.ItemsSource = hits;
-            GpsPlaceResults.Visibility = hits.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+            GpsPlaceResultsPopup.IsOpen = hits.Count > 0;
             GpsEditStatus.Text = hits.Count == 0
                 ? UiLanguage.T("Kein Ort gefunden.") : UiLanguage.T("Ort auswählen oder auf Karte klicken.");
-            if (hits.Count == 1) GpsPlaceResults.SelectedIndex = 0;
         }
         catch (OperationCanceledException ex)
         {
@@ -149,10 +177,38 @@ public partial class MainWindow
         }
     }
 
-    private void GpsPlaceResults_SelectionChanged(object sender,
-        SelectionChangedEventArgs e)
+    private void GpsPlaceResults_PreviewMouseLeftButtonUp(object sender,
+        MouseButtonEventArgs e)
     {
-        if (GpsPlaceResults.SelectedItem is not PlaceHit hit) return;
+        if (e.OriginalSource is not DependencyObject source ||
+            ItemsControl.ContainerFromElement(GpsPlaceResults, source)
+                is not ListBoxItem item ||
+            item.DataContext is not PlaceHit hit)
+            return;
+        e.Handled = true;
+        ChooseGpsPlace(hit);
+    }
+
+    private void GpsPlaceResults_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            e.Handled = true;
+            GpsPlaceResultsPopup.IsOpen = false;
+            GpsPlaceSearchBox.Focus();
+        }
+        else if (e.Key == Key.Enter &&
+                 GpsPlaceResults.SelectedItem is PlaceHit hit)
+        {
+            e.Handled = true;
+            ChooseGpsPlace(hit);
+        }
+    }
+
+    private void ChooseGpsPlace(PlaceHit hit)
+    {
+        GpsPlaceResultsPopup.IsOpen = false;
+        GpsPlaceResults.SelectedItem = null;
         GpsPickPositionToggle.IsChecked = true;
         SetGpsDraft(hit.Lat, hit.Lon, recenter: true);
     }

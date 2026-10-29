@@ -588,7 +588,7 @@ internal static class TagFlow
             foreach (var controlName in new[]
             {
                 "GpsPlaceSearchBox", "GpsPlaceSearchButton", "GpsPlaceResults",
-                "GpsPickPositionToggle", "GpsApplyMissingButton",
+                "GpsPlaceResultsPopup", "GpsPickPositionToggle", "GpsApplyMissingButton",
                 "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
                 "GpsShowAreaButton", "GpsClearAreaButton"
             })
@@ -603,6 +603,61 @@ internal static class TagFlow
             // itself select a photo in the real gallery.
             if (removeGpsButton.IsEnabled && selected.Count == 0)
                 throw new Exception("GPS removal enabled without an actual selection.");
+
+            // Search results are a popup UNDER the search box, not an
+            // ever-visible white ComboBox consuming a second sidebar row.
+            var resultPopup = (System.Windows.Controls.Primitives.Popup?)
+                window.FindName("GpsPlaceResultsPopup")
+                ?? throw new Exception("GPS place dropdown popup is missing.");
+            var resultList = (ListBox?)window.FindName("GpsPlaceResults")
+                ?? throw new Exception("GPS place dropdown list is missing.");
+            var searchBox = (TextBox?)window.FindName("GpsPlaceSearchBox")
+                ?? throw new Exception("GPS place search input is missing.");
+            if (resultPopup.IsOpen ||
+                resultPopup.PlacementTarget != searchBox ||
+                resultList.Background is not SolidColorBrush resultBackground ||
+                resultBackground.Color != ((SolidColorBrush)window.FindResource("PcasaPanelBrush")).Color)
+                throw new Exception("GPS place results must open under the field using the PCasa theme.");
+            var placeHitType = typeof(PCasa.App.MainWindow).GetNestedType("PlaceHit",
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("GPS result model is missing.");
+            var hit = Activator.CreateInstance(placeHitType,
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic,
+                null, ["Chilehaus, Hamburg", 53.548, 10.0], null)
+                ?? throw new Exception("Could not create test GPS place.");
+            resultList.ItemsSource = new[] { hit };
+            resultPopup.IsOpen = true;
+            if (!resultPopup.IsOpen ||
+                resultList.Items.Count != 1 ||
+                resultList.SelectedItem is not null)
+                throw new Exception("GPS popup did not display an uncommitted result.");
+            resultList.SelectedIndex = 0;
+            // Moving the ListBox highlight must NOT write coordinates.
+            var draftField = typeof(PCasa.App.MainWindow).GetField("_gpsDraft",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("GPS draft field missing.");
+            var beforePlace = draftField.GetValue(window);
+            var choosePlace = typeof(PCasa.App.MainWindow).GetMethod("ChooseGpsPlace",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("GPS selection callback missing.");
+            if (!Equals(beforePlace, draftField.GetValue(window)))
+                throw new Exception("Highlighting a place changed GPS without confirmation.");
+            choosePlace.Invoke(window, [hit]);
+            if (resultPopup.IsOpen ||
+                draftField.GetValue(window) is null ||
+                resultList.SelectedItem is not null)
+                throw new Exception("Chosen GPS place did not close popup and set the draft.");
+            // Changing the query must invalidate the popup and old hits.
+            resultList.ItemsSource = new[] { hit };
+            resultPopup.IsOpen = true;
+            searchBox.Text = "different query";
+            if (resultPopup.IsOpen || resultList.ItemsSource is not null)
+                throw new Exception("GPS search retained stale results after query changed.");
+            Console.WriteLine("PASS: Theme-aware GPS result popup uses click/Enter confirmation and no reserved row.");
 
             var filmToggle = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsFilmstripToggle")
                 ?? throw new Exception("Optional GPS filmstrip toggle missing.");
