@@ -288,5 +288,10 @@
   "Zuerst Bilder auswählen.": "Select images first.",
   "Zum Einfügen einen Zielordner im Ordnerbaum auswählen": "Choose a destination folder in the folder tree to paste",
   "Zum Invertieren einen Bildordner auswählen.": "Select an image folder before inverting the selection.",
-  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images"
+  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images",
+  "GPS-Leiste vergrößern": "Expand GPS pane",
+  "GPS-Leiste verkleinern": "Restore GPS pane",
+  "GPS-Vollbild": "GPS full screen",
+  "GPS-Vollbild verlassen": "Exit GPS full screen",
+  "Ordnerleiste ein-/ausblenden": "Show/hide folder pane"
 }

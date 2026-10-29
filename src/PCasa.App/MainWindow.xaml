@@ -620,17 +620,16 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2">
+        <Grid x:Name="BrowseWorkspaceGrid" Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="285" MinWidth="170" MaxWidth="800" />
-                <ColumnDefinition Width="5" />
-                <ColumnDefinition Width="*" />
-                <!-- Reserved for optional info/GPS/tools panel, initially hidden. -->
+                <ColumnDefinition x:Name="FolderSidebarColumn" Width="0.22*" MinWidth="170" />
+                <ColumnDefinition x:Name="FolderSidebarDividerColumn" Width="5" />
+                <ColumnDefinition x:Name="GalleryWorkspaceColumn" Width="0.78*" MinWidth="240" />
                 <ColumnDefinition x:Name="InfoSidebarDividerColumn" Width="0" />
                 <ColumnDefinition x:Name="InfoSidebarColumn" Width="0" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}">
+            <Border x:Name="FolderSidebarPanel" Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}">
                 <Grid>
                     <Grid x:Name="FolderTreePanel">
                     <Grid.RowDefinitions>
@@ -740,7 +739,9 @@
                 </Grid>
             </Border>
 
-            <GridSplitter Grid.Column="1"
+            <GridSplitter x:Name="FolderSidebarSplitter" Grid.Column="1"
+                          DragStarted="WorkspaceSplitter_DragStarted"
+                          DragCompleted="WorkspaceSplitter_DragCompleted"
                           Width="5"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"
@@ -867,9 +868,17 @@
                 </Grid>
             </Grid>
 
-            <Border x:Name="InfoSidebarDivider" Grid.Column="3"
-                    Visibility="Collapsed"
-                    Background="{DynamicResource PcasaDividerBrush}" />
+            <GridSplitter x:Name="InfoSidebarSplitter" Grid.Column="3"
+                          Width="5" Visibility="Collapsed"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          ShowsPreview="True"
+                          DragStarted="WorkspaceSplitter_DragStarted"
+                          DragCompleted="WorkspaceSplitter_DragCompleted"
+                          Background="{DynamicResource PcasaDividerBrush}"
+                          Cursor="SizeWE" />
 
             <Border x:Name="InfoSidebarPanel" Grid.Column="4"
                     Visibility="Collapsed"
@@ -880,9 +889,21 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <DockPanel Margin="4,0,0,12">
-                        <Button DockPanel.Dock="Right" Content="✕" Width="24" Height="24"
-                                HorizontalAlignment="Right" ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
-                                Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button x:Name="GpsExpandButton" Content="⇤" Width="26" Height="24"
+                                    Margin="0,0,4,0" Visibility="Collapsed"
+                                    ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}"
+                                    Style="{StaticResource PcasaStatusButtonStyle}"
+                                    Click="GpsExpand_Click"/>
+                            <Button x:Name="GpsFullscreenButton" Content="⛶" Width="26" Height="24"
+                                    Margin="0,0,4,0" Visibility="Collapsed"
+                                    ToolTip="{loc:Tr Key='GPS-Vollbild'}"
+                                    Style="{StaticResource PcasaStatusButtonStyle}"
+                                    Click="GpsFullscreen_Click"/>
+                            <Button Content="✕" Width="24" Height="24"
+                                    ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
+                                    Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
+                        </StackPanel>
                         <TextBlock x:Name="SidePanelHeading" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </DockPanel>
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -1020,6 +1041,21 @@
                             Padding="4,1" FontSize="12" Margin="0,0,10,0"
                             ToolTip="{loc:Tr Key='Zwei ausgewählte Bilder vergleichen'}"
                             x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
+                    <Button x:Name="FolderSidebarToggleButton"
+                            Style="{StaticResource PcasaFooterIconButtonStyle}"
+                            ToolTip="{loc:Tr Key='Ordnerleiste ein-/ausblenden'}"
+                            Click="FolderSidebarToggle_Click">
+                        <Viewbox Width="18" Height="18">
+                            <Canvas Width="24" Height="24">
+                                <Path Data="M 2,5 L 9,5 L 11,7 L 22,7 L 22,21 L 2,21 Z"
+                                      Stroke="{DynamicResource PcasaTextBrush}"
+                                      StrokeThickness="1.5" Fill="Transparent"/>
+                                <Path Data="M 7,11 L 18,11 M 7,15 L 16,15"
+                                      Stroke="{DynamicResource PcasaTextBrush}"
+                                      StrokeThickness="1.6"/>
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
                     <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
                             ToolTip="{loc:Tr Key='Tags anzeigen'}" Tag="Tags" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">

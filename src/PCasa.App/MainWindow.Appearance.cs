@@ -49,6 +49,14 @@ public partial class MainWindow
         public double? WindowWidth { get; set; }
         public double? WindowHeight { get; set; }
         public bool WindowMaximized { get; set; }
+        // Relative proportions of the resizable three-column workspace.
+        // The folder's user preference stays intact while expanded GPS hides it.
+        public bool FolderSidebarVisible { get; set; } = true;
+        public double FolderSidebarFraction { get; set; } = 0.22;
+        public double SidebarFraction { get; set; } = 0.25;
+        public double ExpandedGpsFraction { get; set; } = 0.55;
+        public bool GpsExpanded { get; set; }
+        public string? ActiveSidebarMode { get; set; }
     }
 
     private readonly string _appearanceFile = Path.Combine(
@@ -107,6 +115,7 @@ public partial class MainWindow
         SyncGallerySortMenu();
         UiLanguage.Current.PropertyChanged += AppearanceUiLanguageChanged;
         RestoreWindowPlacement();
+        InitializeWorkspaceLayout();
         SystemEvents.UserPreferenceChanged += AppearanceUserPreferenceChanged;
         Closed += AppearanceWindowClosed;
     }
@@ -548,14 +557,12 @@ public partial class MainWindow
 
     private void CloseSidebar_Click(object sender, RoutedEventArgs e)
     {
-        QueueGalleryAnchorRestore();
         _sidebarInfoRequests.Invalidate();
         _sidebarMode = null;
-        InfoSidebarDivider.Visibility = Visibility.Collapsed;
-        InfoSidebarPanel.Visibility = Visibility.Collapsed;
-        InfoSidebarDividerColumn.Width = new GridLength(0);
-        InfoSidebarColumn.Width = new GridLength(0);
-        RestoreAnchorAfterSidebarLayout();
+        _gpsFullscreen = false;
+        _appearance.ActiveSidebarMode = null;
+        UpdateWorkspaceLayoutPreservingGallery();
+        SaveAppearance();
     }
 
     private async void SidebarMode_Click(object sender, RoutedEventArgs e)
@@ -568,15 +575,13 @@ public partial class MainWindow
             return;
         }
 
+        _sidebarInfoRequests.Invalidate();
         _sidebarMode = mode;
-        InfoSidebarDividerColumn.Width = new GridLength(1);
-        InfoSidebarColumn.Width = new GridLength(245);
-        InfoSidebarDivider.Visibility = Visibility.Visible;
-        InfoSidebarPanel.Visibility = Visibility.Visible;
-        RestoreAnchorAfterSidebarLayout();
-        TagSidebar.Visibility = mode == "Tags" ? Visibility.Visible : Visibility.Collapsed;
+        _gpsFullscreen = false;
+        _appearance.ActiveSidebarMode = mode;
+        UpdateWorkspaceLayoutPreservingGallery();
+        SaveAppearance();
         if (mode == "Tags") RefreshQuickTags();
-        GeneralSidebarScroll.Visibility = mode == "Tags" ? Visibility.Collapsed : Visibility.Visible;
         SidePanelHeading.Text = mode switch
         {
             "Tags" => "Tags",

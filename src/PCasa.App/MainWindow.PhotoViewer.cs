@@ -1218,6 +1218,13 @@ public partial class MainWindow
 
     private void PhotoViewerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (!_viewerOpen && _gpsFullscreen && e.Key == Key.Escape)
+        {
+            _gpsFullscreen = false;
+            UpdateWorkspaceLayoutPreservingGallery();
+            e.Handled = true;
+            return;
+        }
         // Arrow navigation must also work after clicking a zoom button or
         // moving its slider, when focus is outside PhotoViewerPanel.
         if (_viewerOpen && _viewerFullscreenWindow is null)
