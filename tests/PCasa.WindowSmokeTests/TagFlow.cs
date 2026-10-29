@@ -583,7 +583,7 @@ internal static class TagFlow
             if (!HasPoint(gpsA, true) || !HasPoint(gpsB, false))
                 throw new Exception("GPS selection dropped the surrounding folder's markers.");
 
-            var filmToggle = (CheckBox?)window.FindName("GpsFilmstripToggle")
+            var filmToggle = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsFilmstripToggle")
                 ?? throw new Exception("Optional GPS filmstrip toggle missing.");
             var filmPanel = (Border?)window.FindName("GpsFilmstripPanel")
                 ?? throw new Exception("Optional GPS filmstrip view missing.");
@@ -596,6 +596,9 @@ internal static class TagFlow
 
             if (((Grid?)window.FindName("GpsMapPanel"))?.Visibility != Visibility.Visible ||
                 ((Button?)window.FindName("GpsProviderButton"))?.ContextMenu?.Items.Count < 4 ||
+                Grid.GetRow(filmPanel) != 3 ||
+                Grid.GetRow(filmToggle) != 0 ||
+                window.FindName("GpsMapAttribution") is not null ||
                 window.FindName("GpsFullscreenCorners") is not System.Windows.Shapes.Path ||
                 window.FindName("FolderSidebarSymbolArrow") is not System.Windows.Shapes.Path)
                 throw new Exception("GPS provider choices or bold vector icons missing.");
@@ -672,8 +675,10 @@ internal static class TagFlow
                 Grid.GetColumnSpan(sidebarPanel) != workspace.ColumnDefinitions.Count)
                 throw new Exception("GPS fullscreen is not an in-place workspace overlay.");
 
-            // The GPS-fullscreen photo overlay reuses the existing viewer
-            // decoder/scheduler, with one-click close and intact map layout.
+            // Opening a GPS image from full-map mode must restore the
+            // gallery alongside the map. The filmstrip and map stay visible,
+            // while one click on the gallery's photo restores thumbnails.
+            // The scheduler/decoder remains the existing viewer path.
             var gpsOverlay = (Grid?)window.FindName("GpsFullscreenImageOverlay")
                 ?? throw new Exception("Fullscreen photo image overlay missing.");
             var gpsImage = (System.Windows.Controls.Image?)
@@ -694,16 +699,23 @@ internal static class TagFlow
             showGpsPhoto.Invoke(window, [gpsA]);
             if (gpsOverlay.Visibility != Visibility.Visible ||
                 !selected.SetEquals(selectionBeforeLayout) ||
-                !gpsFullscreen.IsVisible)
-                throw new Exception("Opening GPS photo destroyed the fullscreen map or selection.");
+                !gpsFullscreen.IsVisible ||
+                gpsOverlay.Parent is not Grid galleryPhotoRoot ||
+                Grid.GetColumn(galleryPhotoRoot) != 2 ||
+                Grid.GetColumn(sidebarPanel) != 4 ||
+                Grid.GetColumnSpan(sidebarPanel) != 1)
+                throw new Exception("Opening a GPS photo must show it in the gallery BESIDE the map.");
             gpsOverlay.RaiseEvent(new MouseButtonEventArgs(
                 InputManager.Current.PrimaryMouseDevice,
                 Environment.TickCount, MouseButton.Left)
             { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
             if (gpsOverlay.Visibility != Visibility.Collapsed ||
-                Grid.GetColumn(sidebarPanel) != 0 ||
+                Grid.GetColumn(sidebarPanel) != 4 ||
                 !selected.SetEquals(selectionBeforeLayout))
-                throw new Exception("Single click did not close photo over GPS fullscreen.");
+                throw new Exception("Single click did not restore gallery thumbnails.");
+            Click(gpsFullscreen);
+            if (Grid.GetColumn(sidebarPanel) != 0)
+                throw new Exception("GPS fullscreen could not be reopened.");
             Click(gpsFullscreen);
             if (Grid.GetColumn(sidebarPanel) != 4 || Grid.GetColumnSpan(sidebarPanel) != 1)
                 throw new Exception("Leaving GPS fullscreen did not restore the panel.");
@@ -754,7 +766,9 @@ internal static class TagFlow
                 filmDoubleClick.Invoke(window, [filmList, doubleClick]);
                 if (gpsOverlay.Visibility != Visibility.Visible ||
                     gpsOverlay.Tag is not long openedId || openedId != gpsA ||
-                    Grid.GetRow(gpsOverlay) != 2 ||
+                    gpsOverlay.Parent is not Grid adjacentGallery ||
+                    Grid.GetColumn(adjacentGallery) != 2 ||
+                    Grid.GetColumn(sidebarPanel) != 4 ||
                     (bool)viewerOpenField.GetValue(window)! ||
                     !selected.SetEquals(keepSelection))
                     throw new Exception("Filmstrip double click opened normal viewer, hid strip or lost multi-selection.");
@@ -784,7 +798,7 @@ internal static class TagFlow
             }
             if (!selected.SetEquals(selectionBeforeLayout))
                 throw new Exception("GPS photo regression test failed to restore original selection.");
-            Console.WriteLine("PASS: GPS filmstrip double click plus single-click image swap preserves multi-selection.");
+            Console.WriteLine("PASS: Photo in gallery, map and filmstrip visible; single-click swaps preserve multi-selection.");
 
             Click(gpsExpand);
             window.UpdateLayout();
