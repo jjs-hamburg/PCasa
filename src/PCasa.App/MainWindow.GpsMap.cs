@@ -222,147 +222,187 @@ public partial class MainWindow
             throw new InvalidOperationException("Local map HTML could not be loaded.");
     }
 
-    // The Chromium callback runs off the WPF dispatcher. The UI action may
-    // execute after its caller returns, so NEVER capture an element owned by
-    // a disposed JsonDocument. Clone the parsed message before dispatch.
-    private static JsonElement ParseDetachedGpsJavascriptMessage(string message)
+    // Chromium's callback runs off the WPF thread. No JsonDocument OR
+    // JsonElement may cross Dispatcher.BeginInvoke: capture immutable values
+    // while the document is alive, and dispatch only this typed snapshot.
+    private sealed record GpsMapMessage(
+        string Kind, long Id = 0, string? Error = null,
+        double? Latitude = null, double? Longitude = null, double? Zoom = null,
+        double? South = null, double? West = null, double? North = null,
+        double? East = null);
+
+    private static GpsMapMessage? ParseGpsJavascriptMessage(string message)
     {
-        using var doc = JsonDocument.Parse(message);
-        return doc.RootElement.Clone();
+        using var document = JsonDocument.Parse(message);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("type", out var type) ||
+            type.ValueKind != JsonValueKind.String)
+            return null;
+        var kind = type.GetString();
+        double? Number(string name)
+        {
+            if (!root.TryGetProperty(name, out var value) ||
+                !value.TryGetDouble(out var number) || !double.IsFinite(number))
+                return null;
+            return number;
+        }
+        switch (kind)
+        {
+            case "ready":
+                return new GpsMapMessage("ready");
+            case "error":
+                return new GpsMapMessage("error",
+                    Error: root.TryGetProperty("message", out var detail) &&
+                        detail.ValueKind == JsonValueKind.String
+                        ? detail.GetString() : null);
+            case "select":
+                return new GpsMapMessage("select", Id:
+                    root.TryGetProperty("id", out var id) &&
+                    id.TryGetInt64(out var parsed) ? parsed : 0);
+            case "draft":
+            {
+                var lat = Number("lat");
+                var lon = Number("lon");
+                return lat is double && lon is double
+                    ? new GpsMapMessage("draft", Latitude: lat, Longitude: lon)
+                    : null;
+            }
+            case "bounds":
+            {
+                var south = Number("south");
+                var west = Number("west");
+                var north = Number("north");
+                var east = Number("east");
+                return south is double && west is double &&
+                       north is double && east is double
+                    ? new GpsMapMessage("bounds", South: south, West: west,
+                        North: north, East: east) : null;
+            }
+            case "viewport":
+            {
+                var lat = Number("lat");
+                var lon = Number("lon");
+                var zoom = Number("zoom");
+                return lat is double && lon is double && zoom is double
+                    ? new GpsMapMessage("viewport", Latitude: lat,
+                        Longitude: lon, Zoom: zoom) : null;
+            }
+            default:
+                return null;
+        }
     }
 
     private void GpsJavascriptMessageReceived(object? sender,
         JavascriptMessageReceivedEventArgs e)
     {
-        // Only our local MapLibre page can send selection messages, never
-        // the experimental third-party Google Maps website.
+        // Only our embedded local map, never the external Google website.
         if (_gpsGoogleWebsiteActive ||
             e.Message is not string message || message.Length > 1024) return;
-        try
+        GpsMapMessage? data;
+        try { data = ParseGpsJavascriptMessage(message); }
+        catch (JsonException) { return; }
+        if (data is null || Dispatcher.HasShutdownStarted) return;
+
+        _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            var root = ParseDetachedGpsJavascriptMessage(message);
-            if (!root.TryGetProperty("type", out var type)) return;
-            var kind = type.GetString();
-            var id = kind == "select" &&
-                root.TryGetProperty("id", out var p) && p.TryGetInt64(out var parsed)
-                    ? parsed : 0;
-            var error = kind == "error" &&
-                root.TryGetProperty("message", out var detail)
-                    ? detail.GetString() : null;
-            _ = Dispatcher.BeginInvoke(() =>
+            if (_gpsBrowser is null || _sidebarMode != "GPS" ||
+                _gpsGoogleWebsiteActive || Dispatcher.HasShutdownStarted)
+                return;
+            if (data.Kind == "ready")
             {
-                if (_gpsBrowser is null || _sidebarMode != "GPS" ||
-                    _gpsGoogleWebsiteActive) return;
-                if (kind == "ready")
+                _gpsBrowserReady = true;
+                GpsMapStatus.Visibility = Visibility.Collapsed;
+                ApplyGpsMapProvider();
+                SendGpsPointsToMap();
+                if (_appearance.GpsMapCenterLat is double savedCenterLat &&
+                    _appearance.GpsMapCenterLon is double savedCenterLon &&
+                    _appearance.GpsMapZoom is double savedZoom)
+                    _gpsBrowser.ExecuteScriptAsync("window.pcasaRestoreViewport?.(" +
+                        savedCenterLat.ToString("R", CultureInfo.InvariantCulture) + "," +
+                        savedCenterLon.ToString("R", CultureInfo.InvariantCulture) + "," +
+                        savedZoom.ToString("R", CultureInfo.InvariantCulture) + ")");
+                if (_gpsDraft is { } draft)
+                    SetGpsDraft(draft.Lat, draft.Lon, recenter: false);
+                GpsPickPosition_Changed(this, new RoutedEventArgs());
+            }
+            else if (data.Kind == "draft" &&
+                     data.Latitude is double dLat &&
+                     data.Longitude is double dLon)
+            {
+                SetGpsDraft(dLat, dLon, recenter: false);
+            }
+            else if (data.Kind == "bounds" &&
+                     data.South is double south &&
+                     data.West is double west &&
+                     data.North is double north &&
+                     data.East is double east)
+            {
+                _ = ApplyGpsBoundsAsync(south, west, north, east);
+            }
+            else if (data.Kind == "viewport" &&
+                     data.Latitude is double lat &&
+                     data.Longitude is double lon &&
+                     data.Zoom is double zoom &&
+                     lat is >= -90 and <= 90 &&
+                     lon is >= -180 and <= 180 &&
+                     zoom is >= 0 and <= 23)
+            {
+                // The map is the owner of camera movements; this only
+                // persists them, without changing the displayed camera.
+                _appearance.GpsMapCenterLat = lat;
+                _appearance.GpsMapCenterLon = lon;
+                _appearance.GpsMapZoom = zoom;
+                SaveAppearance();
+            }
+            else if (data.Kind == "select" && data.Id > 0 &&
+                     _gpsPoints.Any(x => x.Id == data.Id))
+            {
+                var selectedId = data.Id;
+                if (_gpsFullscreen)
                 {
-                    _gpsBrowserReady = true;
-                    GpsMapStatus.Visibility = Visibility.Collapsed;
-                    ApplyGpsMapProvider();
-                    SendGpsPointsToMap();
-                    if (_appearance.GpsMapCenterLat is double savedCenterLat &&
-                        _appearance.GpsMapCenterLon is double savedCenterLon &&
-                        _appearance.GpsMapZoom is double savedZoom)
-                        _gpsBrowser.ExecuteScriptAsync("window.pcasaRestoreViewport?.(" +
-                            savedCenterLat.ToString("R", CultureInfo.InvariantCulture) + "," +
-                            savedCenterLon.ToString("R", CultureInfo.InvariantCulture) + "," +
-                            savedZoom.ToString("R", CultureInfo.InvariantCulture) + ")");
-                    if (_gpsDraft is { } draft)
-                        SetGpsDraft(draft.Lat, draft.Lon, recenter: false);
-                    GpsPickPosition_Changed(this, new RoutedEventArgs());
+                    _gpsHighlightedImageId = selectedId;
+                    GpsPhotoPopup.Visibility = Visibility.Collapsed;
+                    ShowGpsFullscreenImage(selectedId);
                 }
-                else if (kind == "draft" &&
-                         root.TryGetProperty("lat", out var draftLat) &&
-                         root.TryGetProperty("lon", out var draftLon) &&
-                         draftLat.TryGetDouble(out var dLat) &&
-                         draftLon.TryGetDouble(out var dLon))
+                else if (_appearance.ShowGpsFilmstrip ||
+                         _gpsSelectionCount > 1)
                 {
-                    SetGpsDraft(dLat, dLon, recenter: false);
-                }
-                else if (kind == "bounds" &&
-                         root.TryGetProperty("south", out var southValue) &&
-                         root.TryGetProperty("west", out var westValue) &&
-                         root.TryGetProperty("north", out var northValue) &&
-                         root.TryGetProperty("east", out var eastValue) &&
-                         southValue.TryGetDouble(out var south) &&
-                         westValue.TryGetDouble(out var west) &&
-                         northValue.TryGetDouble(out var north) &&
-                         eastValue.TryGetDouble(out var eastLongitude))
-                {
-                    _ = ApplyGpsBoundsAsync(south, west, north, eastLongitude);
-                }
-                else if (kind == "viewport" &&
-                         root.TryGetProperty("lat", out var cameraLat) &&
-                         root.TryGetProperty("lon", out var cameraLon) &&
-                         root.TryGetProperty("zoom", out var cameraZoom) &&
-                         cameraLat.TryGetDouble(out var savedLat) &&
-                         cameraLon.TryGetDouble(out var savedLon) &&
-                         cameraZoom.TryGetDouble(out var savedZoom) &&
-                         double.IsFinite(savedLat) && double.IsFinite(savedLon) &&
-                         double.IsFinite(savedZoom))
-                {
-                    if (savedLat >= -90 && savedLat <= 90 &&
-                        savedLon >= -180 && savedLon <= 180 && savedZoom >= 0 &&
-                        savedZoom <= 23)
+                    _gpsHighlightedImageId = selectedId;
+                    if (_appearance.ShowGpsFilmstrip)
                     {
-                        _appearance.GpsMapCenterLat = savedLat;
-                        _appearance.GpsMapCenterLon = savedLon;
-                        _appearance.GpsMapZoom = savedZoom;
-                        SaveAppearance();
-                    }
-                }
-                else if (kind == "select" && id > 0 &&
-                         _gpsPoints.Any(x => x.Id == id))
-                {
-                    if (_gpsFullscreen)
-                    {
-                        // Map full-screen opens the photo over the map. A click
-                        // on that overlay restores the existing GPS view.
-                        _gpsHighlightedImageId = id;
                         GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                        ShowGpsFullscreenImage(id);
-                    }
-                    else if (_appearance.ShowGpsFilmstrip ||
-                             _gpsSelectionCount > 1)
-                    {
-                        // A map point within a multi-photo selection must
-                        // NOT collapse that selection or reframe the map.
-                        // Only its visual highlight / optional strip focus
-                        // changes. This includes the no-filmstrip case.
-                        _gpsHighlightedImageId = id;
-                        if (_appearance.ShowGpsFilmstrip)
-                        {
-                            GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                            _gpsFilmstripUpdating = true;
-                            GpsFilmstripList.SelectedItem =
-                                _gpsFilmstripEntries.FirstOrDefault(x => x.Id == id);
-                            _gpsFilmstripUpdating = false;
-                        }
-                        else
-                            ShowGpsPhotoPopup(id);
-                        HighlightGpsPointOnMap(id);
+                        _gpsFilmstripUpdating = true;
+                        GpsFilmstripList.SelectedItem =
+                            _gpsFilmstripEntries.FirstOrDefault(x => x.Id == selectedId);
+                        _gpsFilmstripUpdating = false;
                     }
                     else
-                    {
-                        ShowGpsPhotoPopup(id);
-                        if (_displayedBrowseIndex.Any(x => x.ImageId == id))
-                        {
-                            BrowseSurface_ImageClicked(this,
-                                new BrowseImageClickedEventArgs(id, ModifierKeys.None));
-                            RestoreGalleryAnchor((id, 0));
-                        }
-                        else
-                            GpsCoordinatesText.Text = _gpsPoints.First(x => x.Id == id).Name;
-                    }
+                        ShowGpsPhotoPopup(selectedId);
+                    HighlightGpsPointOnMap(selectedId);
                 }
-                else if (kind == "error" && error is not null)
+                else
                 {
-                    PCasaDiagnostics.WriteMessage("GPS.Map", error);
-                    GpsMapStatus.Visibility = Visibility.Visible;
-                    GpsMapStatus.Text = UiLanguage.T("Kartenanbieter konnte nicht geladen werden");
+                    ShowGpsPhotoPopup(selectedId);
+                    if (_displayedBrowseIndex.Any(x => x.ImageId == selectedId))
+                    {
+                        BrowseSurface_ImageClicked(this,
+                            new BrowseImageClickedEventArgs(selectedId, ModifierKeys.None));
+                        RestoreGalleryAnchor((selectedId, 0));
+                    }
+                    else
+                        GpsCoordinatesText.Text =
+                            _gpsPoints.First(x => x.Id == selectedId).Name;
                 }
-            });
-        }
-        catch (JsonException) { }
+            }
+            else if (data.Kind == "error" && data.Error is not null)
+            {
+                PCasaDiagnostics.WriteMessage("GPS.Map", data.Error);
+                GpsMapStatus.Visibility = Visibility.Visible;
+                GpsMapStatus.Text =
+                    UiLanguage.T("Kartenanbieter konnte nicht geladen werden");
+            }
+        }));
     }
 
     private void ApplyGpsMapProvider()

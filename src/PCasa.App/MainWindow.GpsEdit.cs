@@ -1,4 +1,5 @@
 using CefSharp;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
@@ -63,6 +64,9 @@ public partial class MainWindow
         _gpsPlaceSearchCancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
         _gpsPlaceSearchCancellation = cancellation;
+        var stopwatch = Stopwatch.StartNew();
+        PCasaDiagnostics.WriteMessage("GPS.PlaceSearch.Start",
+            "Request=" + version + "; QueryLength=" + query.Length);
         GpsEditStatus.Text = UiLanguage.T("Ort wird gesucht …");
         GpsPlaceSearchButton.IsEnabled = false;
         try
@@ -81,6 +85,9 @@ public partial class MainWindow
                     await Task.Delay(pause, cancellation.Token);
                 _lastGpsPlaceRequest = DateTimeOffset.UtcNow;
                 using var response = await GpsPlaceClient.GetAsync(url, cancellation.Token);
+                PCasaDiagnostics.WriteMessage("GPS.PlaceSearch.Http",
+                    "Request=" + version + "; Status=" + (int)response.StatusCode +
+                    "; ElapsedMs=" + stopwatch.ElapsedMilliseconds);
                 response.EnsureSuccessStatusCode();
                 json = await response.Content.ReadAsStringAsync(cancellation.Token);
             }
@@ -97,6 +104,9 @@ public partial class MainWindow
                 hits.Add(new PlaceHit(item.GetProperty("display_name").GetString() ??
                     query, lat, lon));
             }
+            PCasaDiagnostics.WriteMessage("GPS.PlaceSearch.Success",
+                "Request=" + version + "; Hits=" + hits.Count +
+                "; ElapsedMs=" + stopwatch.ElapsedMilliseconds);
             if (version != _gpsPlaceSearchRevision || _sidebarMode != "GPS") return;
             GpsPlaceResults.ItemsSource = hits;
             GpsPlaceResults.Visibility = hits.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -104,7 +114,21 @@ public partial class MainWindow
                 ? UiLanguage.T("Kein Ort gefunden.") : UiLanguage.T("Ort auswählen oder auf Karte klicken.");
             if (hits.Count == 1) GpsPlaceResults.SelectedIndex = 0;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException ex)
+        {
+            // HttpClient.Timeout throws TaskCanceledException too. It is
+            // NOT a user cancellation: leaving "Ort wird gesucht" visible
+            // indefinitely made a finite timeout look like a frozen app.
+            var superseded = cancellation.IsCancellationRequested ||
+                version != _gpsPlaceSearchRevision;
+            PCasaDiagnostics.WriteMessage("GPS.PlaceSearch." +
+                (superseded ? "Canceled" : "Timeout"),
+                "Request=" + version + "; ElapsedMs=" +
+                stopwatch.ElapsedMilliseconds + "; " + ex.GetType().Name);
+            if (!superseded)
+                GpsEditStatus.Text =
+                    UiLanguage.T("Ortssuche hat zu lange gedauert. Bitte erneut versuchen.");
+        }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("GPS.PlaceSearch", ex);
@@ -115,6 +139,11 @@ public partial class MainWindow
         {
             if (version == _gpsPlaceSearchRevision)
                 GpsPlaceSearchButton.IsEnabled = true;
+            if (ReferenceEquals(_gpsPlaceSearchCancellation, cancellation))
+            {
+                _gpsPlaceSearchCancellation = null;
+                cancellation.Dispose();
+            }
         }
     }
 
