@@ -102,7 +102,7 @@ public partial class MainWindow
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "PCasa", "map-browser-cache");
                 Directory.CreateDirectory(cache);
-                if (!Cef.Initialize(new CefSettings { CachePath = cache }))
+                if (Cef.Initialize(new CefSettings { CachePath = cache }) is not true)
                     throw new InvalidOperationException("CEF initialisation failed.");
             }
 
