@@ -362,6 +362,7 @@ public partial class MainWindow
                      _gpsPoints.Any(x => x.Id == data.Id))
             {
                 var selectedId = data.Id;
+                FocusGpsPhotoForDisplay(selectedId);
                 if (_gpsFullscreen)
                 {
                     _gpsHighlightedImageId = selectedId;
@@ -449,6 +450,27 @@ public partial class MainWindow
             _gpsBrowser is not { IsDisposed: false } browser) return;
         browser.ExecuteScriptAsync("window.pcasaHighlightPoint?.(" +
             imageId.ToString(CultureInfo.InvariantCulture) + ")");
+    }
+
+    // A filmstrip/map focus change is not a gallery selection change: do
+    // not change selected IDs, browse anchor, or the map camera. It DOES
+    // change whose GPS coordinates the sidebar shows, and an old draft
+    // must not continue to look applicable to the newly focused photo.
+    private void FocusGpsPhotoForDisplay(long imageId)
+    {
+        if (_gpsHighlightedImageId != imageId)
+        {
+            ClearGpsEditorDraft();
+            GpsEditorToggle.IsChecked = false;
+        }
+        _gpsHighlightedImageId = imageId;
+        var photo = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
+        if (photo is null) return;
+        _gpsCurrentCoordinates = (photo.Lat, photo.Lon);
+        GpsCoordinatesText.Text = UiLanguage.Format(
+            "GPS (Foto): {0:F6}°, {1:F6}°", photo.Lat, photo.Lon);
+        GpsCopyButton.IsEnabled = true;
+        UpdateGpsGoogleButton();
     }
 
     private async Task RefreshGpsMapAsync()

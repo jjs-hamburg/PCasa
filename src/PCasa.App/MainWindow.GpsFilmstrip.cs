@@ -169,7 +169,7 @@ public partial class MainWindow
             GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item) return;
         // A single click changes only the map highlight, NOT gallery
         // selection, folder focus or the map photo popup.
-        _gpsHighlightedImageId = item.Id;
+        FocusGpsPhotoForDisplay(item.Id);
         GpsPhotoPopup.Visibility = Visibility.Collapsed;
         HighlightGpsPointOnMap(item.Id);
         // Only an ALREADY OPEN image follows single clicks. Ordinary strip

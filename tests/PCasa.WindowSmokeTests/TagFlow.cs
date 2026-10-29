@@ -698,9 +698,62 @@ internal static class TagFlow
                 searchBox.Text != "Next target in progress")
                 throw new Exception("Refreshing the same selection discarded a draft.");
             changeSelection.Invoke(window, [new long[] { gpsB }]);
-            if (gpsTools.IsChecked == true || searchBox.Text.Length != 0)
-                throw new Exception("Next photo did not hide the old GPS editing tools.");
+            if (gpsTools.IsChecked == true || searchBox.Text.Length != 0 ||
+                !((TextBlock)window.FindName("GpsCoordinatesText")!).Text.Contains(
+                    UiLanguage.T("GPS-Positionen werden geladen"), StringComparison.Ordinal))
+                throw new Exception("Next photo retained old search text or the previous photo's GPS.");
             Console.WriteLine("PASS: GPS editing is compact and draft state belongs to the selected photos.");
+
+            // Single-click filmstrip focus must preserve gallery multiselection
+            // while replacing the coordinates displayed for the focused photo.
+            var pointsField = typeof(PCasa.App.MainWindow).GetField("_gpsPoints",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("GPS map projection missing.");
+            var highlightedField = typeof(PCasa.App.MainWindow).GetField(
+                "_gpsHighlightedImageId",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)
+                ?? throw new Exception("GPS photo focus missing.");
+            var oldPoints = pointsField.GetValue(window);
+            var oldHighlight = highlightedField.GetValue(window);
+            var pointType = projected[0].GetType();
+            var suppliedPoints = Array.CreateInstance(pointType, projected.Length);
+            for (var i = 0; i < projected.Length; i++)
+                suppliedPoints.SetValue(projected[i], i);
+            try
+            {
+                pointsField.SetValue(window, suppliedPoints);
+                highlightedField.SetValue(window, gpsA);
+                var focus = typeof(PCasa.App.MainWindow).GetMethod(
+                    "FocusGpsPhotoForDisplay",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("GPS focused photo display refresh missing.");
+                gpsTools.IsChecked = true;
+                searchBox.Text = "Old search from previous filmstrip photo";
+                focus.Invoke(window, [gpsB]);
+                var pointB = projected.Single(p =>
+                    (long)p.GetType().GetProperty("Id")!.GetValue(p)! == gpsB);
+                var latB = (double)pointB.GetType().GetProperty("Lat")!.GetValue(pointB)!;
+                var lonB = (double)pointB.GetType().GetProperty("Lon")!.GetValue(pointB)!;
+                var coordinateField = typeof(PCasa.App.MainWindow).GetField(
+                    "_gpsCurrentCoordinates",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!;
+                var shownGps = ((double Lat, double Lon)?)coordinateField.GetValue(window);
+                if (gpsTools.IsChecked == true || searchBox.Text != string.Empty ||
+                    shownGps is not { } pos || Math.Abs(pos.Lat-latB)>0.000001 ||
+                    Math.Abs(pos.Lon-lonB)>0.000001 ||
+                    !selected.SetEquals(selectionBeforeLayout))
+                    throw new Exception("Filmstrip focus retained old search/GPS or lost gallery selection.");
+            }
+            finally
+            {
+                pointsField.SetValue(window, oldPoints);
+                highlightedField.SetValue(window, oldHighlight);
+            }
+            Console.WriteLine("PASS: Filmstrip focus updates displayed GPS without losing selection or keeping the previous search.");
 
             var filmToggle = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsFilmstripToggle")
                 ?? throw new Exception("Optional GPS filmstrip toggle missing.");

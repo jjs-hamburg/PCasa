@@ -63,6 +63,7 @@ public partial class MainWindow
         _gpsEditSelectionIds.UnionWith(selectedIds);
         ClearGpsEditorDraft();
         GpsEditorToggle.IsChecked = false;
+        GpsCoordinatesText.Text = UiLanguage.T("GPS-Positionen werden geladen");
     }
 
     private void ClearGpsEditorDraft()
