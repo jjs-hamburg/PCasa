@@ -607,11 +607,11 @@ internal static class TagFlow
             var googleAddress = (string)googleUrlBuilder.Invoke(
                 null, [53.553333, 10.017222])!;
             if (!googleAddress.StartsWith(
-                    "https://www.google.com/maps/@?api=1&map_action=map&center=",
+                    "https://www.google.com/maps/search/?api=1&query=",
                     StringComparison.Ordinal) ||
                 googleAddress.Contains("key=", StringComparison.Ordinal) ||
-                googleAddress.Contains("/search/", StringComparison.Ordinal))
-                throw new Exception("Google Maps must open without search sidebar or Cloud key.");
+                !googleAddress.Contains("53.553333", StringComparison.Ordinal))
+                throw new Exception("Google Maps coordinate search fallback changed unexpectedly.");
 
             var multiSelectionField = typeof(PCasa.App.MainWindow).GetField(
                 "_gpsSelectionCount",
@@ -647,7 +647,7 @@ internal static class TagFlow
                 coordField.SetValue(window, oldCoords);
                 updateGoogle.Invoke(window, null);
             }
-            Console.WriteLine("PASS: Google map without search sidebar; multi selection stays in PCasa.");
+            Console.WriteLine("PASS: Stable Google coordinate search; multi selection stays in PCasa.");
 
             // A previous run may have saved GPS in expanded mode.
             if (Equals(gpsExpand.Tag, "expanded")) Click(gpsExpand);

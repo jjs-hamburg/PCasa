@@ -599,10 +599,13 @@ public partial class MainWindow
             throw new ArgumentOutOfRangeException(nameof(latitude));
         var value = string.Create(CultureInfo.InvariantCulture,
             $"{latitude:F6},{longitude:F6}");
-        // Google's documented map action opens without a place-detail
-        // sidebar; unlike search it provides no custom photo marker.
-        return "https://www.google.com/maps/@?api=1&map_action=map&center=" +
-            Uri.EscapeDataString(value) + "&zoom=15";
+        // On an embedded, narrow Chromium view, Google's pure map action
+        // can display a stack of Home/Work, weather and place suggestions
+        // over the map. The tested coordinate search is the less intrusive
+        // fallback and keeps the selected location identifiable with a pin.
+        // Google does not expose a supported URL switch to hide its full UI.
+        return "https://www.google.com/maps/search/?api=1&query=" +
+            Uri.EscapeDataString(value);
     }
 
     private void GpsGoogle_Click(object sender, RoutedEventArgs e)
