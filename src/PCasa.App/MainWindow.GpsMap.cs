@@ -96,7 +96,7 @@ public partial class MainWindow
         if (_sidebarMode != "GPS" || _gpsBrowser is not null) return;
         try
         {
-            if (!Cef.IsInitialized)
+            if (Cef.IsInitialized is not true)
             {
                 var cache = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
