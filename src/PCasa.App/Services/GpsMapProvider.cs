@@ -25,7 +25,6 @@ public sealed class GpsMapProvider
                 .Replace("{z}", "1").Replace("{x}", "1").Replace("{y}", "1"),
                 UriKind.Absolute, out var uri) &&
            uri.Scheme == Uri.UriSchemeHttps &&
-           !uri.IsLoopback &&
            (provider.Format != "xyz" ||
                 (provider.Url.Contains("{z}", StringComparison.Ordinal) &&
                  provider.Url.Contains("{x}", StringComparison.Ordinal) &&

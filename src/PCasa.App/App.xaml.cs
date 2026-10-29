@@ -40,7 +40,14 @@ public partial class App : Application
         // WPF can exit through a path other than MainWindow.Close().
         // Always invoke the SAME ExifTool owner cleanup on application exit;
         // the Windows kill-on-close job is the final crash-safe fallback.
-        try { ExifToolProcessRegistry.StopAll(); }
+        try
+        {
+            ExifToolProcessRegistry.StopAll();
+            // GPS uses the open-source CEF engine only if its panel was opened.
+            // Shutdown after WPF closes the owned map browser, not on every
+            // incidental sidebar switch.
+            if (CefSharp.Cef.IsInitialized is true) CefSharp.Cef.Shutdown();
+        }
         finally { base.OnExit(e); }
     }
 
