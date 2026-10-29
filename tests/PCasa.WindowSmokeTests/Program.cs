@@ -656,6 +656,8 @@ internal static class Program
                 ?? throw new Exception("Tags panel not found.");
             var infoPanel = (FrameworkElement?)window.FindName("GeneralSidebarScroll")
                 ?? throw new Exception("Info panel not found.");
+            var gpsPanel = (FrameworkElement?)window.FindName("GpsMapPanel")
+                ?? throw new Exception("GPS map panel not found.");
 
             foreach (var mode in new[] { "Tags", "Info", "GPS", "Tags" })
             {
@@ -667,8 +669,10 @@ internal static class Program
                 if (sidebar.Visibility != Visibility.Visible ||
                     tagsPanel.Visibility != (mode == "Tags"
                         ? Visibility.Visible : Visibility.Collapsed) ||
-                    infoPanel.Visibility != (mode == "Tags"
-                        ? Visibility.Collapsed : Visibility.Visible))
+                    infoPanel.Visibility != (mode == "Info"
+                        ? Visibility.Visible : Visibility.Collapsed) ||
+                    gpsPanel.Visibility != (mode == "GPS"
+                        ? Visibility.Visible : Visibility.Collapsed))
                     throw new Exception("Sidebar state inconsistent for " + mode);
                 surface.SetViewport(scroller.VerticalOffset,
                     Math.Max(1, scroller.ViewportHeight));
