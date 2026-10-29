@@ -596,9 +596,13 @@ internal static class TagFlow
                     throw new Exception("GPS editing control missing: " + controlName);
             if (window.FindName("GpsApplyMissingButton") is not Button missingGpsButton ||
                 missingGpsButton.IsEnabled ||
-                window.FindName("GpsRemoveButton") is not Button removeGpsButton ||
-                !removeGpsButton.IsEnabled)
-                throw new Exception("GPS editor should require a draft but allow deletion of selected GPS.");
+                window.FindName("GpsRemoveButton") is not Button removeGpsButton)
+                throw new Exception("GPS editor must require a draft for assignment.");
+            // Removal is enabled only when the actual gallery has selected
+            // images. This test's explicit ReadGpsPoints projection does NOT
+            // itself select a photo in the real gallery.
+            if (removeGpsButton.IsEnabled && selected.Count == 0)
+                throw new Exception("GPS removal enabled without an actual selection.");
 
             var filmToggle = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsFilmstripToggle")
                 ?? throw new Exception("Optional GPS filmstrip toggle missing.");
