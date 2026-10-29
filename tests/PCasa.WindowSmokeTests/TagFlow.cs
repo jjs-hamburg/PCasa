@@ -496,8 +496,6 @@ internal static class TagFlow
                 ?? throw new Exception("GPS fullscreen button is missing.");
             var sidebarPanel = (Border?)window.FindName("InfoSidebarPanel")
                 ?? throw new Exception("GPS panel is missing.");
-            var closeSidebar = (Button?)window.FindName("InfoSidebarButton")
-                ?? throw new Exception("Info sidebar button is missing.");
             void Click(Button button) =>
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
 
@@ -553,7 +551,7 @@ internal static class TagFlow
             if (folderPane.Visibility != Visibility.Collapsed)
                 throw new Exception("GPS resize overwrote the user's hidden-folder preference.");
             Click(folderToggle);
-            Click(closeSidebar);
+            Click(gpsToggle);
             if (!folderPane.IsVisible ||
                 gpsColumn.Width.Value != 0 ||
                 !selected.SetEquals(selectionBeforeLayout))
