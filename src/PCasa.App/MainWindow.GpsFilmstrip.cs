@@ -74,17 +74,17 @@ public partial class MainWindow
         var packed = new List<(GpsFilmstripEntry Item, BrowseThumbnailIndexEntry Index)>();
         // Follow the same sort/gallery projection the user sees, not database ID
         // ordering. No source file or NAS roundtrip for the strip.
-        foreach (var index in _browseIndex)
+        for (var imageIndex = 0; imageIndex < _browseIndex.Count; imageIndex++)
         {
             if (entries.Count >= MaximumGpsFilmstripPhotos) break;
+            var index = _browseIndex[imageIndex];
             if (!selected.Contains(index.ImageId) || !mapSelected.TryGetValue(index.ImageId, out var point))
                 continue;
             var item = new GpsFilmstripEntry { Id = index.ImageId, Name = point.Name };
             entries.Add(item);
             if (_browsePageCache is not null)
             {
-                var imageIndex = _browseIndex.IndexOf(index);
-                if (imageIndex >= 0 && _browsePageCache.TryGet(imageIndex, out var cached))
+                if (_browsePageCache.TryGet(imageIndex, out var cached))
                     item.Bitmap = cached;
             }
             if (item.Bitmap is null) packed.Add((item, index));

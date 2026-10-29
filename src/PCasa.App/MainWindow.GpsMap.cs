@@ -49,6 +49,7 @@ public partial class MainWindow
         _appearance.GpsProviders = _appearance.GpsProviders
             .Where(GpsMapProvider.IsValid).ToList();
         UpdateGpsProviderMenu();
+        InitializeGpsFilmstrip();
         GpsMapHost.SizeChanged += (_, _) =>
         {
             if (_gpsBrowserReady && _gpsBrowser is { IsDisposed: false } browser)
@@ -57,6 +58,7 @@ public partial class MainWindow
         Closed += (_, _) =>
         {
             _gpsQueryRevision++;
+            _gpsFilmstripRevision++;
             if (_gpsBrowser is not null)
             {
                 _gpsBrowser.JavascriptMessageReceived -= GpsJavascriptMessageReceived;
@@ -270,19 +272,28 @@ public partial class MainWindow
                 workKind: SchedulerWorkKind.CatalogRead);
             if (revision != _gpsQueryRevision || _sidebarMode != "GPS") return;
             _gpsPoints = points;
-            // Multi-image selection is a meaningful map set, rather than only
-            // the first selected image used by the previous GPS text sidebar.
-            _gpsCurrentCoordinates = points.Count == 1
-                ? (points[0].Lat, points[0].Lon) : null;
+            // Foreground selection and folder context are intentionally
+            // independent. One selection may coexist with thousands of
+            // unselected background markers in the same map source.
+            var selectedGps = points.Where(p => p.Selected).ToArray();
+            _gpsCurrentCoordinates = selectedGps.Length == 1
+                ? (selectedGps[0].Lat, selectedGps[0].Lon)
+                : selectedIds.Length == 0 && points.Count == 1
+                    ? (points[0].Lat, points[0].Lon) : null;
             GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
             GpsGoogleButton.IsEnabled = _gpsCurrentCoordinates is not null;
-            GpsCoordinatesText.Text = points.Count == 0
+            GpsCoordinatesText.Text = selectedIds.Length > 0 && selectedGps.Length == 0
                 ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
-                : points.Count == 1
-                    ? string.Format(CultureInfo.CurrentCulture,
-                        "{0:F6}°, {1:F6}°", points[0].Lat, points[0].Lon)
-                    : UiLanguage.Format("Bilder mit GPS: {0:N0}", points.Count);
+                : points.Count == 0
+                    ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
+                    : _gpsCurrentCoordinates is { } coordinate
+                        ? string.Format(CultureInfo.CurrentCulture,
+                            "{0:F6}°, {1:F6}°", coordinate.Lat, coordinate.Lon)
+                        : UiLanguage.Format("Bilder mit GPS: {0:N0}",
+                            selectedGps.Length > 0 ? selectedGps.Length : points.Count);
             SendGpsPointsToMap();
+            SyncGpsPhotoPopupToGallerySelection();
+            UpdateGpsFilmstrip();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -297,13 +308,15 @@ public partial class MainWindow
     private List<GpsPoint> ReadGpsPoints(long[] ids, long? folderId,
         CancellationToken cancellation)
     {
-        const int maxPoints = 5000;
+        const int maximum = 5000;
         var result = new List<GpsPoint>();
+        var selected = ids.ToHashSet();
+        var seen = new HashSet<long>();
         using var connection = _database.OpenConnection();
 
-        void Read(string where, long[]? subset, long? folder)
+        void Read(string where, long[]? chunk, long? folder)
         {
-            if (result.Count >= maxPoints) return;
+            if (result.Count >= maximum) return;
             using var command = connection.CreateCommand();
             command.CommandText = """
                 SELECT i.id, i.file_name, x.gps_latitude, x.gps_longitude
@@ -312,36 +325,55 @@ public partial class MainWindow
                   AND x.source_file_size = i.file_size
                 WHERE x.gps_latitude BETWEEN -90 AND 90
                   AND x.gps_longitude BETWEEN -180 AND 180
-                """ + where + " ORDER BY i.id LIMIT " + (maxPoints - result.Count);
+                """ + where + " ORDER BY i.id LIMIT " + maximum;
             if (folder is long f) command.Parameters.AddWithValue("$folder", f);
-            if (subset is not null)
-                for (var i = 0; i < subset.Length; i++)
-                    command.Parameters.AddWithValue("$p" + i, subset[i]);
+            if (chunk is not null)
+                for (var i = 0; i < chunk.Length; i++)
+                    command.Parameters.AddWithValue("$p" + i, chunk[i]);
             using var reader = command.ExecuteReader();
-            while (reader.Read())
+            while (reader.Read() && result.Count < maximum)
             {
                 cancellation.ThrowIfCancellationRequested();
                 var id = reader.GetInt64(0);
+                if (!seen.Add(id)) continue;
                 result.Add(new GpsPoint(id, reader.GetString(1),
-                    reader.GetDouble(2), reader.GetDouble(3),
-                    ids.Contains(id)));
+                    reader.GetDouble(2), reader.GetDouble(3), selected.Contains(id)));
             }
         }
 
-        if (ids.Length > 0)
+        // Selected pictures are always fetched first: if they lie outside the
+        // current folder or at the end of a large catalog, the 5000-marker
+        // limit can never hide them behind background markers.
+        foreach (var chunk in ids.Distinct().Chunk(350))
         {
-            foreach (var chunk in ids.Distinct().Chunk(350))
-            {
-                cancellation.ThrowIfCancellationRequested();
-                Read(" AND i.id IN (" + string.Join(",", chunk.Select(
-                    (_, i) => "$p" + i)) + ")", chunk, null);
-                if (result.Count >= maxPoints) break;
-            }
+            cancellation.ThrowIfCancellationRequested();
+            Read(" AND i.id IN (" + string.Join(",", chunk.Select(
+                (_, i) => "$p" + i)) + ")", chunk, null);
+            if (result.Count >= maximum) return result;
         }
-        else
-            Read(folderId is not null ? " AND i.photo_folder_id = $folder" : "",
-                null, folderId);
+        // The current folder remains visible as surrounding context even
+        // when the selection changes. This is one consistent SQLite read,
+        // with the same scheduler-owned CatalogRead lifecycle.
+        if (folderId is long currentFolder)
+            Read(" AND i.photo_folder_id = $folder", null, currentFolder);
+        else if (ids.Length == 0)
+            Read("", null, null);
         return result;
+    }
+
+    private void SyncGpsPhotoPopupToGallerySelection()
+    {
+        if (GpsPhotoPopup.Visibility != Visibility.Visible) return;
+        var focused = _gallerySelection.FocusedId;
+        var selected = _gpsPoints.FirstOrDefault(p => p.Id == focused && p.Selected)
+            ?? _gpsPoints.FirstOrDefault(p => p.Selected);
+        if (selected is null)
+        {
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (GpsPhotoPopup.Tag is not long previous || previous != selected.Id)
+            ShowGpsPhotoPopup(selected.Id);
     }
 
     private void ShowGpsPhotoPopup(long id)
