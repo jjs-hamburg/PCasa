@@ -311,5 +311,11 @@
   "Kartenanbieter konnte nicht geladen werden": "Could not load map provider",
   "Foto anzeigen": "Show photo",
   "Filmstreifen": "Filmstrip",
-  "Karte": "Map"
+  "Karte": "Map",
+  "Zur Fotokarte": "Back to photo map",
+  "Google Maps – experimentelle Webansicht": "Google Maps – experimental web view",
+  "Google Maps konnte nicht geladen werden": "Google Maps could not be loaded",
+  "Bild wird geladen": "Loading photo",
+  "Original nicht verfügbar": "Original unavailable",
+  "Bild konnte nicht geladen werden": "Photo could not be loaded"
 }

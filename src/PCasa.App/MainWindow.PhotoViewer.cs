@@ -1220,8 +1220,13 @@ public partial class MainWindow
     {
         if (!_viewerOpen && _gpsFullscreen && e.Key == Key.Escape)
         {
-            _gpsFullscreen = false;
-            UpdateWorkspaceLayoutPreservingGallery();
+            if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+                CloseGpsFullscreenImage();
+            else
+            {
+                _gpsFullscreen = false;
+                UpdateWorkspaceLayoutPreservingGallery();
+            }
             e.Handled = true;
             return;
         }

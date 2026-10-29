@@ -122,6 +122,8 @@ public partial class MainWindow
         GeneralSidebarScroll.Visibility = _sidebarMode is "Tags" or "GPS"
             ? Visibility.Collapsed : Visibility.Visible;
         GpsMapPanel.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
+        if (!fullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+            CloseGpsFullscreenImage();
     }
 
     private void FolderSidebarToggle_Click(object sender, RoutedEventArgs e)

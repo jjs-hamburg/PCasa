@@ -172,8 +172,13 @@ public partial class MainWindow
 
     private void GpsFilmstrip_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item ||
-            !_displayedBrowseIndex.Any(x => x.ImageId == item.Id)) return;
+        if (GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item) return;
+        if (_gpsFullscreen)
+        {
+            ShowGpsFullscreenImage(item.Id);
+            return;
+        }
+        if (!_displayedBrowseIndex.Any(x => x.ImageId == item.Id)) return;
         BrowseSurface_ImageOpened(this,
             new PCasa.App.Controls.BrowseImageClickedEventArgs(item.Id, ModifierKeys.None));
     }

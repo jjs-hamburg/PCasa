@@ -486,8 +486,14 @@ public partial class MainWindow
 
     private void GpsPhotoOpen_Click(object sender, RoutedEventArgs e)
     {
-        if (GpsPhotoPopup.Tag is not long id ||
-            !_displayedBrowseIndex.Any(x => x.ImageId == id)) return;
+        if (GpsPhotoPopup.Tag is not long id) return;
+        if (_gpsFullscreen)
+        {
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+            ShowGpsFullscreenImage(id);
+            return;
+        }
+        if (!_displayedBrowseIndex.Any(x => x.ImageId == id)) return;
         BrowseSurface_ImageOpened(this, new BrowseImageClickedEventArgs(id, ModifierKeys.None));
     }
 
