@@ -28,6 +28,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  });
  map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
  let points = [], ready = false, highlightedId = null;
+ let previousSelectedIds = null;
  const selectedMarkers = new Map();
  function geojson(list) {
    return {type:'FeatureCollection',features:list.map(p=>({
@@ -100,8 +101,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    const p=points.find(p=>String(p.id)===String(id) && p.selected);
    if(!p)return;
    highlightedId=String(id);
+   // Highlight only: the user must retain the exact map extent while
+   // comparing selected photos, even at identical GPS coordinates.
    syncSelectedMarkers();
-   map.easeTo({center:[p.lon,p.lat],zoom:Math.max(map.getZoom(),13),duration:300});
  };
  function zoomSelection() {
    const selected = points.filter(p=>p.selected);
@@ -114,7 +116,15 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  }
  window.pcasaSetPoints = (data) => {
    points = Array.isArray(data) ? data.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)) : [];
-   if (ready) { updatePhotos(); zoomSelection(); }
+   const selectedIds = points.filter(p=>p.selected).map(p=>String(p.id)).sort().join(',');
+   const selectionChanged = selectedIds !== previousSelectedIds;
+   previousSelectedIds = selectedIds;
+   if (ready) {
+     updatePhotos();
+     // Only a different multi-photo selection establishes a new overview.
+     // A focus/highlight update must NEVER pan or zoom this overview.
+     if (selectionChanged && selectedIds) zoomSelection();
+   }
  };
  window.pcasaApplyProvider = (provider) => {
    if (!provider || !provider.url) return;
@@ -126,7 +136,11 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      map.setStyle(style);
    } catch(err) { post({type:'error',message:String(err)}); }
  };
- map.on('style.load',()=>{installPhotos();if(!ready){ready=true;post({type:'ready'});}else{zoomSelection();}});
+ map.on('style.load',()=>{
+   installPhotos();
+   if(!ready){ready=true;post({type:'ready'});}
+   // Style switching preserves the current camera instead of zooming again.
+ });
  map.on('error',event=>{const s=String(event.error?.message||'');if(s)post({type:'error',message:s.substring(0,250)});});
  map.on('click','pcasa-clusters',event=>{
    const features=map.queryRenderedFeatures(event.point,{layers:['pcasa-clusters']});
