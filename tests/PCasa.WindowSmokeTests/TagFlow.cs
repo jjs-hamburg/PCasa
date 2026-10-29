@@ -609,8 +609,45 @@ internal static class TagFlow
             if (!googleAddress.StartsWith(
                     "https://www.google.com/maps/@?api=1&map_action=map&center=",
                     StringComparison.Ordinal) ||
-                googleAddress.Contains("key=", StringComparison.Ordinal))
-                throw new Exception("Google Maps requires an unintended Cloud API key.");
+                googleAddress.Contains("key=", StringComparison.Ordinal) ||
+                googleAddress.Contains("/search/", StringComparison.Ordinal))
+                throw new Exception("Google Maps must open without search sidebar or Cloud key.");
+
+            var multiSelectionField = typeof(PCasa.App.MainWindow).GetField(
+                "_gpsSelectionCount",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var googleButton = (Button?)window.FindName("GpsGoogleButton")
+                ?? throw new Exception("Google Maps button is missing.");
+            var coordField = typeof(PCasa.App.MainWindow).GetField(
+                "_gpsCurrentCoordinates",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var updateGoogle = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateGpsGoogleButton",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var oldCount = multiSelectionField.GetValue(window);
+            var oldCoords = coordField.GetValue(window);
+            try
+            {
+                coordField.SetValue(window, (53.553333, 10.017222));
+                multiSelectionField.SetValue(window, 2);
+                updateGoogle.Invoke(window, null);
+                if (googleButton.IsEnabled)
+                    throw new Exception("Google Maps misleadingly accepts multiple photo markers.");
+                multiSelectionField.SetValue(window, 1);
+                updateGoogle.Invoke(window, null);
+                if (!googleButton.IsEnabled)
+                    throw new Exception("Single selected GPS photo cannot open Google Maps.");
+            }
+            finally
+            {
+                multiSelectionField.SetValue(window, oldCount);
+                coordField.SetValue(window, oldCoords);
+                updateGoogle.Invoke(window, null);
+            }
+            Console.WriteLine("PASS: Google map without search sidebar; multi selection stays in PCasa.");
 
             // A previous run may have saved GPS in expanded mode.
             if (Equals(gpsExpand.Tag, "expanded")) Click(gpsExpand);
