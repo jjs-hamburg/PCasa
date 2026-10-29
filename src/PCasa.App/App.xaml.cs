@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -33,6 +34,20 @@ public partial class App : Application
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
+
+        // Always log the ACTUAL loaded executable and assembly before any
+        // window, network or scheduler work. A copied/deleted installation
+        // folder is NOT sufficient evidence of which process is running.
+        // The CI build embeds its exact Git commit in InformationalVersion.
+        var assembly = typeof(MainWindow).Assembly;
+        var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion ?? "(unknown)";
+        PCasaDiagnostics.WriteMessage("App.Build",
+            "Version=" + version +
+            "; ModuleVersionId=" + assembly.ManifestModule.ModuleVersionId +
+            "; ProcessId=" + Environment.ProcessId +
+            "; Executable=" + Environment.ProcessPath +
+            "; AppAssembly=" + assembly.Location);
     }
 
     protected override void OnExit(ExitEventArgs e)

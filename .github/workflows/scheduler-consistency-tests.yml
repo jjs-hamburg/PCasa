@@ -84,11 +84,19 @@ jobs:
       - name: Publish self-contained Windows x64 acceptance package
         shell: pwsh
         run: |
-          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:InformationalVersion=$env:GITHUB_SHA -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
           if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
+          $dll = "publish/PCasa/PCasa.App.dll"
+          $dllHash = (Get-FileHash -Path $dll -Algorithm SHA256).Hash
+          @(
+            "Commit=$env:GITHUB_SHA"
+            "WorkflowRun=$env:GITHUB_RUN_ID"
+            "PCasa.App.dll.SHA256=$dllHash"
+          ) | Set-Content -Path "publish/PCasa/BUILD-INFO.txt" -Encoding UTF8
+          Write-Host "Build identity: commit=$env:GITHUB_SHA DLL SHA256=$dllHash"
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 4) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
