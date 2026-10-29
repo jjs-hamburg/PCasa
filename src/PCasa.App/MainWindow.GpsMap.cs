@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Windows.Threading;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -31,6 +32,10 @@ public partial class MainWindow
 
     private ChromiumWebBrowser? _gpsBrowser;
     private bool _gpsBrowserReady;
+    private bool _gpsBrowserInitializationPending;
+    private bool _gpsGoogleWebsiteActive;
+    private string? _gpsGoogleLoadedUrl;
+    private long? _gpsHighlightedImageId;
     private string? _gpsAppliedProviderId;
     private long _gpsQueryRevision;
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
@@ -52,13 +57,15 @@ public partial class MainWindow
         InitializeGpsFilmstrip();
         GpsMapHost.SizeChanged += (_, _) =>
         {
-            if (_gpsBrowserReady && _gpsBrowser is { IsDisposed: false } browser)
+            if (!_gpsGoogleWebsiteActive && _gpsBrowserReady &&
+                _gpsBrowser is { IsDisposed: false } browser)
                 browser.ExecuteScriptAsync("window.pcasaResize?.()");
         };
         Closed += (_, _) =>
         {
             _gpsQueryRevision++;
             _gpsFilmstripRevision++;
+            CloseGpsFullscreenImage();
             if (_gpsBrowser is not null)
             {
                 _gpsBrowser.JavascriptMessageReceived -= GpsJavascriptMessageReceived;
@@ -119,14 +126,31 @@ public partial class MainWindow
         _appearance.ActiveGpsProviderId = id;
         UpdateGpsProviderMenu();
         SaveAppearance();
-        ApplyGpsMapProvider();
+        if (_gpsGoogleWebsiteActive)
+            ExitGoogleMapsWebsite();
+        else
+            ApplyGpsMapProvider();
     }
 
     private void ActivateGpsMap()
     {
-        // A hidden panel never creates an expensive browser. Its only
-        // persistent state lives in appearance.json, not in a second store.
-        if (_sidebarMode != "GPS" || _gpsBrowser is not null) return;
+        if (_sidebarMode != "GPS" || _gpsBrowser is not null ||
+            _gpsBrowserInitializationPending || _shutdownStarted) return;
+        // CEF must initialize on the WPF UI thread. Deferring until the first
+        // input/layout work is dispatched prevents the entire main window from
+        // being held hostage at startup when GPS was previously selected.
+        _gpsBrowserInitializationPending = true;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _gpsBrowserInitializationPending = false;
+            if (_sidebarMode == "GPS" && !_shutdownStarted)
+                InitializeGpsMapBrowser();
+        }), DispatcherPriority.ApplicationIdle);
+    }
+
+    private void InitializeGpsMapBrowser()
+    {
+        if (_gpsBrowser is not null || _shutdownStarted) return;
         try
         {
             if (Cef.IsInitialized is not true)
@@ -143,12 +167,10 @@ public partial class MainWindow
             browser.JavascriptMessageReceived += GpsJavascriptMessageReceived;
             _gpsBrowser = browser;
             GpsMapHost.Children.Insert(0, browser);
-            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(
-                "PCasa.App.Resources.gps-map.html")
-                ?? throw new InvalidOperationException("Embedded map is missing.");
-            using var reader = new StreamReader(stream);
-            if (!browser.LoadHtml(reader.ReadToEnd(), "https://pcasa-map.invalid/gps"))
-                throw new InvalidOperationException("Local map HTML could not be loaded.");
+            if (_gpsGoogleWebsiteActive)
+                NavigateGoogleMapsToSelection();
+            else
+                LoadPcasaMapDocument(browser);
         }
         catch (Exception ex)
         {
@@ -164,10 +186,23 @@ public partial class MainWindow
         }
     }
 
+    private static void LoadPcasaMapDocument(ChromiumWebBrowser browser)
+    {
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(
+            "PCasa.App.Resources.gps-map.html")
+            ?? throw new InvalidOperationException("Embedded map is missing.");
+        using var reader = new StreamReader(stream);
+        if (!browser.LoadHtml(reader.ReadToEnd(), "https://pcasa-map.invalid/gps"))
+            throw new InvalidOperationException("Local map HTML could not be loaded.");
+    }
+
     private void GpsJavascriptMessageReceived(object? sender,
         JavascriptMessageReceivedEventArgs e)
     {
-        if (e.Message is not string message || message.Length > 1024) return;
+        // Only our local MapLibre page can send selection messages, never
+        // the experimental third-party Google Maps website.
+        if (_gpsGoogleWebsiteActive ||
+            e.Message is not string message || message.Length > 1024) return;
         try
         {
             using var doc = JsonDocument.Parse(message);
@@ -182,7 +217,8 @@ public partial class MainWindow
                     ? detail.GetString() : null;
             _ = Dispatcher.BeginInvoke(() =>
             {
-                if (_gpsBrowser is null || _sidebarMode != "GPS") return;
+                if (_gpsBrowser is null || _sidebarMode != "GPS" ||
+                    _gpsGoogleWebsiteActive) return;
                 if (kind == "ready")
                 {
                     _gpsBrowserReady = true;
@@ -193,18 +229,35 @@ public partial class MainWindow
                 else if (kind == "select" && id > 0 &&
                          _gpsPoints.Any(x => x.Id == id))
                 {
-                    ShowGpsPhotoPopup(id);
-                    if (_displayedBrowseIndex.Any(x => x.ImageId == id))
+                    if (_gpsFullscreen)
                     {
-                        BrowseSurface_ImageClicked(this,
-                            new BrowseImageClickedEventArgs(id, ModifierKeys.None));
-                        RestoreGalleryAnchor((id, 0));
+                        // Map full-screen opens the photo over the map. A click
+                        // on that overlay restores the existing GPS view.
+                        _gpsHighlightedImageId = id;
+                        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+                        ShowGpsFullscreenImage(id);
+                    }
+                    else if (_appearance.ShowGpsFilmstrip)
+                    {
+                        _gpsHighlightedImageId = id;
+                        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+                        _gpsFilmstripUpdating = true;
+                        GpsFilmstripList.SelectedItem =
+                            _gpsFilmstripEntries.FirstOrDefault(x => x.Id == id);
+                        _gpsFilmstripUpdating = false;
+                        HighlightGpsPointOnMap(id);
                     }
                     else
                     {
-                        // A marker outside the filtered gallery is not silently
-                        // assigned a different photo. Report the exact image.
-                        GpsCoordinatesText.Text = _gpsPoints.First(x => x.Id == id).Name;
+                        ShowGpsPhotoPopup(id);
+                        if (_displayedBrowseIndex.Any(x => x.ImageId == id))
+                        {
+                            BrowseSurface_ImageClicked(this,
+                                new BrowseImageClickedEventArgs(id, ModifierKeys.None));
+                            RestoreGalleryAnchor((id, 0));
+                        }
+                        else
+                            GpsCoordinatesText.Text = _gpsPoints.First(x => x.Id == id).Name;
                     }
                 }
                 else if (kind == "error" && error is not null)
@@ -220,7 +273,7 @@ public partial class MainWindow
 
     private void ApplyGpsMapProvider()
     {
-        if (!_gpsBrowserReady || _gpsBrowser is null) return;
+        if (_gpsGoogleWebsiteActive || !_gpsBrowserReady || _gpsBrowser is null) return;
         var p = CurrentGpsProvider();
         try
         {
@@ -244,12 +297,22 @@ public partial class MainWindow
 
     private void SendGpsPointsToMap()
     {
-        if (!_gpsBrowserReady || _gpsBrowser is null) return;
+        if (_gpsGoogleWebsiteActive || !_gpsBrowserReady || _gpsBrowser is null) return;
         var json = JsonSerializer.Serialize(_gpsPoints.Select(p => new
         {
             id = p.Id, name = p.Name, lat = p.Lat, lon = p.Lon, selected = p.Selected
         }));
         _gpsBrowser.ExecuteScriptAsync("window.pcasaSetPoints(" + json + ")");
+        if (_gpsHighlightedImageId is long selected)
+            HighlightGpsPointOnMap(selected);
+    }
+
+    private void HighlightGpsPointOnMap(long imageId)
+    {
+        if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
+            _gpsBrowser is not { IsDisposed: false } browser) return;
+        browser.ExecuteScriptAsync("window.pcasaHighlightPoint?.(" +
+            imageId.ToString(CultureInfo.InvariantCulture) + ")");
     }
 
     private async Task RefreshGpsMapAsync()
@@ -276,12 +339,22 @@ public partial class MainWindow
             // independent. One selection may coexist with thousands of
             // unselected background markers in the same map source.
             var selectedGps = points.Where(p => p.Selected).ToArray();
-            _gpsCurrentCoordinates = selectedGps.Length == 1
-                ? (selectedGps[0].Lat, selectedGps[0].Lon)
-                : selectedIds.Length == 0 && points.Count == 1
-                    ? (points[0].Lat, points[0].Lon) : null;
+            if (_gpsHighlightedImageId is long oldId &&
+                !selectedGps.Any(p => p.Id == oldId))
+                _gpsHighlightedImageId = null;
+            // Multi-selection retains a focused coordinate for Google Maps
+            // and Copy GPS, while MapLibre still renders all selected points.
+            var focused = selectedGps.FirstOrDefault(p =>
+                p.Id == _gpsHighlightedImageId)
+                ?? selectedGps.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
+            _gpsCurrentCoordinates = focused is not null
+                ? (focused.Lat, focused.Lon)
+                : selectedGps.Length == 1
+                    ? (selectedGps[0].Lat, selectedGps[0].Lon)
+                    : selectedIds.Length == 0 && points.Count == 1
+                        ? (points[0].Lat, points[0].Lon) : null;
             GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
-            GpsGoogleButton.IsEnabled = _gpsCurrentCoordinates is not null;
+            UpdateGpsGoogleButton();
             GpsCoordinatesText.Text = selectedIds.Length > 0 && selectedGps.Length == 0
                 ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
                 : points.Count == 0
@@ -291,8 +364,14 @@ public partial class MainWindow
                             "{0:F6}°, {1:F6}°", coordinate.Lat, coordinate.Lon)
                         : UiLanguage.Format("Bilder mit GPS: {0:N0}",
                             selectedGps.Length > 0 ? selectedGps.Length : points.Count);
-            SendGpsPointsToMap();
-            SyncGpsPhotoPopupToGallerySelection();
+            if (_gpsGoogleWebsiteActive)
+                NavigateGoogleMapsToSelection();
+            else
+                SendGpsPointsToMap();
+            if (_appearance.ShowGpsFilmstrip)
+                GpsPhotoPopup.Visibility = Visibility.Collapsed;
+            else
+                SyncGpsPhotoPopupToGallerySelection();
             UpdateGpsFilmstrip();
         }
         catch (OperationCanceledException) { }
@@ -487,13 +566,84 @@ public partial class MainWindow
             $"{p.Lat:F6}, {p.Lon:F6}"));
     }
 
+    private static string BuildGoogleMapsWebsiteUrl(double latitude, double longitude)
+    {
+        if (!double.IsFinite(latitude) || !double.IsFinite(longitude) ||
+            latitude is < -90 or > 90 || longitude is < -180 or > 180)
+            throw new ArgumentOutOfRangeException(nameof(latitude));
+        var value = string.Create(CultureInfo.InvariantCulture,
+            $"{latitude:F6},{longitude:F6}");
+        return "https://www.google.com/maps/search/?api=1&query=" +
+            Uri.EscapeDataString(value);
+    }
+
     private void GpsGoogle_Click(object sender, RoutedEventArgs e)
     {
-        if (_gpsCurrentCoordinates is not { } p) return;
-        var coordinates = string.Create(CultureInfo.InvariantCulture,
-            $"{p.Lat:F6},{p.Lon:F6}");
-        Process.Start(new ProcessStartInfo(
-            "https://www.google.com/maps/search/?api=1&query=" +
-            Uri.EscapeDataString(coordinates)) { UseShellExecute = true });
+        if (_gpsGoogleWebsiteActive)
+        {
+            ExitGoogleMapsWebsite();
+            return;
+        }
+        if (_gpsCurrentCoordinates is null) return;
+        _gpsGoogleWebsiteActive = true;
+        _gpsBrowserReady = false;
+        _gpsGoogleLoadedUrl = null;
+        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+        CloseGpsFullscreenImage();
+        UpdateGpsGoogleButton();
+        ActivateGpsMap();
+        NavigateGoogleMapsToSelection();
+    }
+
+    private void NavigateGoogleMapsToSelection()
+    {
+        if (!_gpsGoogleWebsiteActive ||
+            _gpsBrowser is not { IsDisposed: false } browser) return;
+        var url = _gpsCurrentCoordinates is { } point
+            ? BuildGoogleMapsWebsiteUrl(point.Lat, point.Lon)
+            : "about:blank";
+        if (string.Equals(url, _gpsGoogleLoadedUrl, StringComparison.Ordinal))
+            return;
+        _gpsGoogleLoadedUrl = url;
+        GpsMapStatus.Visibility = _gpsCurrentCoordinates is null
+            ? Visibility.Visible : Visibility.Collapsed;
+        GpsMapStatus.Text = UiLanguage.T("Keine GPS-Koordinaten für die Auswahl");
+        GpsMapAttribution.Text = UiLanguage.T("Google Maps – experimentelle Webansicht");
+        try { browser.Load(url); }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("GPS.GoogleMapsWebsite", ex);
+            GpsMapStatus.Text = UiLanguage.T("Google Maps konnte nicht geladen werden");
+            GpsMapStatus.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void ExitGoogleMapsWebsite()
+    {
+        if (!_gpsGoogleWebsiteActive) return;
+        _gpsGoogleWebsiteActive = false;
+        _gpsGoogleLoadedUrl = null;
+        _gpsBrowserReady = false;
+        UpdateGpsGoogleButton();
+        GpsMapAttribution.Text = CurrentGpsProvider().Attribution;
+        GpsMapStatus.Visibility = Visibility.Visible;
+        GpsMapStatus.Text = UiLanguage.T("Karte wird geladen");
+        if (_gpsBrowser is { IsDisposed: false } browser)
+        {
+            try { LoadPcasaMapDocument(browser); }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("GPS.GoogleMapsReturn", ex);
+                GpsMapStatus.Text = UiLanguage.T("Karte ist nicht verfügbar");
+            }
+        }
+    }
+
+    private void UpdateGpsGoogleButton()
+    {
+        GpsGoogleButton.Content = UiLanguage.T(_gpsGoogleWebsiteActive
+            ? "Zur Fotokarte" : "Google Maps");
+        GpsGoogleButton.IsEnabled =
+            _gpsGoogleWebsiteActive || _gpsCurrentCoordinates is not null;
     }
 }
