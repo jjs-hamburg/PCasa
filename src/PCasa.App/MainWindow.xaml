@@ -902,7 +902,7 @@
                                                Fill="{DynamicResource PcasaTextBrush}"/>
                                     <Path x:Name="GpsExpandArrow" Data="M 13,14 L 4,14 M 8,10 L 4,14 L 8,18"
                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.7"
-                                          StrokeLineCap="Round" StrokeLineJoin="Round"/>
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GpsFullscreenButton" Width="30" Height="27"
@@ -914,11 +914,11 @@
                                     <Path x:Name="GpsFullscreenCorners"
                                           Data="M 3,11 L 3,3 L 11,3 M 17,3 L 25,3 L 25,11 M 25,17 L 25,25 L 17,25 M 11,25 L 3,25 L 3,17"
                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="3.3"
-                                          StrokeLineCap="Square" StrokeLineJoin="Miter"/>
+                                          StrokeStartLineCap="Square" StrokeEndLineCap="Square" StrokeLineJoin="Miter"/>
                                     <Path x:Name="GpsFullscreenArrows"
                                           Data="M 12,12 L 5,5 M 16,12 L 23,5 M 16,16 L 23,23 M 12,16 L 5,23"
                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"
-                                          StrokeLineCap="Round"/>
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button Content="✕" Width="24" Height="24"
@@ -1150,7 +1150,7 @@
                             <Path x:Name="FolderSidebarSymbolArrow"
                                   Data="M 16,14 L 24,14 M 20,10 L 24,14 L 20,18"
                                   Stroke="{DynamicResource PcasaTextBrush}"
-                                  StrokeThickness="2.3" StrokeLineCap="Round" StrokeLineJoin="Round"/>
+                                  StrokeThickness="2.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                         </Canvas></Viewbox>
                     </Button>
                     <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"

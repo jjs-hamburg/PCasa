@@ -13,7 +13,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="CefSharp.Wpf.NETCore" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <PackageReference Include="NetVips" />
     <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
