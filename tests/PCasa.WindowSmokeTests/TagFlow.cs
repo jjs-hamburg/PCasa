@@ -826,9 +826,11 @@ internal static class TagFlow
                     count?.Text.Contains("12", StringComparison.OrdinalIgnoreCase) != true)
                     throw new Exception(
                         "Running NAS scan with zero new photos is not visible.");
-                scanPresentation.BeginCachePhase();
+                var queuedCacheOwner = new object();
+                scanPresentation.BeginCachePhase(queuedCacheOwner);
                 scanPresentation.Update(
-                    new BrowseCacheBuildProgress(20, 4, 0, null, null));
+                    new BrowseCacheBuildProgress(20, 4, 0, null, null),
+                    queuedCacheOwner);
                 if (!scanPresentation.IsVisible ||
                     !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
                         StringComparison.OrdinalIgnoreCase))
@@ -848,6 +850,7 @@ internal static class TagFlow
                 if (!scanPresentation.IsVisible ||
                     count?.Text != "4 / 20")
                     throw new Exception("Finished NAS scan did not restore actual cache progress.");
+                scanPresentation.EndCachePhase(queuedCacheOwner);
                 scanPresentation.EndCachePhase();
                 if (scanPresentation.IsVisible || !string.IsNullOrEmpty(count?.Text))
                     throw new Exception(
@@ -863,6 +866,39 @@ internal static class TagFlow
                 scanPresentation.Finish();
             }
             Console.WriteLine("PASS: NAS scan, cache and manual P0 share one priority-correct presenter.");
+
+            // Two cache jobs may be present: one running, one queued.
+            // A queued one must not erase or retire real cache progress.
+            var independentPresenter = new PCasa.App.BrowseCacheProgressWindow
+                { Owner = window };
+            var liveCacheOwner = new object();
+            var pendingCacheOwner = new object();
+            try
+            {
+                independentPresenter.BeginCachePhase(liveCacheOwner);
+                independentPresenter.Update(
+                    new BrowseCacheBuildProgress(100, 30, 0, null, null),
+                    liveCacheOwner);
+                independentPresenter.BeginCachePhase(pendingCacheOwner);
+                var independentCount = (TextBlock?)independentPresenter.FindName("CountText");
+                if (!independentPresenter.IsVisible ||
+                    independentCount?.Text != "30 / 100")
+                    throw new Exception("Queued cache erased a live cache progress count.");
+                independentPresenter.EndCachePhase(pendingCacheOwner);
+                if (!independentPresenter.IsVisible ||
+                    independentCount?.Text != "30 / 100")
+                    throw new Exception("Queued cache completion closed a running cache.");
+                independentPresenter.EndCachePhase(liveCacheOwner);
+                if (independentPresenter.IsVisible)
+                    throw new Exception("Last cache completion kept idle progress visible.");
+            }
+            finally
+            {
+                independentPresenter.EndCachePhase(pendingCacheOwner);
+                independentPresenter.EndCachePhase(liveCacheOwner);
+                independentPresenter.Finish();
+            }
+            Console.WriteLine("PASS: Competing cache producers cannot clear active progress.");
 
             // The MainWindow, not the job which first created the presenter,
             // must own its lifetime until every borrower releases it.

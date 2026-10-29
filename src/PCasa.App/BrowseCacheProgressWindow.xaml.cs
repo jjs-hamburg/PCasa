@@ -68,7 +68,8 @@ public partial class BrowseCacheProgressWindow : Window
     // scan MUST NOT be restored from a stale progress snapshot after P0 work.
     private bool _scanPhaseActive;
     private object? _activeScanOwner;
-    private bool _cachePhaseActive;
+    private readonly HashSet<object> _cachePhaseOwners = new();
+    private object? _cacheProgressOwner;
     private ScanProgress? _lastScanProgress;
     private BrowseCacheBuildProgress? _lastCacheProgress;
     // Owned borderless WPF windows can lose their rendered composition when
@@ -360,7 +361,7 @@ public partial class BrowseCacheProgressWindow : Window
             ShowScanProgress(scan);
             RevealActiveProgress();
         }
-        else if (_cachePhaseActive && _lastCacheProgress is { } cache)
+        else if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } cache)
         {
             ShowCacheProgress(cache);
             PublishProgressStatus();
@@ -421,7 +422,7 @@ public partial class BrowseCacheProgressWindow : Window
         _activeScanOwner = null;
         _lastScanProgress = null;
         if (_manualPresentationActive) return;
-        if (_cachePhaseActive && _lastCacheProgress is { } cache)
+        if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } cache)
         {
             ShowCacheProgress(cache);
             PublishProgressStatus();
@@ -445,31 +446,48 @@ public partial class BrowseCacheProgressWindow : Window
         PublishProgressStatus();
     }
 
-    public void BeginCachePhase()
+    public void BeginCachePhase(object? cacheOwner = null)
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
-        _cachePhaseActive = true;
+        cacheOwner ??= this;
+        if (!_cachePhaseOwners.Add(cacheOwner)) return;
+        // A newly QUEUED cache request cannot erase existing progress from
+        // another active cache producer, much less an active NAS scan.
+        if (_cachePhaseOwners.Count != 1 ||
+            _manualPresentationActive || _scanPhaseActive) return;
         _lastCacheProgress = null;
-        if (_manualPresentationActive || _scanPhaseActive) return;
-        // A queued cache job is NOT running. It cannot replace a live
-        // scan or open a meaningless 0/0 background window.
+        _cacheProgressOwner = null;
         ClearInactivePresentation();
     }
 
-    public void EndCachePhase()
+    public void EndCachePhase(object? cacheOwner = null)
     {
-        if (!_cachePhaseActive) return;
-        _cachePhaseActive = false;
-        _lastCacheProgress = null;
-        if (!_manualPresentationActive && !_scanPhaseActive)
+        cacheOwner ??= this;
+        if (!_cachePhaseOwners.Remove(cacheOwner)) return;
+        if (ReferenceEquals(_cacheProgressOwner, cacheOwner))
+        {
+            _lastCacheProgress = null;
+            _cacheProgressOwner = null;
+        }
+        if (_manualPresentationActive || _scanPhaseActive) return;
+        if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } remaining)
+        {
+            ShowCacheProgress(remaining);
+            PublishProgressStatus();
+            RevealActiveProgress();
+        }
+        else
             ClearInactivePresentation();
     }
 
-    public void Update(BrowseCacheBuildProgress progress)
+    public void Update(BrowseCacheBuildProgress progress,
+        object? cacheOwner = null)
     {
+        cacheOwner ??= this;
         if (_finished || Dispatcher.HasShutdownStarted ||
-            !_cachePhaseActive) return;
+            !_cachePhaseOwners.Contains(cacheOwner)) return;
         _lastCacheProgress = progress;
+        _cacheProgressOwner = cacheOwner;
         if (_manualPresentationActive || _scanPhaseActive) return;
         if (progress.TotalImages == 0 && progress.ProcessedImages == 0)
             return;
@@ -633,7 +651,7 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || Dispatcher.HasShutdownStarted ||
             !(_manualPresentationActive || _scanPhaseActive ||
-              (_cachePhaseActive && _lastCacheProgress is not null)))
+              (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null)))
             return;
         _hiddenByUser = false;
         if (Owner?.WindowState != WindowState.Minimized)

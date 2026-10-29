@@ -390,7 +390,7 @@ public partial class MainWindow
             // another window showing the meaningless default "Einlesen 0/0".
             var cacheOwner = new object();
             var progressWindow = AcquireProgressPresenter(cacheOwner);
-            progressWindow.BeginCachePhase();
+            progressWindow.BeginCachePhase(cacheOwner);
             // A queued background task has not started. Show the existing
             // presenter only when real cache-build progress arrives.
             StatusText.Text = UiLanguage.Format("Vorschaudaten vorgemerkt: {0:N0}", missing);
@@ -399,7 +399,7 @@ public partial class MainWindow
             {
                 // The shared presenter publishes exactly the same phase
                 // and count to the status bar, including manual overlays.
-                progressWindow.Update(value);
+                progressWindow.Update(value, cacheOwner);
             });
 
             try
@@ -427,7 +427,7 @@ public partial class MainWindow
             finally
             {
                 _browseCacheBuilding = false;
-                progressWindow.EndCachePhase();
+                progressWindow.EndCachePhase(cacheOwner);
                 ReleaseProgressPresenter(cacheOwner);
             }
         }

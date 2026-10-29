@@ -831,14 +831,15 @@ public partial class MainWindow
         if (missing > 0)
         {
             _browseCacheBuilding = true;
+            var cacheOwner = new object();
             try
             {
                 StatusText.Text = $"Hintergrund: {missing:N0} Vorschaudaten vorbereiten";
-                activityWindow?.BeginCachePhase();
+                activityWindow?.BeginCachePhase(cacheOwner);
                 var currentWindow = activityWindow;
                 var cacheProgress = currentWindow is null ? null
                     : new Progress<BrowseCacheBuildProgress>(value =>
-                        currentWindow.Update(value));
+                        currentWindow.Update(value, cacheOwner));
                 await _scheduler.EnqueueAsync(
                     "browse-cache:background",
                     SchedulerPriority.Background,
@@ -853,7 +854,7 @@ public partial class MainWindow
             finally
             {
                 _browseCacheBuilding = false;
-                activityWindow?.EndCachePhase();
+                activityWindow?.EndCachePhase(cacheOwner);
             }
         }
 
