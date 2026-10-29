@@ -142,10 +142,10 @@ public partial class MainWindow
             if (version == _gpsPlaceSearchRevision)
                 GpsPlaceSearchButton.IsEnabled = true;
             if (ReferenceEquals(_gpsPlaceSearchCancellation, cancellation))
-            {
                 _gpsPlaceSearchCancellation = null;
-                cancellation.Dispose();
-            }
+            // Each request owns and releases its token source, including
+            // requests superseded while a newer search is already running.
+            cancellation.Dispose();
         }
     }
 
