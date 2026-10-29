@@ -20,6 +20,14 @@
   <!-- Single embedded translation catalog; no external deployment dependency. -->
   <ItemGroup>
     <EmbeddedResource Include="Resources/gps-map.html" LogicalName="PCasa.App.Resources.gps-map.html" />
+    <!-- CI provides the pinned, redistributable BSD-3 MapLibre assets.
+         A developer build without them still uses the existing CDN fallback. -->
+    <EmbeddedResource Include="Resources/maplibre-gl.js"
+                      LogicalName="PCasa.App.Resources.maplibre-gl.js"
+                      Condition="Exists('Resources/maplibre-gl.js')" />
+    <EmbeddedResource Include="Resources/maplibre-gl.css"
+                      LogicalName="PCasa.App.Resources.maplibre-gl.css"
+                      Condition="Exists('Resources/maplibre-gl.css')" />
     <EmbeddedResource Include="Resources/english.json"
                       LogicalName="PCasa.App.Resources.english.json" />
   </ItemGroup>

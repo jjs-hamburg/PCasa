@@ -267,6 +267,10 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
             {
                 EndVisibleManualOperation(key);
+                // Only refresh the existing locally packed thumbnail index,
+                // so the GPS badge changes without decoding/rebuilding images.
+                if (_browseInitialized)
+                    await RefreshBrowseGalleryAsync(forceIndexReload: true);
                 if (_sidebarMode == "GPS") await RefreshGpsMapAsync();
             }
         }

@@ -40,6 +40,9 @@ jobs:
       - name: Install verified lossless metadata tool
         shell: pwsh
         run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
+      - name: Bundle pinned MapLibre JS and CSS into PCasa.App.dll
+        shell: pwsh
+        run: ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
       - name: Probe EXIF reader, GPS fields and legacy backfill
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe

@@ -193,7 +193,32 @@ public partial class MainWindow
             "PCasa.App.Resources.gps-map.html")
             ?? throw new InvalidOperationException("Embedded map is missing.");
         using var reader = new StreamReader(stream);
-        if (!browser.LoadHtml(reader.ReadToEnd(), "https://pcasa-map.invalid/gps"))
+        var html = reader.ReadToEnd();
+        var assembly = Assembly.GetExecutingAssembly();
+        using var css = assembly.GetManifestResourceStream(
+            "PCasa.App.Resources.maplibre-gl.css");
+        using var js = assembly.GetManifestResourceStream(
+            "PCasa.App.Resources.maplibre-gl.js");
+        if (css is not null && js is not null)
+        {
+            // Bundled JS/CSS (BSD-3-Clause) work without a CDN. The
+            // network is needed only for tiles and optional place search.
+            using var cssReader = new StreamReader(css);
+            using var jsReader = new StreamReader(js);
+            const string cssLink = "<link href=\"https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.css\" rel=\"stylesheet\">";
+            html = html.Replace(cssLink, "<style>" + cssReader.ReadToEnd() +
+                "</style>", StringComparison.Ordinal);
+            const string scriptSource = "<script src=\"https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.js\"";
+            var first = html.IndexOf(scriptSource, StringComparison.Ordinal);
+            var last = first < 0 ? -1 : html.IndexOf("</script>", first, StringComparison.Ordinal);
+            if (first < 0 || last < 0)
+                throw new InvalidDataException("MapLibre script placeholder is missing.");
+            var embeddedScript = jsReader.ReadToEnd().Replace("</script",
+                @"<\/script", StringComparison.OrdinalIgnoreCase);
+            html = html[..first] + "<script>" + embeddedScript + "</script>" +
+                html[(last + "</script>".Length)..];
+        }
+        if (!browser.LoadHtml(html, "https://pcasa-map.invalid/gps"))
             throw new InvalidOperationException("Local map HTML could not be loaded.");
     }
 
