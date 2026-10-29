@@ -41,6 +41,7 @@ public partial class MainWindow
     private long _gpsAreaRevision;
     private HashSet<long>? _gpsAreaFilterIds;
     private readonly HashSet<long> _gpsEditSelectionIds = new();
+    private long? _gpsEditFocusedImageId;
 
     private void GpsEditorToggle_Changed(object sender, RoutedEventArgs e)
     {
@@ -58,9 +59,13 @@ public partial class MainWindow
     // camera or to the newly focused photo.
     private void ResetGpsEditorOnSelectionChange(IReadOnlyCollection<long> selectedIds)
     {
-        if (_gpsEditSelectionIds.SetEquals(selectedIds)) return;
+        // A new focused image within an unchanged multi-selection is also
+        // a different photo for location editing. Do not reuse its draft.
+        if (_gpsEditSelectionIds.SetEquals(selectedIds) &&
+            _gpsEditFocusedImageId == _gallerySelection.FocusedId) return;
         _gpsEditSelectionIds.Clear();
         _gpsEditSelectionIds.UnionWith(selectedIds);
+        _gpsEditFocusedImageId = _gallerySelection.FocusedId;
         ClearGpsEditorDraft();
         GpsEditorToggle.IsChecked = false;
         GpsCoordinatesText.Text = UiLanguage.T("GPS-Positionen werden geladen");
