@@ -846,6 +846,7 @@
                                        HorizontalAlignment="Left" VerticalAlignment="Top"
                                        Margin="18,12" FontSize="13" Foreground="White"
                                        IsHitTestVisible="False"/>
+                        </Grid>
 
                     <StackPanel x:Name="EmptyPanel"
                                 HorizontalAlignment="Center"
