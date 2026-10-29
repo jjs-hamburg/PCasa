@@ -76,7 +76,7 @@ public partial class MainWindow
 
         GalleryWorkspaceColumn.MinWidth = 240;
         GalleryWorkspaceColumn.Width = new GridLength(galleryFraction, GridUnitType.Star);
-        InfoSidebarColumn.MinWidth = sidebarOpen ? 170 : 0;
+        InfoSidebarColumn.MinWidth = gps ? 225 : sidebarOpen ? 170 : 0;
         InfoSidebarColumn.Width = sidebarOpen
             ? new GridLength(sidebarFraction, GridUnitType.Star) : new GridLength(0);
         InfoSidebarDividerColumn.Width =

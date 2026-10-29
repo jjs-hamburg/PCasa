@@ -890,12 +890,12 @@
                     </Grid.RowDefinitions>
                     <DockPanel Margin="4,0,0,12">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button x:Name="GpsExpandButton" Width="30" Height="27"
+                            <Button x:Name="GpsExpandButton" Width="39" Height="34"
                                     Margin="0,0,4,0" Visibility="Collapsed"
                                     ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
                                     Click="GpsExpand_Click">
-                                <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                                <Viewbox Width="29" Height="29"><Canvas Width="28" Height="28">
                                     <Rectangle Canvas.Left="2" Canvas.Top="3" Width="24" Height="22" RadiusX="1.5"
                                                Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="5" Width="8" Height="18"
@@ -905,12 +905,12 @@
                                           StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
-                            <Button x:Name="GpsFullscreenButton" Width="30" Height="27"
+                            <Button x:Name="GpsFullscreenButton" Width="39" Height="34"
                                     Margin="0,0,4,0" Visibility="Collapsed"
                                     ToolTip="{loc:Tr Key='GPS-Vollbild'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
                                     Click="GpsFullscreen_Click">
-                                <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                                <Viewbox Width="29" Height="29"><Canvas Width="28" Height="28">
                                     <Path x:Name="GpsFullscreenCorners"
                                           Data="M 3,11 L 3,3 L 11,3 M 17,3 L 25,3 L 25,11 M 25,17 L 25,25 L 17,25 M 11,25 L 3,25 L 3,17"
                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="3.3"
@@ -921,7 +921,7 @@
                                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
-                            <Button Content="✕" Width="24" Height="24"
+                            <Button Content="✕" Width="32" Height="34"
                                     ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
                         </StackPanel>
@@ -936,15 +936,22 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <DockPanel Margin="0,0,0,6">
                             <Button DockPanel.Dock="Right" Width="29" Height="28" Content="⚙"
                                     Margin="4,0,0,0" Style="{StaticResource PcasaStatusButtonStyle}"
                                     ToolTip="{loc:Tr Key='Kartenanbieter konfigurieren'}"
                                     Click="GpsProviderSettings_Click"/>
-                            <ComboBox x:Name="GpsProviderComboBox" MinWidth="105"
-                                      VerticalAlignment="Center"
-                                      SelectionChanged="GpsProvider_SelectionChanged"/>
+                            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                <TextBlock Text="{loc:Tr Key='Karte'}" Margin="0,0,6,0"
+                                           VerticalAlignment="Center"/>
+                                <ComboBox x:Name="GpsProviderComboBox" Width="175"
+                                          VerticalAlignment="Center"
+                                          ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
+                                          SelectionChanged="GpsProvider_SelectionChanged"/>
+                            </StackPanel>
                         </DockPanel>
                         <StackPanel Grid.Row="1" Margin="0,0,0,6">
                             <TextBlock x:Name="GpsCoordinatesText"
@@ -1020,7 +1027,45 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
-                        <TextBlock Grid.Row="3" x:Name="GpsMapAttribution"
+                        <CheckBox x:Name="GpsFilmstripToggle" Grid.Row="3"
+                                  Content="{loc:Tr Key='Filmstreifen'}"
+                                  Margin="3,7,0,4" VerticalAlignment="Center"
+                                  Checked="GpsFilmstripToggle_Changed"
+                                  Unchecked="GpsFilmstripToggle_Changed"/>
+                        <Border x:Name="GpsFilmstripPanel" Grid.Row="4" Height="116"
+                                Background="{DynamicResource PcasaPanelBrush}"
+                                Visibility="Collapsed">
+                            <ListBox x:Name="GpsFilmstripList"
+                                     BorderThickness="0"
+                                     HorizontalContentAlignment="Center"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                     ScrollViewer.CanContentScroll="True"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Recycling"
+                                     SelectionChanged="GpsFilmstrip_SelectionChanged"
+                                     MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
+                                     ScrollViewer.ScrollChanged="GpsFilmstrip_ScrollChanged">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Width="105" Margin="3,2">
+                                            <Border Height="76" Background="{DynamicResource PcasaWindowBrush}">
+                                                <Image Source="{Binding Bitmap}" Stretch="Uniform"/>
+                                            </Border>
+                                            <TextBlock Text="{Binding Name}" FontSize="10"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextAlignment="Center" Margin="0,3,0,0"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+                        <TextBlock Grid.Row="5" x:Name="GpsMapAttribution"
                                    Text="OpenFreeMap © OpenMapTiles · OpenStreetMap contributors"
                                    FontSize="10" TextWrapping="Wrap"
                                    Foreground="{DynamicResource PcasaMutedTextBrush}"

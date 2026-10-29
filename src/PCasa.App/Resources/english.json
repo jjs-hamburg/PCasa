@@ -309,5 +309,7 @@
   "Keine GPS-Koordinaten für die Auswahl": "No GPS coordinates in selection",
   "Kartenanbieter auswählen": "Select map provider",
   "Kartenanbieter konnte nicht geladen werden": "Could not load map provider",
-  "Foto anzeigen": "Show photo"
+  "Foto anzeigen": "Show photo",
+  "Filmstreifen": "Filmstrip",
+  "Karte": "Map"
 }
