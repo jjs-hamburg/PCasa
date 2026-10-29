@@ -384,7 +384,11 @@ public partial class BrowseCacheProgressWindow : Window
                 FolderPathText.ToolTip = null;
                 CurrentThumbnail.Source = null;
                 if (IsVisible) Hide();
-                PublishProgressStatus();
+                // There is no background progress to publish. A completed
+                // manual operation (folder removal, GPS, tags, transfer)
+                // has already set its own final StatusText. Publishing an
+                // empty presenter status here would overwrite that success
+                // confirmation and make the folder-removal test time out.
                 break;
         }
     }

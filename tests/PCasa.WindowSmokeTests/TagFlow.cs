@@ -735,7 +735,12 @@ internal static class TagFlow
                 var count = (TextBlock?)idleProgress.FindName("CountText")
                     ?? throw new Exception("Missing common progress count.");
                 count.Text = "2 / 2";
+                var idleChanged = 0;
+                idleProgress.ProgressPresentationChanged += (_, _) => idleChanged++;
                 idleProgress.EndManualOperation();
+                if (idleChanged != 0)
+                    throw new Exception(
+                        "Idle progress cleanup must not overwrite completed manual operation status.");
                 if (idleProgress.IsManualPresentationActive ||
                     idleProgress.IsVisible ||
                     !string.IsNullOrEmpty(count.Text))
