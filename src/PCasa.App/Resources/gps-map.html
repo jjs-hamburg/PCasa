@@ -18,7 +18,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  const fallback = document.getElementById('fallback');
  const empty = { type:'FeatureCollection',features:[] };
  const map = new maplibregl.Map({
-   container:'map',style:'https://tiles.openfreemap.org/styles/liberty',
+   // Start without a network-dependent style; the WPF provider owner
+   // supplies the chosen style after the renderer reports readiness.
+   container:'map',style:{version:8,sources:{},layers:[]},
    center:[10,42],zoom:2,attributionControl:true
  });
  map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
