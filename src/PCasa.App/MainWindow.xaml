@@ -16,6 +16,67 @@
         Closed="BackgroundScan_WindowClosed"
         PreviewKeyDown="PhotoViewerWindow_PreviewKeyDown">
     <Window.Resources>
+        <!-- One continuous 35-mm-inspired perforation pattern. The strip
+             background is independent of item virtualization/scrolling. -->
+        <DrawingBrush x:Key="GpsFilmPerforationBrush" TileMode="Tile"
+                      Viewport="0,0,26,12" ViewportUnits="Absolute"
+                      Viewbox="0,0,26,12" ViewboxUnits="Absolute" Stretch="Fill">
+            <DrawingBrush.Drawing>
+                <DrawingGroup>
+                    <GeometryDrawing Brush="#414448">
+                        <GeometryDrawing.Geometry>
+                            <RectangleGeometry Rect="6.5,2,13,8" RadiusX="1.6" RadiusY="1.6"/>
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="#08090A">
+                        <GeometryDrawing.Geometry>
+                            <RectangleGeometry Rect="7.5,3,11,6" RadiusX="1.1" RadiusY="1.1"/>
+                        </GeometryDrawing.Geometry>
+                    </GeometryDrawing>
+                </DrawingGroup>
+            </DrawingBrush.Drawing>
+        </DrawingBrush>
+
+        <!-- Explicit item template: WPF's system ListBoxItem template paints
+             a large blue selected block. Selection is instead a subtle,
+             high-contrast border, distinguishable without color perception. -->
+        <Style x:Key="GpsFilmFrameItemStyle" TargetType="{x:Type ListBoxItem}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#D1D3D5"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                        <Border x:Name="FilmFrame" Margin="3,2" Padding="2"
+                                Background="#242527" BorderBrush="#474A4C"
+                                BorderThickness="1" CornerRadius="1"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              ContentSource="Content"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="FilmFrame" Property="Background" Value="#2E3032"/>
+                                <Setter TargetName="FilmFrame" Property="BorderBrush" Value="#86898B"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="FilmFrame" Property="Background" Value="#36383A"/>
+                                <Setter TargetName="FilmFrame" Property="BorderBrush" Value="#D6D5CF"/>
+                                <Setter TargetName="FilmFrame" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="PcasaLogicSymbolStyle" TargetType="RadioButton">
             <Setter Property="Width" Value="26"/>
             <Setter Property="Height" Value="26"/>
@@ -1074,38 +1135,63 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
-                        <Border x:Name="GpsFilmstripPanel" Grid.Row="3" Height="116"
-                                Background="{DynamicResource PcasaPanelBrush}"
-                                Visibility="Collapsed">
-                            <ListBox x:Name="GpsFilmstripList"
-                                     BorderThickness="0"
-                                     HorizontalContentAlignment="Center"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                                     ScrollViewer.VerticalScrollBarVisibility="Disabled"
-                                     ScrollViewer.CanContentScroll="True"
-                                     VirtualizingPanel.IsVirtualizing="True"
-                                     VirtualizingPanel.VirtualizationMode="Recycling"
-                                     SelectionChanged="GpsFilmstrip_SelectionChanged"
-                                     MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
-                                     ScrollViewer.ScrollChanged="GpsFilmstrip_ScrollChanged">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <VirtualizingStackPanel Orientation="Horizontal"/>
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Width="105" Margin="3,2">
-                                            <Border Height="76" Background="{DynamicResource PcasaWindowBrush}">
-                                                <Image Source="{Binding Bitmap}" Stretch="Uniform"/>
-                                            </Border>
-                                            <TextBlock Text="{Binding Name}" FontSize="10"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       TextAlignment="Center" Margin="0,3,0,0"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                        <Border x:Name="GpsFilmstripPanel" Grid.Row="3"
+                                Height="132" Margin="0,4,0,0"
+                                BorderBrush="#4D4F51" BorderThickness="1"
+                                Background="#17191B" Visibility="Collapsed"
+                                ClipToBounds="True">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="12"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="12"/>
+                                </Grid.RowDefinitions>
+                                <!-- Perforations run continuously across the WHOLE
+                                     film, not separately around each photo. -->
+                                <Rectangle x:Name="GpsFilmPerforationsTop" Grid.Row="0"
+                                           Fill="{StaticResource GpsFilmPerforationBrush}"
+                                           IsHitTestVisible="False"/>
+                                <Border Grid.Row="1" Background="#222426"
+                                        BorderBrush="#494B4E" BorderThickness="0,1">
+                                    <ListBox x:Name="GpsFilmstripList"
+                                             Background="Transparent" BorderThickness="0"
+                                             ItemContainerStyle="{StaticResource GpsFilmFrameItemStyle}"
+                                             HorizontalContentAlignment="Center"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                             ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                             ScrollViewer.CanContentScroll="True"
+                                             VirtualizingPanel.IsVirtualizing="True"
+                                             VirtualizingPanel.VirtualizationMode="Recycling"
+                                             SelectionChanged="GpsFilmstrip_SelectionChanged"
+                                             MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
+                                             ScrollViewer.ScrollChanged="GpsFilmstrip_ScrollChanged">
+                                        <ListBox.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <VirtualizingStackPanel Orientation="Horizontal"/>
+                                            </ItemsPanelTemplate>
+                                        </ListBox.ItemsPanel>
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Width="113" Margin="0,1,0,0">
+                                                    <Border Height="72" Margin="2,0,2,0"
+                                                            BorderThickness="1" BorderBrush="#4B4E51"
+                                                            Background="#0E0F10">
+                                                        <Image Source="{Binding Bitmap}" Stretch="Uniform"
+                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                    </Border>
+                                                    <TextBlock Text="{Binding Name}" FontSize="10"
+                                                               Foreground="#C9CBCE"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextAlignment="Center" Margin="4,3,4,0"/>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Border>
+                                <Rectangle x:Name="GpsFilmPerforationsBottom" Grid.Row="2"
+                                           Fill="{StaticResource GpsFilmPerforationBrush}"
+                                           IsHitTestVisible="False"/>
+                            </Grid>
                         </Border>
                     </Grid>
                     <Grid x:Name="TagSidebar" Grid.Row="1" Visibility="Collapsed">
