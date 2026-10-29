@@ -94,16 +94,16 @@ public partial class MainWindow
         GpsExpandButton.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
         GpsExpandButton.Tag = expanded ? "expanded" : "normal";
         GpsExpandArrow.Data = System.Windows.Media.Geometry.Parse(expanded
-            ? "M 5,14 L 14,14 M 10,10 L 14,14 L 10,18"
-            : "M 13,14 L 4,14 M 8,10 L 4,14 L 8,18");
+            ? "M 7,16 L 26,16 M 17,7 L 26,16 L 17,25"
+            : "M 25,16 L 6,16 M 15,7 L 6,16 L 15,25");
         GpsExpandButton.ToolTip = UiLanguage.T(expanded
             ? "GPS-Leiste verkleinern" : "GPS-Leiste vergrößern");
         GpsExpandButton.IsEnabled = !fullscreen;
         GpsFullscreenButton.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
         GpsFullscreenButton.Tag = fullscreen ? "fullscreen" : "normal";
-        GpsFullscreenArrows.Data = System.Windows.Media.Geometry.Parse(fullscreen
-            ? "M 5,5 L 12,12 M 23,5 L 16,12 M 23,23 L 16,16 M 5,23 L 12,16"
-            : "M 12,12 L 5,5 M 16,12 L 23,5 M 16,16 L 23,23 M 12,16 L 5,23");
+        GpsFullscreenCorners.Data = System.Windows.Media.Geometry.Parse(fullscreen
+            ? "M 4,12 L 12,12 L 12,4 M 28,12 L 20,12 L 20,4 M 20,28 L 20,20 L 28,20 M 12,28 L 12,20 L 4,20"
+            : "M 12,4 L 4,4 L 4,12 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20");
         FolderSidebarSymbolArrow.Data = System.Windows.Media.Geometry.Parse(
             _appearance.FolderSidebarVisible
                 ? "M 16,14 L 24,14 M 20,10 L 24,14 L 20,18"

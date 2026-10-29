@@ -895,15 +895,16 @@
                                     ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
                                     Click="GpsExpand_Click">
-                                <Viewbox Width="24" Height="24">
+                                <Viewbox Width="26" Height="26" Stretch="Uniform">
                                     <Canvas Width="32" Height="32">
-                                        <Rectangle Canvas.Left="3.5" Canvas.Top="4" Width="25" Height="24"
-                                                   RadiusX="2" Stroke="{DynamicResource PcasaTextBrush}"
-                                                   StrokeThickness="2.4"/>
-                                        <Rectangle Canvas.Left="19" Canvas.Top="6.5" Width="7" Height="19"
-                                                   Fill="{DynamicResource PcasaTextBrush}"/>
-                                        <Path x:Name="GpsExpandArrow" Data="M 15,16 L 7,16 M 11,12 L 7,16 L 11,20"
-                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="3"
+                                        <Path Data="M 28,5 L 28,27"
+                                              Stroke="{DynamicResource PcasaTextBrush}"
+                                              StrokeThickness="3.2"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                        <Path x:Name="GpsExpandArrow"
+                                              Data="M 25,16 L 6,16 M 15,7 L 6,16 L 15,25"
+                                              Stroke="{DynamicResource PcasaTextBrush}"
+                                              StrokeThickness="3.5"
                                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                               StrokeLineJoin="Round"/>
                                     </Canvas>
@@ -914,16 +915,14 @@
                                     ToolTip="{loc:Tr Key='GPS-Vollbild'}"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
                                     Click="GpsFullscreen_Click">
-                                <Viewbox Width="24" Height="24">
+                                <Viewbox Width="26" Height="26" Stretch="Uniform">
                                     <Canvas Width="32" Height="32">
                                         <Path x:Name="GpsFullscreenCorners"
-                                              Data="M 4,12 L 4,4 L 12,4 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20"
-                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="3.2"
-                                              StrokeStartLineCap="Square" StrokeEndLineCap="Square"/>
-                                        <Path x:Name="GpsFullscreenArrows"
-                                              Data="M 14,14 L 7,7 M 18,14 L 25,7 M 18,18 L 25,25 M 14,18 L 7,25"
-                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.3"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                              Data="M 12,4 L 4,4 L 4,12 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20"
+                                              Stroke="{DynamicResource PcasaTextBrush}"
+                                              StrokeThickness="3.6"
+                                              StrokeStartLineCap="Square" StrokeEndLineCap="Square"
+                                              StrokeLineJoin="Miter"/>
                                     </Canvas>
                                 </Viewbox>
                             </Button>

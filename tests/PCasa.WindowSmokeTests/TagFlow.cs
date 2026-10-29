@@ -596,7 +596,7 @@ internal static class TagFlow
 
             if (((Grid?)window.FindName("GpsMapPanel"))?.Visibility != Visibility.Visible ||
                 ((Button?)window.FindName("GpsProviderButton"))?.ContextMenu?.Items.Count < 4 ||
-                window.FindName("GpsFullscreenArrows") is not System.Windows.Shapes.Path ||
+                window.FindName("GpsFullscreenCorners") is not System.Windows.Shapes.Path ||
                 window.FindName("FolderSidebarSymbolArrow") is not System.Windows.Shapes.Path)
                 throw new Exception("GPS provider choices or bold vector icons missing.");
             var googleUrlBuilder = typeof(PCasa.App.MainWindow).GetMethod(
