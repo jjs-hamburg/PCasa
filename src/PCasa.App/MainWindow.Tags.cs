@@ -849,11 +849,11 @@ public partial class MainWindow
             ?? throw new InvalidDataException("Ungültiger Tag-Auftrag.");
         var perImage = request.ImageEdits is { Length: > 0 }
             ? request.ImageEdits.Select(entry =>
-                (entry.ImageId, (IReadOnlyList<(string Tag, bool Remove)>)
+                (ImageId: entry.ImageId, Edits: (IReadOnlyList<(string Tag, bool Remove)>)
                     entry.Changes.Select(edit => (edit.Tag, edit.Remove)).ToArray()))
                 .ToArray()
             : request.ImageIds.Select(id =>
-                (id, (IReadOnlyList<(string Tag, bool Remove)>)
+                (ImageId: id, Edits: (IReadOnlyList<(string Tag, bool Remove)>)
                     request.Changes.Select(edit => (edit.Tag, edit.Remove)).ToArray()))
                 .ToArray();
         if (perImage.Length != request.ImageIds.Length ||
