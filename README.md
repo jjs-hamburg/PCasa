@@ -6,7 +6,7 @@
 
 ## Aktueller Entwicklungsstand
 
-Der aktive Zweig enthält eine **WPF-/ .NET-10-Anwendung** mit:
+Der aktive Zweig enthält eine **WPF-Anwendung auf .NET 10** mit:
 
 - durchgehend scrollbarer, virtualisierter Galerie, Ordnerbaum und Ordnermanager;
 - einstellbarer Thumbnailgröße und -abständen, mehreren Designs und Galerie-Sortierung pro Ordner;
