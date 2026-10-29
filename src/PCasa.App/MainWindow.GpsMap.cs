@@ -160,6 +160,7 @@ public partial class MainWindow
                 else if (kind == "select" && id > 0 &&
                          _gpsPoints.Any(x => x.Id == id))
                 {
+                    ShowGpsPhotoPopup(id);
                     if (_displayedBrowseIndex.Any(x => x.ImageId == id))
                     {
                         BrowseSurface_ImageClicked(this,
@@ -310,6 +311,42 @@ public partial class MainWindow
             Read(folderId is not null ? " AND i.photo_folder_id = $folder" : "",
                 null, folderId);
         return result;
+    }
+
+    private void ShowGpsPhotoPopup(long id)
+    {
+        var point = _gpsPoints.FirstOrDefault(x => x.Id == id);
+        if (point is null) return;
+        GpsPhotoPopup.Tag = id;
+        GpsPhotoName.Text = point.Name;
+        GpsPhotoPreview.Source = null;
+        GpsPhotoPreview.Visibility = Visibility.Collapsed;
+        // Use already decoded local thumbnail pages. Never open a potentially
+        // disconnected NAS original solely to show a map popup.
+        if (_browsePageCache is not null)
+        {
+            for (var i = 0; i < _browseIndex.Count; i++)
+                if (_browseIndex[i].ImageId == id)
+                {
+                    if (_browsePageCache.TryGet(i, out var bitmap) && bitmap is not null)
+                    {
+                        GpsPhotoPreview.Source = bitmap;
+                        GpsPhotoPreview.Visibility = Visibility.Visible;
+                    }
+                    break;
+                }
+        }
+        GpsPhotoPopup.Visibility = Visibility.Visible;
+    }
+
+    private void GpsPhotoClose_Click(object sender, RoutedEventArgs e)
+        => GpsPhotoPopup.Visibility = Visibility.Collapsed;
+
+    private void GpsPhotoOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (GpsPhotoPopup.Tag is not long id ||
+            !_displayedBrowseIndex.Any(x => x.ImageId == id)) return;
+        BrowseSurface_ImageOpened(this, new BrowseImageClickedEventArgs(id, ModifierKeys.None));
     }
 
     private void GpsProvider_SelectionChanged(object sender, SelectionChangedEventArgs e)

@@ -965,6 +965,28 @@
                                        Text="{loc:Tr Key='Karte wird geladen'}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
                                        Margin="10" TextWrapping="Wrap"/>
+                            <Border x:Name="GpsPhotoPopup" Panel.ZIndex="10"
+                                    Visibility="Collapsed" HorizontalAlignment="Left"
+                                    VerticalAlignment="Bottom" Margin="8" MaxWidth="240"
+                                    Background="{DynamicResource PcasaPanelBrush}"
+                                    BorderBrush="{DynamicResource PcasaDividerBrush}"
+                                    BorderThickness="1" Padding="7">
+                                <StackPanel>
+                                    <DockPanel>
+                                        <Button Content="✕" DockPanel.Dock="Right" Width="22"
+                                                Click="GpsPhotoClose_Click"
+                                                Style="{StaticResource PcasaStatusButtonStyle}"/>
+                                        <TextBlock x:Name="GpsPhotoName" FontWeight="SemiBold"
+                                                   MaxWidth="205" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"/>
+                                    </DockPanel>
+                                    <Image x:Name="GpsPhotoPreview" Stretch="Uniform"
+                                           Height="130" Margin="0,6,0,6" Visibility="Collapsed"/>
+                                    <Button Content="{loc:Tr Key='Foto anzeigen'}"
+                                            HorizontalAlignment="Stretch"
+                                            Click="GpsPhotoOpen_Click"/>
+                                </StackPanel>
+                            </Border>
                             <Border x:Name="GpsProviderEditor" Background="{DynamicResource PcasaPanelBrush}"
                                     BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
                                     Visibility="Collapsed" Panel.ZIndex="12"
