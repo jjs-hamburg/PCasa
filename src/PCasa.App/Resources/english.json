@@ -293,5 +293,20 @@
   "GPS-Leiste verkleinern": "Restore GPS pane",
   "GPS-Vollbild": "GPS full screen",
   "GPS-Vollbild verlassen": "Exit GPS full screen",
-  "Ordnerleiste ein-/ausblenden": "Show/hide folder pane"
+  "Ordnerleiste ein-/ausblenden": "Show/hide folder pane",
+  "Kartenanbieter konfigurieren": "Configure map provider",
+  "GPS-Positionen werden geladen": "Loading GPS positions",
+  "GPS kopieren": "Copy GPS",
+  "Google Maps": "Google Maps",
+  "Karte wird geladen": "Loading map",
+  "Eigener Kartenanbieter": "Custom map provider",
+  "Kartenformat": "Map format",
+  "Quellenangabe": "Attribution",
+  "API-Schlüssel optional": "API key (optional)",
+  "Entfernen": "Remove",
+  "Karte ist nicht verfügbar": "Map is unavailable",
+  "Bilder mit GPS: {0:N0}": "Images with GPS: {0:N0}",
+  "Keine GPS-Koordinaten für die Auswahl": "No GPS coordinates in selection",
+  "Kartenanbieter auswählen": "Select map provider",
+  "Kartenanbieter konnte nicht geladen werden": "Could not load map provider"
 }

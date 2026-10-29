@@ -57,6 +57,8 @@ public partial class MainWindow
         public double ExpandedGpsFraction { get; set; } = 0.55;
         public bool GpsExpanded { get; set; }
         public string? ActiveSidebarMode { get; set; }
+        public string ActiveGpsProviderId { get; set; } = "openfreemap-liberty";
+        public List<GpsMapProvider> GpsProviders { get; set; } = new();
     }
 
     private readonly string _appearanceFile = Path.Combine(
@@ -116,6 +118,7 @@ public partial class MainWindow
         UiLanguage.Current.PropertyChanged += AppearanceUiLanguageChanged;
         RestoreWindowPlacement();
         InitializeWorkspaceLayout();
+        InitializeGpsProviderMenu();
         SystemEvents.UserPreferenceChanged += AppearanceUserPreferenceChanged;
         Closed += AppearanceWindowClosed;
     }
@@ -582,6 +585,7 @@ public partial class MainWindow
         UpdateWorkspaceLayoutPreservingGallery();
         SaveAppearance();
         if (mode == "Tags") RefreshQuickTags();
+        if (mode == "GPS") ActivateGpsMap();
         await UpdateSidebarContentAsync();
     }
 
@@ -593,6 +597,11 @@ public partial class MainWindow
         if (mode == "Tags")
         {
             await RefreshTagSidebarAsync();
+            return;
+        }
+        if (mode == "GPS")
+        {
+            await RefreshGpsMapAsync();
             return;
         }
         if (request.ImageId is not long imageId)

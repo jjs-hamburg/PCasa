@@ -930,6 +930,80 @@
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
                     </ScrollViewer>
+                    <Grid x:Name="GpsMapPanel" Grid.Row="1" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <DockPanel Margin="0,0,0,6">
+                            <Button DockPanel.Dock="Right" Width="29" Height="28" Content="⚙"
+                                    Margin="4,0,0,0" Style="{StaticResource PcasaStatusButtonStyle}"
+                                    ToolTip="{loc:Tr Key='Kartenanbieter konfigurieren'}"
+                                    Click="GpsProviderSettings_Click"/>
+                            <ComboBox x:Name="GpsProviderComboBox" MinWidth="105"
+                                      VerticalAlignment="Center"
+                                      SelectionChanged="GpsProvider_SelectionChanged"/>
+                        </DockPanel>
+                        <StackPanel Grid.Row="1" Margin="0,0,0,6">
+                            <TextBlock x:Name="GpsCoordinatesText"
+                                       Text="{loc:Tr Key='GPS-Positionen werden geladen'}"
+                                       TextWrapping="Wrap" FontSize="12" Margin="0,0,0,4"/>
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="GpsCopyButton"
+                                        Content="{loc:Tr Key='GPS kopieren'}" Margin="0,0,7,0"
+                                        Click="GpsCopy_Click" IsEnabled="False"/>
+                                <Button x:Name="GpsGoogleButton"
+                                        Content="{loc:Tr Key='Google Maps'}"
+                                        Click="GpsGoogle_Click" IsEnabled="False"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <Grid Grid.Row="2" x:Name="GpsMapHost" Background="{DynamicResource PcasaWindowBrush}"
+                              ClipToBounds="True">
+                            <TextBlock x:Name="GpsMapStatus"
+                                       Text="{loc:Tr Key='Karte wird geladen'}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Margin="10" TextWrapping="Wrap"/>
+                            <Border x:Name="GpsProviderEditor" Background="{DynamicResource PcasaPanelBrush}"
+                                    BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
+                                    Visibility="Collapsed" Panel.ZIndex="12"
+                                    HorizontalAlignment="Stretch" VerticalAlignment="Top"
+                                    Padding="12" Margin="5">
+                                <StackPanel>
+                                    <TextBlock Text="{loc:Tr Key='Eigener Kartenanbieter'}"
+                                               FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <TextBlock Text="{loc:Tr Key='Name'}"/>
+                                    <TextBox x:Name="GpsProviderNameBox" Margin="0,0,0,6"/>
+                                    <TextBlock Text="{loc:Tr Key='Kartenformat'}"/>
+                                    <ComboBox x:Name="GpsProviderFormatBox" SelectedIndex="0" Margin="0,0,0,6">
+                                        <ComboBoxItem Content="MapLibre Style JSON"/>
+                                        <ComboBoxItem Content="XYZ PNG/JPEG"/>
+                                    </ComboBox>
+                                    <TextBlock Text="HTTPS-URL"/>
+                                    <TextBox x:Name="GpsProviderUrlBox" Margin="0,0,0,6"/>
+                                    <TextBlock Text="{loc:Tr Key='Quellenangabe'}"/>
+                                    <TextBox x:Name="GpsProviderAttributionBox" Margin="0,0,0,6"/>
+                                    <TextBlock Text="{loc:Tr Key='API-Schlüssel optional'}"/>
+                                    <PasswordBox x:Name="GpsProviderKeyBox" Margin="0,0,0,6"/>
+                                    <TextBlock x:Name="GpsProviderError" TextWrapping="Wrap"
+                                               Margin="0,0,0,6" Foreground="#D35C55"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button Content="{loc:Tr Key='Entfernen'}"
+                                                Margin="0,0,6,0" Click="GpsProviderDelete_Click"/>
+                                        <Button Content="{loc:Tr Key='Abbruch'}"
+                                                Margin="0,0,6,0" Click="GpsProviderCancel_Click"/>
+                                        <Button Content="OK" Click="GpsProviderSave_Click"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                        <TextBlock Grid.Row="3" x:Name="GpsMapAttribution"
+                                   Text="OpenFreeMap © OpenMapTiles · OpenStreetMap contributors"
+                                   FontSize="10" TextWrapping="Wrap"
+                                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                   Margin="0,5,0,0"/>
+                    </Grid>
                     <Grid x:Name="TagSidebar" Grid.Row="1" Visibility="Collapsed">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>

@@ -34,6 +34,7 @@ public partial class MainWindow
         if (_sidebarMode is not null)
         {
             if (_sidebarMode == "Tags") RefreshQuickTags();
+            if (_sidebarMode == "GPS") ActivateGpsMap();
             _ = UpdateSidebarContentAsync();
         }
     }
@@ -118,8 +119,9 @@ public partial class MainWindow
         });
         TagSidebar.Visibility = _sidebarMode == "Tags"
             ? Visibility.Visible : Visibility.Collapsed;
-        GeneralSidebarScroll.Visibility = _sidebarMode == "Tags"
+        GeneralSidebarScroll.Visibility = _sidebarMode is "Tags" or "GPS"
             ? Visibility.Collapsed : Visibility.Visible;
+        GpsMapPanel.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void FolderSidebarToggle_Click(object sender, RoutedEventArgs e)

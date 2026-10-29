@@ -12,12 +12,15 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="CefSharp.Wpf.NETCore" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
     <PackageReference Include="NetVips" />
     <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
   
   <!-- Single embedded translation catalog; no external deployment dependency. -->
   <ItemGroup>
+    <EmbeddedResource Include="Resources/gps-map.html" LogicalName="PCasa.App.Resources.gps-map.html" />
     <EmbeddedResource Include="Resources/english.json"
                       LogicalName="PCasa.App.Resources.english.json" />
   </ItemGroup>
