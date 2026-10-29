@@ -22,6 +22,10 @@ public partial class MainWindow
     }
 
     private static readonly HttpClient GpsPlaceClient = CreateGpsPlaceClient();
+    // Nominatim public API policy: max one explicitly triggered request/sec
+    // across all windows; never call it from autocomplete or map movement.
+    private static readonly SemaphoreSlim GpsPlaceRequestGate = new(1, 1);
+    private static DateTimeOffset _lastGpsPlaceRequest = DateTimeOffset.MinValue;
     private static HttpClient CreateGpsPlaceClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(18) };
@@ -64,11 +68,24 @@ public partial class MainWindow
         try
         {
             // Explicit searches only: no autocomplete requests to Nominatim.
-            var url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=" +
+            var url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=" +
+                Uri.EscapeDataString(_appearance.Language) + "&q=" +
                 Uri.EscapeDataString(query);
-            using var response = await GpsPlaceClient.GetAsync(url, cancellation.Token);
-            response.EnsureSuccessStatusCode();
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellation.Token));
+            string json;
+            await GpsPlaceRequestGate.WaitAsync(cancellation.Token);
+            try
+            {
+                var pause = TimeSpan.FromSeconds(1) -
+                    (DateTimeOffset.UtcNow - _lastGpsPlaceRequest);
+                if (pause > TimeSpan.Zero)
+                    await Task.Delay(pause, cancellation.Token);
+                _lastGpsPlaceRequest = DateTimeOffset.UtcNow;
+                using var response = await GpsPlaceClient.GetAsync(url, cancellation.Token);
+                response.EnsureSuccessStatusCode();
+                json = await response.Content.ReadAsStringAsync(cancellation.Token);
+            }
+            finally { GpsPlaceRequestGate.Release(); }
+            using var doc = JsonDocument.Parse(json);
             var hits = new List<PlaceHit>();
             foreach (var item in doc.RootElement.EnumerateArray())
             {

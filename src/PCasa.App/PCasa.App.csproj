@@ -30,6 +30,11 @@
                       Condition="Exists('Resources/maplibre-gl.css')" />
     <EmbeddedResource Include="Resources/english.json"
                       LogicalName="PCasa.App.Resources.english.json" />
+    <!-- Redistributed MapLibre BSD-3 and third-party attributions. -->
+    <Content Include="Resources/maplibre-LICENSE.txt"
+             Link="Licenses/MapLibre-LICENSE.txt"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- User-editable JPG texture directory beside the published EXE. -->

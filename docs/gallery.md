@@ -86,4 +86,4 @@ Siehe [Architektur](architecture.md), [Anforderungen/Status](requirements.md) un
 - **Keine Sidecars.** Direktschreiben ist nur für JPG, JPEG, TIF, TIFF, DNG, NEF, ARW und CR2 vorgesehen; andere Endungen werden schon vor dem Paket abgewiesen. Ob ein konkretes RAW schreibbar ist, entscheidet ExifTool; ungeeignete Originale bleiben unverändert und der Auftrag sichtbar offen.
 - „Fotos im Ausschnitt“ schränkt die bestehende Galerieprojektion anhand der sichtbaren Kartenkoordinaten ein, „Filter aufheben“ stellt sie wieder her; das ist keine zweite Galerie.
 - Kartenzentrum und Zoom werden in der vorhandenen appearance.json gespeichert.
-- Die Release-Pipeline bündelt MapLibre 5.9.0 (JS und CSS, BSD-3-Clause) als Assembly-Ressource. Die App benötigt keinen CDN-Zugriff zum Anzeigen der Karte; Kartenkacheln und Nominatim-Ortssuche sind weiterhin online.
+- Die Release-Pipeline bündelt MapLibre 5.9.0 (JS und CSS, BSD-3-Clause) als Assembly-Ressource; die mitverteilten Lizenzhinweise stehen unter Licenses/MapLibre-LICENSE.txt. Die App benötigt keinen CDN-Zugriff zum Anzeigen der Karte; Kartenkacheln und Nominatim-Ortssuche sind weiterhin online.
