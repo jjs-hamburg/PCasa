@@ -24,7 +24,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    // Start without a network-dependent style; the WPF provider owner
    // supplies the chosen style after the renderer reports readiness.
    container:'map',style:{version:8,sources:{},layers:[]},
-   center:[10,42],zoom:2,attributionControl:true
+   // Keep the required licensing attribution accessible via the small
+   // information button, instead of an expanded overlay obscuring photos.
+   center:[10,42],zoom:2,attributionControl:{compact:true}
  });
  map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
  let points = [], ready = false, highlightedId = null;
