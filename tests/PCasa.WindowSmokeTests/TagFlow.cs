@@ -501,7 +501,6 @@ internal static class TagFlow
 
             // Establish a known folder-visible state even if saved appearance
             // from another smoke run exists on this test runner.
-            if (folderPane.Visibility != Visibility.Visible) Click(folderToggle);
             if (sidebarPanel.Visibility == Visibility.Visible)
             {
                 var close = typeof(PCasa.App.MainWindow).GetMethod(
@@ -510,8 +509,11 @@ internal static class TagFlow
                     System.Reflection.BindingFlags.Instance)!;
                 close.Invoke(window, [null, new RoutedEventArgs()]);
             }
+            if (folderPane.Visibility != Visibility.Visible) Click(folderToggle);
             var selectionBeforeLayout = selected.ToHashSet();
             Click(gpsToggle);
+            // A previous run may have saved GPS in expanded mode.
+            if (Equals(gpsExpand.Content, "⇥")) Click(gpsExpand);
             window.UpdateLayout();
             if (gpsColumn.Width.GridUnitType != GridUnitType.Star ||
                 galleryColumn.Width.GridUnitType != GridUnitType.Star ||

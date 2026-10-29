@@ -30,6 +30,18 @@ Die Suchzeile steht dauerhaft getrennt unter dem Hauptmenü; ihre Suchgruppe ist
 - Bilder lassen sich auf Ordner im Baum oder geeignete Ziele ziehen. Das Ziel wird beim Darüberziehen markiert. Kopieren und Verschieben laufen durch die bestehenden priorisierten, wiederaufnehmbaren Dateioperationspfade; Namenskonflikte werden ausdrücklich abgefragt.
 - Externe Explorer-Dateiaktionen erfordern anschließende Abgleichlogik; ein fehlendes NAS-Laufwerk wird nicht als bestätigtes Löschen behandelt.
 
+## GPS-Arbeitsbereich
+
+Der GPS-Bereich ist dieselbe rechte Seitenleiste wie Tags und Bildinformationen, kein eigenes Fenster. Die Breiten von Ordnerliste, Galerie und rechter Leiste werden relativ zum verfügbaren Platz verwaltet und im bestehenden `appearance.json` gespeichert. Beide Trennlinien lassen sich ziehen.
+
+- **GPS vergrößern** erweitert die Leiste nach links und blendet die Ordnerliste vorübergehend aus. Beim Zurückschalten erscheint die Ordnerliste nur dann wieder, wenn sie vorher sichtbar war.
+- Über das Ordnersymbol unten kann die Ordnerleiste unabhängig ein- oder ausgeblendet werden.
+- **GPS-Vollbild** lässt die rechte Leiste innerhalb der PCasa-Arbeitsfläche alles andere überdecken; nochmals klicken oder **Esc** stellt die vorherige Aufteilung wieder her.
+- Der letzte Seitenleistenmodus, die vergrößerte GPS-Ansicht und die relativen Breiten bleiben erhalten. Der kurzfristige Vollbildzustand wird nicht als Fensterstartmodus gespeichert.
+- Galerieauswahl und Galeriescrollposition werden beim Wechsel der Aufteilung nicht bewusst verändert.
+
+Die aktuelle GPS-Anzeige enthält weiterhin die gespeicherten Koordinaten und die Höhe. Eine interaktive Karte und ihre Verknüpfung mit der Bildauswahl werden getrennt umgesetzt.
+
 ## Tag-Bearbeitung über mehrere Bildauswahlen
 
 Im Tag-Editor werden neue oder entfernte Tags zunächst **pro Bild-ID vorgemerkt**, ohne sofort SQLite oder die Originaldateien zu ändern. Beim Wechsel der Auswahl oder des Ordners und auch bei leerer Auswahl bleibt die Sitzung erhalten.
