@@ -144,6 +144,8 @@ internal static class Program
         Run("Scan progress previews come from committed local thumbnails, never NAS originals", ScanProgressUsesLocalThumbnails, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
         Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
+        Run("Tag edit draft preserves independent images and counts across selections", MultiImageTagDraftStaysAcrossSelections, failures);
+        Run("Per-image tag batch records one atomic local intent transaction", PerImageTagBatchCommitsAtomically, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
@@ -5063,6 +5065,92 @@ internal static class Program
             ?? throw new Exception("End of gallery has no visible images.");
         if (visible.Last != imageCount - 1)
             throw new Exception("Gallery does not expose the last catalog image.");
+    }
+
+    private static void MultiImageTagDraftStaysAcrossSelections()
+    {
+        var draft = new TagEditDraft();
+        draft.Stage(new long[] { 10, 11 }, "Familie", remove: false);
+        draft.Stage(new long[] { 12 }, "Reise", remove: false);
+        draft.Stage(new long[] { 10 }, "Alt", remove: true);
+        draft.Stage(new long[] { 12 }, "Reise", remove: true);
+        draft.Stage(new long[] { 12 }, "Reise", remove: false);
+        if (draft.ImageCount != 3 || draft.ChangeCount != 4)
+            throw new Exception("Draft does not keep per-photo edits across selections.");
+        var source = new Dictionary<long, HashSet<string>>
+        {
+            [10] = new(StringComparer.OrdinalIgnoreCase) { "Alt" },
+            [11] = new(StringComparer.OrdinalIgnoreCase) { "Ort" },
+            [12] = new(StringComparer.OrdinalIgnoreCase) { "Jahr" }
+        };
+        var selected = draft.ProjectCounts(new long[] { 10, 12 }, source);
+        if (selected.GetValueOrDefault("Familie") != 1 ||
+            selected.GetValueOrDefault("Reise") != 1 ||
+            selected.ContainsKey("Alt") || selected.GetValueOrDefault("Jahr") != 1)
+            throw new Exception("Draft projection over selectable photo IDs is incorrect.");
+        var different = draft.ProjectCounts(new long[] { 11 }, source);
+        if (different.GetValueOrDefault("Familie") != 1 ||
+            different.GetValueOrDefault("Ort") != 1 ||
+            different.ContainsKey("Reise"))
+            throw new Exception("Draft applied another photo's tags to current selection.");
+        var all = draft.Snapshot();
+        if (all.Count != 3 || all[0].ImageId != 10 ||
+            all[1].ImageId != 11 || all[2].ImageId != 12 ||
+            all[2].Changes.Single().Remove)
+            throw new Exception("Last staged operation did not win per photo.");
+        draft.Clear();
+        if (draft.HasChanges || draft.ImageCount != 0 ||
+            draft.ChangeCount != 0 || draft.Snapshot().Count != 0)
+            throw new Exception("Cancel did not discard the complete tag session.");
+    }
+
+    private static void PerImageTagBatchCommitsAtomically()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "first.jpg"));
+        WriteJpeg(Path.Combine(sandbox.Images, "second.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        long first;
+        long second;
+        using (var connection = db.OpenConnection())
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id FROM images ORDER BY file_name;";
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read()) throw new Exception("Missing first photo.");
+            first = reader.GetInt64(0);
+            if (!reader.Read()) throw new Exception("Missing second photo.");
+            second = reader.GetInt64(0);
+        }
+        var repo = new ImageTagRepository(db);
+        var edits = new (long ImageId, IReadOnlyList<(string Tag, bool Remove)> Edits)[]
+        {
+            (first, new (string Tag, bool Remove)[] { ("BatchAlpha", false) }),
+            (second, new (string Tag, bool Remove)[] { ("BatchBeta", false) })
+        };
+        // An invalid second row must roll back the first image's changes.
+        var broken = new (long ImageId, IReadOnlyList<(string Tag, bool Remove)> Edits)[]
+        {
+            edits[0],
+            (second, new (string Tag, bool Remove)[] { ("  ", false) })
+        };
+        try
+        {
+            repo.QueueTagEdits(broken);
+            throw new Exception("Invalid batch was unexpectedly accepted.");
+        }
+        catch (ArgumentException) { }
+        if (repo.GetKeywords(first)?.Contains("BatchAlpha") == true ||
+            repo.PendingEdits().Any(e => e.ImageId == first))
+            throw new Exception("Per-image batch did not roll back atomically.");
+        if (repo.QueueTagEdits(edits) != 2 ||
+            !(repo.GetKeywords(first) ?? "").Contains("BatchAlpha") ||
+            (repo.GetKeywords(first) ?? "").Contains("BatchBeta") ||
+            !(repo.GetKeywords(second) ?? "").Contains("BatchBeta") ||
+            (repo.GetKeywords(second) ?? "").Contains("BatchAlpha") ||
+            repo.PendingEdits().Count != 2)
+            throw new Exception("Per-image intent batch leaked tags across photos.");
     }
 
     private static void LanguageSwitchPreservesUserMetadata()

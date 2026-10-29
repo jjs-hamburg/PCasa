@@ -623,6 +623,111 @@ internal static class TagFlow
                         .Any(label => label.Text.Contains(editableTag,
                             StringComparison.Ordinal))),
                 "Cancel did not restore the original tag list.");
+            // A staged batch is not tied to the currently selected folder.
+            // Different photos receive different tags. Only ONE OK produces
+            // a durable package; switching photos, folders or clearing the
+            // selection must never discard the unconfirmed session.
+            var applyGallerySelection = typeof(PCasa.App.MainWindow).GetMethod(
+                "ApplyGallerySelection",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            long otherImageId;
+            string otherImagePath;
+            using (var connection = db.OpenConnection())
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT id, local_path FROM images
+                    WHERE photo_folder_id=$folder ORDER BY file_name LIMIT 1;
+                    """;
+                command.Parameters.AddWithValue("$folder", b.Id);
+                using var reader = command.ExecuteReader();
+                if (!reader.Read())
+                    throw new Exception("Second folder has no available image.");
+                otherImageId = reader.GetInt64(0);
+                otherImagePath = reader.GetString(1);
+            }
+            const string stagedA = "CrossFolder Draft A";
+            const string stagedB = "CrossFolder Draft B";
+            var draftSummary = (TextBlock?)window.FindName("TagDraftSummaryText")
+                ?? throw new Exception("Pending-tag summary is missing.");
+            void SelectTagImages(params long[] ids)
+            {
+                selected.Clear();
+                foreach (var id in ids) selected.Add(id);
+                applyGallerySelection.Invoke(window, null);
+            }
+            SelectTagImages(editorIds[0]);
+            tagInput.Text = stagedA;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            SelectTagImages(otherImageId);
+            tagInput.Text = stagedB;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            Until(window, () => tagOk.IsEnabled &&
+                draftSummary.Text.Contains("2 Bilder") &&
+                draftSummary.Text.Contains("2 Änderungen") &&
+                tagRows.Children.OfType<DockPanel>().Any(row =>
+                    row.Children.OfType<TextBlock>().Any(label =>
+                        label.Text.Contains(stagedB, StringComparison.Ordinal))),
+                "Changing folders dropped staged Tag changes or the per-image projection.");
+            SelectTagImages(editorIds[0]);
+            Until(window, () =>
+                tagRows.Children.OfType<DockPanel>().Any(row =>
+                    row.Children.OfType<TextBlock>().Any(label =>
+                        label.Text.Contains(stagedA, StringComparison.Ordinal))) &&
+                !tagRows.Children.OfType<DockPanel>().Any(row =>
+                    row.Children.OfType<TextBlock>().Any(label =>
+                        label.Text.Contains(stagedB, StringComparison.Ordinal))),
+                "Returning to a previous photo failed to show its staged tags.");
+            SelectTagImages();
+            if (!tagOk.IsEnabled || !tagCancel.IsEnabled ||
+                !draftSummary.Text.Contains("2 Bilder"))
+                throw new Exception("Clearing selection prematurely discarded draft.");
+            if (editorIds.All(id => (new ImageTagRepository(db).GetKeywords(id) ?? "")
+                    .Contains(stagedA)) ||
+                (new ImageTagRepository(db).GetKeywords(otherImageId) ?? "")
+                    .Contains(stagedB))
+                throw new Exception("Unconfirmed Tag session wrote SQLite prematurely.");
+            tagCancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagCancel));
+            if (tagOk.IsEnabled || draftSummary.Visibility != Visibility.Collapsed ||
+                (new ImageTagRepository(db).GetKeywords(editorIds[0]) ?? "")
+                    .Contains(stagedA) ||
+                (new ImageTagRepository(db).GetKeywords(otherImageId) ?? "")
+                    .Contains(stagedB))
+                throw new Exception("Cancel did not discard every cross-folder Tag edit.");
+
+            // Repeat with a single confirmation, proving different original
+            // files get their own words in one new durable tag-edit-v2 package.
+            SelectTagImages(editorIds[0]);
+            tagInput.Text = stagedA;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            SelectTagImages(otherImageId);
+            tagInput.Text = stagedB;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            var activeScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+            var beforePackages = activeScheduler.Snapshot().Count(job =>
+                job.Key.StartsWith("tags:package:", StringComparison.Ordinal));
+            tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
+            Until(window, () =>
+                (ImageTagRepository.ReadKeywords(Path.Combine(albumA,
+                    "a-00-topaz.jpg")) ?? "").Contains(stagedA) &&
+                (ImageTagRepository.ReadKeywords(otherImagePath) ?? "")
+                    .Contains(stagedB) &&
+                activeScheduler.Snapshot().Count(job =>
+                    job.Key.StartsWith("tags:package:", StringComparison.Ordinal))
+                    == beforePackages + 1,
+                "Cross-folder Tag session was not confirmed as ONE durable package.");
+            if ((new ImageTagRepository(db).GetKeywords(editorIds[0]) ?? "")
+                    .Contains(stagedB) ||
+                (new ImageTagRepository(db).GetKeywords(otherImageId) ?? "")
+                    .Contains(stagedA))
+                throw new Exception("Cross-folder Tag batch applied words to wrong images.");
+            Console.WriteLine(
+                "PASS: One Tag draft survives folder/selection changes, Cancel discards it, one OK writes distinct originals.");
+
+            SelectTagImages(editorIds);
             tagInput.Text = editableTag;
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
             if (!tagOk.IsEnabled) throw new Exception("Re-staged tag did not enable OK.");
