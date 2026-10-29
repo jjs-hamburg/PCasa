@@ -1,77 +1,28 @@
-# PCasa – Synchronization Model
+# PCasa – optionale Mehrclient-Synchronisierung (Konzept, nicht implementiert)
 
-## General rule
+**Stand 29.10.2026.** Diese Seite hält eine **geplante Architektur** fest. Die derzeit lauffähige PCasa-Anwendung besitzt einen eigenständigen lokalen Katalog, **aber keine betriebsbereite zentrale Mehrclient-Synchronisierung**. Im aktiven Branch wird der Ordnermanager mit `serverDatabaseConfigured: false` geöffnet; die Server-Sync-Option erscheint daher derzeit nicht als nutzbare Einrichtung.
 
-Synchronization exchanges catalog information and thumbnails between clients through an optional server-side synchronization database/storage.
+## Verbindliche Leitlinien für eine spätere Umsetzung
 
-Original images are not distributed by the synchronization layer.
+1. **Local first:** Jeder Client muss mit seinem eigenen SQLite-Katalog und lokalen Thumbnail-Dateien ohne Server arbeiten können.
+2. **Dateisystem als Wahrheit:** Der Server darf Originalbilder nicht zu Datenbankobjekten machen, keine Bildordner selbst scannen und keine lokale Dateisystemberechtigung umgehen.
+3. **Explizites Opt-in:** Nur ausdrücklich zur Synchronisierung freigegebene **Netzwerk-/Serverordner** sollen später teilnehmen; lokale Ordner bleiben lokal.
+4. **Kanonische Identität:** Gemeinsame Netzwerkbilder benötigen konsistente UNC-Pfadidentitäten; lokale Laufwerksbuchstaben können zwischen Clients unterschiedlich sein.
+5. **Geteilte Daten:** Katalogmetadaten, Tags/GPS und Thumbnails sollen bei Bedarf ausgetauscht werden, **nicht** die Originalbilddateien.
+6. **Kein zweiter Jobplaner:** Datenabgleich, Konflikte, Wiederholung und Datei-/Katalogänderungen müssen die bestehende Scheduler-/Generationsarchitektur respektieren.
 
-Only explicitly selected network/server folders participate in central synchronization.
+## Vorgesehene Bedienung (noch nicht verfügbar)
 
-Local folders never participate in central synchronization.
+Wenn ein Server eingerichtet ist, soll der Ordnermanager eine Option für die Synchronisierung geeigneter überwachter Netzwerkordner zeigen. Lokale Quellen wären ausgegraut. Die Auswahl eines Netzwerkordners zur Überwachung allein **soll nicht** automatisch einen Serverabgleich aktivieren.
 
-## Server database availability
+Die ursprünglich vorgesehene manuelle Synchronisierung eines Ordners oder Teilbaums ist ebenfalls noch keine implementierte Funktion. Der aktuelle Befehl zum **manuellen Einlesen/Aktualisieren** ist ein lokaler Dateisystemscan und darf nicht mit Server-Synchronisation verwechselt werden.
 
-Central synchronization is optional.
+## Offene Architekturentscheidungen
 
-If no server database is configured on a client:
+- Serverdatenbank, Transport, Authentifizierung, Berechtigungen und Verschlüsselung
+- Konfliktmodell bei konkurrierenden Tag-Änderungen, Umbenennungen und Löschungen
+- Revisions-/Generationsabgleich zwischen Clients und Wiederanlauf nach langer Offline-Zeit
+- Übertragung und Prüfung referenzierter Cache-Packs ohne doppelte Fachzuständigkeiten
+- Migrations- und Kompatibilitätsregeln für bestehende lokale Kataloge
 
-- PCasa remains fully usable locally
-- no server-synchronization controls are shown in the Folder Manager
-- no folder participates in central synchronization
-
-If a server database is configured:
-
-- server-synchronization controls become visible in the Folder Manager
-- local folders remain ineligible and their server-synchronization control is disabled/greyed out
-- network/server folders can be selected individually for central synchronization
-
-## Folder synchronization scope
-
-The Folder Manager controls permanent monitoring and, separately, central synchronization eligibility.
-
-For each monitored folder:
-
-- Local folder:
-  - permanently monitorable
-  - central server synchronization is not allowed
-  - when server synchronization controls are visible, the control is disabled and greyed out
-- Network/server folder:
-  - permanently monitorable
-  - central server synchronization can be enabled or disabled explicitly for that folder
-  - being a network/server folder alone does not make it part of central synchronization
-
-Therefore, the central server database contains only catalog data and thumbnails belonging to network/server folders that were explicitly selected for server synchronization.
-
-## Path normalization
-
-PCasa stores complete paths. Paths are not split into a root plus a relative path.
-
-For network sources, the canonical synchronized path is always the complete UNC path.
-
-Drive letters and mapped network drives are client-local conveniences only and must never become the canonical synchronized identity.
-
-Example for the same image:
-
-- Client A local access path: `P:\Fotos\2024\IMG_0001.jpg`
-- Client B local access path: `X:\2024\IMG_0001.jpg`
-- Canonical synchronized path: `\\PHOTO-SERVER\Photos\2024\IMG_0001.jpg`
-
-The catalog stores the complete local access path needed by the client and the complete canonical path needed for identity/synchronization.
-
-Changing a client drive mapping must not alter the canonical synchronized path.
-
-## Manual synchronization
-
-In addition to automatic monitoring, the user can explicitly synchronize:
-
-- the selected folder
-- the selected folder including subfolders
-
-The folder manager itself is only for permanent monitoring configuration and for choosing whether an eligible network/server folder participates in central synchronization.
-
-## Identity
-
-No artificial image UUID is defined as the primary truth at this stage.
-
-The complete canonical path identifies the file in the catalog. Renames or moves performed by PCasa can update the catalog directly. External renames/moves may later be correlated using file attributes or fingerprints where useful.
+**Nicht aus den bereits vorhandenen Schemafeldern oder UI-Platzhaltern ableiten, dass der Abgleich funktioniert.** Die aktuelle Datenhaltung ist unter [`database.md`](database.md) beschrieben.

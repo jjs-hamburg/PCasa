@@ -1,3 +1,5 @@
+> **HISTORISCHE TESTSPEZIFIKATION.** Die unten aufgeführten G01–G12 waren ursprünglich geplante Akzeptanzfälle, **keine Tabelle automatisch bestandener Tests**. Aktueller Implementierungsstand: [Architektur](architecture.md), [Scheduler-Statusnachtrag](operation-scheduler-design.md#15-statusnachtrag--29102026-implementierter-scheduler-und-offene-grenzen). Der erfolgreiche CI-Lauf `40765826666` belegt die konkret im Workflow ausgeführten Prüfungen, jedoch nicht automatisch alle damaligen Szenarien mit einem realen NAS/VPN.
+
 # OperationScheduler – deterministische Konsistenztests (Vorbereitung)
 
 Basis: öffentlicher PCasa-main-Ausgangsstand `bf8e6015e45389a077cfc3e899ff8f621ce8d775`. Dieser Arbeitszweig isoliert die Scheduler-Sanierung von PR #14. Dieses Dokument ist eine **Testspezifikation**, keine Behauptung bereits bestandener Tests.
@@ -44,3 +46,17 @@ Basis: öffentlicher PCasa-main-Ausgangsstand `bf8e6015e45389a077cfc3e899ff8f621
 6. Bestehende Langzeitlocks nur unter nachgewiesener Pack-/Index-Konsistenz verkürzen.
 
 **Freigabekriterium:** G01–G12 müssen reproduzierbar bestanden sein; zusätzlich sämtliche bisherigen Katalog-/WPF-Tests und manuelle SMB-/VPN-Tests. Keine automatische Release- oder Merge-Freigabe.
+
+
+## Nachtrag – tatsächlich ausgeführte Windows-Prüfungen (29.10.2026)
+
+Im Zweig `scheduler-consistency` startet `.github/workflows/scheduler-consistency-tests.yml` automatisch bei Push und per `workflow_dispatch`. Der [erfolgreiche Lauf `40765826666`](https://github.com/jjs-hamburg/PCasa/actions/runs/40765826666) umfasst:
+
+- EXIF-/GPS-/Tag-Probes und Katalog-Regressionen;
+- echte WPF-Fenster-Smokes einschließlich Deutsch/Englisch;
+- Ordnerentfernung bei Cache-Lock, Ordnerhinzufügen mit Priorität/Neustart;
+- Tag-Suche, Originaldatei-Schreibablauf und cached Tag-Fortschrittsvorschau;
+- Kopieren und Verschieben innerhalb überwachter Ordner;
+- self-contained Windows-x64-Publish und Artefakt `PCasa-win-x64`.
+
+**Unverändert außerhalb des CI-Nachweises:** vollständige Abnahme der G01–G12 unter sämtlichen Netzwerkbedingungen, lang laufende produktive NAS-/VPN-Workloads, alle DPI-/Monitorfälle und Drittwerkzeuge. Die historische Freigabegrenze in diesem Dokument ist eine **Anforderung für die Gesamtfreigabe**, nicht der Status jedes einzelnen heutigen Testlaufs.

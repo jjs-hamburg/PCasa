@@ -1,3 +1,5 @@
+> **ARCHIVIERTER REVISIONSBERICHT (19.–20.10.2026).** Dies ist ein historischer Ausgangsbefund mit damaligen Commit- und CI-Referenzen. Die darunter dokumentierten ursprünglichen Fehler und Vorhaben dürfen **nicht** als unverändert offene Fehlerliste des Standes 29.10.2026 gelesen werden. Der aktuelle Implementierungsstand steht in [`architecture.md`](architecture.md), [`gallery.md`](gallery.md) und [`requirements.md`](requirements.md) für den Zweig `scheduler-consistency`. Der Originalbericht bleibt zur Nachvollziehbarkeit der Entscheidungen erhalten.
+
 # PCasa PR #14 – Architektur-Revision (2026-10-19)
 
 ## Fortschrittsnachtrag – 20.10.2026

@@ -1,3 +1,5 @@
+> **HISTORISCHER ENTWURF UND ÄNDERUNGSPROTOKOLL (21.–23.10.2026).** Die folgenden Kapitel 1–14 enthalten absichtlich damalige Planungen, Teilstände und offene Abnahmesperren. Formulierungen wie »Konzept, keine Implementierung«, »nur manuelle CI«, »Scheduler-Monitor« oder »nicht als ZIP freigeben« beschreiben **nicht** pauschal den aktuellen Stand. Die gegenwärtige Architektur steht in [`architecture.md`](architecture.md); der aktuelle, geprüfte Entwicklungszweig ist `scheduler-consistency`. Im Zweifel gelten Quelltext, Tests und der Statusnachtrag am Ende dieser Datei. Ein Scheduler-Monitor als separate UI wird **nicht** als aktuelle oder geplante Funktion geführt.
+
 # PCasa – OperationScheduler: verbindlicher Architekturentwurf
 
 Stand: 2026-10-21 · Arbeitszweig `picasa-browse-cache` · **Konzept, keine Implementierung**
@@ -233,7 +235,7 @@ anschließend gezielt geprüft wurde. `main` bleibt unverändert.
 **Stand des Arbeitszweigs:** implementiert und analytisch durchgesehen;
 Windows-Kompilierung, gezielte Regressionen und reale NAS-End-to-End-Abnahme
 dieser letzten Änderungen **noch nicht ausgeführt**. Dieser Abschnitt ersetzt
-die unter §12 beschriebenen damaligen offenen Punkte nicht rückwirkend,
+die unter `12 beschriebenen damaligen offenen Punkte nicht rückwirkend,
 sondern dokumentiert ihre aktuelle Bearbeitung.
 
 ### Einheitliche dauerhafte Zustandsgrenze
@@ -357,3 +359,24 @@ keine ungeprüfte Produktionsfreigabe. `main` wird nicht verändert.
 Die automatischen GitHub-Tests des Entwicklungsbranches sind weiterhin
 deaktiviert. Nur der isolierte Prübranch besitzt einen absichtlich
 eingeschränkten Push-Trigger, um seine gezielten Abnahmeläufe auszuführen.
+
+
+## 15. Statusnachtrag – 29.10.2026: implementierter Scheduler und offene Grenzen
+
+Die frühere Formulierung »Konzept, keine Implementierung« gilt ausschließlich für den historischen Entwurf vom 21.10.2026. Im Entwicklungszweig `scheduler-consistency` sind `PCasaScheduler`, `SchedulerTaskPackage`, `DurablePackageJournal` und die zugehörigen Repository-/WPF-Integrationen implementiert.
+
+### Nachweisbarer Implementierungsstand
+
+- **Eine zentrale Steuerung:** `PCasaScheduler` ist Eigentümer der Queues und begrenzten Arbeits-Lanes; Viewer-/Thumbnail-/Source-Probes verwenden getrennte Kapazitäten *innerhalb derselben* Scheduler-Instanz.
+- **Prioritäten:** `ManualAction` (P0), `Interactive`, `UserAction`, `Background` und `Idle`; manuelle Pakete werden an bestätigten Schrittgrenzen unterbrochen und grundsätzlich in umgekehrter Startreihenfolge weiterbearbeitet.
+- **Dauerhafte Pakete:** `scheduler_packages` speichert Typ, Payload, Priorität, Einreihung, Cursor und Retry. Wiederherstellung geschieht über registrierte Paketfabriken. Fehlende Wiederherstellungstypen dürfen nicht stillschweigend als erledigt gelten.
+- **Tags:** `pending_tag_edits` enthält die offenen Originaldatei-Änderungen. ExifTool darf bei atomaren nativen Schreiboperationen nicht mitten im Ersetzen einer Datei beendet werden; erfolgreiche Schritte werden bestätigt. Bei NAS-Ausfall bleibt der unerledigte Auftrag rekonstruierbar.
+- **Ordnermanager, Scans und Dateioperationen:** verwenden den gemeinsamen Scheduler, fachliche Quell-/Generationssperren und bestehende Transaktions-/Abgleichdienste.
+- **Status und Vorschau:** dieselbe Scheduler-Fortschrittsprojektion bedient Statuszeile und schwebendes Fenster; Tags zeigen eine Serien-Gesamtzahl sowie Bildname und Pfad. Das Vorschaubild wird lokal aus Pack oder Einzel-Thumbnail geladen, ohne das NAS-Original nur dafür neu zu öffnen.
+- **Programmende:** geordneter Scheduler-Abschluss vor dem Beenden von PCasa-eigenen ExifTool-Prozessen; Windows-Job-Object als zusätzliche Crash-Absicherung.
+
+### Tests, noch offene Abnahme
+
+Der [Windows-Workflow](https://github.com/jjs-hamburg/PCasa/actions/workflows/scheduler-consistency-tests.yml) läuft bei Pushes auf `scheduler-consistency` und manuell. [Lauf `40765826666`](https://github.com/jjs-hamburg/PCasa/actions/runs/40765826666) hat Katalog-/EXIF-/Tag-, WPF-, Ordner-, Übertragungs- und lokale Vorschauprüfungen sowie Paketierung erfolgreich abgeschlossen. Einzelne historische Ideen, etwa jede G01–G12-Variante unter allen NAS-/VPN-Ausfallmodi, sind dadurch **nicht automatisch vollständig bewiesen**.
+
+Ein Test-Artefakt `PCasa-win-x64` ist verfügbar; das ist **keine** automatische Produktionsfreigabe. Reale Netzwerkunterbrechungen, echte Großbibliotheken, Drittanwendungen und diverse Monitorkonfigurationen müssen separat abgenommen werden. `main` enthält weiterhin eine ältere Codebasis; diese Aktualisierung dokumentiert den aktiven Entwicklungszweig.

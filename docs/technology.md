@@ -1,57 +1,51 @@
-# PCasa – Initial Technology Decisions
+# PCasa – Technik, Build und Test
 
-Status: bootstrap baseline
+**Stand 29.10.2026 · Entwicklungszweig `scheduler-consistency`.** Dies ist der aktuelle technische Stand, keine ursprüngliche Framework-Auswahlliste.
 
-## Platform and UI
+## Laufzeit und Bibliotheken
 
-- Windows desktop application.
-- .NET 10 LTS.
-- WPF as the UI framework.
-- Built-in WPF Fluent theme in system mode for a modern, lightweight Windows appearance.
-- x64 is the initial target architecture.
+| Bereich | Gewählte Technologie |
+| --- | --- |
+| Plattform | Windows x64 |
+| Framework/UI | .NET 10, WPF, XAML |
+| Lokale Datenbank | SQLite mit `Microsoft.Data.Sqlite`, SQL/Transaktionen ohne ORM |
+| Bildverarbeitung | `NetVips` und native `NetVips.Native.win-x64` |
+| Metadaten | ExifTool für EXIF/GPS und dauerhaftes Tag-Schreiben |
+| Galerie | `BrowseGallerySurface` mit virtualisiertem Layout und gepackten Thumbnail-Stufen |
+| Sprache | Zentrale `UiLanguage`, eingebettetes `Resources/english.json` (de/en) |
 
-### Why WPF
+Projektdatei: [`src/PCasa.App/PCasa.App.csproj`](../src/PCasa.App/PCasa.App.csproj). Aktuelle Abhängigkeiten und Versionen werden über die Projekt-/Package-Konfiguration bestimmt.
 
-PCasa is deliberately Windows-first. WPF is mature, actively maintained with current .NET releases, supports hardware-accelerated rendering, XAML/data binding, virtualization and modern Fluent theming. We therefore avoid the additional platform and abstraction cost of a cross-platform UI framework at this stage.
+## Bildformate und RAW
 
-## Local catalog
+Der Scanner berücksichtigt gebräuchliche JPEG-/Bildformate und ausgewählte RAW-Formate (u. a. ARW/NEF und weitere Formate, siehe `FolderScanner.IsSupportedImagePath`). Für RAW werden, soweit technisch verfügbar, native Dekodierung oder eingebettete JPEG-Vorschauen verwendet. Orientierung/EXIF/GPS sind Bestandteil des Katalogflusses. **RAW-Bearbeitung** und allgemeine Bildbearbeitungswerkzeuge sind nicht implementiert.
 
-- SQLite is the local client database.
-- `Microsoft.Data.Sqlite` is used directly.
-- No ORM is required for the initial implementation.
-- SQL, indexes and transactions remain explicit because catalog performance at approximately 500,000 images is a primary requirement.
+## Caches
 
-## Image processing
+- Lokale Einzel-Vorschaubilder werden unter dem Benutzerprofil gepflegt.
+- Der Browse-Cache besitzt standardmäßig drei Größenstufen **96, 192, 384** und referenziert gepackte Dateien aus SQLite.
+- Sichtbare/nahe Galerie-Pages werden geladen; Scrollen soll nicht die Originalbilder über das Netzwerk neu dekodieren.
+- GUI-Status und schwebendes Fortschrittsfenster sind Projektionen bestehender Scheduler-Fortschritte.
 
-- libvips is the initial image-processing engine.
-- .NET binding: NetVips.
-- Native Windows x64 libvips package is bundled through NuGet.
+## Bauen und testen
 
-libvips is intended for thumbnail generation, decoding, resize/crop, rotation/mirroring and the core pixel operations required by PCasa. Interactive editing will operate on screen-sized previews; the full-resolution source is processed only when the user saves.
+Mit installiertem .NET-10-SDK auf Windows x64:
 
-## Thumbnail principle
+~~~powershell
+dotnet restore src/PCasa.App/PCasa.App.csproj -r win-x64
+dotnet publish src/PCasa.App/PCasa.App.csproj -c Release -r win-x64 --self-contained true -o publish/PCasa
+~~~
 
-- Thumbnails are files in a dedicated cache, not BLOBs in the SQLite catalog.
-- The database stores catalog information and thumbnail cache keys/state.
-- Thumbnail generation is asynchronous and must never block the UI.
-- Only thumbnails needed for the visible/near-visible viewport are loaded into UI memory.
-- Server synchronization will include thumbnail cache data so a new client does not have to regenerate the complete collection.
+Für das **vollständige verteilbare Testpaket** wird ExifTool benötigt. Der Workflow [`scheduler-consistency-tests.yml`](../.github/workflows/scheduler-consistency-tests.yml) beschafft die geprüfte ExifTool-Distribution, führt Tests aus, veröffentlicht einen self-contained Build und lädt das Artefakt **`PCasa-win-x64`** hoch. Es gibt einen automatischen Push-Trigger auf `scheduler-consistency` sowie einen manuellen `workflow_dispatch`-Trigger.
 
-Exact thumbnail sizes and cache format remain open until they are benchmarked with a representative large photo set.
+Testprojekte: `tests/PCasa.CatalogTests` und `tests/PCasa.WindowSmokeTests`. Zu den realen Windows-WPF-Abläufen gehören Ordnerwahl/-entfernung, Tag-Suche/-Schreiben, Kopieren/Verschieben, Sprachwechsel und lokale Tag-Job-Vorschaubilder. Beispiel: [erfolgreicher Workflow-Lauf `40765826666`](https://github.com/jjs-hamburg/PCasa/actions/runs/40765826666).
 
-## Metadata
+**Grenze der Tests:** Der GitHub-Windows-Runner besitzt keinen Zugriff auf das tatsächliche NAS, den VPN-Tunnel, alle persönlichen Originaldateien oder Drittprogramme. Ein grüner CI-Lauf ersetzt keine lokale Sicht-/Last-/Ausfallprüfung und keine förmliche Freigabe.
 
-Metadata reading/writing is intentionally not fixed yet. Tag/GPS persistence must be decided separately because it affects interoperability, file modification behavior and server synchronization.
+## Daten und Prozesse
 
-## Server synchronization
+Die Anwendung benötigt Schreibrechte für den lokalen PCasa-Datenordner und, beim tatsächlichen Metadaten-Schreiben, für die betreffenden Originaldateien. ExifTool-Prozesse werden über eine gemeinsame Registry verwaltet; ein Windows-Job-Object dient als zusätzliche Kill-on-Close-Sicherung. PCasa darf keine fremden ExifTool-Prozesse beenden.
 
-The optional server database remains a synchronization/distribution point only. It does not scan files and does not become the source of truth. The file system remains authoritative.
+## Noch offen
 
-## Decisions deliberately postponed
-
-- server database engine
-- synchronization transport/protocol
-- embedded metadata writer
-- map component/provider
-- thumbnail file format and size tiers
-- installer/update mechanism
+Server-Datenbank/Transport, Plugin-/Werkzeugintegration, Bildbearbeitung, Kartendarstellung, Installer/Updateprozess und breite reale NAS-/VPN-Abnahme sind nicht als abgeschlossene Features zu kennzeichnen.

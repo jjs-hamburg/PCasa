@@ -1,61 +1,30 @@
-# PCasa UI languages — one owner, one path
+# PCasa – zentrale Sprachverwaltung Deutsch / Englisch
 
-PCasa supports **Deutsch (`de`)** and **English (`en`)**.
+**Stand 29.10.2026 · implementiert in `scheduler-consistency`.** Deutsch (`de`) ist der Ausgangskatalog; Englisch (`en`) verwendet die Datei `src/PCasa.App/Resources/english.json`, die in die Anwendung eingebettet wird.
 
-## Ownership
+## Eine Quelle, ein Übersetzungsweg
 
-`src/PCasa.App/Services/UiLanguage.cs` is the only owner of language state,
-translation lookup and change notifications. The invariant German text is the
-source key. `src/PCasa.App/Resources/english.json` is the centrally maintained
-English catalog, embedded into the published executable.
+`src/PCasa.App/Services/UiLanguage.cs` ist der **einzige Eigentümer** des Sprachzustands, der Katalogsuche und der Änderungsbenachrichtigung. Es dürfen keine eigenständigen Wörterbücher oder Sprachumschalter in Galerie, Viewer, Tag-Editor, Fortschrittsdialog oder Ordnermanager eingeführt werden.
 
-Do **not** introduce a separate localization dictionary in the gallery, Tags,
-folder manager, viewer, progress window or individual WPF dialogs. Do **not**
-translate filesystem paths, image filenames, user-entered Tags, EXIF metadata,
-SQLite values, package keys, or machine-readable status identifiers.
+- WPF/XAML benutzt `{loc:Tr Key='Ordner'}`. Die Markup-Extension bindet an `UiLanguage.Revision` und aktualisiert offene Fenster nach Sprachwechsel.
+- Zur Laufzeit generierte C#-Texte verwenden `UiLanguage.T("...")` bzw. `UiLanguage.Format("...", args)`.
+- **Laufzeitwerte**, die im Code gesetzt werden, müssen bei Sprachänderung erneut publiziert werden. Beispiel: `MainWindow.GallerySorting.cs` aktualisiert das ausgewählte Sortiermerkmal und den Tooltip über `UiLanguage`, statt ein zuvor übersetztes XAML-Feld wieder mit deutschem Text zu überschreiben.
+- Unbekannte Übersetzungsschlüssel fallen auf den deutschen Originaltext zurück und dürfen niemals als leere Beschriftung verschwinden.
 
-## Use from XAML
+## Was ausdrücklich nicht übersetzt wird
 
-Declare `xmlns:loc="clr-namespace:PCasa.App.Services"` on a Window/Application,
-then use the dynamic markup extension:
+Benutzer-Tags, Bilddateinamen, Ordner- und UNC-Pfade, EXIF-Nutzdaten, SQLite-Werte, Scheduler-Paket-IDs und andere maschinenlesbare Identifikatoren sind **Daten**, keine UI-Texte. Platzhalter mit benutzergegebenen Werten dürfen erst **nach** der Übersetzung des Formatstrings eingefügt werden.
 
-```xml
-<MenuItem Header="{loc:Tr Key='Ordner'}"/>
-<TextBlock Text="{loc:Tr Key='Überwachte Ordner'}"/>
-```
+## Sprachwechsel und Persistenz
 
-The extension binds to `UiLanguage.Revision`; changing languages updates
-*already open* WPF windows and menus without recreating their viewmodels.
+**Optionen → Sprache → Deutsch / English** schaltet ohne Programmneustart um. Der Sprachcode liegt im vorhandenen `%LOCALAPPDATA%\PCasa\appearance.json` als `AppearanceState.Language`. Alte Profile ohne diesen Eintrag starten auf Deutsch. Eine separate Spracheinstellungsdatei ist nicht vorgesehen.
 
-## Use from C#
+Neue sichtbare Beschriftungen gehören zentral in die deutsche Ausgangsschreibweise und, falls abweichend, in den englischen Katalog. Nicht jeder denkbare Laufzeit-/Fehlertext ist bereits lückenlos übersetzt; unvollständige Katalogeinträge sind durch den deutschen Fallback sichtbar.
 
-```csharp
-StatusText.Text = UiLanguage.T("Tag-Suche fehlgeschlagen");
-CountText.Text = UiLanguage.Format("{0:N0} Bilder", imageCount);
-```
+## Tests und Qualitätsgrenze
 
-Keep the key string invariant and add one English entry for each new visible
-message. For compound messages format translated templates rather than
-interpolating a user-supplied filename or Tag before translation.
+- Katalogtest: Sprachwechsel, Formatstrings, unbekannte Tags/Pfade.
+- Echter Windows-WPF-Test: Menü, Suchleiste und **Sortierfeld inklusive ausgewähltem Kriterium, Tooltip und Einträgen** wechseln de → en → de; Spracheinstellung bleibt gespeichert.
+- Bestehende EXIF-, Tag-, Scheduler-, Ordner- und Dateitestfälle bleiben unverändert gültig.
 
-## Persistent setting and switching
-
-The language is stored under `AppearanceState.Language` in the existing
-`%LOCALAPPDATA%\PCasa\appearance.json`. Older profiles default to `de`.
-The Options → Language menu is the sole UI that switches the language;
-`UiLanguage.Current.Select(code)` broadcasts the change.
-
-Unlisted strings fall back to readable German rather than disappearing.
-The two supported language codes are deliberately validated; adding a third
-language requires a new resource catalog, a corresponding menu entry and tests.
-
-## Tests
-
-- Catalog test: verifies source/fallback translations, counts, and preservation
-  of user Tag and file path strings.
-- Real Windows/WPF smoke test: selects English and German in the running menu,
-  verifies live menu and toolbar translations and checks the saved setting.
-- Existing scheduler, EXIF, Tag, folder and gallery tests must all remain green.
-
-Localization is a **presentation layer only**. It must not change scheduler
-priorities, database schema, file operations or gallery layout.
+Die Lokalisierung ist **ausschließlich Darstellung**. Sie darf weder Schedulerprioritäten, Dateipfade, Tag-Daten, Datenbank-Schema noch Galerie-Layout verändern.
