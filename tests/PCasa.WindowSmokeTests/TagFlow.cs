@@ -683,6 +683,40 @@ internal static class TagFlow
                 !googleAddress.Contains("53.553333", StringComparison.Ordinal))
                 throw new Exception("Google Maps coordinate search fallback changed unexpectedly.");
 
+            // Regression for GPS place/address entry: CefSharp's callback
+            // returns BEFORE BeginInvoke executes. The dispatcher must never
+            // dereference a JsonElement backed by an already disposed document.
+            var parseGpsMessage = typeof(PCasa.App.MainWindow).GetMethod(
+                "ParseDetachedGpsJavascriptMessage",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+                ?? throw new Exception("Detached GPS JS message parser is missing.");
+            foreach (var (message, numericField, expected) in new[]
+            {
+                ("""{"type":"draft","lat":48.8584,"lon":2.2945}""", "lat", 48.8584),
+                ("""{"type":"bounds","south":47.0,"west":2.0,"north":49.0,"east":4.0}""", "west", 2.0),
+                ("""{"type":"viewport","lat":53.55,"lon":10.0,"zoom":14.5}""", "zoom", 14.5),
+            })
+            {
+                var detached = (System.Text.Json.JsonElement)
+                    parseGpsMessage.Invoke(null, [message])!;
+                bool ranOnDispatcher = false;
+                bool hasValidValue = false;
+                _ = window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    // This used to throw ObjectDisposedException and terminate
+                    // PCasa as soon as a GPS address/map callback arrived.
+                    hasValidValue = detached.TryGetProperty(numericField, out var value) &&
+                        Math.Abs(value.GetDouble() - expected) < 0.00001;
+                    ranOnDispatcher = true;
+                }));
+                Until(window, () => ranOnDispatcher, 
+                    "GPS message did not reach the WPF dispatcher.");
+                if (!hasValidValue)
+                    throw new Exception("GPS JavaScript message data did not survive the asynchronous dispatcher boundary.");
+            }
+            Console.WriteLine("PASS: Address and GPS map callbacks remain valid after deferred WPF dispatch.");
+
             var multiSelectionField = typeof(PCasa.App.MainWindow).GetField(
                 "_gpsSelectionCount",
                 System.Reflection.BindingFlags.NonPublic |

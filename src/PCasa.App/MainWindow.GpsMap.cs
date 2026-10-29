@@ -222,6 +222,15 @@ public partial class MainWindow
             throw new InvalidOperationException("Local map HTML could not be loaded.");
     }
 
+    // The Chromium callback runs off the WPF dispatcher. The UI action may
+    // execute after its caller returns, so NEVER capture an element owned by
+    // a disposed JsonDocument. Clone the parsed message before dispatch.
+    private static JsonElement ParseDetachedGpsJavascriptMessage(string message)
+    {
+        using var doc = JsonDocument.Parse(message);
+        return doc.RootElement.Clone();
+    }
+
     private void GpsJavascriptMessageReceived(object? sender,
         JavascriptMessageReceivedEventArgs e)
     {
@@ -231,8 +240,7 @@ public partial class MainWindow
             e.Message is not string message || message.Length > 1024) return;
         try
         {
-            using var doc = JsonDocument.Parse(message);
-            var root = doc.RootElement;
+            var root = ParseDetachedGpsJavascriptMessage(message);
             if (!root.TryGetProperty("type", out var type)) return;
             var kind = type.GetString();
             var id = kind == "select" &&
