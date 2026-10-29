@@ -32,14 +32,20 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  // MapLibre 5.9's compact attribution starts EXPANDED until the first drag.
  // Open the photo map in the compact state from the first frame, but keep
  // the information button and the complete source credits available.
+ let initialAttributionCollapsePending = true;
  function collapseAttributionInitially() {
+   if (!initialAttributionCollapsePending) return;
    const attribution = map.getContainer().querySelector('.maplibregl-ctrl-attrib.maplibregl-compact');
-   if (!attribution) return;
+   // The starting style is deliberately empty. Attribution for the chosen
+   // provider may arrive later as source metadata, not at 'style.load'.
+   if (!attribution || attribution.classList.contains('maplibregl-attrib-empty')) return;
    attribution.classList.remove('maplibregl-compact-show');
    attribution.removeAttribute('open');
+   initialAttributionCollapsePending = false;
  }
  collapseAttributionInitially();
- map.on('style.load', collapseAttributionInitially);
+ map.on('styledata', collapseAttributionInitially);
+ map.on('sourcedata', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
  let previousSelectedIds = null;
  const selectedMarkers = new Map();
