@@ -1218,7 +1218,8 @@ public partial class MainWindow
 
     private void PhotoViewerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (!_viewerOpen && _gpsFullscreen && e.Key == Key.Escape)
+        if (!_viewerOpen && _sidebarMode == "GPS" && e.Key == Key.Escape &&
+            (GpsFullscreenImageOverlay.Visibility == Visibility.Visible || _gpsFullscreen))
         {
             if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
                 CloseGpsFullscreenImage();

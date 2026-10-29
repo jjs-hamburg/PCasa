@@ -13,12 +13,14 @@ public partial class MainWindow
 
     private void ShowGpsFullscreenImage(long imageId)
     {
-        if (_sidebarMode != "GPS" || !_gpsFullscreen) return;
+        if (_sidebarMode != "GPS" ||
+            (!_gpsFullscreen && !_appearance.ShowGpsFilmstrip)) return;
         var item = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
         if (item is null) return;
 
         CancelGpsFullscreenImageRead();
         var version = _gpsFullscreenImageRequest;
+        GpsFullscreenImageOverlay.Tag = imageId;
         GpsFullscreenImageCaption.Text = item.Name;
         GpsFullscreenImage.Source = null;
         GpsFullscreenImageStatus.Text = UiLanguage.T("Bild wird geladen");
@@ -69,7 +71,8 @@ public partial class MainWindow
                 },
                 () => !token.IsCancellationRequested &&
                     version == _gpsFullscreenImageRequest &&
-                    _sidebarMode == "GPS" && _gpsFullscreen,
+                    _sidebarMode == "GPS" &&
+                    (_gpsFullscreen || _appearance.ShowGpsFilmstrip),
                 cancellationToken: token,
                 workKind: SchedulerWorkKind.ViewerRead);
             if (token.IsCancellationRequested ||
@@ -114,6 +117,7 @@ public partial class MainWindow
     {
         CancelGpsFullscreenImageRead();
         GpsFullscreenImageOverlay.Visibility = Visibility.Collapsed;
+        GpsFullscreenImageOverlay.Tag = null;
         GpsFullscreenImage.Source = null;
         GpsFullscreenImageStatus.Visibility = Visibility.Collapsed;
     }

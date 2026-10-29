@@ -53,7 +53,11 @@ public partial class MainWindow
         if (_appearance.ShowGpsFilmstrip)
             GpsPhotoPopup.Visibility = Visibility.Collapsed;
         else
+        {
             _gpsHighlightedImageId = null;
+            if (!_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+                CloseGpsFullscreenImage();
+        }
         SaveAppearance();
         if (_sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip)
             UpdateGpsFilmstrip();
@@ -168,19 +172,25 @@ public partial class MainWindow
         _gpsHighlightedImageId = item.Id;
         GpsPhotoPopup.Visibility = Visibility.Collapsed;
         HighlightGpsPointOnMap(item.Id);
+        // Only an ALREADY OPEN image follows single clicks. Ordinary strip
+        // navigation remains map-highlight only and never changes gallery
+        // selection, map scale or the current map viewport.
+        if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible &&
+            GpsFullscreenImageOverlay.Tag is long shownId && shownId != item.Id)
+            ShowGpsFullscreenImage(item.Id);
     }
 
     private void GpsFilmstrip_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item) return;
-        if (_gpsFullscreen)
-        {
+        // Never route through BrowseSurface_ImageOpened here: its
+        // SelectViewerImage deliberately replaces the multiple selection.
+        // The one in-place GPS photo display stays open and subsequent
+        // single clicks on filmstrip photos replace its image.
+        if (GpsFullscreenImageOverlay.Visibility != Visibility.Visible ||
+            GpsFullscreenImageOverlay.Tag is not long displayedId ||
+            displayedId != item.Id)
             ShowGpsFullscreenImage(item.Id);
-            return;
-        }
-        if (!_displayedBrowseIndex.Any(x => x.ImageId == item.Id)) return;
-        BrowseSurface_ImageOpened(this,
-            new PCasa.App.Controls.BrowseImageClickedEventArgs(item.Id, ModifierKeys.None));
     }
 
     private void GpsFilmstrip_ScrollChanged(object sender, ScrollChangedEventArgs e)

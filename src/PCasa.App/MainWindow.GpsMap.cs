@@ -392,6 +392,10 @@ public partial class MainWindow
                 GpsPhotoPopup.Visibility = Visibility.Collapsed;
             else
                 SyncGpsPhotoPopupToGallerySelection();
+            if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible &&
+                GpsFullscreenImageOverlay.Tag is long shownId &&
+                !points.Any(point => point.Id == shownId && point.Selected))
+                CloseGpsFullscreenImage();
             UpdateGpsFilmstrip();
         }
         catch (OperationCanceledException) { }

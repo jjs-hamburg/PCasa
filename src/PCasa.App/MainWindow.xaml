@@ -1077,11 +1077,12 @@
                                    FontSize="10" TextWrapping="Wrap"
                                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                                    Margin="0,5,0,0"/>
-                        <!-- Fullscreen GPS owns an in-place, single-click-to-close
-                             photo overlay. It reuses the scheduler viewer decoder
-                             without changing gallery selection or leaving the map. -->
-                        <Grid x:Name="GpsFullscreenImageOverlay" Grid.Row="0"
-                              Grid.RowSpan="6" Panel.ZIndex="30"
+                        <!-- One photo surface over the MAP ONLY, keeping the
+                             selected-filmstrip thumbnails clickable. Opening
+                             or swapping photos never enters the normal gallery
+                             viewer or discards its multi-selection. -->
+                        <Grid x:Name="GpsFullscreenImageOverlay" Grid.Row="2"
+                              Panel.ZIndex="30"
                               Visibility="Collapsed" Background="#F51C1D20"
                               Cursor="Hand"
                               MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
