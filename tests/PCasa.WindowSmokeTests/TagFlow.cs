@@ -607,7 +607,7 @@ internal static class TagFlow
             var googleAddress = (string)googleUrlBuilder.Invoke(
                 null, [53.553333, 10.017222])!;
             if (!googleAddress.StartsWith(
-                    "https://www.google.com/maps/search/?api=1&query=",
+                    "https://www.google.com/maps/@?api=1&map_action=map&center=",
                     StringComparison.Ordinal) ||
                 googleAddress.Contains("key=", StringComparison.Ordinal))
                 throw new Exception("Google Maps requires an unintended Cloud API key.");

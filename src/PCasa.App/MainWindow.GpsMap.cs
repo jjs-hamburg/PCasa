@@ -36,6 +36,7 @@ public partial class MainWindow
     private bool _gpsGoogleWebsiteActive;
     private string? _gpsGoogleLoadedUrl;
     private long? _gpsHighlightedImageId;
+    private int _gpsSelectionCount;
     private string? _gpsAppliedProviderId;
     private long _gpsQueryRevision;
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
@@ -339,6 +340,13 @@ public partial class MainWindow
             // independent. One selection may coexist with thousands of
             // unselected background markers in the same map source.
             var selectedGps = points.Where(p => p.Selected).ToArray();
+            _gpsSelectionCount = selectedIds.Length;
+            // Public Google URLs cannot encode arbitrary PCasa photo markers.
+            // Never silently represent multiple selected images as one pin.
+            var googleMultiSelection = _gpsGoogleWebsiteActive &&
+                _gpsSelectionCount > 1;
+            if (googleMultiSelection)
+                ExitGoogleMapsWebsite();
             if (_gpsHighlightedImageId is long oldId &&
                 !selectedGps.Any(p => p.Id == oldId))
                 _gpsHighlightedImageId = null;
@@ -355,8 +363,10 @@ public partial class MainWindow
                         ? (points[0].Lat, points[0].Lon) : null;
             GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
             UpdateGpsGoogleButton();
-            GpsCoordinatesText.Text = selectedIds.Length > 0 && selectedGps.Length == 0
-                ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
+            GpsCoordinatesText.Text = googleMultiSelection
+                ? UiLanguage.T("Mehrfachauswahl in PCasa-Fotokarte")
+                : selectedIds.Length > 0 && selectedGps.Length == 0
+                    ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
                 : points.Count == 0
                     ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
                     : _gpsCurrentCoordinates is { } coordinate
@@ -579,8 +589,10 @@ public partial class MainWindow
             throw new ArgumentOutOfRangeException(nameof(latitude));
         var value = string.Create(CultureInfo.InvariantCulture,
             $"{latitude:F6},{longitude:F6}");
-        return "https://www.google.com/maps/search/?api=1&query=" +
-            Uri.EscapeDataString(value);
+        // Google's documented map action opens without a place-detail
+        // sidebar; unlike search it provides no custom photo marker.
+        return "https://www.google.com/maps/@?api=1&map_action=map&center=" +
+            Uri.EscapeDataString(value) + "&zoom=15";
     }
 
     private void GpsGoogle_Click(object sender, RoutedEventArgs e)
@@ -590,7 +602,7 @@ public partial class MainWindow
             ExitGoogleMapsWebsite();
             return;
         }
-        if (_gpsCurrentCoordinates is null) return;
+        if (_gpsCurrentCoordinates is null || _gpsSelectionCount > 1) return;
         _gpsGoogleWebsiteActive = true;
         _gpsBrowserReady = false;
         _gpsGoogleLoadedUrl = null;
@@ -649,7 +661,10 @@ public partial class MainWindow
     {
         GpsGoogleButton.Content = UiLanguage.T(_gpsGoogleWebsiteActive
             ? "Zur Fotokarte" : "Google Maps");
-        GpsGoogleButton.IsEnabled =
-            _gpsGoogleWebsiteActive || _gpsCurrentCoordinates is not null;
+        GpsGoogleButton.IsEnabled = _gpsGoogleWebsiteActive ||
+            (_gpsCurrentCoordinates is not null && _gpsSelectionCount <= 1);
+        GpsGoogleButton.ToolTip = UiLanguage.T(_gpsSelectionCount > 1
+            ? "Mehrfachauswahl in PCasa-Fotokarte"
+            : "Google Maps ohne Fotomarkierung");
     }
 }

@@ -317,5 +317,7 @@
   "Google Maps konnte nicht geladen werden": "Google Maps could not be loaded",
   "Bild wird geladen": "Loading photo",
   "Original nicht verfügbar": "Original unavailable",
-  "Bild konnte nicht geladen werden": "Photo could not be loaded"
+  "Bild konnte nicht geladen werden": "Photo could not be loaded",
+  "Mehrfachauswahl in PCasa-Fotokarte": "Multiple photos shown on PCasa photo map",
+  "Google Maps ohne Fotomarkierung": "Google Maps shows location, not PCasa photo markers"
 }
