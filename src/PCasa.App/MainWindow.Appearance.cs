@@ -128,6 +128,19 @@ public partial class MainWindow
 
         e.Cancel = true;
         if (_shutdownStarted) return; // Double click/Alt+F4 cannot start a second shutdown.
+        // Unconfirmed Tag changes live only in the editing session. Do not
+        // silently discard them when the user closes the main window.
+        if (_tagDraft.HasChanges)
+        {
+            var choice = MessageBox.Show(this,
+                UiLanguage.Format("{0:N0} Bilder mit {1:N0} vorgemerkten Tag-Änderungen verwerfen?",
+                    _tagDraft.ImageCount, _tagDraft.ChangeCount),
+                UiLanguage.T("Nicht bestätigte Tag-Änderungen"),
+                MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (choice != MessageBoxResult.Yes) return;
+            _tagDraft.Clear();
+        }
         _shutdownStarted = true;
 
         // In-flight catalog work or owned ExifTool sessions can need an
@@ -305,9 +318,16 @@ public partial class MainWindow
         if (e.PropertyName != nameof(UiLanguage.Revision) ||
             Dispatcher.HasShutdownStarted) return;
         if (Dispatcher.CheckAccess())
+        {
             SyncGallerySortMenu();
+            RefreshTagDraftControls();
+        }
         else
-            Dispatcher.BeginInvoke(SyncGallerySortMenu);
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                SyncGallerySortMenu();
+                RefreshTagDraftControls();
+            }));
     }
 
     private void AppearanceTheme_Click(object sender, RoutedEventArgs e)

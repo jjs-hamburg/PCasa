@@ -301,26 +301,16 @@ public partial class MainWindow
 
     private int _tagSidebarRefreshVersion;
     private long[] _tagSidebarCountImageIds = Array.Empty<long>();
-    private KeyValuePair<string, int>[] _tagSidebarOriginalCounts =
-        Array.Empty<KeyValuePair<string, int>>();
+    private Dictionary<long, HashSet<string>> _tagSidebarOriginalTags = new();
 
     private async Task RefreshTagSidebarAsync()
     {
         var revision = ++_tagSidebarRefreshVersion;
         var selected = _selectedImageIds.ToArray();
-        // A draft belongs to one selection. Never carry it into another
-        // folder or make the next folder's tag editor unusable.
-        var selectedSorted = selected.OrderBy(id => id).ToArray();
-        if (_tagDraftImageIds is not null &&
-            !_tagDraftImageIds.SequenceEqual(selectedSorted))
-        {
-            _tagDraft.Clear();
-            _tagDraftImageIds = null;
-            if (TagEntryBox is not null) TagEntryBox.Clear();
-            if (TagDraftOkButton is not null) TagDraftOkButton.IsEnabled = false;
-            if (TagDraftCancelButton is not null) TagDraftCancelButton.IsEnabled = false;
-        }
+        // Selection only changes the editor's projection; uncommitted edits
+        // for other photos (and other folders) remain in the ONE draft.
         TagSelectionCaption.Text = UiLanguage.Format("Tags der Auswahl ({0} Bilder)", selected.Length);
+        RefreshTagDraftControls();
         TagRowsPanel.Children.Clear();
         if (selected.Length == 0)
         {
@@ -336,21 +326,21 @@ public partial class MainWindow
             {
                 token.ThrowIfCancellationRequested();
                 var repository = new ImageTagRepository(_database);
-                var dictionary = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                var original = new Dictionary<long, HashSet<string>>();
                 foreach (var id in selected)
                 {
-                    var value = repository.GetKeywords(id);
-                    if (value is null) continue;
-                    foreach (var tag in value.Split(new[] { (char)10, (char)13 }, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
-                                 .Distinct(StringComparer.OrdinalIgnoreCase))
-                        dictionary[tag] = dictionary.GetValueOrDefault(tag) + 1;
+                    token.ThrowIfCancellationRequested();
+                    var value = repository.GetKeywords(id) ?? string.Empty;
+                    original[id] = value.Split(new[] { (char)10, (char)13 },
+                        StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 }
-                return dictionary.OrderBy(pair => pair.Key, StringComparer.CurrentCultureIgnoreCase).ToArray();
+                return original;
             }, () => revision == _tagSidebarRefreshVersion,
                 workKind: SchedulerWorkKind.CatalogRead);
             if (revision != _tagSidebarRefreshVersion || _sidebarMode != "Tags") return;
             _tagSidebarCountImageIds = selected.OrderBy(id => id).ToArray();
-            _tagSidebarOriginalCounts = counts;
+            _tagSidebarOriginalTags = counts;
             RenderTagRows();
         }
         catch (Exception ex)
@@ -366,15 +356,7 @@ public partial class MainWindow
         if (TagRowsPanel is null) return;
         var selected = _selectedImageIds.OrderBy(id => id).ToArray();
         if (!_tagSidebarCountImageIds.SequenceEqual(selected)) return;
-        var projected = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pair in _tagSidebarOriginalCounts)
-            projected[pair.Key] = pair.Value;
-        if (_tagDraftImageIds is not null && _tagDraftImageIds.SequenceEqual(selected))
-            foreach (var (tag, remove) in _tagDraft)
-            {
-                if (remove) projected.Remove(tag);
-                else projected[tag] = selected.Length;
-            }
+        var projected = _tagDraft.ProjectCounts(selected, _tagSidebarOriginalTags);
         TagRowsPanel.Children.Clear();
         var allOnly = TagLogicAnd.IsChecked == true;
         var filtered = projected
@@ -635,7 +617,7 @@ public partial class MainWindow
     {
         var pending = new DurablePackageJournal(_database).Pending()
             .Where(p => p.State != "deferred" &&
-                (p.Type is "tag-edit-v1" or
+                (p.Type is "tag-edit-v1" or "tag-edit-v2" or
                     "tag-recovery-v1" or "tag-recovery-v2") &&
                 (onlyKey is null || p.Key == onlyKey))
             .ToArray();
@@ -653,7 +635,7 @@ public partial class MainWindow
             int confirmed;
             try
             {
-                if (record.Type == "tag-edit-v1")
+                if (record.Type is "tag-edit-v1" or "tag-edit-v2")
                 {
                     var recipe = System.Text.Json.JsonSerializer
                         .Deserialize<DurableTagEdit>(record.Payload)
@@ -757,7 +739,8 @@ public partial class MainWindow
             _scheduler.HasActiveDurablePackageType(TagRecoveryType) ||
             _scheduler.HasActiveDurablePackageType("tag-recovery-v1") ||
             // First finish all genuine manually submitted edit packages.
-            _scheduler.HasActiveDurablePackageType("tag-edit-v1")) return;
+            _scheduler.HasActiveDurablePackageType("tag-edit-v1") ||
+            _scheduler.HasActiveDurablePackageType("tag-edit-v2")) return;
         _tagRecoveryQueued = true;
         var key = "tags:recover:" + Guid.NewGuid().ToString("N");
         try
@@ -807,39 +790,36 @@ public partial class MainWindow
         }
     }
 
-    private readonly Dictionary<string, bool> _tagDraft =
-        new(StringComparer.OrdinalIgnoreCase);
-    private long[]? _tagDraftImageIds;
+    private readonly TagEditDraft _tagDraft = new();
 
     // Draft changes never mutate SQLite or the originals. One OK is one package.
     private void StageTagChange(string tag, bool remove)
     {
         tag = tag.Trim();
         if (tag.Length == 0 || _tagWriteActive) return;
-        var ids = _selectedImageIds.OrderBy(id => id).ToArray();
+        var ids = _selectedImageIds.ToArray();
         if (ids.Length == 0)
         {
             StatusText.Text = UiLanguage.T("Zuerst Bilder auswählen.");
             return;
         }
-        if (_tagDraftImageIds is not null && !_tagDraftImageIds.SequenceEqual(ids))
-        {
-            // Changing the selected images starts a fresh draft. Pending
-            // unconfirmed edits were never committed and are discarded.
-            _tagDraft.Clear();
-            _tagDraftImageIds = null;
-        }
-        _tagDraftImageIds ??= ids;
-        _tagDraft[tag] = remove;
+        _tagDraft.Stage(ids, tag, remove);
         if (!remove) TagEntryBox.Clear();
         RefreshTagDraftControls();
     }
 
     private void RefreshTagDraftControls()
     {
-        // The existing tag list IS the editor; no second staging list.
-        TagDraftOkButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
-        TagDraftCancelButton.IsEnabled = _tagDraft.Count > 0 && !_tagWriteActive;
+        // A single draft owns ALL selections. The current Tag list remains
+        // the projection for the selected photos, not a second draft list.
+        TagDraftOkButton.IsEnabled = _tagDraft.HasChanges && !_tagWriteActive;
+        TagDraftCancelButton.IsEnabled = _tagDraft.HasChanges && !_tagWriteActive;
+        TagDraftSummaryText.Text = _tagDraft.HasChanges
+            ? UiLanguage.Format("{0:N0} Bilder · {1:N0} Änderungen vorgemerkt",
+                _tagDraft.ImageCount, _tagDraft.ChangeCount)
+            : string.Empty;
+        TagDraftSummaryText.Visibility = _tagDraft.HasChanges
+            ? Visibility.Visible : Visibility.Collapsed;
         RenderTagRows();
     }
 
@@ -847,7 +827,6 @@ public partial class MainWindow
     {
         if (_tagWriteActive) return;
         _tagDraft.Clear();
-        _tagDraftImageIds = null;
         TagEntryBox.Clear();
         RefreshTagDraftControls();
         // Discard the entire draft and reload the unchanged, authoritative
@@ -856,7 +835,11 @@ public partial class MainWindow
     }
 
     private sealed record DurableTagChange(string Tag, bool Remove);
-    private sealed record DurableTagEdit(long[] ImageIds, DurableTagChange[] Changes);
+    private sealed record DurableTagImageEdit(long ImageId, DurableTagChange[] Changes);
+    // Optional ImageEdits leaves old tag-edit-v1 recipes readable without
+    // migrations. Newly submitted tag-edit-v2 recipes express per-image changes.
+    private sealed record DurableTagEdit(long[] ImageIds, DurableTagChange[] Changes,
+        DurableTagImageEdit[]? ImageEdits = null);
 
     // Exactly reproducible steps: one local commit, then one step per image.
     // A restart never needs an in-memory closure to reconstruct this package.
@@ -864,13 +847,28 @@ public partial class MainWindow
     {
         var request = System.Text.Json.JsonSerializer.Deserialize<DurableTagEdit>(payload)
             ?? throw new InvalidDataException("Ungültiger Tag-Auftrag.");
+        var perImage = request.ImageEdits is { Length: > 0 }
+            ? request.ImageEdits.Select(entry =>
+                (entry.ImageId, (IReadOnlyList<(string Tag, bool Remove)>)
+                    entry.Changes.Select(edit => (edit.Tag, edit.Remove)).ToArray()))
+                .ToArray()
+            : request.ImageIds.Select(id =>
+                (id, (IReadOnlyList<(string Tag, bool Remove)>)
+                    request.Changes.Select(edit => (edit.Tag, edit.Remove)).ToArray()))
+                .ToArray();
+        if (perImage.Length != request.ImageIds.Length ||
+            !perImage.Select(entry => entry.ImageId).SequenceEqual(request.ImageIds) ||
+            perImage.Any(entry => entry.Item2.Count == 0) ||
+            perImage.Select(entry => entry.ImageId).Distinct().Count() != perImage.Length)
+            throw new InvalidDataException("Ungültige bildbezogene Tag-Aufträge.");
         var package = new SchedulerTaskPackage(key);
         package.AddStep(token =>
         {
             token.ThrowIfCancellationRequested();
-            var edits = request.Changes.Select(e => (e.Tag, e.Remove)).ToArray();
+            // ONE atomic SQLite intent/projection commit for the entire
+            // multi-selection draft. Only then begin per-original write steps.
             var count = new ImageTagRepository(_database)
-                .QueueTagEdits(request.ImageIds, edits);
+                .QueueTagEdits(perImage);
             _scheduler.ReportProgress(key, "Tags lokal gesichert", 0,
                 request.ImageIds.Length);
             if (!Dispatcher.HasShutdownStarted)
@@ -908,12 +906,15 @@ public partial class MainWindow
 
     private void TagDraftOk_Click(object sender, RoutedEventArgs e)
     {
-        if (_tagWriteActive || _tagDraft.Count == 0 || _tagDraftImageIds is null) return;
-        var ids = _tagDraftImageIds.ToArray();
-        var edits = _tagDraft.Select(x => (Tag: x.Key, Remove: x.Value)).ToArray();
+        if (_tagWriteActive || !_tagDraft.HasChanges) return;
+        var snapshot = _tagDraft.Snapshot();
+        var ids = snapshot.Select(entry => entry.ImageId).ToArray();
         var key = "tags:package:" + Guid.NewGuid().ToString("N");
         var payload = System.Text.Json.JsonSerializer.Serialize(new DurableTagEdit(
-            ids, edits.Select(e => new DurableTagChange(e.Tag, e.Remove)).ToArray()));
+            ids, Array.Empty<DurableTagChange>(),
+            snapshot.Select(entry => new DurableTagImageEdit(entry.ImageId,
+                entry.Changes.Select(edit =>
+                    new DurableTagChange(edit.Tag, edit.Remove)).ToArray())).ToArray()));
         var package = BuildTagEditPackage(key, payload);
 
         _tagWriteActive = true;
@@ -922,12 +923,11 @@ public partial class MainWindow
             BeginVisibleManualOperation(key,
                 "Tags in Originaldateien schreiben", ids.Length);
             var completion = _scheduler.EnqueueDurablePackageAsync(package,
-                "tag-edit-v1", payload, SchedulerPriority.ManualAction);
+                "tag-edit-v2", payload, SchedulerPriority.ManualAction);
             _ = ObserveTagPackageAsync(completion, key);
             // The edit is accepted. The next manual action MUST be possible
             // immediately, even if this package later waits for slow I/O.
             _tagDraft.Clear();
-            _tagDraftImageIds = null;
             TagEntryBox.Clear();
             StatusText.Text = UiLanguage.T("Tag-Paket P0 vorgemerkt · SQLite und Originaldateien folgen");
         }

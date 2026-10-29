@@ -948,6 +948,10 @@
                             <WrapPanel x:Name="TagQuickPanel"/>
                         </StackPanel>
                         <StackPanel Grid.Row="5" Margin="2,7,2,0">
+                            <TextBlock x:Name="TagDraftSummaryText" FontSize="11"
+                                       HorizontalAlignment="Right" Margin="0,0,0,4"
+                                       TextWrapping="Wrap" Visibility="Collapsed"
+                                       Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button x:Name="TagDraftCancelButton" Content="{loc:Tr Key='Abbrechen'}" MinWidth="80"
                                         Margin="0,0,6,0" IsEnabled="False"

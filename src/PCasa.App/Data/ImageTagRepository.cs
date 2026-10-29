@@ -285,17 +285,25 @@ public sealed class ImageTagRepository
 
     public int QueueTagEdits(IReadOnlyList<long> imageIds,
         IReadOnlyList<(string Tag, bool Remove)> edits)
+        => QueueTagEdits(imageIds.Select(id =>
+            (ImageId: id, Edits: edits)).ToArray());
+
+    // All per-image edits of one OK action share ONE SQLite transaction.
+    // This is the existing authoritative pending_tag_edits write path,
+    // not another job queue or an additional metadata writer.
+    public int QueueTagEdits(IReadOnlyList<(
+        long ImageId, IReadOnlyList<(string Tag, bool Remove)> Edits)> editsByImage)
     {
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
         var count = 0;
         var recent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (originalTag, remove) in edits)
+        foreach (var (id, edits) in editsByImage)
         {
+            foreach (var (originalTag, remove) in edits)
+            {
             var tag = originalTag.Trim();
             if (tag.Length == 0) throw new ArgumentException("Tag fehlt.");
-            foreach (var id in imageIds)
-            {
             using var read = db.CreateCommand();
             read.Transaction = tx;
             read.CommandText = """
