@@ -750,7 +750,7 @@ internal static class TagFlow
                 var keepSelection = selected.ToHashSet();
                 var doubleClick = new MouseButtonEventArgs(
                     InputManager.Current.PrimaryMouseDevice,
-                    Environment.TickCount, MouseButton.Left) { ClickCount = 2 };
+                    Environment.TickCount, MouseButton.Left);
                 filmDoubleClick.Invoke(window, [filmList, doubleClick]);
                 if (gpsOverlay.Visibility != Visibility.Visible ||
                     gpsOverlay.Tag is not long openedId || openedId != gpsA ||
