@@ -50,6 +50,10 @@ public partial class MainWindow
         if (_gpsFilmstripUpdating) return;
         _appearance.ShowGpsFilmstrip = GpsFilmstripToggle.IsChecked == true;
         ApplyGpsFilmstripVisibility();
+        if (_appearance.ShowGpsFilmstrip)
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+        else
+            _gpsHighlightedImageId = null;
         SaveAppearance();
         if (_sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip)
             UpdateGpsFilmstrip();
@@ -93,7 +97,8 @@ public partial class MainWindow
         _gpsFilmstripUpdating = true;
         GpsFilmstripList.ItemsSource = entries;
         GpsFilmstripList.SelectedItem = entries.FirstOrDefault(p =>
-            p.Id == _gallerySelection.FocusedId);
+            p.Id == _gpsHighlightedImageId)
+            ?? entries.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
         _gpsFilmstripUpdating = false;
         GpsFilmstripToggle.Content = UiLanguage.T("Filmstreifen") +
             (selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160)" : "");
@@ -136,7 +141,8 @@ public partial class MainWindow
                 !_appearance.ShowGpsFilmstrip) return;
             foreach (var (item, bitmap) in images)
                 item.Bitmap = bitmap;
-            if (GpsPhotoPopup.IsVisible && GpsPhotoPopup.Tag is long imageId)
+            if (!_appearance.ShowGpsFilmstrip && GpsPhotoPopup.IsVisible &&
+                GpsPhotoPopup.Tag is long imageId)
             {
                 var popupItem = _gpsFilmstripEntries.FirstOrDefault(i => i.Id == imageId);
                 if (popupItem?.Bitmap is { } bmp)
@@ -156,12 +162,12 @@ public partial class MainWindow
     private void GpsFilmstrip_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_gpsFilmstripUpdating ||
-            GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item ||
-            !_displayedBrowseIndex.Any(x => x.ImageId == item.Id)) return;
-        BrowseSurface_ImageClicked(this,
-            new PCasa.App.Controls.BrowseImageClickedEventArgs(item.Id, ModifierKeys.None));
-        RestoreGalleryAnchor((item.Id, 0));
-        ShowGpsPhotoPopup(item.Id);
+            GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item) return;
+        // A single click changes only the map highlight, NOT gallery
+        // selection, folder focus or the map photo popup.
+        _gpsHighlightedImageId = item.Id;
+        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+        HighlightGpsPointOnMap(item.Id);
     }
 
     private void GpsFilmstrip_MouseDoubleClick(object sender, MouseButtonEventArgs e)

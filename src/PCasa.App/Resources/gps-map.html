@@ -7,6 +7,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
 .maplibregl-popup-content{font-size:12px;line-height:1.5;max-width:260px;overflow-wrap:anywhere;color:#222}
 .maplibregl-ctrl-attrib{font-size:10px}
 #fallback{position:absolute;left:12px;right:12px;top:42%;color:#333;text-align:center;pointer-events:none}
+.pcasa-pin{width:17px;height:17px;box-sizing:border-box;background:#df4550;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 5px #222b;cursor:pointer}
+.pcasa-pin-target{width:24px;height:24px;background:#f0a030;border:3px solid #111;outline:2px solid #fff;outline-offset:0}
+.pcasa-pin-target:before{content:'';display:block;width:7px;height:7px;background:#fff;border-radius:50%;margin:5.5px auto 0}
 </style></head><body><div id="map"></div><div id="fallback"></div>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.js"
  onerror="document.getElementById('fallback').textContent='MapLibre konnte nicht geladen werden.'"></script>
@@ -24,7 +27,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    center:[10,42],zoom:2,attributionControl:true
  });
  map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
- let points = [], ready = false;
+ let points = [], ready = false, highlightedId = null;
+ const selectedMarkers = new Map();
  function geojson(list) {
    return {type:'FeatureCollection',features:list.map(p=>({
      type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]},
@@ -62,7 +66,43 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  function updatePhotos() {
    map.getSource('pcasa-photos')?.setData(geojson(points.filter(p=>!p.selected)));
    map.getSource('pcasa-selected')?.setData(geojson(points.filter(p=>p.selected)));
+   syncSelectedMarkers();
  }
+ function syncSelectedMarkers() {
+   // Guaranteed visible regardless of style-load races, tile/label order or
+   // clustering. Capped overlay count; the vector source still covers ALL
+   // selected pictures, even for huge selections.
+   const selected = points.filter(p=>p.selected);
+   if (selected.length && !selected.some(p=>String(p.id)===String(highlightedId)))
+     highlightedId=String(selected[0].id);
+   const keep = new Set();
+   for (const p of selected.slice(0,200)) {
+     const key = String(p.id); keep.add(key);
+     let entry=selectedMarkers.get(key);
+     if (!entry) {
+       const el=document.createElement('div');
+       el.className='pcasa-pin';
+       el.title=p.name||'Foto';
+       el.addEventListener('click',e=>{
+         e.stopPropagation();
+         post({type:'select',id:Number(key)});
+       });
+       const marker=new maplibregl.Marker({element:el,anchor:'center'})
+         .setLngLat([p.lon,p.lat]).addTo(map);
+       entry={marker,el}; selectedMarkers.set(key,entry);
+     } else entry.marker.setLngLat([p.lon,p.lat]);
+     entry.el.classList.toggle('pcasa-pin-target',key===String(highlightedId));
+   }
+   for(const [key,entry] of selectedMarkers)
+     if(!keep.has(key)){entry.marker.remove();selectedMarkers.delete(key);}
+ }
+ window.pcasaHighlightPoint = (id) => {
+   const p=points.find(p=>String(p.id)===String(id) && p.selected);
+   if(!p)return;
+   highlightedId=String(id);
+   syncSelectedMarkers();
+   map.easeTo({center:[p.lon,p.lat],zoom:Math.max(map.getZoom(),13),duration:300});
+ };
  function zoomSelection() {
    const selected = points.filter(p=>p.selected);
    const target = selected.length ? selected : points;
