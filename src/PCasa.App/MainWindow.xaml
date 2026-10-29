@@ -1107,7 +1107,6 @@
                                 </ListBox.ItemTemplate>
                             </ListBox>
                         </Border>
-                        </Grid>
                     </Grid>
                     <Grid x:Name="TagSidebar" Grid.Row="1" Visibility="Collapsed">
                         <Grid.RowDefinitions>
