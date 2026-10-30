@@ -2903,6 +2903,75 @@ internal static class TagFlow
             finally { sharedErrors.Clear(OriginalWriteFailureRepository.Gps,gpsA); }
             Console.WriteLine("PASS: Write errors modal offers working per-file decisions after third attempt.");
 
+            // Reproduce a truly large selected set through the SAME WPF
+            // catalog projection, without creating thousands of source files.
+            // A hard 5000 cap or a first-chunk-only query must fail this test.
+            long[] worldwideIds;
+            using (var bulkDb = db.OpenConnection())
+            {
+                using (var insert = bulkDb.CreateCommand())
+                {
+                    insert.CommandText = """
+                        WITH RECURSIVE numbers(n) AS (
+                            SELECT 0 UNION ALL SELECT n+1 FROM numbers WHERE n < 6099
+                        )
+                        INSERT INTO images (folder_id, photo_folder_id,
+                            local_path, canonical_path, file_name, extension,
+                            file_size, modified_utc_ticks, width, height,
+                            thumbnail_path, indexed_utc)
+                        SELECT $root, $album,
+                            $prefix || printf('bulk-gps-%04d.jpg', n),
+                            $prefix || printf('bulk-gps-%04d.jpg', n),
+                            printf('bulk-gps-%04d.jpg', n), '.jpg',
+                            1, 1, 10, 10, 'synthetic-test-thumbnail', '2026-01-01'
+                        FROM numbers;
+                        """;
+                    insert.Parameters.AddWithValue("$root", root.Id);
+                    insert.Parameters.AddWithValue("$album", b.Id);
+                    insert.Parameters.AddWithValue("$prefix", albumB + Path.DirectorySeparatorChar);
+                    insert.ExecuteNonQuery();
+                }
+                using (var exif = bulkDb.CreateCommand())
+                {
+                    exif.CommandText = """
+                        INSERT INTO image_exif(image_id, source_modified_utc_ticks,
+                            source_file_size, exif_json, gps_latitude, gps_longitude)
+                        SELECT id, modified_utc_ticks, file_size,
+                            json_object('SourceFile',local_path),
+                            CASE id % 3 WHEN 0 THEN 53.55 WHEN 1 THEN 26.11
+                                ELSE -25.27 END,
+                            CASE id % 3 WHEN 0 THEN 10.2 WHEN 1 THEN -80.15
+                                ELSE 133.77 END
+                        FROM images WHERE file_name LIKE 'bulk-gps-%';
+                        """;
+                    exif.ExecuteNonQuery();
+                }
+                using var idsCommand = bulkDb.CreateCommand();
+                idsCommand.CommandText = """
+                    SELECT id FROM images WHERE file_name LIKE 'bulk-gps-%'
+                    ORDER BY id;
+                    """;
+                using var idsReader = idsCommand.ExecuteReader();
+                var ids = new List<long>();
+                while (idsReader.Read()) ids.Add(idsReader.GetInt64(0));
+                worldwideIds = ids.ToArray();
+            }
+            if (worldwideIds.Length != 6100)
+                throw new Exception("Worldwide GPS fixture is incomplete.");
+            var worldwidePoints = ((System.Collections.IEnumerable)readGps.Invoke(
+                window, [worldwideIds, null, CancellationToken.None, null])!)
+                .Cast<object>().ToArray();
+            var locations = worldwidePoints.Select(p => (
+                Lat: (double)p.GetType().GetProperty("Lat")!.GetValue(p)!,
+                Lon: (double)p.GetType().GetProperty("Lon")!.GetValue(p)!,
+                Selected: (bool)p.GetType().GetProperty("Selected")!.GetValue(p)!))
+                .ToArray();
+            if (locations.Length != worldwideIds.Length ||
+                locations.Any(p => !p.Selected) ||
+                locations.Select(p => (p.Lat, p.Lon)).Distinct().Count() != 3)
+                throw new Exception("Large GPS selection dropped images or continents.");
+            Console.WriteLine("PASS: 6100 selected GPS photos from Europe, America and Australia survive the catalog projection.");
+
             // Explicitly leave an EXIF reader and keyword writer session
             // alive (not disposed) when closing. The app MUST kill both
             // owned native children after the scheduler's journal finishes.
