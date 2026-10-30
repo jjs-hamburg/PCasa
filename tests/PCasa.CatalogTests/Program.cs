@@ -3823,6 +3823,16 @@ internal static class Program
             SchedulerPriority.ManualAction,SchedulerWorkKind.Catalog);
         if (!restored.HasNewerGpsIntent(original,319L))
             throw new Exception("GPS must never retry an older coordinate request.");
+        journal.Defer(original, 0,
+            "Simulated GPS original read failed outside writer exception filter",
+            TimeSpan.FromMinutes(1));
+        var projected = restored.DeferredGpsSteps();
+        if (projected.Count != 1 || projected[0].ImageId != 319 ||
+            projected[0].PackageKey != original ||
+            !projected[0].Error.Contains("outside writer exception filter"))
+            throw new Exception(
+                "A deferred GPS write has no visible file in Schreibfehler review.");
+
         restored.RecordFailure(OriginalWriteFailureRepository.Gps,
             current,319L,new IOException("Newer GPS write failed"),permanent:true);
         restored.ClearIfOwned(OriginalWriteFailureRepository.Gps,319L,original);
