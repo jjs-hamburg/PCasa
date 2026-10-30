@@ -329,17 +329,21 @@ internal static class TagFlow
             // restriction. Check global tag/filename results through WPF.
             var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Appearance dialog option missing.");
-            search.Clear();
-            Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+            void SetHideCollapsed(bool enabled)
             {
-                var dialog = Application.Current.Windows
-                    .OfType<PCasa.App.AppearanceSettingsWindow>().Single();
-                dialog.HideCollapsedCheck.IsChecked = true;
-                var ok = Descendants<Button>(dialog)
-                    .Single(button => Equals(button.Content, UiLanguage.T("OK")));
-                ok.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, ok));
-            }), DispatcherPriority.ContextIdle);
-            appearanceMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, appearanceMenu));
+                Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+                {
+                    var dialog = Application.Current.Windows
+                        .OfType<PCasa.App.AppearanceSettingsWindow>().Single();
+                    dialog.HideCollapsedCheck.IsChecked = enabled;
+                    dialog.ConfirmButton.RaiseEvent(
+                        new RoutedEventArgs(Button.ClickEvent, dialog.ConfirmButton));
+                }), DispatcherPriority.ContextIdle);
+                appearanceMenu.RaiseEvent(
+                    new RoutedEventArgs(MenuItem.ClickEvent, appearanceMenu));
+            }
+            search.Clear();
+            SetHideCollapsed(true);
             FolderTreeNavigation.ExpandAncestors(monitoredRootItem);
             monitoredRootItem.IsExpanded = false;
             Until(window, () => surface.HiddenFolderIds.Contains(a.Id) &&
@@ -419,8 +423,7 @@ internal static class TagFlow
                 surface.HiddenFolderIds.Contains(b.Id),
                 "Clearing search failed to restore gallery-only collapsed-folder hiding.");
             monitoredRootItem.IsExpanded = true;
-            skipCollapsed.IsChecked = false;
-            skipCollapsed.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            SetHideCollapsed(false);
             Until(window, () => surface.HiddenFolderIds.Count == 0,
                 "Disabling collapsed-folder option failed to restore ordinary gallery.");
             fileMode.IsChecked = true;
