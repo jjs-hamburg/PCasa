@@ -1192,9 +1192,10 @@ internal static class Program
                         Grid.GetColumn(gpsOverlay) != 0 ||
                         Grid.GetColumnSpan(gpsOverlay) != 5 ||
                         Panel.GetZIndex(gpsOverlay) <= Panel.GetZIndex(gpsSidebar) ||
-                        gpsPhotoFrame.ActualWidth >= workspace.ActualWidth)
+                        Math.Abs(gpsPhotoFrame.ActualWidth - workspace.ActualWidth) > 2 ||
+                        Math.Abs(gpsPhotoFrame.ActualHeight - workspace.ActualHeight) > 2)
                         throw new Exception(
-                            "An open photo is not floating above the fullscreen GPS map.");
+                            "The fullscreen photo does not cover the entire GPS workspace.");
                     // A real filmstrip double-click (not only the image
                     // loader method) must reopen the floating window while
                     // preserving the fullscreen GPS mode.
