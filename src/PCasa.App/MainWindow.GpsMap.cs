@@ -230,7 +230,7 @@ public partial class MainWindow
         string Kind, long Id = 0, string? Error = null,
         double? Latitude = null, double? Longitude = null, double? Zoom = null,
         double? South = null, double? West = null, double? North = null,
-        double? East = null);
+        double? East = null, int? Received = null, int? SelectedCount = null);
 
     private static GpsMapMessage? ParseGpsJavascriptMessage(string message)
     {
@@ -253,6 +253,23 @@ public partial class MainWindow
         {
             case "ready":
                 return new GpsMapMessage("ready");
+            case "gps-sync":
+            {
+                bool ReadInteger(string key, out int value)
+                {
+                    value = 0;
+                    return root.TryGetProperty(key, out var number) &&
+                        number.ValueKind == JsonValueKind.Number &&
+                        number.TryGetInt32(out value);
+                }
+                return root.TryGetProperty("version", out var v) &&
+                    v.TryGetInt64(out var revision) &&
+                    ReadInteger("received", out var total) &&
+                    ReadInteger("selected", out var count)
+                    ? new GpsMapMessage("gps-sync", Id: revision,
+                        Received: total, SelectedCount: count)
+                    : null;
+            }
             case "error":
                 return new GpsMapMessage("error",
                     Error: root.TryGetProperty("message", out var detail) &&
@@ -312,7 +329,17 @@ public partial class MainWindow
             if (_gpsBrowser is null || _sidebarMode != "GPS" ||
                 _gpsGoogleWebsiteActive || Dispatcher.HasShutdownStarted)
                 return;
-            if (data.Kind == "ready")
+            if (data.Kind == "gps-sync" &&
+                data.Id == _gpsMapTransferRevision)
+            {
+                var expectedSelected = _gpsPoints.Count(p => p.Selected);
+                if (data.Received != _gpsPoints.Count ||
+                    data.SelectedCount != expectedSelected)
+                    PCasaDiagnostics.WriteMessage("GPS.Map.Transfer",
+                        $"Map transfer {data.Id}: received {data.Received}/{_gpsPoints.Count}, " +
+                        $"selected {data.SelectedCount}/{expectedSelected}");
+            }
+            else if (data.Kind == "ready")
             {
                 _gpsBrowserReady = true;
                 GpsMapStatus.Visibility = Visibility.Collapsed;
