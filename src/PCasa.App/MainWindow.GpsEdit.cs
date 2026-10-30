@@ -358,7 +358,7 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", ids.Length);
             // Retire old errors before a new worker can begin. If accepting
             // the durable recipe fails, restore the old errors in the ledger.
-            var writeErrors = new OriginalWriteFailureRepository(_database);
+            var writeErrors = _originalWriteFailures;
             var previousErrors = writeErrors.Unresolved()
                 .Where(error => error.Kind == OriginalWriteFailureRepository.Gps &&
                                 ids.Contains(error.ImageId)).ToArray();
