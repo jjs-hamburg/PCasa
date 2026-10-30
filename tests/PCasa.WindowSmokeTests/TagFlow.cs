@@ -845,6 +845,53 @@ internal static class TagFlow
             if (filmPanel.Visibility != Visibility.Visible)
                 throw new Exception("GPS filmstrip could not be enabled.");
 
+            // A single gallery selection without GPS coordinates is still a
+            // FILMSTRIP PHOTO. The map may have no pin, but the strip must
+            // show and open it, and closing the overlay must not remove it.
+            var noGpsPhoto = catalog.GetImages(a.Id)
+                .First(image => image.Id != gpsA).Id;
+            var preservedGpsSelection = selected.ToHashSet();
+            var updateStrip = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateGpsFilmstrip", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var showStripPhoto = typeof(PCasa.App.MainWindow).GetMethod(
+                "ShowGpsFullscreenImage", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var closeStripPhoto = typeof(PCasa.App.MainWindow).GetMethod(
+                "CloseGpsFullscreenImage", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var stripOverlay = (Grid?)window.FindName("GpsFullscreenImageOverlay")
+                ?? throw new Exception("GPS photo overlay missing.");
+            try
+            {
+                selected.Clear();
+                selected.Add(noGpsPhoto);
+                updateStrip.Invoke(window, null);
+                var stripRows = ((ListBox?)window.FindName("GpsFilmstripList"))?.Items
+                    .Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().ToArray()
+                    ?? throw new Exception("GPS filmstrip list missing.");
+                if (stripRows.Length != 1 || stripRows[0].Id != noGpsPhoto)
+                    throw new Exception("Single photo without GPS was omitted from filmstrip.");
+                showStripPhoto.Invoke(window, [noGpsPhoto]);
+                if (stripOverlay.Visibility != Visibility.Visible ||
+                    stripOverlay.Tag is not long openId || openId != noGpsPhoto)
+                    throw new Exception("Filmstrip could not open selected photo without GPS.");
+                closeStripPhoto.Invoke(window, null);
+                updateStrip.Invoke(window, null);
+                var surviving = ((ListBox)window.FindName("GpsFilmstripList")!)
+                    .Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().ToArray();
+                if (surviving.Length != 1 || surviving[0].Id != noGpsPhoto)
+                    throw new Exception("Closing GPS photo removed selection from filmstrip.");
+                Console.WriteLine("PASS: Single no-GPS photo remains in filmstrip after opening and closing photo.");
+            }
+            finally
+            {
+                closeStripPhoto.Invoke(window, null);
+                selected.Clear();
+                foreach (var imageId in preservedGpsSelection) selected.Add(imageId);
+                updateStrip.Invoke(window, null);
+            }
+
             // The scrollbar belongs UNDER the lower perforation; both bands
             // stay fixed across the full viewport instead of moving with items.
             if (filmPanel.Child is not ListBox filmListForStyle ||
