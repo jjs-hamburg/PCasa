@@ -192,6 +192,14 @@
             <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}" />
         </Style>
+        <!-- Default control templates remain Fluent/light-or-dark; a shared
+             foreground resource keeps every generated dialog readable. -->
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+        </Style>
         <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
         </Style>
