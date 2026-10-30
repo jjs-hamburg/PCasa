@@ -8,8 +8,17 @@ namespace PCasa.App.Data;
 /// NEVER a job queue: the Scheduler still owns retries, ordering and steps,
 /// and pending_tag_edits remains the sole authoritative tag intent table.
 /// </summary>
-public sealed class OriginalWriteFailureRepository(LocalDatabase database)
+public sealed class OriginalWriteFailureRepository
 {
+    private readonly LocalDatabase database;
+
+    public OriginalWriteFailureRepository(LocalDatabase database)
+    {
+        this.database = database;
+        using var connection = database.OpenConnection();
+        EnsureSchema(connection); // one migration on service creation, never per photo
+    }
+
     public const string Gps = "gps";
     public const string Tags = "tags";
     public const int MaximumAttempts = 3;
@@ -65,7 +74,6 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
         bool permanent = false)
     {
         using var db = database.OpenConnection();
-        EnsureSchema(db);
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             INSERT INTO original_write_failures
@@ -100,7 +108,6 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
     public bool IsParked(string kind, long imageId, string? packageKey = null)
     {
         using var db = database.OpenConnection();
-        EnsureSchema(db);
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT EXISTS(SELECT 1 FROM original_write_failures
@@ -118,7 +125,6 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
     public void Clear(string kind, long imageId)
     {
         using var db = database.OpenConnection();
-        EnsureSchema(db);
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             DELETE FROM original_write_failures
@@ -132,7 +138,6 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
     public IReadOnlyList<FailedFile> Unresolved()
     {
         using var db = database.OpenConnection();
-        EnsureSchema(db);
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT kind,package_key,image_id,file_path,attempts,
