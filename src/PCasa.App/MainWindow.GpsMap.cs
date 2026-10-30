@@ -555,17 +555,32 @@ public partial class MainWindow
         var folderId = _activePhotoFolderId;
         try
         {
+            var mismatchedSources = new List<(long RootId, string Path)>();
             var points = await _scheduler.RunAsync(
                 "gps:catalog:" + revision,
                 SchedulerPriority.Interactive,
                 cancellation =>
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    return ReadGpsPoints(selectedIds, folderId, cancellation);
+                    return ReadGpsPoints(selectedIds, folderId, cancellation,
+                        mismatchedSources);
                 },
                 () => revision == _gpsQueryRevision && _sidebarMode == "GPS",
                 workKind: SchedulerWorkKind.CatalogRead);
             if (revision != _gpsQueryRevision || _sidebarMode != "GPS") return;
+            // Never display positions from metadata stored under a different
+            // original image. Repair those specific files with the EXISTING
+            // background scanner; never force another whole-folder scan.
+            if (mismatchedSources.Count > 0)
+            {
+                PCasaDiagnostics.WriteMessage("GPS.SourceIdentity",
+                    $"{mismatchedSources.Count} EXIF catalog rows have another " +
+                    "SourceFile; isolated for targeted repair.");
+                foreach (var (rootId, path) in mismatchedSources.Distinct())
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        rootId, path, BackgroundFolderChangeKind.ScanFile,
+                        Recursive: false));
+            }
             _gpsPoints = points;
             // Foreground selection and folder context are intentionally
             // independent. No stale point may survive a failed or canceled
@@ -645,7 +660,8 @@ public partial class MainWindow
     }
 
     private List<GpsPoint> ReadGpsPoints(long[] ids, long? folderId,
-        CancellationToken cancellation)
+        CancellationToken cancellation,
+        List<(long RootId, string Path)>? mismatchedSources = null)
     {
         const int maximumContext = 5000;
         var result = new List<GpsPoint>();
@@ -659,7 +675,9 @@ public partial class MainWindow
             if (maximum <= 0 || maximumNew <= 0) return;
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT i.id, i.file_name, x.gps_latitude, x.gps_longitude
+                SELECT i.id, i.file_name, x.gps_latitude, x.gps_longitude,
+                       i.local_path, i.folder_id,
+                       json_extract(x.exif_json,'$.SourceFile')
                 FROM images i JOIN image_exif x ON x.image_id = i.id
                 WHERE x.gps_latitude BETWEEN -90 AND 90
                   AND x.gps_longitude BETWEEN -180 AND 180
@@ -676,6 +694,17 @@ public partial class MainWindow
                 cancellation.ThrowIfCancellationRequested();
                 var id = reader.GetInt64(0);
                 if (!seen.Add(id)) continue;
+                var originalPath = reader.GetString(4);
+                var exifPath = reader.IsDBNull(6) ? null : reader.GetString(6);
+                if (exifPath is not null &&
+                    !ImageExifReader.IsSameSourcePath(exifPath, originalPath))
+                {
+                    // Same image ID, WRONG EXIF source. The gallery/image is
+                    // correct; showing the foreign coordinates would be a lie.
+                    if (selected.Contains(id))
+                        mismatchedSources?.Add((reader.GetInt64(5), originalPath));
+                    continue;
+                }
                 result.Add(new GpsPoint(id, reader.GetString(1),
                     reader.GetDouble(2), reader.GetDouble(3), selected.Contains(id)));
                 added++;
