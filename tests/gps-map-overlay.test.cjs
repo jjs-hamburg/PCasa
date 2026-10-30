@@ -19,8 +19,9 @@ const document={
 };
 class MapStub {
  constructor(){activeMap=this;this.handlers={};this.sources={};this.layers={};this.zoom=2;}
- on(name,a,b){(this.handlers[name]??=[]).push(b||a);}
- emit(name,event){for(const f of this.handlers[name]??[])f(event);}
+ on(name,a,b){(this.handlers[name]??=[]).push({layer:b?a:null,handler:b||a});}
+ emit(name,event){for(const entry of this.handlers[name]??[])
+   if(!entry.layer)entry.handler(event);}
  getContainer(){return host;}getCanvas(){return {style:{}};}
  addControl(){}addSource(id,source){this.sources[id]={setData(data){this.data=data;}};}
  getSource(id){return this.sources[id];}addLayer(layer){this.layers[layer.id]=layer;}
