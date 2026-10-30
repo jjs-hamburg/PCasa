@@ -302,6 +302,216 @@ public sealed class FolderRepository
         return cursors;
     }
 
+    public sealed record RegularScanCheckpoint(
+        long Generation, long Epoch, int Checked,
+        HashSet<string> Completed, Dictionary<string, string> Cursors);
+
+    // One scan identity owns its receipts throughout a restart. A *new*
+    // manual request has a new scheduler package key and creates a fresh
+    // inventory epoch. Recovered packages reuse their old identity/epoch.
+    public RegularScanCheckpoint BeginOrResumeRegularScan(
+        string scanKey, long folderId, string scanRoot,
+        string sourceCanonicalPath, bool beginManualEpoch)
+    {
+        using var connection = _database.OpenConnection();
+        using var tx = connection.BeginTransaction();
+        using var source = connection.CreateCommand();
+        source.Transaction = tx;
+        source.CommandText = """
+            SELECT generation, scan_epoch FROM scheduler_sources
+            WHERE canonical_path=$path AND desired_present=1;
+            """;
+        source.Parameters.AddWithValue("$path", sourceCanonicalPath);
+        long generation, currentEpoch;
+        using (var reader = source.ExecuteReader())
+        {
+            if (!reader.Read())
+                throw new OperationCanceledException("Scan source no longer monitored.");
+            generation = reader.GetInt64(0);
+            currentEpoch = reader.GetInt64(1);
+        }
+
+        long epoch;
+        int checkedCount;
+        using (var previous = connection.CreateCommand())
+        {
+            previous.Transaction = tx;
+            previous.CommandText = """
+                SELECT monitored_folder_id, scan_root, source_generation,
+                       scan_epoch, checked_count
+                FROM scan_resume_jobs WHERE scan_key=$key;
+                """;
+            previous.Parameters.AddWithValue("$key", scanKey);
+            using var reader = previous.ExecuteReader();
+            if (reader.Read())
+            {
+                if (reader.GetInt64(0) != folderId ||
+                    !string.Equals(reader.GetString(1), scanRoot,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    reader.GetInt64(2) != generation)
+                    throw new OperationCanceledException(
+                        "Obsolete scan receipt belongs to another source generation.");
+                epoch = reader.GetInt64(3);
+                checkedCount = reader.GetInt32(4);
+            }
+            else
+            {
+                epoch = -1;
+                checkedCount = 0;
+            }
+        }
+        if (epoch < 0)
+        {
+            epoch = currentEpoch;
+            if (beginManualEpoch)
+            {
+                using var advance = connection.CreateCommand();
+                advance.Transaction = tx;
+                advance.CommandText = """
+                    UPDATE scheduler_sources
+                    SET scan_epoch=scan_epoch+1, updated_utc=$now
+                    WHERE canonical_path=$path AND generation=$generation
+                      AND desired_present=1 RETURNING scan_epoch;
+                    """;
+                advance.Parameters.AddWithValue("$path", sourceCanonicalPath);
+                advance.Parameters.AddWithValue("$generation", generation);
+                advance.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+                epoch = advance.ExecuteScalar() is { } next
+                    ? Convert.ToInt64(next)
+                    : throw new OperationCanceledException("Scan source changed.");
+            }
+            using var create = connection.CreateCommand();
+            create.Transaction = tx;
+            create.CommandText = """
+                INSERT INTO scan_resume_jobs
+                    (scan_key,monitored_folder_id,scan_root,source_generation,
+                     scan_epoch,checked_count,started_utc)
+                VALUES ($key,$id,$root,$generation,$epoch,0,$now);
+                """;
+            create.Parameters.AddWithValue("$key", scanKey);
+            create.Parameters.AddWithValue("$id", folderId);
+            create.Parameters.AddWithValue("$root", scanRoot);
+            create.Parameters.AddWithValue("$generation", generation);
+            create.Parameters.AddWithValue("$epoch", epoch);
+            create.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            create.ExecuteNonQuery();
+        }
+        var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cursors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        using (var rows = connection.CreateCommand())
+        {
+            rows.Transaction = tx;
+            rows.CommandText = """
+                SELECT local_directory,last_file_name,completed
+                FROM scan_resume_directories WHERE scan_key=$key;
+                """;
+            rows.Parameters.AddWithValue("$key", scanKey);
+            using var reader = rows.ExecuteReader();
+            while (reader.Read())
+            {
+                var directory = reader.GetString(0);
+                if (reader.GetInt64(2) != 0) completed.Add(directory);
+                else if (!reader.IsDBNull(1))
+                    cursors[directory] = reader.GetString(1);
+            }
+        }
+        tx.Commit();
+        return new RegularScanCheckpoint(generation, epoch, checkedCount,
+            completed, cursors);
+    }
+
+    // A file receipt is durable only AFTER the image's catalog transaction
+    // committed. Both the file cursor and its visible progress count are
+    // persisted in this single short transaction.
+    public bool SaveRegularScanFile(string scanKey, string directory,
+        string fileName, int checkedCount, long generation, long epoch)
+    {
+        return SaveRegularScanReceipt(scanKey, directory,
+            fileName, completed: false, checkedCount, generation, epoch);
+    }
+
+    public bool CompleteRegularScanDirectory(string scanKey, string directory,
+        int checkedCount, long generation, long epoch)
+    {
+        return SaveRegularScanReceipt(scanKey, directory,
+            null, completed: true, checkedCount, generation, epoch);
+    }
+
+    private bool SaveRegularScanReceipt(string scanKey, string directory,
+        string? fileName, bool completed, int checkedCount,
+        long generation, long epoch)
+    {
+        using var connection = _database.OpenConnection();
+        using var tx = connection.BeginTransaction();
+        using var validate = connection.CreateCommand();
+        validate.Transaction = tx;
+        validate.CommandText = """
+            UPDATE scan_resume_jobs
+            SET checked_count=MAX(checked_count,$count)
+            WHERE scan_key=$key AND source_generation=$generation AND scan_epoch=$epoch
+              AND EXISTS (
+                SELECT 1 FROM monitored_folders m
+                JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                WHERE m.id=scan_resume_jobs.monitored_folder_id
+                  AND s.generation=$generation AND s.desired_present=1);
+            """;
+        validate.Parameters.AddWithValue("$key", scanKey);
+        validate.Parameters.AddWithValue("$generation", generation);
+        validate.Parameters.AddWithValue("$epoch", epoch);
+        validate.Parameters.AddWithValue("$count", checkedCount);
+        if (validate.ExecuteNonQuery() != 1)
+        {
+            tx.Rollback();
+            return false;
+        }
+        using var receipt = connection.CreateCommand();
+        receipt.Transaction = tx;
+        receipt.CommandText = """
+            INSERT INTO scan_resume_directories
+                (scan_key,local_directory,last_file_name,completed)
+            VALUES ($key,$dir,$file,$completed)
+            ON CONFLICT(scan_key,local_directory) DO UPDATE SET
+                last_file_name=excluded.last_file_name,
+                completed=excluded.completed;
+            """;
+        receipt.Parameters.AddWithValue("$key", scanKey);
+        receipt.Parameters.AddWithValue("$dir", directory);
+        receipt.Parameters.AddWithValue("$file", (object?)fileName ?? DBNull.Value);
+        receipt.Parameters.AddWithValue("$completed", completed ? 1 : 0);
+        receipt.ExecuteNonQuery();
+        tx.Commit();
+        return true;
+    }
+
+    public void FinishRegularScan(string scanKey, long generation, long epoch)
+    {
+        using var connection = _database.OpenConnection();
+        using var tx = connection.BeginTransaction();
+        using var clear = connection.CreateCommand();
+        clear.Transaction = tx;
+        clear.CommandText = """
+            DELETE FROM scan_resume_directories WHERE scan_key=$key
+              AND EXISTS (SELECT 1 FROM scan_resume_jobs
+                  WHERE scan_key=$key AND source_generation=$generation
+                    AND scan_epoch=$epoch);
+            """;
+        clear.Parameters.AddWithValue("$key", scanKey);
+        clear.Parameters.AddWithValue("$generation", generation);
+        clear.Parameters.AddWithValue("$epoch", epoch);
+        clear.ExecuteNonQuery();
+        using var finish = connection.CreateCommand();
+        finish.Transaction = tx;
+        finish.CommandText = """
+            DELETE FROM scan_resume_jobs WHERE scan_key=$key
+              AND source_generation=$generation AND scan_epoch=$epoch;
+            """;
+        finish.Parameters.AddWithValue("$key", scanKey);
+        finish.Parameters.AddWithValue("$generation", generation);
+        finish.Parameters.AddWithValue("$epoch", epoch);
+        finish.ExecuteNonQuery();
+        tx.Commit();
+    }
+
     public bool SaveInitialScanFileCursor(
         long folderId, string directory, string fileName,
         long generation, long epoch)

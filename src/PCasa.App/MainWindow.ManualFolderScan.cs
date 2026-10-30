@@ -238,7 +238,7 @@ public partial class MainWindow
         var step = new CompleteFolderScanStep(this, recipe.Directory,
             new ScanJobProgress(_scheduler, key, null), recipe.MonitoredRootId,
             recipe.RequirePendingInitialImport,
-            recipe.AcknowledgeTargetedPending);
+            recipe.AcknowledgeTargetedPending, key);
         var package = new SchedulerTaskPackage(key);
         package.AddStep(async token =>
         {
@@ -268,7 +268,7 @@ public partial class MainWindow
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
         using var step = new CompleteFolderScanStep(this, directory,
             schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport,
-            acknowledgeTargetedPending);
+            acknowledgeTargetedPending, key);
         if (priority == SchedulerPriority.ManualAction)
         {
             var package = new SchedulerTaskPackage(key);
@@ -299,7 +299,8 @@ public partial class MainWindow
         MainWindow owner, string directory, IProgress<ScanProgress>? progress,
         long? expectedMonitoredFolderId = null,
         bool requirePendingInitialImport = false,
-        bool acknowledgeTargetedPending = false) : IDisposable
+        bool acknowledgeTargetedPending = false,
+        string? durableScanKey = null) : IDisposable
     {
         private readonly FolderScanner.ScanResumeState _resume = new();
         private bool _manualGenerationStarted;
@@ -354,8 +355,18 @@ public partial class MainWindow
                 // An automatic first import must retain its durable scan epoch
                 // after restart; explicit manual rescans still supersede it.
                 if (!requirePendingInitialImport)
+                {
+                    if (string.IsNullOrWhiteSpace(durableScanKey))
+                        throw new InvalidOperationException("Scan package identity missing.");
+                    // Same identity through scheduler yields and process
+                    // restart: a recovered package must NOT begin a new
+                    // epoch or replay an already confirmed file.
                     _manualScanEpoch =
-                        owner._folderRepository.BeginManualScan(folder.CanonicalPath);
+                        owner._folderRepository.BeginOrResumeRegularScan(
+                            durableScanKey, folder.Id,
+                            Path.GetFullPath(directory).Replace('/', '\\'),
+                            folder.CanonicalPath, beginManualEpoch: true).Epoch;
+                }
                 _manualGenerationStarted = true;
             }
 
@@ -373,7 +384,8 @@ public partial class MainWindow
             {
                 Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
-                    durableInitialImport: requirePendingInitialImport);
+                    durableInitialImport: requirePendingInitialImport,
+                    durableScanKey: requirePendingInitialImport ? null : durableScanKey);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)

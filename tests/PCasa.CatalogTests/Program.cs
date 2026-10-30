@@ -62,6 +62,8 @@ internal static class Program
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Durable first-import checkpoints survive restart without unsafe pruning", DurableInitialImportRestartSafe, failures);
         Run("Restart resumes within unfinished directory after last committed image", DurableFileCursorRestartSafe, failures);
+        Run("All ordinary scans resume inside a directory after a process restart",
+            RegularScanRestartSafe, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
@@ -995,6 +997,72 @@ internal static class Program
         resumedScanner.Scan(root);
         if (new ImageCatalogRepository(db).CountAll() != 7)
             throw new Exception("Later full inventory did not reconcile deleted image.");
+    }
+
+    private static void RegularScanRestartSafe()
+    {
+        using var sandbox = new Sandbox();
+        var directory = Path.Combine(sandbox.Images, "LongCatalogFolder");
+        Directory.CreateDirectory(directory);
+        for (var i = 0; i < 9; i++)
+            WriteJpeg(Path.Combine(directory, $"photo-{i:D4}.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        var key = $"background:inventory:{root.Id}:root";
+        using var stop = new CancellationTokenSource();
+        var interrupted = false;
+        var first = new InlineProgress<ScanProgress>(progress =>
+        {
+            if (interrupted || progress.DiscoveredPhotoFolderId is null)
+                return;
+            interrupted = true;
+            stop.Cancel();
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, recursive: true,
+                progress: first, cancellationToken: stop.Token,
+                durableScanKey: key);
+            throw new Exception("Regular inventory ignored cancellation.");
+        }
+        catch (OperationCanceledException) when (interrupted) { }
+        var folders = new FolderRepository(db);
+        var saved = folders.BeginOrResumeRegularScan(key, root.Id,
+            root.LocalPath, root.CanonicalPath, beginManualEpoch: false);
+        if (saved.Checked != 1 ||
+            !saved.Cursors.TryGetValue(directory, out var fileName) ||
+            fileName != "photo-0000.jpg")
+            throw new Exception("Automatic inventory did not persist its last committed file.");
+
+        // A partial directory inventory MUST NOT authorize deletion of the
+        // photo that the new process skipped using its persisted cursor.
+        File.Delete(Path.Combine(directory, "photo-0000.jpg"));
+        db.Initialize();
+        var nextProcess = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
+        var resumed = nextProcess.ScanDirectory(root, root.LocalPath,
+            recursive: true, durableScanKey: key);
+        if (resumed.ImageFilesSeen != 9 || resumed.Failed != 0)
+            throw new Exception("Restart lost the saved file cursor/count.");
+        if (new ImageCatalogRepository(db).CountAll() != 9)
+            throw new Exception("Resumed partial inventory deleted an unseen earlier image.");
+
+        // The completed inventory releases its checkpoint. A genuinely
+        // NEW complete inventory must visit the whole directory and may
+        // safely reconcile the removed photo.
+        using (var connection = db.OpenConnection())
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM scan_resume_jobs WHERE scan_key=$key;";
+            cmd.Parameters.AddWithValue("$key", key);
+            if (Convert.ToInt32(cmd.ExecuteScalar()) != 0)
+                throw new Exception("Completed ordinary scan left a stale receipt.");
+        }
+        var fresh = nextProcess.ScanDirectory(root, root.LocalPath,
+            recursive: true, durableScanKey: key);
+        if (fresh.ImageFilesSeen != 8 || fresh.Removed != 1 ||
+            new ImageCatalogRepository(db).CountAll() != 8)
+            throw new Exception("A new full inventory did not reconcile the deleted image.");
     }
 
     private static void DurableInitialImportRestartSafe()

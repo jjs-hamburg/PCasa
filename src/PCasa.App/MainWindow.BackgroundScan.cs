@@ -720,7 +720,9 @@ public partial class MainWindow
                                 ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token)
                                 : _folderScanner.ScanDirectory(
                                     folder, scanPath, request.Recursive,
-                                    progress: scanProgress, token, scanResume);
+                                    progress: scanProgress, token, scanResume,
+                                    durableScanKey:
+                                        $"background:inventory:{folder.Id}:{sourceState.Value.Generation}:{request.Kind}:{request.Recursive}:{scanPath}");
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(

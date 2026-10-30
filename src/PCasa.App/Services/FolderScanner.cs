@@ -131,11 +131,13 @@ public sealed class FolderScanner
         IProgress<ScanProgress>? progress = null,
         CancellationToken cancellationToken = default,
         ScanResumeState? resume = null,
-        bool durableInitialImport = false)
+        bool durableInitialImport = false,
+        string? durableScanKey = null)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
-            resume: resume, durableInitialImport: durableInitialImport);
+            resume: resume, durableInitialImport: durableInitialImport,
+            durableScanKey: durableScanKey);
     }
 
     public ScanResult ScanFile(
@@ -162,7 +164,8 @@ public sealed class FolderScanner
         string? specificFile = null,
         ScanResumeState? resume = null,
         bool publishCatalogChange = true,
-        bool durableInitialImport = false)
+        bool durableInitialImport = false,
+        string? durableScanKey = null)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -191,10 +194,18 @@ public sealed class FolderScanner
                 "The scan source configuration changed during a paused inventory.");
         }
         if (resume is not null) resume.SourceGeneration = generation;
-        // Capture the inventory epoch only once per resumable enumeration.
-        // A newer manual scan can supersede its deletion authority without
-        // discarding the old scanner's work or restarting NAS enumeration.
-        var scanEpoch = resume?.ScanEpoch ??
+        // Same scanner and traversal for every inventory. The durable key
+        // belongs to one scan request; completed requests erase their receipt.
+        var regularCheckpoint = durableScanKey is not null
+            ? _folderRepository.BeginOrResumeRegularScan(
+                durableScanKey, folder.Id, scanRoot, folder.CanonicalPath,
+                beginManualEpoch: false)
+            : null;
+        if (regularCheckpoint is not null &&
+            resume is not null && resume.Enumerator is null &&
+            resume.ImageFilesSeen == 0)
+            resume.ImageFilesSeen = regularCheckpoint.Checked;
+        var scanEpoch = resume?.ScanEpoch ?? regularCheckpoint?.Epoch ??
             _folderRepository.GetScanEpoch(folder.CanonicalPath);
         if (resume is not null) resume.ScanEpoch = scanEpoch;
         var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
@@ -218,31 +229,36 @@ public sealed class FolderScanner
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             : null;
 
-        // Directory checkpoints are a first-import optimization only; manual
-        // rescans retain their established full-inventory semantics.
+        // First-import and other scan receipts drive the same enumerator.
+        var persistentScan = durableInitialImport || durableScanKey is not null;
         var completedDirectories = durableInitialImport
             ? resume?.CompletedInitialDirectories ??
                 _folderRepository.GetCompletedInitialScanDirectories(
                     folder.Id, generation, scanEpoch)
-            : null;
-        if (durableInitialImport && resume is not null)
+            : durableScanKey is not null
+                ? resume?.CompletedInitialDirectories ?? regularCheckpoint!.Completed
+                : null;
+        if (persistentScan && resume is not null)
             resume.CompletedInitialDirectories = completedDirectories;
         var fileCursors = durableInitialImport
             ? resume?.InitialFileCursors ??
                 _folderRepository.GetInitialScanFileCursors(folder.Id, generation, scanEpoch)
-            : null;
-        if (durableInitialImport && resume is not null)
+            : durableScanKey is not null
+                ? resume?.InitialFileCursors ?? regularCheckpoint!.Cursors
+                : null;
+        if (persistentScan && resume is not null)
             resume.InitialFileCursors = fileCursors;
-        // Remember which directories had an incomplete inventory BEFORE the
-        // current enumerator began. Only those directories lack a full seen set.
-        var restartedPartialDirectories = durableInitialImport
+        // A partial directory seen-set after restart must never prune images
+        // that were committed and skipped before this process started.
+        var restartedPartialDirectories = persistentScan
             ? resume?.RestartedPartialDirectories ??
                 new HashSet<string>(fileCursors!.Keys, StringComparer.OrdinalIgnoreCase)
             : null;
-        if (durableInitialImport && resume is not null)
+        if (persistentScan && resume is not null)
             resume.RestartedPartialDirectories = restartedPartialDirectories;
         var failedDirectories = resume?.FailedDirectories ??
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var removedByCompletedDirectories = 0;
         void DirectoryCompleted(string directory)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -260,15 +276,20 @@ public sealed class FolderScanner
             if (restartedPartialDirectories?.Contains(directory) != true)
             {
                 var cleanup = new CatalogRemovalService(_catalog.Database);
-                cleanup.RemoveMissing(folder.Id, directory, seen,
+                removedByCompletedDirectories += cleanup.RemoveMissing(
+                    folder.Id, directory, seen,
                     recursive: false, cancellationToken: cancellationToken,
                     sourceCanonicalPath: folder.CanonicalPath,
                     expectedGeneration: generation, expectedScanEpoch: scanEpoch);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            if (!_folderRepository.CompleteInitialScanDirectory(
-                    folder.Id, directory, generation, scanEpoch))
-                throw new OperationCanceledException("First-import checkpoint superseded.");
+            var committed = durableInitialImport
+                ? _folderRepository.CompleteInitialScanDirectory(
+                    folder.Id, directory, generation, scanEpoch)
+                : _folderRepository.CompleteRegularScanDirectory(
+                    durableScanKey!, directory, imageFilesSeen, generation, scanEpoch);
+            if (!committed)
+                throw new OperationCanceledException("Directory checkpoint superseded.");
             completedDirectories!.Add(directory);
             // A completed directory is now durable; do not keep a large
             // duplicate inventory in memory across the rest of the NAS scan.
@@ -285,7 +306,7 @@ public sealed class FolderScanner
         // token. The persistent iterator must dispatch into THIS invocation,
         // never the first invocation's cancelled token or stale cleanup context.
         if (resume is not null)
-            resume.DirectoryCompletionHandler = durableInitialImport
+            resume.DirectoryCompletionHandler = persistentScan
                 ? DirectoryCompleted : null;
         var profile = _browseProfile.Get();
         var scanSession = _catalog.CreateScanSession(
@@ -298,7 +319,7 @@ public sealed class FolderScanner
                     scanRoot, recursive, exclusions, CancellationToken.None,
                     completedDirectories,
                     fileCursors,
-                    durableInitialImport
+                    persistentScan
                         ? resume is null
                             ? DirectoryCompleted
                             : directory => resume.DirectoryCompletionHandler?.Invoke(directory)
@@ -559,7 +580,7 @@ public sealed class FolderScanner
                 // Persist after the file's SQLite commit, never in advance of
                 // indexing. An interruption therefore retries at most one
                 // uncommitted file. Do not move past a failed file.
-                if (durableInitialImport &&
+                if (persistentScan &&
                     !failedDirectories.Contains(Path.GetDirectoryName(localPath) ?? scanRoot))
                 {
                     var directory = Path.GetDirectoryName(localPath) ?? scanRoot;
@@ -568,10 +589,15 @@ public sealed class FolderScanner
                         (!fileCursors.TryGetValue(directory, out var previous) ||
                          StringComparer.OrdinalIgnoreCase.Compare(fileName, previous) > 0))
                     {
-                        if (!_folderRepository.SaveInitialScanFileCursor(
-                                folder.Id, directory, fileName, generation, scanEpoch))
+                        var committed = durableInitialImport
+                            ? _folderRepository.SaveInitialScanFileCursor(
+                                folder.Id, directory, fileName, generation, scanEpoch)
+                            : _folderRepository.SaveRegularScanFile(
+                                durableScanKey!, directory, fileName,
+                                imageFilesSeen, generation, scanEpoch);
+                        if (!committed)
                             throw new OperationCanceledException(
-                                "Initial import source superseded.");
+                                "Scan source or checkpoint superseded.");
                         fileCursors[directory] = fileName;
                     }
                 }
@@ -627,8 +653,8 @@ public sealed class FolderScanner
         // Enumeration, access and cancellation failures abort above, before
         // this reconciliation. A single broken JPEG must not prevent every
         // unrelated rename/deletion in that directory from converging.
-        var removed = 0;
-        if (observedPaths is not null && !durableInitialImport)
+        var removed = removedByCompletedDirectories;
+        if (observedPaths is not null && !persistentScan)
         {
             // The source may disappear AFTER successful enumeration (VPN/SMB
             // drop, drive removal, renamed root) but BEFORE reconciliation.
@@ -669,6 +695,13 @@ public sealed class FolderScanner
             _folderRepository.CompleteInitialScan(folder.Id, generation, scanEpoch);
         }
 
+        // Success releases this inventory's receipt; the NEXT new scan must
+        // start fresh. Failed/interrupted inventories retain their cursor.
+        if (durableScanKey is not null && failed == 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _folderRepository.FinishRegularScan(durableScanKey, generation, scanEpoch);
+        }
         return new ScanResult(imageFilesSeen, updated, unchanged, failed, removed, metadataUpdated);
 
         void ReportProgress(string? currentFile, bool force = false,

@@ -305,6 +305,38 @@ public sealed class LocalDatabase
             fileCursor.ExecuteNonQuery();
         }
 
+        // Same restart-safe receipt format for manual scans and automatic
+        // reconciliation; first imports keep their existing durable receipts.
+        // A row describes ONE inventory, never a permanent "already scanned"
+        // flag. Success removes the entire receipt; the next fresh scan
+        // starts at the first file again.
+        using (var regularScan = connection.CreateCommand())
+        {
+            regularScan.CommandText = """
+                CREATE TABLE IF NOT EXISTS scan_resume_jobs (
+                    scan_key TEXT PRIMARY KEY,
+                    monitored_folder_id INTEGER NOT NULL,
+                    scan_root TEXT NOT NULL COLLATE NOCASE,
+                    source_generation INTEGER NOT NULL,
+                    scan_epoch INTEGER NOT NULL,
+                    checked_count INTEGER NOT NULL DEFAULT 0,
+                    started_utc TEXT NOT NULL,
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS scan_resume_directories (
+                    scan_key TEXT NOT NULL,
+                    local_directory TEXT NOT NULL COLLATE NOCASE,
+                    last_file_name TEXT,
+                    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
+                    PRIMARY KEY(scan_key,local_directory),
+                    FOREIGN KEY(scan_key)
+                        REFERENCES scan_resume_jobs(scan_key) ON DELETE CASCADE
+                );
+                """;
+            regularScan.ExecuteNonQuery();
+        }
+
         // One-time upgrade for folders added by older builds that never
         // initiated their first scan: do not strand an empty monitored root.
         // Completed (including intentionally empty) scans are not repeatedly
