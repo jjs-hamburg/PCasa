@@ -17,7 +17,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
 <script>
 (() => {
  'use strict';
- const post = (data) => { if (window.CefSharp?.PostMessage) CefSharp.PostMessage(JSON.stringify(data)); };
+ const post = (data) => { if (window.CefSharp?.PostMessage) window.CefSharp.PostMessage(JSON.stringify(data)); };
  if (!window.maplibregl) { post({type:'error',message:'MapLibre library unavailable'}); return; }
  const fallback = document.getElementById('fallback');
  const empty = { type:'FeatureCollection',features:[] };
