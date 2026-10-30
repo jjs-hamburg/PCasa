@@ -48,6 +48,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('sourcedata', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
  let previousSelectedIds = null;
+ let transferRevision=-1,transferPoints=[],transferActive=false;
+
  const selectedMarkers = new Map();
  function geojson(list) {
    return {type:'FeatureCollection',features:list.map(p=>({
@@ -74,12 +76,26 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    // Selected photos have their own unclustered source and are always on top.
    // A cluster at identical coordinates must never swallow the selected marker.
    if (!map.getSource('pcasa-selected')) {
-     map.addSource('pcasa-selected',{type:'geojson',data:geojson([])});
+     // Cluster only nearby selected coordinates at low zoom so thousands of
+     // photos at the same place do not hide other regions of the world.
+     map.addSource('pcasa-selected',{type:'geojson',data:geojson([]),
+       cluster:true,clusterRadius:38,clusterMaxZoom:15});
+     map.addLayer({id:'pcasa-selected-clusters',type:'circle',
+       source:'pcasa-selected',filter:['has','point_count'],
+       paint:{'circle-radius':['step',['get','point_count'],14,10,18,100,23],
+              'circle-color':'#f0a030','circle-stroke-width':3,
+              'circle-stroke-color':'#111'}});
+     map.addLayer({id:'pcasa-selected-cluster-count',type:'symbol',
+       source:'pcasa-selected',filter:['has','point_count'],
+       layout:{'text-field':['get','point_count_abbreviated'],'text-size':12},
+       paint:{'text-color':'#111'}});
      map.addLayer({id:'pcasa-selected-points',type:'circle',source:'pcasa-selected',
-       paint:{'circle-radius':12,'circle-color':'#f0a030',
-              'circle-stroke-width':4,'circle-stroke-color':'#111'}});
+       filter:['!',['has','point_count']],
+       paint:{'circle-radius':10,'circle-color':'#f0a030',
+              'circle-stroke-width':3,'circle-stroke-color':'#111'}});
      map.addLayer({id:'pcasa-selected-center',type:'circle',source:'pcasa-selected',
-       paint:{'circle-radius':5,'circle-color':'#fff'}});
+       filter:['!',['has','point_count']],
+       paint:{'circle-radius':4,'circle-color':'#fff'}});
    }
    updatePhotos();
  }
@@ -136,16 +152,35 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    map.fitBounds(bounds,{padding:35,maxZoom:13,duration:400});
  }
  window.pcasaSetPoints = (data) => {
-   points = Array.isArray(data) ? data.filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)) : [];
+   points = Array.isArray(data) ? data.filter(p=>
+     Number.isFinite(p.lat)&&Number.isFinite(p.lon) &&
+     Math.abs(p.lat)<=90 && Math.abs(p.lon)<=180) : [];
    const selectedIds = points.filter(p=>p.selected).map(p=>String(p.id)).sort().join(',');
    const selectionChanged = selectedIds !== previousSelectedIds;
    previousSelectedIds = selectedIds;
    if (ready) {
      updatePhotos();
-     // Only a different multi-photo selection establishes a new overview.
-     // A focus/highlight update must NEVER pan or zoom this overview.
+     // Only a changed selection establishes a new overview. Switching a
+     // focused filmstrip photo must preserve the user's map extent.
      if (selectionChanged && selectedIds) zoomSelection();
    }
+ };
+ // A single huge ExecuteScriptAsync payload previously left stale map data
+ // (often one focused photo) after large gallery selections. Only commit a
+ // complete, matching transfer; never expose partial continents.
+ window.pcasaBeginPoints=(version)=>{
+   if(!Number.isSafeInteger(version)||version<transferRevision)return;
+   transferRevision=version;transferPoints=[];transferActive=true;
+ };
+ window.pcasaAppendPoints=(version,chunk)=>{
+   if(!transferActive||version!==transferRevision||!Array.isArray(chunk))return;
+   transferPoints.push(...chunk);
+ };
+ window.pcasaCommitPoints=(version)=>{
+   if(!transferActive||version!==transferRevision)return;
+   transferActive=false;
+   window.pcasaSetPoints(transferPoints);
+   transferPoints=[];
  };
  window.pcasaApplyProvider = (provider) => {
    if (!provider || !provider.url) return;
@@ -178,7 +213,17 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  }
  map.on('click','pcasa-points',selectPhoto);
  map.on('click','pcasa-selected-points',selectPhoto);
- for(const layer of ['pcasa-points','pcasa-selected-points']) {
+ map.on('click','pcasa-selected-clusters',event=>{
+   const features=map.queryRenderedFeatures(event.point,{layers:['pcasa-selected-clusters']});
+   if(!features.length)return;
+   const cluster=features[0];
+   map.getSource('pcasa-selected').getClusterExpansionZoom(
+     cluster.properties.cluster_id).then(
+       zoom=>map.easeTo({center:cluster.geometry.coordinates,zoom})
+     ).catch(()=>{});
+ });
+
+ for(const layer of ['pcasa-points','pcasa-selected-points','pcasa-selected-clusters']) {
    map.on('mouseenter',layer,()=>map.getCanvas().style.cursor='pointer');
    map.on('mouseleave',layer,()=>map.getCanvas().style.cursor='');
  }
