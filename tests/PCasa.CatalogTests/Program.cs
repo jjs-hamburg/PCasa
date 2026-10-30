@@ -128,6 +128,7 @@ internal static class Program
         Run("Source disappearing after enumeration never deletes catalog", SourceLossAfterEnumerationPreservesCatalog, failures);
         Run("Repeated folder monitor disconnect and reconnect preserves catalog", RepeatedMonitorReconnectPreservesCatalog, failures);
         Run("Faulted file watcher is rebuilt after an Error event", FaultedWatcherIsRebuilt, failures);
+        Run("Individual watcher file events never scan their entire parent", WatcherFileEventsStayTargeted, failures);
         Run("Canceled reconciliation never commits deletions", CanceledReconciliationPreservesCatalog, failures);
         Run("Partial folder scan preserves siblings", PartialScanPreservesSibling, failures);
         Run("Nonrecursive scan preserves unseen descendants", NonrecursiveScanPreservesDescendants, failures);
@@ -3763,10 +3764,44 @@ internal static class Program
         }
     }
 
+    private static void WatcherFileEventsStayTargeted()
+    {
+        using var sandbox = new Sandbox();
+        var (db, root, _) = sandbox.Prepare();
+        FaultInjectingWatcher? fake = null;
+        using var monitor = new BackgroundFolderMonitor(path =>
+        {
+            fake = new FaultInjectingWatcher(path);
+            return fake;
+        });
+        var notifications = new List<BackgroundFolderChange>();
+        monitor.Changed += (_, notification) => notifications.Add(notification);
+        if (!monitor.Refresh(new[] { root }, enabled: true)[root.Id] || fake is null)
+            throw new Exception("Test watcher could not be started.");
+
+        // ExifTool's atomic replacement produces file-level delete/rename
+        // notifications. None may trigger a full 5,000-image parent inventory.
+        fake.SignalDeleted("changed.jpg");
+        if (notifications.Count != 1 ||
+            notifications[0].Kind != BackgroundFolderChangeKind.RemovePath)
+            throw new Exception("File deletion unexpectedly queued a directory scan.");
+        notifications.Clear();
+        fake.SignalRenamed("before.jpg", "after.jpg");
+        if (notifications.Count != 2 ||
+            notifications[0].Kind != BackgroundFolderChangeKind.RemovePath ||
+            notifications[1].Kind != BackgroundFolderChangeKind.ScanFile ||
+            notifications[1].Path != Path.Combine(sandbox.Images, "after.jpg"))
+            throw new Exception("File rename queued a full parent scan instead of the target file.");
+    }
+
     private sealed class FaultInjectingWatcher(string path) : FileSystemWatcher(path)
     {
         public void SignalError() =>
             OnError(new ErrorEventArgs(new IOException("Simulated watcher failure")));
+        public void SignalDeleted(string name) =>
+            OnDeleted(new FileSystemEventArgs(WatcherChangeTypes.Deleted, Path, name));
+        public void SignalRenamed(string oldName, string newName) =>
+            OnRenamed(new RenamedEventArgs(WatcherChangeTypes.Renamed, Path, newName, oldName));
     }
 
     private static void CanceledReconciliationPreservesCatalog()
