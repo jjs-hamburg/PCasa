@@ -10,6 +10,15 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
+    private string? GetOriginalImagePath(long imageId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT local_path FROM images WHERE id=$id;";
+        cmd.Parameters.AddWithValue("$id", imageId);
+        return cmd.ExecuteScalar() as string;
+    }
+
     // Every original-file edit shares this ONE error/retry boundary.
     // The existing scheduler still owns priority, package cursor and retry.
     private bool TryWriteOriginal(string kind, string packageKey, long imageId,
