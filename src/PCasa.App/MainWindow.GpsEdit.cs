@@ -69,7 +69,7 @@ public partial class MainWindow
         GpsPlaceSearchButton.IsEnabled = true;
         _gpsDraft = null;
         GpsDraftCoordinates.Text = string.Empty;
-        GpsEditStatus.Text = string.Empty;
+        GpsEditStatus.Text = GpsFailureSummary();
         GpsApplyMissingButton.IsEnabled = false;
         GpsReplaceButton.IsEnabled = false;
         GpsPickPositionToggle.IsChecked = false;
@@ -461,8 +461,52 @@ public partial class MainWindow
                 if (_browseInitialized)
                     await RefreshBrowseGalleryAsync(forceIndexReload: true);
                 if (_sidebarMode == "GPS") await RefreshGpsMapAsync();
+                var summary = GpsFailureSummary();
+                if (summary.Length > 0) GpsEditStatus.Text = summary;
             }
         }
+    }
+
+    private string GpsFailureSummary()
+    {
+        var count = new GpsWriteFailureRepository(_database).Unresolved().Count;
+        return count == 0 ? string.Empty
+            : UiLanguage.Format("{0} GPS-Schreibfehler – anklicken", count);
+    }
+
+    private void GpsEditStatus_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        var failed = new GpsWriteFailureRepository(_database).Unresolved();
+        if (failed.Count == 0) return;
+        var details = string.Join(Environment.NewLine + Environment.NewLine,
+            failed.Select(f => f.Path + Environment.NewLine +
+                UiLanguage.Format("Versuche: {0}", f.Attempts) +
+                " | " + f.LastAttemptUtc + Environment.NewLine + f.Error));
+        // Readable, scrollable list backed by SQLite, also after restart.
+        // Uses the same application-level light/dark resources as other dialogs.
+        var contents = new TextBox
+        {
+            Text = details,
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Margin = new Thickness(14),
+            Padding = new Thickness(8)
+        };
+        var dialog = new Window
+        {
+            Title = UiLanguage.T("GPS-Schreibfehler"),
+            Width = 820, Height = 530,
+            MinWidth = 450, MinHeight = 280,
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = contents
+        };
+        dialog.SetResourceReference(Window.BackgroundProperty, "PcasaWindowBrush");
+        dialog.SetResourceReference(Window.ForegroundProperty, "PcasaTextBrush");
+        dialog.ShowDialog();
+        e.Handled = true;
     }
 
     private void GpsShowArea_Click(object sender, RoutedEventArgs e)
