@@ -504,8 +504,17 @@ public partial class MainWindow
             ClearGpsEditorDraft();
         }
         _gpsHighlightedImageId = imageId;
-        var photo = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
-        if (photo is null) return;
+        var photo = _gpsPoints.FirstOrDefault(p => p.Id == imageId && p.Selected);
+        if (photo is null)
+        {
+            // A filmstrip photo can have no GPS. Its focus must NEVER
+            // inherit a previous picture's coordinates or Copy-GPS state.
+            _gpsCurrentCoordinates = null;
+            GpsCoordinatesText.Text = UiLanguage.T("Keine GPS-Koordinaten für die Auswahl");
+            GpsCopyButton.IsEnabled = false;
+            UpdateGpsGoogleButton();
+            return;
+        }
         _gpsCurrentCoordinates = (photo.Lat, photo.Lon);
         GpsCoordinatesText.Text = UiLanguage.Format(
             "{0:F6}°, {1:F6}°", photo.Lat, photo.Lon);
@@ -518,8 +527,15 @@ public partial class MainWindow
         if (_sidebarMode != "GPS") return;
         var revision = ++_gpsQueryRevision;
         var selectedIds = _selectedImageIds.ToArray();
-        // Before any async read, discard the place/marker left by the
-        // previous photo. Mere refresh of the same selection keeps editing.
+        // The previous selection's map and coordinates must not masquerade
+        // as the newly selected 6,000 photos while catalog reads are queued.
+        // Keep the scheduler as the only read owner; publish loading state
+        // synchronously, and only publish matching revision results.
+        _gpsCurrentCoordinates = null;
+        GpsCopyButton.IsEnabled = false;
+        GpsCoordinatesText.Text = selectedIds.Length > 1
+            ? UiLanguage.Format("GPS für {0:N0} ausgewählte Fotos wird gelesen …", selectedIds.Length)
+            : UiLanguage.T("GPS-Positionen werden geladen");
         ResetGpsEditorOnSelectionChange(selectedIds);
         var folderId = _activePhotoFolderId;
         try
@@ -537,8 +553,14 @@ public partial class MainWindow
             if (revision != _gpsQueryRevision || _sidebarMode != "GPS") return;
             _gpsPoints = points;
             // Foreground selection and folder context are intentionally
-            // independent. One selection may coexist with thousands of
-            // unselected background markers in the same map source.
+            // independent. No stale point may survive a failed or canceled
+            // catalog read while pretending to belong to the new selection.
+            PCasaDiagnostics.WriteMessage("GPS.Map.Query",
+                $"Revision={revision}; Selected={selectedIds.Length}; " +
+                $"GeotaggedSelected={points.Count(p => p.Selected)}; " +
+                $"DistinctSelectedPositions={points.Where(p => p.Selected)
+                    .Select(p => (p.Lat, p.Lon)).Distinct().Count()}; " +
+                $"ZeroZero={points.Count(p => p.Selected && p.Lat == 0 && p.Lon == 0)}");
             var selectedGps = points.Where(p => p.Selected).ToArray();
             _gpsSelectionCount = selectedIds.Length;
             // Public Google URLs cannot encode arbitrary PCasa photo markers.
@@ -655,8 +677,10 @@ public partial class MainWindow
             Read(" AND i.id IN (" + string.Join(",", chunk.Select(
                 (_, i) => "$p" + i)) + ")", chunk, null, chunk.Length, chunk.Length);
         }
-        // Only unselected context markers are capped to avoid an unbounded
-        // global inventory. Never use that limit to exclude a selected photo.
+        // A bulk selection wants the selected photos, not an additional
+        // 5,000 unrelated context images and their expensive catalog lookup.
+        // For an empty/single selection preserve folder context semantics.
+        if (ids.Length > 1) return result;
         var selectedWithGps = result.Count;
         if (folderId is long currentFolder)
             Read(" AND i.photo_folder_id = $folder", null, currentFolder,
