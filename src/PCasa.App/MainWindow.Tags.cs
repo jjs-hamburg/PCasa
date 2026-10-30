@@ -994,8 +994,18 @@ public partial class MainWindow
     private int _tagSuggestionVersion;
     private bool _acceptingTagSuggestion;
 
+    private void TagEntryClear_Click(object sender, RoutedEventArgs e)
+    {
+        TagEntryBox.Clear();
+        TagEntryBox.Focus();
+    }
+
     private async void TagEntry_TextChanged(object sender, TextChangedEventArgs e)
     {
+        if (TagEntryClearButton is not null)
+            TagEntryClearButton.Visibility =
+                string.IsNullOrEmpty(TagEntryBox.Text)
+                    ? Visibility.Collapsed : Visibility.Visible;
         if (_acceptingTagSuggestion || TagSuggestionsPopup is null ||
             _scheduler is null || _database is null) return;
         var query = TagEntryBox.Text.Trim();

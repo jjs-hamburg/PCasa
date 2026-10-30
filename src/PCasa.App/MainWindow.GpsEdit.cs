@@ -111,8 +111,19 @@ public partial class MainWindow
         _ = SearchGpsPlacesAsync();
     }
 
+    private void GpsPlaceSearchClear_Click(object sender, RoutedEventArgs e)
+    {
+        GpsPlaceSearchBox.Clear();
+        GpsPlaceSearchBox.Focus();
+    }
+
     private void GpsPlaceSearch_TextChanged(object sender, TextChangedEventArgs e)
     {
+        // The clear icon is visual state derived from text, not search state.
+        if (GpsPlaceSearchClearButton is not null)
+            GpsPlaceSearchClearButton.Visibility =
+                string.IsNullOrEmpty(GpsPlaceSearchBox.Text)
+                    ? Visibility.Collapsed : Visibility.Visible;
         // A result belongs to the exact search text which produced it.
         // Editing the query invalidates the old list and any in-flight HTTP
         // response, so a stale hit cannot accidentally reposition the map.

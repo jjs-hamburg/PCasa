@@ -661,31 +661,12 @@
                             </Style>
                         </TextBox.Style>
                     </TextBox>
-                    <Button x:Name="ClearTagSearchButton" Width="24" Height="24"
+                    <Button x:Name="ClearTagSearchButton"
                             HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,2,0" Cursor="Hand"
+                            Margin="0,0,2,0"
+                            Style="{StaticResource PcasaSearchClearButtonStyle}"
                             ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed"
-                            Click="ClearTagSearch_Click">
-                        <Button.Template>
-                            <ControlTemplate TargetType="Button">
-                                <Border x:Name="ClearBackground" Background="Transparent" CornerRadius="3">
-                                    <ContentControl Template="{StaticResource PcasaDeleteGlyphTemplate}"
-                                                    Width="19" Height="19"
-                                                    HorizontalAlignment="Center"
-                                                    VerticalAlignment="Center"/>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="ClearBackground" Property="Background"
-                                                Value="{DynamicResource PcasaHoverBrush}"/>
-                                    </Trigger>
-                                    <Trigger Property="IsEnabled" Value="False">
-                                        <Setter Property="Opacity" Value="0.5"/>
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
-                        </Button.Template>
-                    </Button>
+                            Click="ClearTagSearch_Click"/>
                 </Grid>
                 
                     </StackPanel>
@@ -1138,9 +1119,17 @@
                                 </Grid.ColumnDefinitions>
                                 <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0"
                                          Height="27" VerticalContentAlignment="Center"
+                                         Padding="8,0,28,0"
                                          ToolTip="{loc:Tr Key='Ort, Adresse oder Sehenswürdigkeit suchen'}"
                                          KeyDown="GpsPlaceSearch_KeyDown"
                                          TextChanged="GpsPlaceSearch_TextChanged"/>
+                                <Button x:Name="GpsPlaceSearchClearButton" Grid.Column="0"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Margin="0,0,2,0"
+                                        Style="{StaticResource PcasaSearchClearButtonStyle}"
+                                        ToolTip="{loc:Tr Key='Suchfilter löschen'}"
+                                        Visibility="Collapsed"
+                                        Click="GpsPlaceSearchClear_Click"/>
                                 <Button x:Name="GpsPlaceSearchButton" Grid.Column="1"
                                         Margin="4,0,0,0" Padding="8,2"
                                         Content="{loc:Tr Key='Suchen'}"
@@ -1385,9 +1374,21 @@
                             <Button x:Name="TagAddButton" DockPanel.Dock="Right" Content="+" Width="30" Height="27"
                                     Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Tag zu ausgewählten Bildern hinzufügen'}"
                                     Click="TagAdd_Click"/>
-                            <TextBox x:Name="TagEntryBox" Margin="0,0,4,0"
-                                     VerticalContentAlignment="Center" ToolTip="{loc:Tr Key='Tag eingeben – vorhandene Tags werden vorgeschlagen'}"
-                                     TextChanged="TagEntry_TextChanged" PreviewKeyDown="TagEntry_KeyDown"/>
+                            <Grid Margin="0,0,4,0">
+                                <TextBox x:Name="TagEntryBox"
+                                         VerticalContentAlignment="Center"
+                                         Padding="8,0,28,0"
+                                         ToolTip="{loc:Tr Key='Tag eingeben – vorhandene Tags werden vorgeschlagen'}"
+                                         TextChanged="TagEntry_TextChanged"
+                                         PreviewKeyDown="TagEntry_KeyDown"/>
+                                <Button x:Name="TagEntryClearButton"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Margin="0,0,2,0"
+                                        Style="{StaticResource PcasaSearchClearButtonStyle}"
+                                        ToolTip="{loc:Tr Key='Eingabe löschen'}"
+                                        Visibility="Collapsed"
+                                        Click="TagEntryClear_Click"/>
+                            </Grid>
                             </DockPanel>
                             <Popup x:Name="TagSuggestionsPopup"
                                    PlacementTarget="{Binding ElementName=TagEntryBox}"

@@ -456,6 +456,16 @@ internal static class TagFlow
                 "Switching back to matching results failed.");
             Console.WriteLine("PASS: Filter results invert independently within exact folder scope.");
 
+            // The global filter has an inline circled red X only when
+            // nonempty. Clearing through it retains NOT/filter semantics.
+            var globalClear = (Button?)window.FindName("ClearTagSearchButton")
+                ?? throw new Exception("Global search clear X missing.");
+            if (globalClear.Visibility != Visibility.Visible)
+                throw new Exception("Global search X not visible for entered text.");
+            if (!ReferenceEquals(globalClear.Style,
+                    window.FindResource("PcasaSearchClearButtonStyle")))
+                throw new Exception("Global clear X diverges from shared PCasa style.");
+
             // NOT is an independent persistent state; clearing the query
             // must not silently reset a selected inversion toggle.
             invertFilter.IsChecked = true;
@@ -634,6 +644,7 @@ internal static class TagFlow
             {
                 "GpsPlaceSearchBox", "GpsPlaceSearchButton", "GpsPlaceResults",
                 "GpsPlaceResultsPopup", "GpsEditPanel", "GpsEditorToggle",
+                "GpsPlaceSearchClearButton",
                 "GpsPickPositionToggle", "GpsApplyMissingButton",
                 "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
                 "GpsShowAreaButton", "GpsClearAreaButton"
@@ -716,7 +727,29 @@ internal static class TagFlow
             searchBox.Text = "different query";
             if (resultPopup.IsOpen || resultList.ItemsSource is not null)
                 throw new Exception("GPS search retained stale results after query changed.");
+            var gpsClear = (Button?)window.FindName("GpsPlaceSearchClearButton")
+                ?? throw new Exception("GPS search clear X missing.");
+            if (gpsClear.Visibility != Visibility.Visible)
+                throw new Exception("GPS clear X not shown for entered place text.");
+            gpsClear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, gpsClear));
+            if (searchBox.Text.Length != 0 || gpsClear.Visibility != Visibility.Collapsed ||
+                resultPopup.IsOpen || resultList.ItemsSource is not null)
+                throw new Exception("GPS clear X failed to clear query and stale search results.");
+            Console.WriteLine("PASS: GPS clear X only appears for text; place results reset after clearing.");
             Console.WriteLine("PASS: Theme-aware GPS result popup uses click/Enter confirmation and no reserved row.");
+
+            var tagEntry = (TextBox?)window.FindName("TagEntryBox")
+                ?? throw new Exception("Tag entry missing.");
+            var tagEntryClear = (Button?)window.FindName("TagEntryClearButton")
+                ?? throw new Exception("Tag entry clear X missing.");
+            tagEntry.Text = "test draft";
+            if (tagEntryClear.Visibility != Visibility.Visible)
+                throw new Exception("Tag entry clear X not visible while typing.");
+            tagEntryClear.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagEntryClear));
+            if (tagEntry.Text.Length != 0 ||
+                tagEntryClear.Visibility != Visibility.Collapsed)
+                throw new Exception("Tag entry clear X did not clear only the editor.");
+            Console.WriteLine("PASS: Tag entry uses the shared clear-X style.");
 
             // Switching gallery photos must never reuse the search text,
             // pending target coordinate or marker from another photo. A

@@ -51,6 +51,38 @@
             </Viewbox>
         </ControlTemplate>
 
+        <!-- Search/entry clear affordance: same Picasa delete glyph everywhere.
+             The owning text field decides whether the button is visible. -->
+        <Style x:Key="PcasaSearchClearButtonStyle" TargetType="{x:Type Button}">
+            <Setter Property="Width" Value="24"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="ClearBackground" Background="Transparent" CornerRadius="3">
+                            <ContentControl Template="{StaticResource PcasaDeleteGlyphTemplate}"
+                                            Width="19" Height="19"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ClearBackground"
+                                        Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <!-- Controls shared by the main window, detached popups and modeless dialogs. -->
         <Style TargetType="TextBox">
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
