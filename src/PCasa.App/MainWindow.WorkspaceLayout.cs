@@ -43,8 +43,15 @@ public partial class MainWindow
     {
         if (!_workspaceLayoutReady) return;
         QueueGalleryAnchorRestore();
+        // Retain the visible image's normalized center BEFORE its available
+        // width changes. Fit and manual zoom remain independent user states.
+        if (_viewerOpen && _viewerFullscreenWindow is null)
+            _viewerPendingImageCenter ??= CaptureViewerCenter();
         ApplyWorkspaceLayout();
         RestoreAnchorAfterSidebarLayout();
+        // The gallery anchor belongs to the thumbnail view; the open viewer
+        // must refit to the newly measured image viewport separately.
+        ScheduleViewerViewportRelayout();
     }
 
     // The normal sidebar fixes the width and absolute right-edge location
@@ -200,7 +207,10 @@ public partial class MainWindow
 
     private void WorkspaceSplitter_DragStarted(object sender, DragStartedEventArgs e)
     {
-        if (_workspaceLayoutReady) QueueGalleryAnchorRestore();
+        if (!_workspaceLayoutReady) return;
+        QueueGalleryAnchorRestore();
+        if (_viewerOpen && _viewerFullscreenWindow is null)
+            _viewerPendingImageCenter ??= CaptureViewerCenter();
     }
 
     private void WorkspaceSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
@@ -226,5 +236,6 @@ public partial class MainWindow
             SaveAppearance();
         }
         RestoreAnchorAfterSidebarLayout();
+        ScheduleViewerViewportRelayout();
     }
 }
