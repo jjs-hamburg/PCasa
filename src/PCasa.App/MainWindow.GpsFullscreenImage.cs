@@ -15,23 +15,18 @@ public partial class MainWindow
     {
         if (_sidebarMode != "GPS") return;
         var item = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
-        if (item is null) return;
+        var sameViewerPhoto = _viewerOpen && _viewerSequence is not null &&
+            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count &&
+            _viewerSequence.At(_viewerCurrentIndex).ImageId == imageId;
+        if (item is null && !sameViewerPhoto) return;
 
-        // A full-map overlay cannot show a photo in the gallery. Return to
-        // the previously agreed two-pane photo/map workspace first. Opening
-        // a photo must NEVER cover the geographic context.
-        if (_gpsFullscreen)
-        {
-            _gpsFullscreen = false;
-            _gpsExpanded = true;
-            _appearance.GpsExpanded = true;
-            UpdateWorkspaceLayoutPreservingGallery();
-        }
+        // Do not change GPS fullscreen/expanded mode: an open viewer photo
+        // floats ABOVE the full map; the gallery and map keep their state.
 
         CancelGpsFullscreenImageRead();
         var version = _gpsFullscreenImageRequest;
         GpsFullscreenImageOverlay.Tag = imageId;
-        GpsFullscreenImageCaption.Text = item.Name;
+        GpsFullscreenImageCaption.Text = item?.Name ?? _viewerImageInfo?.FileName ?? string.Empty;
         GpsFullscreenImage.Source = null;
         GpsFullscreenImageStatus.Text = UiLanguage.T("Bild wird geladen");
         GpsFullscreenImageStatus.Visibility = Visibility.Visible;
@@ -40,6 +35,8 @@ public partial class MainWindow
         // gallery. No uncatalogued disk access occurs on the WPF UI thread.
         var strip = _gpsFilmstripEntries.FirstOrDefault(p => p.Id == imageId);
         BitmapSource? preview = strip?.Bitmap;
+        if (preview is null && sameViewerPhoto)
+            preview = PhotoViewerImage.Source as BitmapSource;
         if (preview is null && _browsePageCache is not null)
         {
             for (var i = 0; i < _browseIndex.Count; i++)
@@ -58,10 +55,12 @@ public partial class MainWindow
         GpsFullscreenImageOverlay.Visibility = Visibility.Visible;
         var cancellation = new CancellationTokenSource();
         _gpsFullscreenImageCancellation = cancellation;
+        var width = GpsFullscreenImageFrame.ActualWidth > 0
+            ? GpsFullscreenImageFrame.ActualWidth : GpsFullscreenImageOverlay.ActualWidth;
+        var height = GpsFullscreenImageFrame.ActualHeight > 0
+            ? GpsFullscreenImageFrame.ActualHeight : GpsFullscreenImageOverlay.ActualHeight;
         var size = Math.Clamp((int)Math.Ceiling(
-            Math.Max(GpsFullscreenImageOverlay.ActualWidth,
-                GpsFullscreenImageOverlay.ActualHeight) * 1.5),
-            800, 4096);
+            Math.Max(width, height) * 1.5), 800, 4096);
         _ = LoadGpsFullscreenImageAsync(imageId, size, version, cancellation.Token);
     }
 
