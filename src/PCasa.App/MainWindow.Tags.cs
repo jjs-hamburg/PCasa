@@ -531,7 +531,7 @@ public partial class MainWindow
                 StringComparer.OrdinalIgnoreCase);
             var confirmed = 0;
             _scheduler.ReportProgress(key, "Tags in Originaldateien schreiben",
-                0, images.Count);
+                0, images.Length);
             foreach (var (imageId, originalPath) in images)
             {
                 token.ThrowIfCancellationRequested();
@@ -586,7 +586,7 @@ public partial class MainWindow
                 if (repo.PendingEditsForImage(imageId).Count == 0)
                     confirmed++;
                 _scheduler.ReportProgress(key, "Tags wiederherstellen",
-                    confirmed, images.Count);
+                    confirmed, images.Length);
                 if (!Dispatcher.HasShutdownStarted)
                     _ = Dispatcher.BeginInvoke(new Action(() =>
                         _ = RefreshPendingTagDotsAsync()));
@@ -600,7 +600,7 @@ public partial class MainWindow
             {
                 _scheduler.ReportProgress(key,
                     "Tag-Schreibfehler – Aufträge bleiben vorgemerkt",
-                    confirmed, images.Count);
+                    confirmed, images.Length);
                 throw new DurablePackageRetryException(
                     "Tag-Schreibaufträge weiterhin offen (" +
                     failures.Count + " Fehler). " +
