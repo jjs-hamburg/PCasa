@@ -689,16 +689,12 @@ public partial class MainWindow
         catch (DurablePackageRetryException ex)
         {
             PCasaDiagnostics.Write("Tags.RecoveredDeferred", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text =
-                    UiLanguage.T("Tag-Aufträge weiter vorgemerkt – nicht alle Originaldateien erreichbar");
+            // File-write failures are listed only under Extras > Schreibfehler.
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Tags.RecoveredWrite", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text =
-                    UiLanguage.T("Wiederhergestellter Tag-Auftrag fehlgeschlagen – offene Tags bleiben sichtbar");
+            // File-write failures are listed only under Extras > Schreibfehler.
         }
         finally
         {
@@ -783,15 +779,12 @@ public partial class MainWindow
         catch (DurablePackageRetryException ex)
         {
             PCasaDiagnostics.Write("Tags.RecoveryDeferred", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text =
-                    UiLanguage.T("Tags noch nicht in allen Originaldateien – Auftrag mit P0 für Wiederanlauf erhalten");
+            // File-write failures are listed only under Extras > Schreibfehler.
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Tags.Recovery", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text = UiLanguage.T("Tag-Wiederherstellung fehlgeschlagen – DB-Aufträge bleiben erhalten");
+            // File-write failures are listed only under Extras > Schreibfehler.
         }
         finally
         {
