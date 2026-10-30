@@ -137,7 +137,7 @@ internal static class Program
                 !englishMenu.IsChecked || germanMenu.IsChecked ||
                 !menu.Items.OfType<MenuItem>()
                     .Select(item => item.Header?.ToString())
-                    .SequenceEqual(new[] { "File", "Edit", "Folder", "Options", "Help" }))
+                    .SequenceEqual(new[] { "File", "Edit", "Folder", "Options", "Appearance", "Help" }))
                 throw new Exception("English translations were not applied live.");
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
                     ?.Content?.ToString() != "Gallery view")
