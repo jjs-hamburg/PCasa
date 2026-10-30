@@ -77,7 +77,10 @@ public partial class MainWindow
         }
 
         var selected = _selectedImageIds.ToHashSet();
-        var mapSelected = _gpsPoints.Where(p => p.Selected).ToDictionary(p => p.Id);
+        // The strip is a projection of the GALLERY SELECTION, not of EXIF GPS
+        // coverage. A selected photo must appear even when coordinates are
+        // absent, invalid or awaiting reindexing.
+        var mapNames = _gpsPoints.ToDictionary(p => p.Id, p => p.Name);
         var entries = new List<GpsFilmstripEntry>();
         var packed = new List<(GpsFilmstripEntry Item, BrowseThumbnailIndexEntry Index)>();
         // Follow the same sort/gallery projection the user sees, not database ID
@@ -86,9 +89,14 @@ public partial class MainWindow
         {
             if (entries.Count >= MaximumGpsFilmstripPhotos) break;
             var index = _browseIndex[imageIndex];
-            if (!selected.Contains(index.ImageId) || !mapSelected.TryGetValue(index.ImageId, out var point))
+            if (!selected.Contains(index.ImageId))
                 continue;
-            var item = new GpsFilmstripEntry { Id = index.ImageId, Name = point.Name };
+            var item = new GpsFilmstripEntry
+            {
+                Id = index.ImageId,
+                Name = mapNames.TryGetValue(index.ImageId, out var gpsName)
+                    ? gpsName : index.FileName
+            };
             entries.Add(item);
             if (_browsePageCache is not null)
             {
