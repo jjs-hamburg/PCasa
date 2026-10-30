@@ -56,6 +56,11 @@ public partial class MainWindow
             .Where(GpsMapProvider.IsValid).ToList();
         UpdateGpsProviderMenu();
         InitializeGpsFilmstrip();
+        // Persisted per-photo errors are discoverable even after restarting
+        // PCasa with an otherwise empty GPS editing status.
+        var previousWriteErrors = GpsFailureSummary();
+        if (previousWriteErrors.Length > 0)
+            GpsEditStatus.Text = previousWriteErrors;
         GpsMapHost.SizeChanged += (_, _) =>
         {
             if (!_gpsGoogleWebsiteActive && _gpsBrowserReady &&
