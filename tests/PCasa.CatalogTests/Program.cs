@@ -129,6 +129,7 @@ internal static class Program
         Run("Repeated folder monitor disconnect and reconnect preserves catalog", RepeatedMonitorReconnectPreservesCatalog, failures);
         Run("Faulted file watcher is rebuilt after an Error event", FaultedWatcherIsRebuilt, failures);
         Run("Individual watcher file events never scan their entire parent", WatcherFileEventsStayTargeted, failures);
+        Run("GPS bad-file attempts are durable, bounded and resolvable", GpsWriteFailuresSurviveRestart, failures);
         Run("Canceled reconciliation never commits deletions", CanceledReconciliationPreservesCatalog, failures);
         Run("Partial folder scan preserves siblings", PartialScanPreservesSibling, failures);
         Run("Nonrecursive scan preserves unseen descendants", NonrecursiveScanPreservesDescendants, failures);
@@ -3762,6 +3763,36 @@ internal static class Program
                 throw new Exception("Healthy recovered watcher was unexpectedly replaced.");
             Require(db, 1);
         }
+    }
+
+    private static void GpsWriteFailuresSurviveRestart()
+    {
+        using var sandbox = new Sandbox();
+        var (db, _, _) = sandbox.Prepare();
+        const string key = "gps:edit:synthetic-file-failure";
+        var store = new GpsWriteFailureRepository(db);
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var count = store.RecordFailure(key, 319L,
+                new IOException("Simulated original-file write failure"));
+            if (count != attempt)
+                throw new Exception("File-specific GPS failure count was not durable.");
+            if (attempt < 3 && store.Unresolved().Count != 0)
+                throw new Exception("Transient GPS write failed too early.");
+        }
+        db.Initialize();
+        var restored = new GpsWriteFailureRepository(db);
+        var issues = restored.Unresolved(key);
+        if (issues.Count != 1 || issues[0].Attempts != 3 ||
+            !issues[0].Error.Contains("Simulated original-file write failure"))
+            throw new Exception("Restart lost the GPS original-file error report.");
+        if (restored.RecordFailure(key, 320L,
+            new InvalidDataException("Other file has its own error")) != 1 ||
+            restored.Unresolved().Count != 1)
+            throw new Exception("GPS error attempts leaked between different files.");
+        restored.MarkResolved(319L);
+        if (restored.Unresolved().Count != 0)
+            throw new Exception("Verified GPS correction did not clear its error.");
     }
 
     private static void WatcherFileEventsStayTargeted()
