@@ -547,7 +547,7 @@ public partial class MainWindow
                 SyncGpsPhotoPopupToGallerySelection();
             if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible &&
                 GpsFullscreenImageOverlay.Tag is long shownId &&
-                !points.Any(point => point.Id == shownId && point.Selected))
+                !_selectedImageIds.Contains(shownId))
                 CloseGpsFullscreenImage();
             UpdateGpsFilmstrip();
         }
@@ -564,30 +564,29 @@ public partial class MainWindow
     private List<GpsPoint> ReadGpsPoints(long[] ids, long? folderId,
         CancellationToken cancellation)
     {
-        const int maximum = 5000;
+        const int maximumContext = 5000;
         var result = new List<GpsPoint>();
         var selected = ids.ToHashSet();
         var seen = new HashSet<long>();
         using var connection = _database.OpenConnection();
 
-        void Read(string where, long[]? chunk, long? folder)
+        void Read(string where, long[]? chunk, long? folder, int maximum)
         {
-            if (result.Count >= maximum) return;
+            if (maximum <= 0) return;
             using var command = connection.CreateCommand();
             command.CommandText = """
                 SELECT i.id, i.file_name, x.gps_latitude, x.gps_longitude
                 FROM images i JOIN image_exif x ON x.image_id = i.id
-                  AND x.source_modified_utc_ticks = i.modified_utc_ticks
-                  AND x.source_file_size = i.file_size
                 WHERE x.gps_latitude BETWEEN -90 AND 90
                   AND x.gps_longitude BETWEEN -180 AND 180
-                """ + where + " ORDER BY i.id LIMIT " + maximum;
+                """ + where + " ORDER BY i.id LIMIT $max";
+            command.Parameters.AddWithValue("$max", maximum);
             if (folder is long f) command.Parameters.AddWithValue("$folder", f);
             if (chunk is not null)
                 for (var i = 0; i < chunk.Length; i++)
                     command.Parameters.AddWithValue("$p" + i, chunk[i]);
             using var reader = command.ExecuteReader();
-            while (reader.Read() && result.Count < maximum)
+            while (reader.Read())
             {
                 cancellation.ThrowIfCancellationRequested();
                 var id = reader.GetInt64(0);
@@ -597,23 +596,24 @@ public partial class MainWindow
             }
         }
 
-        // Selected pictures are always fetched first: if they lie outside the
-        // current folder or at the end of a large catalog, the 5000-marker
-        // limit can never hide them behind background markers.
+        // ALL selected geo-tagged photos must be sent to the map, regardless
+        // of total selection size (including folders with >5,000 originals).
+        // This is the catalog's stored GPS projection; a tag/GPS write can
+        // temporarily change source size without changing existing coordinates.
         foreach (var chunk in ids.Distinct().Chunk(350))
         {
             cancellation.ThrowIfCancellationRequested();
             Read(" AND i.id IN (" + string.Join(",", chunk.Select(
-                (_, i) => "$p" + i)) + ")", chunk, null);
-            if (result.Count >= maximum) return result;
+                (_, i) => "$p" + i)) + ")", chunk, null, chunk.Length);
         }
-        // The current folder remains visible as surrounding context even
-        // when the selection changes. This is one consistent SQLite read,
-        // with the same scheduler-owned CatalogRead lifecycle.
+        // Only unselected context markers are capped to avoid an unbounded
+        // global inventory. Never use that limit to exclude a selected photo.
+        var selectedWithGps = result.Count;
         if (folderId is long currentFolder)
-            Read(" AND i.photo_folder_id = $folder", null, currentFolder);
+            Read(" AND i.photo_folder_id = $folder", null, currentFolder,
+                maximumContext + selectedWithGps);
         else if (ids.Length == 0)
-            Read("", null, null);
+            Read("", null, null, maximumContext);
         return result;
     }
 
