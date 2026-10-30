@@ -355,6 +355,19 @@ public sealed class ImageTagRepository
             pending.Parameters.AddWithValue("$desired", remove ? 0 : 1);
             pending.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             pending.ExecuteNonQuery();
+            // This committed newer tag intent supersedes any previously
+            // parked failure for the image. The current pending revisions
+            // still own the actual original-file write.
+            using (var clearFailure = db.CreateCommand())
+            {
+                clearFailure.Transaction = tx;
+                clearFailure.CommandText = """
+                    DELETE FROM original_write_failures
+                     WHERE kind='tags' AND image_id=$id;
+                    """;
+                clearFailure.Parameters.AddWithValue("$id", id);
+                clearFailure.ExecuteNonQuery();
+            }
             count++;
             if (!remove) recent.Add(tag);
             }
