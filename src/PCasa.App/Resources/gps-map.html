@@ -180,6 +180,10 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if(!transferActive||version!==transferRevision)return;
    transferActive=false;
    window.pcasaSetPoints(transferPoints);
+   // The renderer acknowledges the COMPLETE update so C# can detect a
+   // truncated/discarded transfer instead of silently retaining old pins.
+   post({type:'gps-sync',version,received:points.length,
+     selected:points.filter(p=>p.selected).length});
    transferPoints=[];
  };
  window.pcasaApplyProvider = (provider) => {
