@@ -40,16 +40,19 @@ public partial class MainWindow
                 errors.Clear(kind, imageId);
             return true;
         }
-        catch (OperationCanceledException) { throw; }
+        // Only the scheduler's OWN cancellation means yield/stop.
+        // ExifTool and EXIF readers may throw OperationCanceledException from
+        // an internal timeout/cancellation token while our scheduler token
+        // remains active. Such a broken file attempt MUST be journaled on
+        // the first occurrence, not silently retried forever.
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (DurablePackageRetryException) { throw; }
         catch (Exception ex)
         {
-            // Every non-cancellation exception from reading, ExifTool,
-            // verification, or catalog commit belongs to THIS original.
-            // Previously only five exception classes were recorded; other
-            // failures deferred the whole durable package forever without
-            // ever entering the shared Schreibfehler list. Genuine scheduler
-            // yields/cancellation stay outside the per-file attempt counter.
+            // Every failed file attempt is recorded BEFORE the scheduler
+            // defers its durable package. The review dialog includes attempts
+            // 1 and 2, while attempt 3 parks only the faulty original.
+            // Normal priority preemption/shutdown is not a failed write.
             token.ThrowIfCancellationRequested();
             // A newer GPS package supersedes the failed immutable intent.
             if (kind == OriginalWriteFailureRepository.Gps &&
