@@ -466,7 +466,7 @@ public partial class MainWindow
         if (photo is null) return;
         _gpsCurrentCoordinates = (photo.Lat, photo.Lon);
         GpsCoordinatesText.Text = UiLanguage.Format(
-            "GPS (Foto): {0:F6}°, {1:F6}°", photo.Lat, photo.Lon);
+            "{0:F6}°, {1:F6}°", photo.Lat, photo.Lon);
         GpsCopyButton.IsEnabled = true;
         UpdateGpsGoogleButton();
     }
@@ -533,7 +533,7 @@ public partial class MainWindow
                 : points.Count == 0
                     ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
                     : _gpsCurrentCoordinates is { } coordinate
-                        ? UiLanguage.Format("GPS (Foto): {0:F6}°, {1:F6}°",
+                        ? UiLanguage.Format("{0:F6}°, {1:F6}°",
                             coordinate.Lat, coordinate.Lon)
                         : UiLanguage.Format("Bilder mit GPS: {0:N0}",
                             selectedGps.Length > 0 ? selectedGps.Length : points.Count);
