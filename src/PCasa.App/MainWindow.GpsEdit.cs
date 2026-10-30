@@ -69,7 +69,7 @@ public partial class MainWindow
         GpsPlaceSearchButton.IsEnabled = true;
         _gpsDraft = null;
         GpsDraftCoordinates.Text = string.Empty;
-        GpsEditStatus.Text = GpsFailureSummary();
+        GpsEditStatus.Text = string.Empty;
         GpsApplyMissingButton.IsEnabled = false;
         GpsReplaceButton.IsEnabled = false;
         GpsPickPositionToggle.IsChecked = false;
