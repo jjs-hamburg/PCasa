@@ -82,8 +82,10 @@ internal static class Program
                 ?? throw new Exception("Sort choices missing during language test.");
             MenuItem Choice(string key) => localizedSortChoices.Single(
                 item => Equals(item.Tag, key));
-            Choice("Ascending").RaiseEvent(
-                new RoutedEventArgs(MenuItem.ClickEvent, Choice("Ascending")));
+            var sortDirectionButton = (Button?)window.FindName("GallerySortDirectionButton")
+                ?? throw new Exception("Sort direction toggle missing.");
+            if (sortDirectionButton.ToolTip?.ToString() == "Absteigend")
+                sortDirectionButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, sortDirectionButton));
             Choice("Captured").RaiseEvent(
                 new RoutedEventArgs(MenuItem.ClickEvent, Choice("Captured")));
             Flush(window);
@@ -107,7 +109,7 @@ internal static class Program
                     "Sort: Date taken, ascending" ||
                 !Equals(Choice("Captured").Header, "Date taken") ||
                 !Equals(Choice("Modified").Header, "Date modified") ||
-                !Equals(Choice("Descending").Header, "Descending"))
+                sortDirectionButton.ToolTip?.ToString() != "Ascending")
                 throw new Exception("Selected sort field, tooltip or choices did not switch to English.");
             var localeConfig = (string?)typeof(PCasa.App.MainWindow).GetField(
                 "_appearanceFile", System.Reflection.BindingFlags.NonPublic |
@@ -316,10 +318,10 @@ internal static class Program
                 ?? throw new Exception("Search toolbar sort selector is missing.");
             var sortItems = sortButton.ContextMenu?.Items.OfType<MenuItem>().ToArray()
                 ?? throw new Exception("Search toolbar sorting choices are missing.");
-            if (sortItems.Count(item => item.IsCheckable) != 8 ||
+            if (sortItems.Count(item => item.IsCheckable) != 6 ||
                 !sortItems.Any(item => Equals(item.Header, "Name")) ||
                 !sortItems.Any(item => Equals(item.Header, "Aufnahmedatum")))
-                throw new Exception("Search toolbar must offer six sort keys and two directions.");
+                throw new Exception("Sort field menu must offer six criteria only.");
             var notToggle = window.FindName("InvertFilterToggle") as ToggleButton
                 ?? throw new Exception("Search inversion toggle is missing.");
             var galleryToggle = window.FindName("GalleryViewFilterToggle") as ToggleButton
@@ -339,12 +341,16 @@ internal static class Program
                 ?? throw new Exception("WAS group not found.");
             var where = window.FindName("SearchAllScope") as RadioButton
                 ?? throw new Exception("WO group not found.");
-            var whatLabel = Descendants<TextBlock>(window).FirstOrDefault(
-                block => block.Text == "WAS?")
+            var whatLabel = window.FindName("SearchWhatCaption") as TextBlock
                 ?? throw new Exception("WAS caption missing.");
-            var whereLabel = Descendants<TextBlock>(window).FirstOrDefault(
-                block => block.Text == "WO?")
+            var whereLabel = window.FindName("SearchWhereCaption") as TextBlock
                 ?? throw new Exception("WO caption missing.");
+            var sortFrame = window.FindName("GallerySortGroupFrame") as Border
+                ?? throw new Exception("Sort frame missing.");
+            var searchFrame = window.FindName("SearchGroupFrame") as Border
+                ?? throw new Exception("Search frame missing.");
+            var direction = window.FindName("GallerySortDirectionButton") as Button
+                ?? throw new Exception("Sort arrow missing.");
 
             Rect Bounds(FrameworkElement element) =>
                 element.TransformToAncestor(window).TransformBounds(
@@ -353,9 +359,10 @@ internal static class Program
             if (Descendants<TextBlock>(sortButton).Any(block =>
                     block.Text == "⌄" || block.Text == "▼"))
                 throw new Exception("Redundant triangle remains inside Sort selector.");
-            if (window.FindName("GallerySortDirectionIcon")
-                is not System.Windows.Shapes.Path)
-                throw new Exception("LAP-style sort arrow is not rendered.");
+            if (window.FindName("GallerySortDirectionToggleIcon")
+                    is not System.Windows.Shapes.Path ||
+                window.FindName("GallerySortDirectionIcon") is not null)
+                throw new Exception("Direction arrow must be in its own toggle, not the sort field.");
 
             if (menu.Parent is not Border menuBorder ||
                 menuBorder.Parent is not Grid twoRowHeader ||
@@ -372,28 +379,42 @@ internal static class Program
                 searchScroll.Content is not StackPanel searchRow ||
                 searchRow.Orientation != Orientation.Horizontal)
                 throw new Exception("Search is not in a permanent horizontal row under menu.");
-            if (whereLabel.Parent is not StackPanel whereChoices ||
-                whereChoices.Parent is not Border whereGroup ||
-                whatLabel.Parent is not StackPanel whatChoices ||
-                whatChoices.Parent is not Border whatGroup)
-                throw new Exception("WAS and WO choices lost their existing group borders.");
-            if (Math.Abs(whereLabel.FontSize - where.FontSize) > 0.01 ||
-                Math.Abs(whatLabel.FontSize - what.FontSize) > 0.01)
-                throw new Exception("WAS/WO captions and choices no longer match.");
-
-            var expectedSearch = new UIElement[]
+            if (sortFrame.Child is not StackPanel sortGroup ||
+                searchFrame.Child is not StackPanel searchGroup ||
+                !ReferenceEquals(sortButton.Parent, sortGroup) ||
+                !ReferenceEquals(direction.Parent, sortGroup) ||
+                !ReferenceEquals(whatLabel.Parent, searchGroup) ||
+                !ReferenceEquals(whereLabel.Parent, searchGroup) ||
+                !ReferenceEquals(galleryToggle.Parent, searchGroup) ||
+                !ReferenceEquals(notToggle.Parent, searchGroup) ||
+                !ReferenceEquals(searchField.Parent, searchGroup.Children[^1]))
+                throw new Exception("Sort and complete search must have only two shared group frames.");
+            if (!searchRow.Children.Cast<UIElement>().SequenceEqual(
+                    new UIElement[] { sortFrame, searchFrame }))
+                throw new Exception("Sort and search changed their established one-row order.");
+            if (Math.Abs(sortFrame.ActualHeight - searchFrame.ActualHeight) > .5 ||
+                !Equals(sortFrame.BorderBrush, searchFrame.BorderBrush))
+                throw new Exception("Group frames differ in height or border brightness.");
+            var toolbarButtons = new FrameworkElement[]
             {
-                sortButton, whatGroup, whereGroup, galleryToggle,
-                notToggle, (UIElement)searchField.Parent
+                sortButton, direction, what, (FrameworkElement)window.FindName("SearchFileNameMode")!,
+                where, (FrameworkElement)window.FindName("SearchTreeScope")!,
+                (FrameworkElement)window.FindName("SearchCurrentScope")!,
+                galleryToggle, notToggle, searchField
             };
-            if (!searchRow.Children.Cast<UIElement>().SequenceEqual(expectedSearch))
-                throw new Exception(
-                    "Second-row order must remain Sort, WAS, WO, Galerieansicht, NOT, search.");
-            if (Math.Abs(searchField.ActualWidth - 180) > 1 ||
-                sortButton.Width != 191 ||
-                items.Any(item => Math.Abs(item.Margin.Right - 20) > .01))
-                throw new Exception("An established menu or search control was resized.");
-
+            foreach (var control in toolbarButtons)
+            {
+                if (Math.Abs(control.ActualHeight - 27) > .6 ||
+                    Math.Abs(((control as Control)?.FontSize ?? 12) - 12) > .1)
+                    throw new Exception("All toolbar controls must be 27px high at 12pt: " + control.Name);
+            }
+            if (Math.Abs(sortButton.Width - 145) > .1 ||
+                Math.Abs(searchField.ActualWidth - 180) > 1 ||
+                items.Any(item => Math.Abs(item.Margin.Right - 20) > .01) ||
+                Math.Abs(whatLabel.FontSize - 12) > .1 ||
+                Math.Abs(whereLabel.FontSize - 12) > .1)
+                throw new Exception("Search field geometry, sort width or font is incorrect.");
+            Console.WriteLine("PASS: Compact 27px controls; 12pt fonts; identical sort/search frames.");
             notToggle.IsChecked = true;
             Flush(window);
             if (searchField.TextDecorations.Count != 1 ||
@@ -432,8 +453,7 @@ internal static class Program
 
                 var row = new FrameworkElement[]
                 {
-                    sortButton, whatGroup, whereGroup, galleryToggle,
-                    notToggle, (FrameworkElement)searchField.Parent
+                    sortFrame, searchFrame
                 };
                 for (var i = 1; i < row.Length; i++)
                     if (Math.Abs(Bounds(row[i]).Top + Bounds(row[i]).Height / 2 -

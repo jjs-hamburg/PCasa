@@ -219,11 +219,27 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- Shared frame: sort and search have identical outline, fill and shadow. -->
+        <Style x:Key="PcasaToolbarGroupFrameStyle" TargetType="Border">
+            <Setter Property="Height" Value="37"/>
+            <Setter Property="Padding" Value="4,4"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaToolbarFrameBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelBrush}"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="7" ShadowDepth="2" Opacity="0.27" Color="#000000"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <!-- Search has two EXCLUSIVE groups plus one independent persistent
              inversion toggle. Checked state has both a tick and a border:
              active selection is not communicated through color alone. -->
         <Style x:Key="PcasaSearchChoiceStyle" TargetType="RadioButton">
             <Setter Property="Height" Value="27"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="MinWidth" Value="45"/>
             <Setter Property="Padding" Value="7,0"/>
             <Setter Property="Margin" Value="1,0"/>
@@ -266,6 +282,7 @@
         </Style>
         <Style x:Key="PcasaSearchInvertStyle" TargetType="{x:Type primitives:ToggleButton}">
             <Setter Property="Height" Value="27"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Padding" Value="8,0"/>
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
             <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
@@ -349,6 +366,8 @@
         <!-- Search toolbar sorting dropdown, following the same compact
              visual language as WAS/WO/Nicht without changing any sort logic. -->
         <Style x:Key="PcasaSearchSortButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="27"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
@@ -540,135 +559,90 @@
                               Focusable="False"
                               HorizontalContentAlignment="Right"
                               CanContentScroll="False"
-                              Padding="10,5,10,5">
+                              Padding="10,3,10,3">
                     <StackPanel x:Name="SearchToolbarPanel"
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
-                        <Button x:Name="GallerySortSelectorButton"
-                         Width="191" Height="27"
-                        Margin="2,0,8,0" VerticalAlignment="Center"
-                        Style="{StaticResource PcasaSearchSortButtonStyle}"
-                        ToolTip="{loc:Tr Key='Bilder innerhalb jedes Ordners sortieren'}"
-                        Click="GallerySortSelector_Click">
-                    <Button.Content>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <!-- LAP-like graded lines with flow-direction arrow; no extra triangle -->
-                            <Grid x:Name="GallerySortIconPanel" Width="29" Height="20" Margin="0,0,7,0">
-                                <Path Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                      Data="M 1,4 L 11,4 M 1,9 L 8,9 M 1,14 L 5,14"/>
-                                <Path x:Name="GallerySortDirectionIcon"
-                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                      StrokeLineJoin="Round"
-                                      Data="M 20,2 L 20,17 M 16,13 L 20,17 L 24,13"/>
-                            </Grid>
-                            <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name"
-                                       VerticalAlignment="Center" FontSize="12"/>
-                        </StackPanel>
-                    </Button.Content>
-                    <Button.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem x:Name="GallerySortNameMenu" Header="{loc:Tr Key='Name'}"
-                                      Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCapturedMenu" Header="{loc:Tr Key='Aufnahmedatum'}"
-                                      Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortCreatedMenu" Header="{loc:Tr Key='Erstellungsdatum'}"
-                                      Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortModifiedMenu" Header="{loc:Tr Key='Änderungsdatum'}"
-                                      Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortSizeMenu" Header="{loc:Tr Key='Größe'}"
-                                      Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDimensionsMenu" Header="{loc:Tr Key='Dimension'}"
-                                      Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/>
-                            <Separator/>
-                            <MenuItem x:Name="GallerySortAscendingMenu" Header="{loc:Tr Key='Aufsteigend'}"
-                                      Tag="Ascending" IsCheckable="True" Click="GallerySort_Click"/>
-                            <MenuItem x:Name="GallerySortDescendingMenu" Header="{loc:Tr Key='Absteigend'}"
-                                      Tag="Descending" IsCheckable="True" Click="GallerySort_Click"/>
-                        </ContextMenu>
-                    </Button.ContextMenu>
-                </Button>
-                
-<Border  VerticalAlignment="Center"
-                        BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
-                        CornerRadius="5" Padding="4,2" Margin="0,0,10,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{loc:Tr Key='WAS?'}" VerticalAlignment="Center" Margin="0,0,4,0"
-                                   FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
-                    <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 IsChecked="True" Checked="SearchMode_Changed"
-                                 Content="{loc:Tr Key='Tags'}" ToolTip="{loc:Tr Key='Nach Tags filtern'}"/>
-                    <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="SearchMode_Changed"
-                                 Content="{loc:Tr Key='Name'}" ToolTip="{loc:Tr Key='Nach Dateinamen filtern'}"/>
-                    </StackPanel>
-                </Border>
-                
-<Border  VerticalAlignment="Center"
-                        BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
-                        CornerRadius="5" Padding="4,2" Margin="0,0,6,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="{loc:Tr Key='WO?'}" VerticalAlignment="Center" Margin="0,0,4,0"
-                                   FontWeight="SemiBold" Foreground="{DynamicResource PcasaTextBrush}"/>
-                    <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 IsChecked="True" Checked="TagSearchScope_Changed"
-                                 Content="{loc:Tr Key='Alle'}" ToolTip="{loc:Tr Key='Alle überwachten Ordner'}"/>
-                    <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="TagSearchScope_Changed"
-                                 Content="{loc:Tr Key='Ab hier'}" ToolTip="{loc:Tr Key='Ausgewählter Ordnerbaum einschließlich Unterordner'}"/>
-                    <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope"
-                                 Style="{StaticResource PcasaSearchChoiceStyle}"
-                                 Checked="TagSearchScope_Changed"
-                                 Content="{loc:Tr Key='Ordner'}" ToolTip="{loc:Tr Key='Nur aktueller Ordner ohne Unterordner'}"/>
-                    </StackPanel>
-                </Border>
-<primitives:ToggleButton x:Name="GalleryViewFilterToggle"
-                                          Margin="3,0,3,0"
-                                         VerticalAlignment="Center"
-                                         Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="{loc:Tr Key='Galerieansicht'}"
-                                         ToolTip="{loc:Tr Key='Suche auf die in der Galerie sichtbaren Ordner beschränken'}"
-                                         Checked="GalleryViewFilter_Changed"
-                                         Unchecked="GalleryViewFilter_Changed"/>
-                
-<primitives:ToggleButton x:Name="InvertFilterToggle"
-                                          Margin="3,0,8,0"
-                                         VerticalAlignment="Center"
-                                         Style="{StaticResource PcasaSearchInvertStyle}"
-                                         Content="{loc:Tr Key='NOT'}"
-                                         ToolTip="{loc:Tr Key='Treffer im gewählten Suchbereich umkehren'}"
-                                         Checked="FilterResultsInversion_Changed"
-                                         Unchecked="FilterResultsInversion_Changed"/>
-                
-<Grid  Width="180" Height="27"
-                      Margin="4,0,10,0" VerticalAlignment="Center">
-                    <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center"
-                             Padding="8,0,27,0" ToolTip="{loc:Tr Key='Tags oder Dateinamen suchen'}"
-                             TextChanged="TagSearchBox_TextChanged">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsChecked, ElementName=InvertFilterToggle}" Value="True">
-                                        <Setter Property="TextDecorations" Value="Strikethrough"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
-                    <Button x:Name="ClearTagSearchButton"
-                            HorizontalAlignment="Right" VerticalAlignment="Center"
-                            Margin="0,0,2,0"
-                            Style="{StaticResource PcasaSearchClearButtonStyle}"
-                            ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed"
-                            Click="ClearTagSearch_Click"/>
-                </Grid>
-                
+<Border x:Name="GallerySortGroupFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="2,0,8,0">
+ <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+  <Button x:Name="GallerySortSelectorButton" Width="145" Height="27" Margin="0,0,5,0"
+    Style="{StaticResource PcasaSearchSortButtonStyle}"
+    ToolTip="{loc:Tr Key='Bilder innerhalb jedes Ordners sortieren'}" Click="GallerySortSelector_Click">
+   <Button.Content><StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+    <Grid x:Name="GallerySortIconPanel" Width="21" Height="20" Margin="0,0,6,0">
+     <Path Data="M 2,4 L 17,4 M 2,10 L 12,10 M 2,16 L 7,16"
+       Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8"
+       StrokeStartLineCap="Square" StrokeEndLineCap="Square"/>
+    </Grid>
+    <TextBlock x:Name="GallerySortSelectedFieldLabel" Text="Name" FontSize="12" VerticalAlignment="Center"/>
+   </StackPanel></Button.Content>
+   <Button.ContextMenu><ContextMenu><MenuItem x:Name="GallerySortNameMenu" Header="{loc:Tr Key='Name'}" Tag="Name" IsCheckable="True" Click="GallerySort_Click"/>
+<MenuItem x:Name="GallerySortCapturedMenu" Header="{loc:Tr Key='Aufnahmedatum'}" Tag="Captured" IsCheckable="True" Click="GallerySort_Click"/>
+<MenuItem x:Name="GallerySortCreatedMenu" Header="{loc:Tr Key='Erstellungsdatum'}" Tag="Created" IsCheckable="True" Click="GallerySort_Click"/>
+<MenuItem x:Name="GallerySortModifiedMenu" Header="{loc:Tr Key='Änderungsdatum'}" Tag="Modified" IsCheckable="True" Click="GallerySort_Click"/>
+<MenuItem x:Name="GallerySortSizeMenu" Header="{loc:Tr Key='Größe'}" Tag="Size" IsCheckable="True" Click="GallerySort_Click"/>
+<MenuItem x:Name="GallerySortDimensionsMenu" Header="{loc:Tr Key='Dimension'}" Tag="Dimensions" IsCheckable="True" Click="GallerySort_Click"/></ContextMenu></Button.ContextMenu>
+  </Button>
+  <Button x:Name="GallerySortDirectionButton" Width="31" Height="27" FontSize="12" Padding="0"
+    Style="{StaticResource PcasaSearchSortButtonStyle}"
+    ToolTip="{loc:Tr Key='Sortierrichtung umschalten'}" Click="GallerySortDirection_Click">
+   <Viewbox Width="17" Height="20" Stretch="Uniform">
+    <Canvas Width="24" Height="24"><Path x:Name="GallerySortDirectionToggleIcon"
+     Data="M 12,2 L 12,20 M 6,14 L 12,20 L 18,14"
+     Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.1"
+     StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas>
+   </Viewbox>
+  </Button>
+ </StackPanel>
+</Border>
+<Border x:Name="SearchGroupFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="0,0,2,0">
+ <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+  <TextBlock x:Name="SearchWhatCaption" Text="{loc:Tr Key='WAS?'}" FontSize="12"
+             Margin="2,0,5,0" VerticalAlignment="Center" Foreground="{DynamicResource PcasaTextBrush}"/>
+  <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode" Style="{StaticResource PcasaSearchChoiceStyle}"
+    IsChecked="True" Checked="SearchMode_Changed" Content="{loc:Tr Key='Tags'}"
+    ToolTip="{loc:Tr Key='Nach Tags filtern'}"/>
+  <RadioButton x:Name="SearchFileNameMode" GroupName="SearchMode" Style="{StaticResource PcasaSearchChoiceStyle}"
+    Checked="SearchMode_Changed" Content="{loc:Tr Key='Name'}"
+    ToolTip="{loc:Tr Key='Nach Dateinamen filtern'}"/>
+  <TextBlock x:Name="SearchWhereCaption" Text="{loc:Tr Key='WO?'}" FontSize="12"
+             Margin="12,0,5,0" VerticalAlignment="Center" Foreground="{DynamicResource PcasaTextBrush}"/>
+  <RadioButton x:Name="SearchAllScope" GroupName="TagSearchScope" Style="{StaticResource PcasaSearchChoiceStyle}"
+    IsChecked="True" Checked="TagSearchScope_Changed" Content="{loc:Tr Key='Alle'}"
+    ToolTip="{loc:Tr Key='Alle überwachten Ordner'}"/>
+  <RadioButton x:Name="SearchTreeScope" GroupName="TagSearchScope" Style="{StaticResource PcasaSearchChoiceStyle}"
+    Checked="TagSearchScope_Changed" Content="{loc:Tr Key='Ab hier'}"
+    ToolTip="{loc:Tr Key='Ausgewählter Ordnerbaum einschließlich Unterordner'}"/>
+  <RadioButton x:Name="SearchCurrentScope" GroupName="TagSearchScope" Style="{StaticResource PcasaSearchChoiceStyle}"
+    Checked="TagSearchScope_Changed" Content="{loc:Tr Key='Ordner'}"
+    ToolTip="{loc:Tr Key='Nur aktueller Ordner ohne Unterordner'}"/>
+  <primitives:ToggleButton x:Name="GalleryViewFilterToggle" Margin="9,0,3,0"
+    Style="{StaticResource PcasaSearchInvertStyle}" Content="{loc:Tr Key='Galerieansicht'}"
+    ToolTip="{loc:Tr Key='Suche auf die in der Galerie sichtbaren Ordner beschränken'}"
+    Checked="GalleryViewFilter_Changed" Unchecked="GalleryViewFilter_Changed"/>
+  <primitives:ToggleButton x:Name="InvertFilterToggle" Margin="3,0,8,0"
+    Style="{StaticResource PcasaSearchInvertStyle}" Content="{loc:Tr Key='NOT'}"
+    ToolTip="{loc:Tr Key='Treffer im gewählten Suchbereich umkehren'}"
+    Checked="FilterResultsInversion_Changed" Unchecked="FilterResultsInversion_Changed"/>
+  <Grid Width="180" Height="27" Margin="1,0,0,0" VerticalAlignment="Center">
+   <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center" FontSize="12"
+            Padding="29,0,27,0" ToolTip="{loc:Tr Key='Tags oder Dateinamen suchen'}"
+            TextChanged="TagSearchBox_TextChanged">
+    <TextBox.Style><Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+     <Style.Triggers><DataTrigger Binding="{Binding IsChecked, ElementName=InvertFilterToggle}" Value="True">
+      <Setter Property="TextDecorations" Value="Strikethrough"/>
+     </DataTrigger></Style.Triggers>
+    </Style></TextBox.Style>
+   </TextBox>
+   <ContentControl Template="{StaticResource PcasaSearchMagnifierTemplate}" Width="17" Height="17"
+    Margin="7,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False"/>
+   <Button x:Name="ClearTagSearchButton" HorizontalAlignment="Right" VerticalAlignment="Center"
+      Margin="0,0,2,0" Style="{StaticResource PcasaSearchClearButtonStyle}"
+      ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed" Click="ClearTagSearch_Click"/>
+  </Grid>
+ </StackPanel>
+</Border>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -1052,8 +1026,11 @@
  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
  <Grid Grid.Row="0" Margin="0,0,0,4">
   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-  <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0" Height="27" VerticalContentAlignment="Center" Padding="8,0,28,0"
+  <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0" Height="27" VerticalContentAlignment="Center" Padding="29,0,28,0"
     ToolTip="{loc:Tr Key='Ort, Adresse oder Sehenswürdigkeit suchen'}" KeyDown="GpsPlaceSearch_KeyDown" TextChanged="GpsPlaceSearch_TextChanged"/>
+  <ContentControl Grid.Column="0" Template="{StaticResource PcasaSearchMagnifierTemplate}"
+                 Width="17" Height="17" Margin="7,0,0,0" HorizontalAlignment="Left"
+                 VerticalAlignment="Center" IsHitTestVisible="False"/>
   <Button x:Name="GpsPlaceSearchClearButton" Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,2,0" Style="{StaticResource PcasaSearchClearButtonStyle}" ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed" Click="GpsPlaceSearchClear_Click"/>
   <Button x:Name="GpsPlaceSearchButton" Grid.Column="1" Margin="4,0,0,0" Padding="8,2" Content="{loc:Tr Key='Suchen'}" Click="GpsPlaceSearch_Click"/>
   <Popup x:Name="GpsPlaceResultsPopup" Grid.Column="0"
@@ -1254,10 +1231,11 @@
                             <Grid Margin="0,0,4,0">
                                 <TextBox x:Name="TagEntryBox"
                                          VerticalContentAlignment="Center"
-                                         Padding="8,0,28,0"
+                                         Padding="29,0,28,0"
                                          ToolTip="{loc:Tr Key='Tag eingeben – vorhandene Tags werden vorgeschlagen'}"
                                          TextChanged="TagEntry_TextChanged"
                                          PreviewKeyDown="TagEntry_KeyDown"/>
+                                <ContentControl Template="{StaticResource PcasaSearchMagnifierTemplate}" Width="17" Height="17" Margin="7,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False"/>
                                 <Button x:Name="TagEntryClearButton"
                                         HorizontalAlignment="Right" VerticalAlignment="Center"
                                         Margin="0,0,2,0"

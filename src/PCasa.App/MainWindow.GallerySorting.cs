@@ -35,15 +35,13 @@ public partial class MainWindow
         GallerySortModifiedMenu.IsChecked = option.Field == GallerySortField.Modified;
         GallerySortSizeMenu.IsChecked = option.Field == GallerySortField.Size;
         GallerySortDimensionsMenu.IsChecked = option.Field == GallerySortField.Dimensions;
-        GallerySortAscendingMenu.IsChecked = !option.Descending;
-        GallerySortDescendingMenu.IsChecked = option.Descending;
-        // LAP-like bars with the user-approved direction:
-        // ASCENDING grows as you go DOWN the list (↓);
-        // DESCENDING shrinks as you go DOWN the list (↑).
-        // Only the icon's geometry changes, never the sort semantics.
-        GallerySortDirectionIcon.Data = Geometry.Parse(option.Descending
-            ? "M 20,17 L 20,2 M 16,6 L 20,2 L 24,6"
-            : "M 20,2 L 20,17 M 16,13 L 20,17 L 24,13");
+        // The three horizontal bars indicate the selected SORT CRITERION.
+        // Sort DIRECTION is owned exclusively by the independent toggle.
+        GallerySortDirectionToggleIcon.Data = Geometry.Parse(option.Descending
+            ? "M 12,20 L 12,2 M 6,8 L 12,2 L 18,8"
+            : "M 12,2 L 12,20 M 6,14 L 12,20 L 18,14");
+        GallerySortDirectionButton.ToolTip = UiLanguage.T(option.Descending
+            ? "Absteigend" : "Aufsteigend");
         // Sort field names are runtime values, not fixed XAML strings.
         // Use the ONE translation service for the selected label and tooltip.
         GallerySortSelectedFieldLabel.Text = UiLanguage.T(option.Field switch
@@ -74,14 +72,21 @@ public partial class MainWindow
     {
         if (sender is not MenuItem { Tag: string key }) return;
         var current = CurrentGallerySort;
-        var next = key switch
-        {
-            "Ascending" => current with { Descending = false },
-            "Descending" => current with { Descending = true },
-            _ when Enum.TryParse<GallerySortField>(key, out var field) &&
-                   Enum.IsDefined(field) => current with { Field = field },
-            _ => current
-        };
+        var next = Enum.TryParse<GallerySortField>(key, out var field) &&
+                   Enum.IsDefined(field)
+            ? current with { Field = field } : current;
+        await SetGallerySortAsync(next);
+    }
+
+    private async void GallerySortDirection_Click(object sender, RoutedEventArgs e)
+    {
+        var current = CurrentGallerySort;
+        await SetGallerySortAsync(current with { Descending = !current.Descending });
+    }
+
+    private async Task SetGallerySortAsync(GallerySortOptions next)
+    {
+        var current = CurrentGallerySort;
         _appearance.GallerySortBy = next.Field.ToString();
         _appearance.GallerySortDescending = next.Descending;
         SyncGallerySortMenu();

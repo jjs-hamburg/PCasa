@@ -141,22 +141,21 @@ internal static class TagFlow
             MenuItem SortItem(string key) =>
                 sortItems.Single(item => Equals(item.Tag, key));
             var sortName = SortItem("Name");
-            var sortAscending = SortItem("Ascending");
-            var sortDescending = SortItem("Descending");
+            var sortDirectionButton = (Button?)window.FindName("GallerySortDirectionButton")
+                ?? throw new Exception("Independent direction button missing.");
             var sortDirection = (System.Windows.Shapes.Path?)window.FindName(
-                "GallerySortDirectionIcon")
-                ?? throw new Exception("LAP-style sort direction icon not found.");
+                "GallerySortDirectionToggleIcon")
+                ?? throw new Exception("Separate direction arrow not found.");
             var downArrow = Geometry.Parse(
-                "M 20,2 L 20,17 M 16,13 L 20,17 L 24,13").ToString();
+                "M 12,2 L 12,20 M 6,14 L 12,20 L 18,14").ToString();
             var upArrow = Geometry.Parse(
-                "M 20,17 L 20,2 M 16,6 L 20,2 L 24,6").ToString();
+                "M 12,20 L 12,2 M 6,8 L 12,2 L 18,8").ToString();
             var sortLabel = (TextBlock?)window.FindName("GallerySortSelectedFieldLabel")
-                ?? throw new Exception("Current sorting criterion not visible.");
-            if (!sortName.IsChecked || !sortAscending.IsChecked ||
-                sortDescending.IsChecked || sortDirection.Data?.ToString() != downArrow ||
+                ?? throw new Exception("Sort field label missing.");
+            if (!sortName.IsChecked ||
+                sortDirection.Data?.ToString() != downArrow ||
                 sortLabel.Text != "Name")
-                throw new Exception("PCasa did not show Name ascending in the search bar.");
-
+                throw new Exception("Default Name ascending sort not displayed.");
             var sortIndexField = typeof(PCasa.App.MainWindow).GetField(
                 "_displayedBrowseIndex",
                 System.Reflection.BindingFlags.NonPublic |
@@ -164,32 +163,34 @@ internal static class TagFlow
             IReadOnlyList<BrowseThumbnailIndexEntry> SortedGallery()
                 => (IReadOnlyList<BrowseThumbnailIndexEntry>)
                     sortIndexField.GetValue(window)!;
-            sortDescending.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            sortDirectionButton.RaiseEvent(
+                new RoutedEventArgs(ButtonBase.ClickEvent, sortDirectionButton));
             Until(window, () =>
             {
                 var images = SortedGallery();
                 var bImages = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
-                return sortDescending.IsChecked && sortName.IsChecked &&
+                return sortName.IsChecked &&
                     sortDirection.Data?.ToString() == upArrow && sortLabel.Text == "Name" &&
                     images.Count == 24 && bImages.Length == 12 &&
                     bImages.SequenceEqual(bImages.OrderByDescending(
                         name => name, StringComparer.OrdinalIgnoreCase)) &&
                     images.Take(12).All(image => image.PhotoFolderId == a.Id) &&
                     images.Skip(12).All(image => image.PhotoFolderId == b.Id);
-            }, "Descending Name sort changed folder order or did not sort within each folder.");
-            sortAscending.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            }, "Descending sort toggle changed folder order or failed within each folder.");
+            sortDirectionButton.RaiseEvent(
+                new RoutedEventArgs(ButtonBase.ClickEvent, sortDirectionButton));
             Until(window, () =>
             {
                 var images = SortedGallery();
                 var names = images.Where(image => image.PhotoFolderId == b.Id)
                     .Select(image => image.FileName).ToArray();
-                return sortAscending.IsChecked &&
-                    sortDirection.Data?.ToString() == downArrow && names.Length == 12 &&
+                return sortDirection.Data?.ToString() == downArrow &&
+                    names.Length == 12 &&
                     names.SequenceEqual(names.OrderBy(
                         name => name, StringComparer.OrdinalIgnoreCase));
-            }, "Ascending Name sort did not restore default order.");
-            Console.WriteLine("PASS: Sort menu defaults to Name ascending; descending preserves distinct folders.");
+            }, "Ascending direction toggle failed.");
+            Console.WriteLine("PASS: Independent direction toggle preserves folder grouping and sort order.");
 
             var monitoredRootItem = Walk(tree).FirstOrDefault(item =>
                 string.Equals(ReadPath(item), sourceRoot,

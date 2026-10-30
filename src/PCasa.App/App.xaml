@@ -51,6 +51,21 @@
             </Viewbox>
         </ControlTemplate>
 
+        <SolidColorBrush x:Key="PcasaToolbarFrameBrush" po:Freeze="False" Color="#73777B"/>
+        <!-- The same passive magnifier adornment is reused across the
+             global filter, GPS location search and tag suggestion entry. -->
+        <ControlTemplate x:Key="PcasaSearchMagnifierTemplate" TargetType="{x:Type ContentControl}">
+            <Viewbox Stretch="Uniform">
+                <Canvas Width="24" Height="24">
+                    <Ellipse Canvas.Left="3" Canvas.Top="3" Width="13" Height="13"
+                             Stroke="{DynamicResource PcasaMutedTextBrush}" StrokeThickness="2"
+                             Fill="Transparent"/>
+                    <Path Data="M 14,14 L 21,21"
+                          Stroke="{DynamicResource PcasaMutedTextBrush}" StrokeThickness="2"
+                          StrokeStartLineCap="Round"/>
+                </Canvas>
+            </Viewbox>
+        </ControlTemplate>
         <!-- Search/entry clear affordance: same Picasa delete glyph everywhere.
              The owning text field decides whether the button is visible. -->
         <Style x:Key="PcasaSearchClearButtonStyle" TargetType="{x:Type Button}">
