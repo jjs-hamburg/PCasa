@@ -570,9 +570,10 @@ public partial class MainWindow
         var seen = new HashSet<long>();
         using var connection = _database.OpenConnection();
 
-        void Read(string where, long[]? chunk, long? folder, int maximum)
+        void Read(string where, long[]? chunk, long? folder, int maximum,
+            int maximumNew)
         {
-            if (maximum <= 0) return;
+            if (maximum <= 0 || maximumNew <= 0) return;
             using var command = connection.CreateCommand();
             command.CommandText = """
                 SELECT i.id, i.file_name, x.gps_latitude, x.gps_longitude
@@ -586,13 +587,15 @@ public partial class MainWindow
                 for (var i = 0; i < chunk.Length; i++)
                     command.Parameters.AddWithValue("$p" + i, chunk[i]);
             using var reader = command.ExecuteReader();
-            while (reader.Read())
+            var added = 0;
+            while (added < maximumNew && reader.Read())
             {
                 cancellation.ThrowIfCancellationRequested();
                 var id = reader.GetInt64(0);
                 if (!seen.Add(id)) continue;
                 result.Add(new GpsPoint(id, reader.GetString(1),
                     reader.GetDouble(2), reader.GetDouble(3), selected.Contains(id)));
+                added++;
             }
         }
 
@@ -604,16 +607,16 @@ public partial class MainWindow
         {
             cancellation.ThrowIfCancellationRequested();
             Read(" AND i.id IN (" + string.Join(",", chunk.Select(
-                (_, i) => "$p" + i)) + ")", chunk, null, chunk.Length);
+                (_, i) => "$p" + i)) + ")", chunk, null, chunk.Length, chunk.Length);
         }
         // Only unselected context markers are capped to avoid an unbounded
         // global inventory. Never use that limit to exclude a selected photo.
         var selectedWithGps = result.Count;
         if (folderId is long currentFolder)
             Read(" AND i.photo_folder_id = $folder", null, currentFolder,
-                maximumContext + selectedWithGps);
+                maximumContext + selectedWithGps, maximumContext);
         else if (ids.Length == 0)
-            Read("", null, null, maximumContext);
+            Read("", null, null, maximumContext, maximumContext);
         return result;
     }
 
