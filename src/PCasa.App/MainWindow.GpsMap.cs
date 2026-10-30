@@ -508,7 +508,10 @@ public partial class MainWindow
             ClearGpsEditorDraft();
         }
         _gpsHighlightedImageId = imageId;
-        var photo = _gpsPoints.FirstOrDefault(p => p.Id == imageId && p.Selected);
+        // The map can focus a context photo outside the gallery selection.
+        // Coordinates belong to the immutable image ID, never to its visual
+        // ordinal or its Selected flag. Filmstrip focus changes no selection.
+        var photo = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
         if (photo is null)
         {
             // A filmstrip photo can have no GPS. Its focus must NEVER
