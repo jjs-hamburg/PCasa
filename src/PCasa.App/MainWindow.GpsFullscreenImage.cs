@@ -20,7 +20,7 @@ public partial class MainWindow
              (_viewerSequence is not null &&
               _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count &&
               _viewerSequence.At(_viewerCurrentIndex).ImageId == imageId));
-        if (item is null && !sameViewerPhoto) return;
+        if (item is null && !_selectedImageIds.Contains(imageId) && !sameViewerPhoto) return;
 
         // Do not change GPS fullscreen/expanded mode: an open viewer photo
         // floats ABOVE the full map; the gallery and map keep their state.
@@ -28,7 +28,9 @@ public partial class MainWindow
         CancelGpsFullscreenImageRead();
         var version = _gpsFullscreenImageRequest;
         GpsFullscreenImageOverlay.Tag = imageId;
-        GpsFullscreenImageCaption.Text = item?.Name ?? _viewerImageInfo?.FileName ?? string.Empty;
+        GpsFullscreenImageCaption.Text = item?.Name
+            ?? _gpsFilmstripEntries.FirstOrDefault(p => p.Id == imageId)?.Name
+            ?? _viewerImageInfo?.FileName ?? string.Empty;
         GpsFullscreenImage.Source = null;
         GpsFullscreenImageStatus.Text = UiLanguage.T("Bild wird geladen");
         GpsFullscreenImageStatus.Visibility = Visibility.Visible;
