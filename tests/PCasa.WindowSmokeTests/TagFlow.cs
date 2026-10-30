@@ -2869,10 +2869,14 @@ internal static class TagFlow
                                     ?? throw new Exception("Review action button missing.");
                                 button.DataContext = row;
                                 button.ApplyTemplate();
+                                System.Windows.Data.BindingOperations.GetBindingExpression(
+                                    button, Button.IsEnabledProperty)?.UpdateTarget();
                                 if (!button.IsEnabled)
                                     throw new Exception("A three-attempt error has disabled row actions.");
                                 button.DataContext = row with { Attempts = 1 };
                                 button.ApplyTemplate();
+                                System.Windows.Data.BindingOperations.GetBindingExpression(
+                                    button, Button.IsEnabledProperty)?.UpdateTarget();
                                 if (button.IsEnabled)
                                     throw new Exception("A transient failure allows premature discard.");
                             }
