@@ -45,7 +45,7 @@ public partial class MainWindow
             // This is the root availability gate, not an individual-file
             // probe loop. A disconnected share does not consume 3 attempts.
             if (!string.IsNullOrWhiteSpace(path) &&
-                ex is IOException or UnauthorizedAccessException &&
+                (ex is IOException or UnauthorizedAccessException) &&
                 !_scheduler.SourceAvailability.CheckAfterSourceError(path, token))
                 throw new DurablePackageRetryException(
                     "Original-Quelle vorübergehend offline: " +
