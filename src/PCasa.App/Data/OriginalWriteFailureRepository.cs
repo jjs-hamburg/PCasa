@@ -176,6 +176,56 @@ public sealed class OriginalWriteFailureRepository
         return result;
     }
 
+    // Read-only projection of CURRENT deferred GPS steps. Exception types
+    // outside the original writer catch path used to leave only a deferred
+    // scheduler record. Show its exact image/path under Extras -> Schreibfehler
+    // without creating a second job queue or falsely consuming attempts.
+    public IReadOnlyList<FailedFile> DeferredGpsSteps()
+    {
+        using var db = database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT p.package_key,p.payload_json,p.completed_steps,p.error,
+                   p.updated_utc
+            FROM scheduler_packages p
+            WHERE p.package_type='gps-edit-v1'
+              AND p.state='deferred' AND p.error IS NOT NULL;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var deferred = new List<(string Key, long ImageId, string Error, string When)>();
+        while (reader.Read())
+        {
+            var error = reader.GetString(3);
+            if (error.Contains("Quelle vorübergehend", StringComparison.OrdinalIgnoreCase) ||
+                error.Contains("Source not reachable", StringComparison.OrdinalIgnoreCase))
+                continue; // NAS/VPN outage is not a bad original.
+            try
+            {
+                using var json = System.Text.Json.JsonDocument.Parse(reader.GetString(1));
+                var ids = json.RootElement.GetProperty("ImageIds");
+                var cursor = reader.GetInt32(2);
+                if (cursor < 0 || cursor >= ids.GetArrayLength()) continue;
+                deferred.Add((reader.GetString(0), ids[cursor].GetInt64(),
+                    error, reader.GetString(4)));
+            }
+            catch (System.Text.Json.JsonException) { }
+            catch (InvalidOperationException) { }
+            catch (KeyNotFoundException) { }
+        }
+        reader.Close();
+        var result = new List<FailedFile>();
+        foreach (var step in deferred)
+        {
+            using var path = db.CreateCommand();
+            path.CommandText = "SELECT local_path FROM images WHERE id=$id;";
+            path.Parameters.AddWithValue("$id", step.ImageId);
+            result.Add(new FailedFile(Gps, step.Key, step.ImageId,
+                path.ExecuteScalar() as string ?? "(missing file)",
+                0, step.Error, step.When));
+        }
+        return result;
+    }
+
     // The immutable GPS intent is still owned by the existing scheduler
     // journal. No duplicate recipe is stored in the error ledger.
     public (string Type, string Payload, long Sequence)? OriginalRecipe(string packageKey)
