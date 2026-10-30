@@ -39,6 +39,7 @@ public partial class MainWindow
     private int _gpsSelectionCount;
     private string? _gpsAppliedProviderId;
     private long _gpsQueryRevision;
+    private long _gpsMapTransferRevision;
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
     private (double Lat, double Lon)? _gpsCurrentCoordinates;
 
@@ -433,12 +434,24 @@ public partial class MainWindow
 
     private void SendGpsPointsToMap()
     {
-        if (_gpsGoogleWebsiteActive || !_gpsBrowserReady || _gpsBrowser is null) return;
-        var json = JsonSerializer.Serialize(_gpsPoints.Select(p => new
+        if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
+            _gpsBrowser is not { IsDisposed: false } browser) return;
+        // CEF ExecuteScriptAsync with a single multi-megabyte script can fail
+        // without applying anything, leaving only an OLD focused marker.
+        // Transfer all selected coordinates in bounded, ordered chunks.
+        // The renderer applies them atomically after the final chunk.
+        var revision = ++_gpsMapTransferRevision;
+        browser.ExecuteScriptAsync("window.pcasaBeginPoints(" + revision + ")");
+        foreach (var chunk in _gpsPoints.Chunk(180))
         {
-            id = p.Id, name = p.Name, lat = p.Lat, lon = p.Lon, selected = p.Selected
-        }));
-        _gpsBrowser.ExecuteScriptAsync("window.pcasaSetPoints(" + json + ")");
+            var json = JsonSerializer.Serialize(chunk.Select(p => new
+            {
+                id = p.Id, name = p.Name, lat = p.Lat, lon = p.Lon, selected = p.Selected
+            }));
+            browser.ExecuteScriptAsync("window.pcasaAppendPoints(" +
+                revision + "," + json + ")");
+        }
+        browser.ExecuteScriptAsync("window.pcasaCommitPoints(" + revision + ")");
         if (_gpsHighlightedImageId is long selected)
             HighlightGpsPointOnMap(selected);
     }
@@ -528,6 +541,10 @@ public partial class MainWindow
             UpdateGpsGoogleButton();
             GpsCoordinatesText.Text = googleMultiSelection
                 ? UiLanguage.T("Mehrfachauswahl in PCasa-Fotokarte")
+                : selectedIds.Length > 1
+                    ? UiLanguage.Format("GPS: {0:N0} / {1:N0} ausgewählt · {2:N0} Positionen",
+                        selectedGps.Length, selectedIds.Length,
+                        selectedGps.Select(p => (p.Lat, p.Lon)).Distinct().Count())
                 : selectedIds.Length > 0 && selectedGps.Length == 0
                     ? UiLanguage.T("Keine GPS-Koordinaten für die Auswahl")
                 : points.Count == 0
