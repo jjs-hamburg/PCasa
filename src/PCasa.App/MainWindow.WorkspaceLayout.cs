@@ -243,9 +243,15 @@ public partial class MainWindow
         UpdateWorkspaceLayoutPreservingGallery();
         // Entering fullscreen must keep the currently opened photo visible
         // above the map. The existing viewer and its zoom state stay intact.
-        if (_gpsFullscreen && _viewerOpen && _viewerSequence is not null &&
-            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count)
-            ShowGpsFullscreenImage(_viewerSequence.At(_viewerCurrentIndex).ImageId);
+        if (_gpsFullscreen && _viewerOpen)
+        {
+            long? imageId = _viewerImageInfo?.Id;
+            if (imageId is null && _viewerSequence is not null &&
+                _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count)
+                imageId = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+            if (imageId is long openedPhotoId)
+                ShowGpsFullscreenImage(openedPhotoId);
+        }
     }
 
     private void WorkspaceSplitter_DragStarted(object sender, DragStartedEventArgs e)
