@@ -89,33 +89,31 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    syncSelectedMarkers();
  }
  function syncSelectedMarkers() {
-   // Guaranteed visible regardless of style-load races, tile/label order or
-   // clustering. Capped overlay count; the vector source still covers ALL
-   // selected pictures, even for huge selections.
+   // ALL selected photos already have unclustered, clickable MapLibre circle
+   // features in pcasa-selected. A previous DOM-marker loop created only the
+   // FIRST 200 separate pins, misleadingly hiding large selections. Keep
+   // exactly one focus marker; use the vector layer for every other photo.
    const selected = points.filter(p=>p.selected);
    if (selected.length && !selected.some(p=>String(p.id)===String(highlightedId)))
      highlightedId=String(selected[0].id);
-   const keep = new Set();
-   for (const p of selected.slice(0,200)) {
-     const key = String(p.id); keep.add(key);
+   if(!selected.length) highlightedId=null;
+   const focused=selected.find(p=>String(p.id)===String(highlightedId));
+   const keep=new Set(focused?[String(focused.id)]:[]);
+   if(focused) {
+     const key=String(focused.id);
      let entry=selectedMarkers.get(key);
-     if (!entry) {
+     if(!entry) {
        const el=document.createElement('div');
-       el.className='pcasa-pin';
-       el.title=p.name||'Foto';
+       el.className='pcasa-pin pcasa-pin-target';
+       el.title=focused.name||'Foto';
+       el.style.zIndex='99';
        el.addEventListener('click',e=>{
-         e.stopPropagation();
-         post({type:'select',id:Number(key)});
+         e.stopPropagation();post({type:'select',id:Number(key)});
        });
        const marker=new maplibregl.Marker({element:el,anchor:'center'})
-         .setLngLat([p.lon,p.lat]).addTo(map);
-       entry={marker,el}; selectedMarkers.set(key,entry);
-     } else entry.marker.setLngLat([p.lon,p.lat]);
-     const highlighted = key===String(highlightedId);
-     entry.el.classList.toggle('pcasa-pin-target',highlighted);
-     // Photos may share identical GPS coordinates. The highlighted one
-     // must render above the others instead of hiding behind the last pin.
-     entry.el.style.zIndex = highlighted ? '99' : '1';
+         .setLngLat([focused.lon,focused.lat]).addTo(map);
+       entry={marker,el};selectedMarkers.set(key,entry);
+     } else entry.marker.setLngLat([focused.lon,focused.lat]);
    }
    for(const [key,entry] of selectedMarkers)
      if(!keep.has(key)){entry.marker.remove();selectedMarkers.delete(key);}
