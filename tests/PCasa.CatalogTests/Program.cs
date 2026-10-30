@@ -3823,6 +3823,13 @@ internal static class Program
             SchedulerPriority.ManualAction,SchedulerWorkKind.Catalog);
         if (!restored.HasNewerGpsIntent(original,319L))
             throw new Exception("GPS must never retry an older coordinate request.");
+        restored.RecordFailure(OriginalWriteFailureRepository.Gps,
+            current,319L,new IOException("Newer GPS write failed"),permanent:true);
+        restored.ClearIfOwned(OriginalWriteFailureRepository.Gps,319L,original);
+        if (restored.Unresolved().Count != 1 ||
+            restored.Unresolved()[0].PackageKey != current)
+            throw new Exception("Old GPS completion erased newer GPS write error.");
+
     }
 
     private static void TagWriteFailureSupersededAndDiscarded()
