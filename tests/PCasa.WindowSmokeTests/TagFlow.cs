@@ -164,7 +164,7 @@ internal static class TagFlow
                 => (IReadOnlyList<BrowseThumbnailIndexEntry>)
                     sortIndexField.GetValue(window)!;
             sortDirectionButton.RaiseEvent(
-                new RoutedEventArgs(ButtonBase.ClickEvent, sortDirectionButton));
+                new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, sortDirectionButton));
             Until(window, () =>
             {
                 var images = SortedGallery();
@@ -179,7 +179,7 @@ internal static class TagFlow
                     images.Skip(12).All(image => image.PhotoFolderId == b.Id);
             }, "Descending sort toggle changed folder order or failed within each folder.");
             sortDirectionButton.RaiseEvent(
-                new RoutedEventArgs(ButtonBase.ClickEvent, sortDirectionButton));
+                new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, sortDirectionButton));
             Until(window, () =>
             {
                 var images = SortedGallery();
