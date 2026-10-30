@@ -24,7 +24,7 @@ public partial class MainWindow
     private bool TryWriteOriginal(string kind, string packageKey, long imageId,
         string? path, CancellationToken token, Action write)
     {
-        var errors = new OriginalWriteFailureRepository(_database);
+        var errors = _originalWriteFailures;
         if (errors.IsParked(kind, imageId,
                 kind == OriginalWriteFailureRepository.Gps ? packageKey : null))
             return false;
@@ -79,7 +79,7 @@ public partial class MainWindow
 
     private void ShowWriteErrorsDialog()
     {
-        var errors = new OriginalWriteFailureRepository(_database);
+        var errors = _originalWriteFailures;
         var dialog = new Window
         {
             Owner = this,
@@ -194,7 +194,7 @@ public partial class MainWindow
 
     private async Task RetryOriginalWriteAsync(OriginalWriteFailureRepository.FailedFile issue)
     {
-        var errors = new OriginalWriteFailureRepository(_database);
+        var errors = _originalWriteFailures;
         if (issue.Kind == OriginalWriteFailureRepository.Tags)
         {
             // The latest pending_tag_edits revisions are the only intent.
@@ -230,7 +230,7 @@ public partial class MainWindow
     private async Task DiscardOriginalWriteAsync(
         OriginalWriteFailureRepository.FailedFile issue)
     {
-        var errors = new OriginalWriteFailureRepository(_database);
+        var errors = _originalWriteFailures;
         if (issue.Kind == OriginalWriteFailureRepository.Tags)
         {
             // Tag intents have already changed the DB's gallery projection.
