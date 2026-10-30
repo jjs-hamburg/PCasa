@@ -36,7 +36,7 @@ def cracks(seed, count, length, darkness=105):
         points = [(x, y)]
         for segment in range(int(local.integers(6, 15))):
             theta += float(local.normal(0, 0.22))
-            distance = float(local.uniform(5, length))
+            distance = float(local.uniform(0.5, length))
             x += int(distance * math.cos(theta))
             y += int(distance * math.sin(theta))
             points.append((x, y))
