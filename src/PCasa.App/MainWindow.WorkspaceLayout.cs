@@ -182,31 +182,20 @@ public partial class MainWindow
     // the map or replace gallery selection when GPS becomes fullscreen.
     private void UpdateGpsPhotoOverlayPlacement()
     {
-        var floating = _sidebarMode == "GPS" && _gpsFullscreen;
-        Grid.SetColumn(GpsFullscreenImageOverlay, floating ? 0 : 2);
-        Grid.SetColumnSpan(GpsFullscreenImageOverlay, floating ? 5 : 1);
-        GpsFullscreenImageOverlay.Background = floating
-            ? System.Windows.Media.Brushes.Transparent
-            : new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromArgb(245, 28, 29, 32));
-        GpsFullscreenImageFrame.HorizontalAlignment = floating
-            ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
-        GpsFullscreenImageFrame.VerticalAlignment = floating
-            ? VerticalAlignment.Center : VerticalAlignment.Stretch;
-        GpsFullscreenImageFrame.Margin = floating
-            ? new Thickness(20) : new Thickness(0);
-        if (floating)
-        {
-            GpsFullscreenImageFrame.Width = Math.Max(200,
-                Math.Min(1000, BrowseWorkspaceGrid.ActualWidth * 0.80));
-            GpsFullscreenImageFrame.Height = Math.Max(160,
-                Math.Min(730, BrowseWorkspaceGrid.ActualHeight * 0.80));
-        }
-        else
-        {
-            GpsFullscreenImageFrame.Width = double.NaN;
-            GpsFullscreenImageFrame.Height = double.NaN;
-        }
+        var fullscreen = _sidebarMode == "GPS" && _gpsFullscreen;
+        Grid.SetColumn(GpsFullscreenImageOverlay, fullscreen ? 0 : 2);
+        Grid.SetColumnSpan(GpsFullscreenImageOverlay, fullscreen ? 5 : 1);
+        // The fullscreen photo must cover the ENTIRE GPS workspace, map and
+        // filmstrip included. No inset, fixed-size black box or translucent
+        // view of the map is allowed behind the picture. The same overlay
+        // covers only the gallery column in the normal two-pane layout.
+        GpsFullscreenImageOverlay.Background = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(28, 29, 32));
+        GpsFullscreenImageFrame.HorizontalAlignment = HorizontalAlignment.Stretch;
+        GpsFullscreenImageFrame.VerticalAlignment = VerticalAlignment.Stretch;
+        GpsFullscreenImageFrame.Margin = new Thickness(0);
+        GpsFullscreenImageFrame.Width = double.NaN;
+        GpsFullscreenImageFrame.Height = double.NaN;
     }
 
     private void BrowseWorkspace_SizeChanged(object sender, SizeChangedEventArgs e)
