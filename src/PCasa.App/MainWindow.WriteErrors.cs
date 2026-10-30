@@ -128,6 +128,9 @@ public partial class MainWindow
         table.Columns.Add(new DataGridTextColumn
         { Header=UiLanguage.T("Zeitpunkt"), Binding=new Binding("LastAttemptUtc"), Width=new DataGridLength(185) });
 
+        // Declared before DataTemplate's routed handlers capture Perform().
+        Button retrySelected = null!, retryAll = null!;
+        Button discardSelected = null!, discardAll = null!;
         // Actions belong visibly to the individual failed file, not only to
         // an ambiguously enabled toolbar at the bottom of a large dialog.
         DataTemplate ActionTemplate(string caption, bool retry)
@@ -178,10 +181,10 @@ public partial class MainWindow
             buttons.Children.Add(b);
             return b;
         }
-        var retrySelected = Add("Ausgewählte erneut versuchen");
-        var retryAll = Add("Alle erneut versuchen");
-        var discardSelected = Add("Ausgewählte verwerfen");
-        var discardAll = Add("Alle verwerfen");
+        retrySelected = Add("Ausgewählte erneut versuchen");
+        retryAll = Add("Alle erneut versuchen");
+        discardSelected = Add("Ausgewählte verwerfen");
+        discardAll = Add("Alle verwerfen");
         var close = Add("Schließen");
         close.Click += (_,_) => dialog.Close();
         Grid.SetRow(buttons, 2);
