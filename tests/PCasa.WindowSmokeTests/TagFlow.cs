@@ -2867,17 +2867,16 @@ internal static class TagFlow
                             {
                                 var button = (Button?)template.CellTemplate.LoadContent()
                                     ?? throw new Exception("Review action button missing.");
-                                button.DataContext = row;
-                                button.ApplyTemplate();
-                                System.Windows.Data.BindingOperations.GetBindingExpression(
-                                    button, Button.IsEnabledProperty)?.UpdateTarget();
-                                if (!button.IsEnabled)
-                                    throw new Exception("A three-attempt error has disabled row actions.");
-                                button.DataContext = row with { Attempts = 1 };
-                                button.ApplyTemplate();
-                                System.Windows.Data.BindingOperations.GetBindingExpression(
-                                    button, Button.IsEnabledProperty)?.UpdateTarget();
-                                if (button.IsEnabled)
+                                var enabledBinding = System.Windows.Data.BindingOperations
+                                    .GetBinding(button, Button.IsEnabledProperty)
+                                    ?? throw new Exception("Review action has no attempt-limit binding.");
+                                var gate = enabledBinding.Converter
+                                    ?? throw new Exception("Review button has no activation rule.");
+                                if (gate.Convert(row.Attempts, typeof(bool), null,
+                                        System.Globalization.CultureInfo.InvariantCulture) is not true)
+                                    throw new Exception("A three-attempt error cannot be decided.");
+                                if (gate.Convert(1, typeof(bool), null,
+                                        System.Globalization.CultureInfo.InvariantCulture) is not false)
                                     throw new Exception("A transient failure allows premature discard.");
                             }
                         }
