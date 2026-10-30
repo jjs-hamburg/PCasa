@@ -1031,7 +1031,7 @@
   <Grid Grid.Column="2" Margin="5,0,0,0" ClipToBounds="True">
    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
    <TextBlock x:Name="GpsDraftCoordinates" Grid.Column="0" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-   <TextBlock x:Name="GpsEditStatus" Grid.Column="1" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource PcasaTextBrush}"/>
+   <TextBlock x:Name="GpsEditStatus" Grid.Column="1" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource PcasaTextBrush}" Cursor="Hand" ToolTip="{loc:Tr Key='GPS-Schreibfehler anzeigen'}" MouseLeftButtonUp="GpsEditStatus_MouseLeftButtonUp"/>
   </Grid>
  </Grid>
  <Grid Grid.Row="3" Height="31">
