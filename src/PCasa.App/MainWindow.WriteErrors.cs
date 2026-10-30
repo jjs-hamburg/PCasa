@@ -33,8 +33,10 @@ public partial class MainWindow
             write();
             // A tag write returning with pending newer revisions is not
             // necessarily a completed intent; do not clear its error then.
-            if (kind != OriginalWriteFailureRepository.Tags ||
-                new ImageTagRepository(_database).PendingEditsForImage(imageId).Count == 0)
+            if (kind == OriginalWriteFailureRepository.Gps)
+                errors.ClearIfOwned(kind, imageId, packageKey);
+            else if (new ImageTagRepository(_database)
+                .PendingEditsForImage(imageId).Count == 0)
                 errors.Clear(kind, imageId);
             return true;
         }
@@ -49,7 +51,7 @@ public partial class MainWindow
             if (kind == OriginalWriteFailureRepository.Gps &&
                 errors.HasNewerGpsIntent(packageKey, imageId))
             {
-                errors.Clear(kind, imageId);
+                errors.ClearIfOwned(kind, imageId, packageKey);
                 return false;
             }
             // This is the root availability gate, not an individual-file
@@ -198,18 +200,21 @@ public partial class MainWindow
     private async Task RetryOriginalWriteAsync(OriginalWriteFailureRepository.FailedFile issue)
     {
         var errors = _originalWriteFailures;
+        if (!errors.Unresolved().Any(entry => entry.Kind == issue.Kind &&
+            entry.ImageId == issue.ImageId && entry.PackageKey == issue.PackageKey))
+            return; // The row changed while the review dialog was open.
         if (issue.Kind == OriginalWriteFailureRepository.Tags)
         {
             // The latest pending_tag_edits revisions are the only intent.
             // Old retry recipes are never recreated from an obsolete tag set.
-            errors.Clear(issue.Kind, issue.ImageId);
+            errors.ClearIfOwned(issue.Kind, issue.ImageId, issue.PackageKey);
             StartPendingTagDrain();
             return;
         }
 
         if (errors.HasNewerGpsIntent(issue.PackageKey, issue.ImageId))
         {
-            errors.Clear(issue.Kind, issue.ImageId);
+            errors.ClearIfOwned(issue.Kind, issue.ImageId, issue.PackageKey);
             return; // The newer request already superseded this one.
         }
         var recipe = errors.OriginalRecipe(issue.PackageKey);
@@ -224,7 +229,7 @@ public partial class MainWindow
         var task = _scheduler.EnqueueDurablePackageAsync(
             BuildGpsEditPackage(key, payload), "gps-edit-v1", payload,
             SchedulerPriority.ManualAction);
-        errors.Clear(issue.Kind, issue.ImageId);
+        errors.ClearIfOwned(issue.Kind, issue.ImageId, issue.PackageKey);
         BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", 1);
         _ = ObserveGpsEditAsync(task, key);
         await Task.CompletedTask;
@@ -234,6 +239,9 @@ public partial class MainWindow
         OriginalWriteFailureRepository.FailedFile issue)
     {
         var errors = _originalWriteFailures;
+        if (!errors.Unresolved().Any(entry => entry.Kind == issue.Kind &&
+            entry.ImageId == issue.ImageId && entry.PackageKey == issue.PackageKey))
+            return;
         if (issue.Kind == OriginalWriteFailureRepository.Tags)
         {
             // Tag intents have already changed the DB's gallery projection.
@@ -247,6 +255,6 @@ public partial class MainWindow
                 workKind: SchedulerWorkKind.Catalog);
             _ = RefreshPendingTagDotsAsync();
         }
-        errors.Clear(issue.Kind, issue.ImageId);
+        errors.ClearIfOwned(issue.Kind, issue.ImageId, issue.PackageKey);
     }
 }
