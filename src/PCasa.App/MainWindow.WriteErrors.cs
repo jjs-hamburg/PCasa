@@ -127,6 +127,42 @@ public partial class MainWindow
         { Header=UiLanguage.T("Letzter Fehler"), Binding=new Binding("Error"), Width=new DataGridLength(2, DataGridLengthUnitType.Star) });
         table.Columns.Add(new DataGridTextColumn
         { Header=UiLanguage.T("Zeitpunkt"), Binding=new Binding("LastAttemptUtc"), Width=new DataGridLength(185) });
+
+        // Actions belong visibly to the individual failed file, not only to
+        // an ambiguously enabled toolbar at the bottom of a large dialog.
+        DataTemplate ActionTemplate(string caption, bool retry)
+        {
+            var button = new FrameworkElementFactory(typeof(Button));
+            button.SetValue(Button.ContentProperty, UiLanguage.T(caption));
+            button.SetValue(Button.PaddingProperty, new Thickness(8,3,8,3));
+            button.SetValue(Button.MarginProperty, new Thickness(3,2,3,2));
+            button.SetValue(Button.MinWidthProperty, 84d);
+            button.SetBinding(Button.IsEnabledProperty, new Binding("Attempts")
+            {
+                Converter = OriginalWriteActionEnabledConverter.Instance
+            });
+            button.AddHandler(Button.ClickEvent,
+                new RoutedEventHandler(async (sender, args) =>
+                {
+                    args.Handled = true;
+                    if (sender is Button { DataContext:
+                        OriginalWriteFailureRepository.FailedFile entry })
+                        await Perform(retry, false, [entry]);
+                }));
+            return new DataTemplate { VisualTree = button };
+        }
+        table.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = UiLanguage.T("Erneut"),
+            CellTemplate = ActionTemplate("Erneut", true),
+            Width = new DataGridLength(100)
+        });
+        table.Columns.Add(new DataGridTemplateColumn
+        {
+            Header = UiLanguage.T("Verwerfen"),
+            CellTemplate = ActionTemplate("Verwerfen", false),
+            Width = new DataGridLength(110)
+        });
         table.SetResourceReference(DataGrid.BackgroundProperty, "PcasaPanelBrush");
         table.SetResourceReference(DataGrid.ForegroundProperty, "PcasaTextBrush");
         Grid.SetRow(table, 1);
@@ -152,6 +188,18 @@ public partial class MainWindow
         root.Children.Add(buttons);
         dialog.Content = root;
 
+        void UpdateButtons()
+        {
+            var selected = table.SelectedItems
+                .Cast<OriginalWriteFailureRepository.FailedFile>()
+                .Any(entry => entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts);
+            var all = errors.Unresolved()
+                .Any(entry => entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts);
+            retrySelected.IsEnabled = discardSelected.IsEnabled = selected;
+            retryAll.IsEnabled = discardAll.IsEnabled = all;
+        }
+        table.SelectionChanged += (_,_) => UpdateButtons();
+
         void Refresh()
         {
             var list = errors.Unresolved(includeRetrying: true).ToList();
@@ -162,9 +210,7 @@ public partial class MainWindow
             table.ItemsSource = list;
             caption.Text = UiLanguage.Format("{0} Schreibfehler (GPS und Tags)", list.Count) +
                 " · " + UiLanguage.T("Bis zum dritten Versuch erfolgt die Wiederholung automatisch.");
-            retrySelected.IsEnabled = discardSelected.IsEnabled = list.Any(entry =>
-                entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts);
-            retryAll.IsEnabled = discardAll.IsEnabled = retrySelected.IsEnabled;
+            UpdateButtons();
         }
         OriginalWriteFailureRepository.FailedFile[] Selected(bool all) =>
             (all ? errors.Unresolved(includeRetrying: true)
@@ -172,9 +218,10 @@ public partial class MainWindow
             .Where(entry => entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts)
             .ToArray();
 
-        async Task Perform(bool retry, bool all)
+        async Task Perform(bool retry, bool all,
+            OriginalWriteFailureRepository.FailedFile[]? individual = null)
         {
-            var selected = Selected(all);
+            var selected = individual ?? Selected(all);
             if (selected.Length == 0) return;
             if (!retry && MessageBox.Show(dialog,
                     UiLanguage.Format("{0} ausstehende Änderungen wirklich verwerfen?", selected.Length),
@@ -210,6 +257,19 @@ public partial class MainWindow
         discardAll.Click += async (_,_) => await Perform(false,true);
         Refresh();
         dialog.ShowDialog();
+    }
+
+    private sealed class OriginalWriteActionEnabledConverter :
+        System.Windows.Data.IValueConverter
+    {
+        internal static readonly OriginalWriteActionEnabledConverter Instance = new();
+        public object Convert(object value, Type targetType, object parameter,
+            System.Globalization.CultureInfo culture)
+            => value is int attempts &&
+               attempts >= OriginalWriteFailureRepository.MaximumAttempts;
+        public object ConvertBack(object value, Type targetType, object parameter,
+            System.Globalization.CultureInfo culture)
+            => System.Windows.Data.Binding.DoNothing;
     }
 
     private async Task RetryOriginalWriteAsync(OriginalWriteFailureRepository.FailedFile issue)
