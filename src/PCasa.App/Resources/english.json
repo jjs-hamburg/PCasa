@@ -358,5 +358,9 @@
   "Zum Einfügen einen Zielordner im Ordnerbaum auswählen": "Choose a destination folder in the folder tree to paste",
   "Zum Invertieren einen Bildordner auswählen.": "Select an image folder before inverting the selection.",
   "Zur Fotokarte": "Back to photo map",
-  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images"
+  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images",
+  "{0} GPS-Schreibfehler – anklicken": "{0} GPS write errors – click to view",
+  "GPS-Schreibfehler": "GPS write errors",
+  "GPS-Schreibfehler anzeigen": "Show GPS write errors",
+  "Versuche: {0}": "Attempts: {0}"
 }
