@@ -43,6 +43,7 @@ public partial class MainWindow
         public string[] ExpandedTreePaths { get; set; } = [];
         public bool ShowThumbnailFileNames { get; set; } = true;
         public bool BoldThumbnailFileNames { get; set; }
+        public int ThumbnailFilenameFontSize { get; set; } = 10;
         public bool ShowThumbnailIcons { get; set; } = true;
         public double? WindowLeft { get; set; }
         public double? WindowTop { get; set; }
@@ -293,17 +294,8 @@ public partial class MainWindow
         catch (Exception ex) { PCasaDiagnostics.Write("Appearance.Save", ex); }
     }
 
-    private void TooltipsEnabled_Click(object sender, RoutedEventArgs e)
-    {
-        _appearance.TooltipsEnabled = TooltipsEnabledMenu.IsChecked;
-        ApplyTooltipSetting();
-        SaveAppearance();
-    }
-
     private void ApplyTooltipSetting()
     {
-        if (TooltipsEnabledMenu is null) return;
-        TooltipsEnabledMenu.IsChecked = _appearance.TooltipsEnabled;
         // One shared application-wide gate handles dynamically created folder
         // labels, context menus and independently opened WPF windows too.
         App.SetTooltipsEnabled(_appearance.TooltipsEnabled);
@@ -346,80 +338,67 @@ public partial class MainWindow
             }));
     }
 
-    private void AppearanceTheme_Click(object sender, RoutedEventArgs e)
+    private void AppearanceSettings_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not MenuItem { Tag: string mode }) return;
-        _appearance.Theme = mode;
-        ApplyAppearance();
-        SaveAppearance();
-    }
-
-    private void AppearanceBackground_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string mode }) return;
-        _appearance.Background = mode;
-        ApplyAppearance();
-        SaveAppearance();
-    }
-
-    private void GalleryTexture_Click(object sender, RoutedEventArgs e)
-    {
-        var chooser = new GalleryTexturePickerWindow(_appearance.TextureFileName)
+        // The only appearance editor stages all values until OK.
+        // This is a snapshot; dialog controls never mutate persisted state.
+        var current = new AppearanceDialogValues(
+            _appearance.Theme, _appearance.Background, _appearance.TextureFileName,
+            _appearance.FolderStatusMode, _appearance.RestoreGalleryPosition,
+            _appearance.HideCollapsedFolders, _appearance.ShowThumbnailFileNames,
+            _appearance.BoldThumbnailFileNames, _appearance.ShowThumbnailIcons,
+            _appearance.ShowThumbnailShadows == true, _appearance.TooltipsEnabled,
+            _viewerSettings.SequenceScope.ToString(),
+            _appearance.ThumbnailFilenameFontSize is 10 or 12 or 14
+                ? _appearance.ThumbnailFilenameFontSize : 10);
+        var dialog = new AppearanceSettingsWindow(current, ShowFolderStatusLegend)
         {
             Owner = this
         };
-        if (chooser.ShowDialog() == true &&
-            chooser.SelectedFileName is string filename)
-            ApplyGalleryTextureSelection(filename);
-    }
-
-    private void ApplyGalleryTextureSelection(string filename)
-    {
-        // A dialog result must reference one of the actual JPG files,
-        // not a free-form path. The same function is used for every choice.
-        if (GalleryTextureLibrary.FindFile(filename) is null) return;
-        _appearance.Background = "Texture";
-        _appearance.TextureFileName = filename;
+        if (dialog.ShowDialog() != true) return;
+        var next = dialog.Values;
+        var visibilityChanged = next.HideCollapsed != _appearance.HideCollapsedFolders;
+        var galleryLayoutChanged =
+            next.FileNames != _appearance.ShowThumbnailFileNames ||
+            next.BoldFileNames != _appearance.BoldThumbnailFileNames ||
+            next.Icons != _appearance.ShowThumbnailIcons ||
+            next.CaptionSize != _appearance.ThumbnailFilenameFontSize;
+        if (galleryLayoutChanged || visibilityChanged) QueueGalleryAnchorRestore();
+        _appearance.Theme = next.Theme;
+        _appearance.Background = next.Background;
+        _appearance.TextureFileName = next.Texture;
+        _appearance.FolderStatusMode = next.FolderStatus;
+        _appearance.RestoreGalleryPosition = next.RestorePosition;
+        _appearance.HideCollapsedFolders = next.HideCollapsed;
+        _appearance.ShowThumbnailFileNames = next.FileNames;
+        _appearance.BoldThumbnailFileNames = next.BoldFileNames;
+        _appearance.ShowThumbnailIcons = next.Icons;
+        _appearance.ShowThumbnailShadows = next.Shadows;
+        _appearance.TooltipsEnabled = next.Tooltips;
+        _appearance.ThumbnailFilenameFontSize = next.CaptionSize;
         ApplyAppearance();
-        SaveAppearance();
-    }
-
-    private void FolderStatusMode_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string mode }) return;
-        _appearance.FolderStatusMode = mode;
-        ApplyFolderStatusMode();
-        HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
-        UpdateAllFoldersButtonState();
-        SaveAppearance();
-    }
-
-    private void AppearanceThumbnailOptions_Click(object sender, RoutedEventArgs e)
-    {
-        QueueGalleryAnchorRestore();
-        _appearance.ShowThumbnailFileNames = ThumbnailFileNamesMenu.IsChecked;
-        _appearance.BoldThumbnailFileNames = ThumbnailBoldFileNamesMenu.IsChecked;
-        _appearance.ShowThumbnailIcons = ThumbnailIconsMenu.IsChecked;
-        BrowseSurface.SetThumbnailAnnotations(
-            _appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
-        BrowseSurface.SetFilenameBold(_appearance.BoldThumbnailFileNames);
-        SaveAppearance();
-        BrowseScrollViewer.UpdateLayout();
-        RestorePendingGalleryAnchor();
-    }
-
-    private void AppearanceRestorePosition_Click(object sender, RoutedEventArgs e)
-    {
-        _appearance.RestoreGalleryPosition = RestoreGalleryPositionMenu.IsChecked;
+        ApplyTooltipSetting();
+        if (visibilityChanged)
+        {
+            UpdateGalleryFolderVisibility();
+            RefreshGallerySearchAfterTreeVisibilityChange();
+        }
+        if (galleryLayoutChanged || visibilityChanged)
+        {
+            BrowseScrollViewer.UpdateLayout();
+            RestorePendingGalleryAnchor();
+            BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        }
+        if (Enum.TryParse<PhotoSequenceScope>(next.SequenceScope, out var sequence) &&
+            Enum.IsDefined(sequence))
+            ApplyPhotoSequenceScope(sequence);
         SaveAppearance();
     }
 
     private void ApplyAppearance()
     {
         var mode = _appearance.Theme;
-        ThemeLightMenu.IsChecked = mode == "Light";
-        ThemeDarkMenu.IsChecked = mode == "Dark";
-        ThemeSystemMenu.IsChecked = mode == "System";
         var useLight = mode == "Light" || (mode == "System" && IsWindowsLightTheme());
         SetColor("PcasaWindowBrush", useLight ? "#F5F5F2" : "#202122");
         SetColor("PcasaTopBrush", useLight ? "#E9E9E7" : "#1A1B1D");
@@ -438,19 +417,12 @@ public partial class MainWindow
             ? (useLight ? "Light" : "Dark") : _appearance.Background;
 
 
-        GalleryBackgroundAutoMenu.IsChecked = _appearance.Background == "Auto";
-        GalleryBackgroundDarkMenu.IsChecked = _appearance.Background == "Dark";
-        GalleryBackgroundLightMenu.IsChecked = _appearance.Background == "Light";
-        GalleryBackgroundTextureMenu.IsChecked = _appearance.Background == "Texture";
-        RestoreGalleryPositionMenu.IsChecked = _appearance.RestoreGalleryPosition;
-        HideCollapsedFoldersMenu.IsChecked = _appearance.HideCollapsedFolders;
         GalleryViewFilterToggle.IsChecked = _appearance.SearchGalleryViewOnly;
         UpdateAllFoldersButtonState();
-        ThumbnailFileNamesMenu.IsChecked = _appearance.ShowThumbnailFileNames;
-        ThumbnailBoldFileNamesMenu.IsChecked = _appearance.BoldThumbnailFileNames;
-        ThumbnailIconsMenu.IsChecked = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
         BrowseSurface.SetFilenameBold(_appearance.BoldThumbnailFileNames);
+        BrowseSurface.SetFilenameFontSize(_appearance.ThumbnailFilenameFontSize);
+        BrowseSurface.SetShadowEnabled(_appearance.ShowThumbnailShadows == true);
         ApplyFolderStatusMode();
         if (ThumbnailSizeSlider is not null)
             ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 72, 600);

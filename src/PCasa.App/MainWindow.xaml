@@ -498,51 +498,16 @@
                     <!-- The main menu always has its own row. Keep all original
                          menu commands and sorting in its search-toolbar dropdown. -->
                     <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem x:Name="TooltipsEnabledMenu" Header="{loc:Tr Key='Tooltips'}" IsCheckable="True" IsChecked="True" Click="TooltipsEnabled_Click"/>
-                        <Separator/>
                         <MenuItem Header="{loc:Tr Key='Sprache'}">
-                            <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de" IsCheckable="True" Click="AppearanceLanguage_Click"/>
-                            <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en" IsCheckable="True" Click="AppearanceLanguage_Click"/>
-                        </MenuItem>
-                        <Separator/>
-                        <MenuItem Header="{loc:Tr Key='Bildfolge (Betrachter / Slideshow)'}">
-                            <MenuItem x:Name="PhotoSequenceFolderMenu" Header="{loc:Tr Key='Aktueller Ordner'}" Tag="CurrentFolder"
-                                      IsCheckable="True" Click="PhotoSequenceMode_Click"/>
-                            <MenuItem x:Name="PhotoSequenceGalleryMenu" Header="{loc:Tr Key='Galerieansicht'}" Tag="Gallery"
-                                      IsCheckable="True" Click="PhotoSequenceMode_Click"/>
-                        </MenuItem>
-                        <Separator/>
-                        <MenuItem Header="{loc:Tr Key='Darstellung'}">
-                            <MenuItem Header="{loc:Tr Key='Design'}">
-                                <MenuItem x:Name="ThemeLightMenu" Header="{loc:Tr Key='Hell'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Light" />
-                                <MenuItem x:Name="ThemeDarkMenu" Header="{loc:Tr Key='Dunkel'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="Dark" />
-                                <MenuItem x:Name="ThemeSystemMenu" Header="{loc:Tr Key='System'}" IsCheckable="True" Click="AppearanceTheme_Click" Tag="System" />
-                            </MenuItem>
-                            <MenuItem Header="{loc:Tr Key='Galeriehintergrund'}">
-                                <MenuItem x:Name="GalleryBackgroundAutoMenu" Header="{loc:Tr Key='Standard (zum Design)'}" IsCheckable="True" Tag="Auto" Click="AppearanceBackground_Click" />
-                                <Separator />
-                                <MenuItem x:Name="GalleryBackgroundDarkMenu" Header="{loc:Tr Key='Einfarbig dunkel'}" IsCheckable="True" Tag="Dark" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundLightMenu" Header="{loc:Tr Key='Einfarbig hell'}" IsCheckable="True" Tag="Light" Click="AppearanceBackground_Click" />
-                                <MenuItem x:Name="GalleryBackgroundTextureMenu" Header="{loc:Tr Key='Textur'}" IsCheckable="True" Click="GalleryTexture_Click" />
-                            </MenuItem>
-                            <MenuItem x:Name="RestoreGalleryPositionMenu" Header="{loc:Tr Key='Galerieposition beim Start wiederherstellen'}" IsCheckable="True" Click="AppearanceRestorePosition_Click" />
-                            <Separator />
-                            <MenuItem Header="{loc:Tr Key='Ordnerstatus'}">
-                                <MenuItem x:Name="FolderStatusAlwaysMenu" Header="{loc:Tr Key='Immer anzeigen'}" IsCheckable="True" Tag="Always" Click="FolderStatusMode_Click"/>
-                                <MenuItem x:Name="FolderStatusProblemsMenu" Header="{loc:Tr Key='Nur Aktivität und Probleme'}" IsCheckable="True" Tag="Problems" Click="FolderStatusMode_Click"/>
-                                <MenuItem x:Name="FolderStatusNeverMenu" Header="{loc:Tr Key='Nie anzeigen'}" IsCheckable="True" Tag="None" Click="FolderStatusMode_Click"/>
-                            </MenuItem>
-                            <MenuItem Header="{loc:Tr Key='Eingeklappte Ordner in Galerie ausblenden'}" x:Name="HideCollapsedFoldersMenu" IsCheckable="True" Click="HideCollapsedFolders_Click" />
-                            <MenuItem Header="{loc:Tr Key='Dateinamen unter Thumbnails'}" x:Name="ThumbnailFileNamesMenu"
-                                      IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="{loc:Tr Key='Dateinamen fett'}" x:Name="ThumbnailBoldFileNamesMenu"
-                                      IsCheckable="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="{loc:Tr Key='GPS-, Tag- und RAW-Symbole'}" x:Name="ThumbnailIconsMenu"
-                                      IsCheckable="True" IsChecked="True" Click="AppearanceThumbnailOptions_Click"/>
-                            <MenuItem Header="{loc:Tr Key='Ordnerstatus-Legende'}" Click="FolderStatusLegend_Click" />
-                            <MenuItem Header="{loc:Tr Key='Thumbnail-Schatten'}" IsCheckable="True" IsChecked="False" Loaded="BrowseThumbnailShadowMenu_Loaded" Click="BrowseThumbnailShadowMenu_Click" x:Name="ThumbnailShadowMenuItem" />
+                            <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de"
+                                      IsCheckable="True" Click="AppearanceLanguage_Click"/>
+                            <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en"
+                                      IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
                     </MenuItem>
+                    <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
+                              Margin="0,0,20,0" HorizontalAlignment="Left"
+                              Click="AppearanceSettings_Click"/>
                     <MenuItem Header="{loc:Tr Key='Hilfe'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
                 </Menu>
             </Border>

@@ -327,11 +327,19 @@ internal static class TagFlow
                 ?? throw new Exception("Current-only scope missing.");
             // A collapsed subtree is a display option, never a search
             // restriction. Check global tag/filename results through WPF.
-            var skipCollapsed = (MenuItem?)window.FindName("HideCollapsedFoldersMenu")
-                ?? throw new Exception("Skip-collapsed gallery option missing.");
+            var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
+                ?? throw new Exception("Appearance dialog option missing.");
             search.Clear();
-            skipCollapsed.IsChecked = true;
-            skipCollapsed.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+            {
+                var dialog = Application.Current.Windows
+                    .OfType<PCasa.App.AppearanceSettingsWindow>().Single();
+                dialog.HideCollapsedCheck.IsChecked = true;
+                var ok = Descendants<Button>(dialog)
+                    .Single(button => Equals(button.Content, UiLanguage.T("OK")));
+                ok.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, ok));
+            }), DispatcherPriority.ContextIdle);
+            appearanceMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, appearanceMenu));
             FolderTreeNavigation.ExpandAncestors(monitoredRootItem);
             monitoredRootItem.IsExpanded = false;
             Until(window, () => surface.HiddenFolderIds.Contains(a.Id) &&

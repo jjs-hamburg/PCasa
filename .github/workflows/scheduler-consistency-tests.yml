@@ -85,6 +85,12 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:InformationalVersion=$env:GITHUB_SHA -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          python -m pip install --quiet numpy pillow
+          python tools/generate_pcasa_textures.py publish/PCasa/Texturen
+          if (-not (Test-Path "publish/PCasa/Texturen/Stein - Schiefer dunkel.jpg") -or
+              -not (Test-Path "publish/PCasa/Texturen/Stein - Nachtblau.jpg")) {
+            throw "New original textures missing from package"
+          }
           New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
@@ -98,7 +104,7 @@ jobs:
           ) | Set-Content -Path "publish/PCasa/BUILD-INFO.txt" -Encoding UTF8
           Write-Host "Build identity: commit=$env:GITHUB_SHA DLL SHA256=$dllHash"
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
-          if ($textures.Count -lt 4) { throw "JPG texture directory is incomplete" }
+          if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
       - name: Upload scheduler acceptance test package
         uses: actions/upload-artifact@v4

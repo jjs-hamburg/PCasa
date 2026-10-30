@@ -62,6 +62,44 @@ internal static class Program
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
 
+            var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
+                ?? throw new Exception("Single appearance dialog menu missing.");
+            void ConfigureAppearance(Action<PCasa.App.AppearanceSettingsWindow> configure,
+                bool accept = true)
+            {
+                Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+                {
+                    var dlg = Application.Current.Windows
+                        .OfType<PCasa.App.AppearanceSettingsWindow>().Single();
+                    configure(dlg);
+                    if (accept)
+                    {
+                        var ok = Descendants<Button>(dlg)
+                            .Single(b => Equals(b.Content, UiLanguage.T("OK")));
+                        ok.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, ok));
+                    }
+                    else dlg.Close();
+                }), DispatcherPriority.ContextIdle);
+                appearanceMenu.RaiseEvent(
+                    new RoutedEventArgs(MenuItem.ClickEvent, appearanceMenu));
+                Flush(window);
+            }
+            void ChooseAppearance(string group, string choice)
+                => ConfigureAppearance(dlg =>
+                    Descendants<RadioButton>(dlg).Single(button =>
+                        button.GroupName == "Appearance_" + group &&
+                        Equals(button.Tag, choice)).IsChecked = true);
+            ConfigureAppearance(dlg => dlg.TooltipsCheck.IsChecked = false, false);
+            // Options belongs to the main-menu level, rather than being
+            // nested under the legacy Options dropdown.
+            if (appearanceMenu.Parent is not Menu)
+                throw new Exception("Appearance is not a direct main-menu item.");
+            if (window.FindName("TooltipsEnabledMenu") is not null ||
+                window.FindName("PhotoSequenceFolderMenu") is not null ||
+                window.FindName("GalleryBackgroundTextureMenu") is not null)
+                throw new Exception("Legacy appearance menu still exposes duplicate settings.");
+            Console.WriteLine("PASS: All display settings are staged by one dialog; cancel closes without applying.");
+
             // Exercise the real menu action, live resource bindings and
             // appearance.json persistence. This must work WITHOUT restarting
             // WPF and without creating a second UI-translation mechanism.
@@ -166,18 +204,18 @@ internal static class Program
                         throw new Exception("A JPG texture has been enlarged by display scaling.");
                 }
             }
-            var applyTexture = typeof(PCasa.App.MainWindow).GetMethod(
-                "ApplyGalleryTextureSelection", System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Instance)
-                ?? throw new Exception("Texture selection path missing.");
             var chosen = System.IO.Path.GetFileName(textures[0]);
-            applyTexture.Invoke(window, [chosen]);
-            var selectedTexture = (MenuItem?)window.FindName("GalleryBackgroundTextureMenu")
-                ?? throw new Exception("Single Texture background menu missing.");
-            if (!selectedTexture.IsChecked ||
-                window.FindName("GalleryBackgroundCanvasMenu") is not null ||
-                window.FindName("GalleryBackgroundCanvasDarkMenu") is not null)
-                throw new Exception("Legacy hard-coded Leinwand choices remain visible.");
+            ConfigureAppearance(dlg =>
+            {
+                var tile = Descendants<Button>(dlg).FirstOrDefault(button =>
+                    button.Tag is string name &&
+                    string.Equals(name, chosen, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new Exception("Texture filmstrip has no JPG tile.");
+                tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tile));
+            });
+            if (window.FindName("GalleryBackgroundTextureMenu") is not null ||
+                window.FindName("GalleryBackgroundCanvasMenu") is not null)
+                throw new Exception("Legacy background submenu is still present.");
             var savedPath = typeof(PCasa.App.MainWindow).GetField(
                 "_appearanceFile", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)?.GetValue(window) as string
@@ -213,10 +251,7 @@ internal static class Program
             // Checked WAS/WO/NOT use the same theme-aware palette. In the
             // light theme they must be pale gray with dark labels; in the
             // dark theme they keep the original charcoal/white appearance.
-            var lightMenu = (MenuItem?)window.FindName("ThemeLightMenu")
-                ?? throw new Exception("Light theme menu missing.");
-            var darkMenu = (MenuItem?)window.FindName("ThemeDarkMenu")
-                ?? throw new Exception("Dark theme menu missing.");
+            ChooseAppearance("theme", "Light");
             var checkedTags = (RadioButton?)window.FindName("SearchTagsMode")
                 ?? throw new Exception("Tags filter missing.");
             var checkedAll = (RadioButton?)window.FindName("SearchAllScope")
@@ -225,7 +260,6 @@ internal static class Program
                 ?? throw new Exception("Name filter missing.");
             var notForColors = (ToggleButton?)window.FindName("InvertFilterToggle")
                 ?? throw new Exception("NOT control missing.");
-            lightMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, lightMenu));
             notForColors.IsChecked = true;
             Flush(window);
             foreach (var selected in new RadioButton[] { checkedTags, checkedAll })
@@ -246,7 +280,7 @@ internal static class Program
                 uncheckedName.Foreground is not SolidColorBrush inactiveFg ||
                 inactiveFg.Color.R > 100)
                 throw new Exception("Light NOT or inactive label has wrong contrast.");
-            darkMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, darkMenu));
+            ChooseAppearance("theme", "Dark");
             Flush(window);
             if (checkedTags.Foreground is not SolidColorBrush darkText ||
                 darkText.Color.R < 220 ||
@@ -257,16 +291,13 @@ internal static class Program
             Console.WriteLine("PASS: WAS/WO/NOT active colors match both themes and remain readable.");
 
             // Real menu action must update the one gallery renderer and persist.
-            var filenameBoldMenu = (MenuItem?)window.FindName("ThumbnailBoldFileNamesMenu")
-                ?? throw new Exception("Bold filename option missing.");
+            ConfigureAppearance(dlg => dlg.BoldFileNamesCheck.IsChecked = true);
             var gallerySurface = (BrowseGallerySurface?)window.FindName("BrowseSurface")
                 ?? throw new Exception("Gallery surface missing.");
             var boldField = typeof(BrowseGallerySurface).GetField(
                 "_boldFileNames", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)
                 ?? throw new Exception("Bold filename rendering field missing.");
-            filenameBoldMenu.IsChecked = true;
-            filenameBoldMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, filenameBoldMenu));
             if (!(bool)boldField.GetValue(gallerySurface)!)
                 throw new Exception("Bold option did not reach gallery renderer.");
             var appearancePath = typeof(PCasa.App.MainWindow).GetField(
@@ -520,17 +551,12 @@ internal static class Program
             Flush(window);
             Console.WriteLine("PASS: Options submenu uses custom placement.");
 
-            // Verify that the real theme handlers update both the WPF menu
-            // state and readable foreground/background resource brushes.
-            foreach (var name in new[] { "ThemeLightMenu", "ThemeDarkMenu",
-                         "ThemeSystemMenu" })
+            // Theme radio selection runs through the one dialog and the
+            // existing central brush-update code path.
+            foreach (var name in new[] { "Light", "Dark", "System" })
             {
-                var themeItem = window.FindName(name) as MenuItem
-                    ?? throw new Exception("Theme choice missing: " + name);
-                themeItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, themeItem));
+                ChooseAppearance("theme", name);
                 Flush(window);
-                if (!themeItem.IsChecked)
-                    throw new Exception("Theme did not become selected: " + name);
                 var foreground = (SolidColorBrush)app.Resources["PcasaTextBrush"];
                 var background = (SolidColorBrush)app.Resources["PcasaPanelBrush"];
                 var foregroundLum = foreground.Color.R + foreground.Color.G +
@@ -540,7 +566,7 @@ internal static class Program
                 if (Math.Abs(foregroundLum - backgroundLum) < 300)
                     throw new Exception("Theme foreground and panel have low contrast: " + name);
             }
-            Console.WriteLine("PASS: Light, dark and system menu/theme resources.");
+            Console.WriteLine("PASS: Light, dark and system appearance dialog/theme resources.");
 
             // Footer layout: two distinct icon-only sliders, one A/B button,
             // and the existing sidebar handlers via icon buttons.
@@ -626,29 +652,19 @@ internal static class Program
                 throw new Exception("Filtered gallery sequence added images not shown.");
             Console.WriteLine("PASS: Viewer sequences use gallery order, search, collapsed folders and cyclic limits.");
 
-            var viewerFolderMenu = (MenuItem?)window.FindName("PhotoSequenceFolderMenu")
-                ?? throw new Exception("Folder sequence menu missing.");
-            var viewerGalleryMenu = (MenuItem?)window.FindName("PhotoSequenceGalleryMenu")
-                ?? throw new Exception("Gallery sequence menu missing.");
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
             {
-                viewerFolderMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent,
-                    viewerFolderMenu));
-                if (!viewerFolderMenu.IsChecked || viewerGalleryMenu.IsChecked ||
-                    PhotoViewerSettings.Load().SequenceScope != PhotoSequenceScope.CurrentFolder)
-                    throw new Exception("Folder mode did not persist or update checked menu.");
-                viewerGalleryMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent,
-                    viewerGalleryMenu));
-                if (!viewerGalleryMenu.IsChecked || viewerFolderMenu.IsChecked ||
-                    PhotoViewerSettings.Load().SequenceScope != PhotoSequenceScope.Gallery)
-                    throw new Exception("Gallery mode did not persist or update checked menu.");
+                ChooseAppearance("sequence", "CurrentFolder");
+                if (PhotoViewerSettings.Load().SequenceScope != PhotoSequenceScope.CurrentFolder)
+                    throw new Exception("Folder sequence choice failed to persist.");
+                ChooseAppearance("sequence", "Gallery");
+                if (PhotoViewerSettings.Load().SequenceScope != PhotoSequenceScope.Gallery)
+                    throw new Exception("Gallery sequence choice failed to persist.");
             }
             finally
             {
-                var restore = savedScope == PhotoSequenceScope.CurrentFolder
-                    ? viewerFolderMenu : viewerGalleryMenu;
-                restore.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, restore));
+                ChooseAppearance("sequence", savedScope.ToString());
             }
             Console.WriteLine("PASS: One persistent image-sequence setting switches both modes.");
 

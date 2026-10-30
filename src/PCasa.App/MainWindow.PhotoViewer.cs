@@ -93,24 +93,11 @@ public partial class MainWindow
         ShowViewerImage();
     }
 
-    private void SyncPhotoSequenceMenu()
+    private void ApplyPhotoSequenceScope(PhotoSequenceScope requested)
     {
-        PhotoSequenceFolderMenu.IsChecked =
-            _viewerSettings.SequenceScope == PhotoSequenceScope.CurrentFolder;
-        PhotoSequenceGalleryMenu.IsChecked =
-            _viewerSettings.SequenceScope == PhotoSequenceScope.Gallery;
-    }
-
-    private void PhotoSequenceMode_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not MenuItem { Tag: string tag } ||
-            !Enum.TryParse<PhotoSequenceScope>(tag, out var requested) ||
-            !Enum.IsDefined(requested))
-            return;
         if (_viewerSettings.SequenceScope == requested) return;
         _viewerSettings.SequenceScope = requested;
         _viewerSettings.Save();
-        SyncPhotoSequenceMenu();
 
         if (!_viewerOpen || _viewerSequence is null) return;
         var currentImageId = _viewerSequence.At(_viewerCurrentIndex).ImageId;

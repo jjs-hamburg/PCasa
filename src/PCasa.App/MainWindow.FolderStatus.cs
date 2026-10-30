@@ -8,10 +8,10 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
-    private void FolderStatusLegend_Click(object sender, System.Windows.RoutedEventArgs e)
+    private void ShowFolderStatusLegend(System.Windows.Window owner)
     {
         System.Windows.MessageBox.Show(
-            this,
+            owner,
             UiLanguage.T("✓  Bekanntes Material vollständig verarbeitet") + "\n" +
             UiLanguage.T("↻  Aktualisierung läuft") + "\n" +
             UiLanguage.T("◷  Aktualisierung steht aus") + "\n" +
@@ -99,9 +99,6 @@ public partial class MainWindow
 
     private void ApplyFolderStatusMode()
     {
-        FolderStatusAlwaysMenu.IsChecked = _appearance.FolderStatusMode == "Always";
-        FolderStatusProblemsMenu.IsChecked = _appearance.FolderStatusMode is not ("Always" or "None");
-        FolderStatusNeverMenu.IsChecked = _appearance.FolderStatusMode == "None";
         RefreshFolderStatusVisuals();
     }
 

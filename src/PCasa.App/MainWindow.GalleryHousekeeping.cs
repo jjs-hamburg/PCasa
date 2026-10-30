@@ -123,14 +123,6 @@ public partial class MainWindow
             Math.Max(1, BrowseScrollViewer.ViewportHeight));
     }
 
-    private void HideCollapsedFolders_Click(object sender, RoutedEventArgs e)
-    {
-        _appearance.HideCollapsedFolders = HideCollapsedFoldersMenu.IsChecked;
-        SaveAppearance();
-        UpdateGalleryFolderVisibility();
-        RefreshGallerySearchAfterTreeVisibilityChange();
-    }
-
     private void FoldersTree_ExpansionChanged(object sender, RoutedEventArgs e)
     {
         if (_bulkFolderExpansion || _rebuildingFolderTree || !_folderTreeInitialized)

@@ -32,7 +32,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private int? _spacingPreviewColumns;
     private bool _previewUsesLiteralSpacing;
     private const double ShadowDepth = 2;
-    private const double FileLabelHeight = 18;
+    private double FileLabelHeight => _filenameFontSize + 8;
+    private int _filenameFontSize = 10;
     private bool _showFileNames = true;
     private bool _boldFileNames;
     private bool _showStatusIcons = true;
@@ -121,6 +122,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
             _showStatusIcons = statusIcons;
             InvalidateVisual();
         }
+    }
+
+    public void SetFilenameFontSize(int value)
+    {
+        if (value is not (10 or 12 or 14))
+            value = 10;
+        if (_filenameFontSize == value) return;
+        _filenameFontSize = value;
+        InvalidateLayout();
     }
 
     public void SetFilenameBold(bool bold)
@@ -690,7 +700,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 {
                     var caption = new FormattedText(entry.FileName,
                         CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-                        _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, 10, _mutedBrush, pixelsPerDip)
+                        _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, _filenameFontSize, _mutedBrush, pixelsPerDip)
                     {
                         // Portraits and landscapes share the full column
                         // width and the same reserved caption row.
@@ -720,7 +730,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
         if (section is null) return;
         var full = new FormattedText(entry.FileName,
             CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
-            _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, 10, _headerBrush, pixelsPerDip);
+            _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, _filenameFontSize, _headerBrush, pixelsPerDip);
         if (full.WidthIncludingTrailingWhitespace <= _thumbnailWidth)
             return; // The caption is already fully visible.
 
