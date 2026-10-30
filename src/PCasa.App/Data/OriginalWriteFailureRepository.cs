@@ -54,9 +54,15 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
             FROM gps_write_failures;
             """;
         migrate.ExecuteNonQuery();
+        // Once copied, retire legacy unresolved rows so a later intentional
+        // Clear/Discard does not resurrect them during the next schema check.
+        using var retire = db.CreateCommand();
+        retire.CommandText = "UPDATE gps_write_failures SET resolved=1 WHERE resolved=0;";
+        retire.ExecuteNonQuery();
     }
 
-    public int RecordFailure(string kind, string packageKey, long imageId, Exception exception)
+    public int RecordFailure(string kind, string packageKey, long imageId, Exception exception,
+        bool permanent = false)
     {
         using var db = database.OpenConnection();
         EnsureSchema(db);
@@ -67,14 +73,14 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
                  last_error,last_attempt_utc,resolved)
             VALUES ($kind,$id,$key,
                 COALESCE((SELECT local_path FROM images WHERE id=$id),'(missing file)'),
-                1,$error,$at,0)
+                $first,$error,$at,0)
             ON CONFLICT(kind,image_id) DO UPDATE SET
                 package_key=excluded.package_key,
                 file_path=excluded.file_path,
                 attempts=CASE
                     WHEN original_write_failures.package_key=excluded.package_key
                       THEN MIN(original_write_failures.attempts+1,$max)
-                    ELSE 1 END,
+                    ELSE $first END,
                 last_error=excluded.last_error,
                 last_attempt_utc=excluded.last_attempt_utc,
                 resolved=0
@@ -84,6 +90,7 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
         cmd.Parameters.AddWithValue("$id", imageId);
         cmd.Parameters.AddWithValue("$key", packageKey);
         cmd.Parameters.AddWithValue("$max", MaximumAttempts);
+        cmd.Parameters.AddWithValue("$first", permanent ? MaximumAttempts : 1);
         cmd.Parameters.AddWithValue("$error", exception.GetType().Name + ": " +
             (exception.Message.Length > 1500 ? exception.Message[..1500] : exception.Message));
         cmd.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
