@@ -18,6 +18,7 @@ public sealed record ImageExifData(string Json, string? CameraMake,
 public sealed class ImageExifReader : IDisposable
 {
     private Process? _process;
+    private int _nextRequestId;
     private bool _disposed;
 
     public static void StopAll() => ExifToolProcessRegistry.StopAll();
@@ -31,34 +32,106 @@ public sealed class ImageExifReader : IDisposable
 
         StartIfNeeded();
         var process = _process!;
-        using var cancellation = cancellationToken.Register(() =>
+        var request = ++_nextRequestId;
+        try
         {
-            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { }
-        });
-        // In stay-open mode -execute delimits one request/response. Group
-        // names disambiguate duplicate EXIF fields from distinct IFDs.
-        foreach (var arg in new[] { "-j", "-G1", "-n", "-EXIF:All",
-            "-GPS:All", "-XMP:GPSLatitude", "-XMP:GPSLongitude",
-            "-XMP:Make", "-XMP:Model", path, "-execute" })
-            process.StandardInput.WriteLine(arg);
-        process.StandardInput.Flush();
+            using var cancellation = cancellationToken.Register(() =>
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { }
+            });
+            // Every response carries the request identity. A timeout may
+            // leave an outstanding ReadLineAsync and a delayed ExifTool reply;
+            // NEVER allow that reply to be stored under the next photo ID.
+            foreach (var arg in new[] { "-j", "-G1", "-n", "-EXIF:All",
+                "-GPS:All", "-XMP:GPSLatitude", "-XMP:GPSLongitude",
+                "-XMP:Make", "-XMP:Model", path, "-execute" + request })
+                process.StandardInput.WriteLine(arg);
+            process.StandardInput.Flush();
 
-        var buffer = new StringBuilder();
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var line = process.StandardOutput.ReadLineAsync(cancellationToken)
-                .AsTask().WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
-                .GetAwaiter().GetResult();
-            if (line is null)
-                throw new IOException("ExifTool: Der Metadatenprozess wurde beendet.");
-            if (line.Trim() == "{ready}") break;
-            buffer.AppendLine(line);
-            if (buffer.Length > 4_000_000)
-                throw new InvalidDataException("Zu große EXIF-Ausgabe.");
+            var buffer = new StringBuilder();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var line = process.StandardOutput.ReadLineAsync(cancellationToken)
+                    .AsTask().WaitAsync(TimeSpan.FromSeconds(30), cancellationToken)
+                    .GetAwaiter().GetResult();
+                if (line is null)
+                    throw new IOException("ExifTool: Der Metadatenprozess wurde beendet.");
+                if (line.Trim() == "{ready" + request + "}") break;
+                if (line.TrimStart().StartsWith("{ready", StringComparison.Ordinal))
+                    throw new InvalidDataException(
+                        "ExifTool-Antwort gehört zu einer anderen Bildanfrage.");
+                buffer.AppendLine(line);
+                if (buffer.Length > 4_000_000)
+                    throw new InvalidDataException("Zu große EXIF-Ausgabe.");
+            }
+            var response = buffer.ToString();
+            if (!SourceFileMatches(response, path, requireSource: true))
+                throw new InvalidDataException(
+                    "ExifTool lieferte EXIF-Daten für eine andere Originaldatei: " + path);
+            return Parse(response);
         }
-        return Parse(buffer.ToString());
+        catch
+        {
+            // A failed/misframed request poisons the stay-open byte stream.
+            // Kill it; the NEXT photo starts with a fresh child process.
+            // Retiring a process also cancels any outstanding ReadLineAsync
+            // that otherwise could consume the next request's response.
+            ResetFailedProcess(process);
+            throw;
+        }
+    }
+
+    // Both the live reader and the catalog integrity check use the exact
+    // SAME source-file identity rule. Legacy EXIF blobs lacking SourceFile are
+    // tolerated only by the catalog check, never by a new read.
+    public static bool SourceFileMatches(string exifJson, string requestedPath,
+        bool requireSource = false)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(exifJson);
+            var entry = json.RootElement;
+            if (entry.ValueKind == JsonValueKind.Array)
+            {
+                if (entry.GetArrayLength() != 1) return false;
+                entry = entry[0];
+            }
+            if (entry.ValueKind != JsonValueKind.Object) return false;
+            if (!entry.TryGetProperty("SourceFile", out var source) ||
+                source.ValueKind != JsonValueKind.String)
+                return !requireSource; // unchanged older catalogs
+            var sourcePath = source.GetString();
+            if (string.IsNullOrWhiteSpace(sourcePath)) return false;
+            static string Normalize(string p) =>
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(p))
+                    .Replace('/', '\\');
+            return string.Equals(Normalize(sourcePath), Normalize(requestedPath),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException
+            or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private void ResetFailedProcess(Process failed)
+    {
+        if (ReferenceEquals(_process, failed)) _process = null;
+        try
+        {
+            if (!failed.HasExited)
+            {
+                failed.Kill(entireProcessTree: true);
+                failed.WaitForExit(3000);
+            }
+        }
+        catch (InvalidOperationException) { }
+        catch (System.ComponentModel.Win32Exception) { }
+        finally { ExifToolProcessRegistry.Retire(failed); }
     }
 
     public static ImageExifData Parse(string json)
