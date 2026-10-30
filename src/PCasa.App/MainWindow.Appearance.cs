@@ -400,6 +400,14 @@ public partial class MainWindow
     {
         var mode = _appearance.Theme;
         var useLight = mode == "Light" || (mode == "System" && IsWindowsLightTheme());
+        // WPF's built-in controls and window chrome must use the SAME mode as
+        // our PCasa brushes. Changing brushes alone left Fluent.Dark controls
+        // (radio buttons, buttons and title bars) white on light panels.
+        // Application-level theme ownership also covers future dialogs.
+#pragma warning disable WPF0001 // .NET 10 WPF Fluent ThemeMode is experimental
+        Application.Current.ThemeMode = mode == "System"
+            ? ThemeMode.System : useLight ? ThemeMode.Light : ThemeMode.Dark;
+#pragma warning restore WPF0001
         SetColor("PcasaWindowBrush", useLight ? "#F5F5F2" : "#202122");
         SetColor("PcasaTopBrush", useLight ? "#E9E9E7" : "#1A1B1D");
         SetColor("PcasaPanelBrush", useLight ? "#F0F0EE" : "#252628");
