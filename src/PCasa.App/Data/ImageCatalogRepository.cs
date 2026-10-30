@@ -382,11 +382,14 @@ public sealed class CatalogScanSession : IDisposable
             """
             SELECT i.file_size, i.modified_utc_ticks, i.thumbnail_path,
                    i.photo_folder_id, i.local_path,
-                   (SELECT x.exif_json FROM image_exif x
-                     WHERE x.image_id = i.id
+                   EXISTS(SELECT 1 FROM image_exif x WHERE x.image_id = i.id
                        AND x.source_modified_utc_ticks = i.modified_utc_ticks
                        AND x.source_file_size = i.file_size),
-                   i.created_utc_ticks
+                   i.created_utc_ticks,
+                   (SELECT json_extract(x.exif_json, '$.SourceFile')
+                      FROM image_exif x WHERE x.image_id = i.id
+                        AND x.source_modified_utc_ticks = i.modified_utc_ticks
+                        AND x.source_file_size = i.file_size)
             FROM images i WHERE i.canonical_path = $canonicalPath;
             """;
         _selectState.Parameters.Add("$canonicalPath", SqliteType.Text);
@@ -532,8 +535,9 @@ public sealed class CatalogScanSession : IDisposable
             reader.GetString(2),
             reader.IsDBNull(3) ? null : reader.GetInt64(3),
             reader.GetString(4),
-            !reader.IsDBNull(5) && ImageExifReader.SourceFileMatches(
-                reader.GetString(5), reader.GetString(4)),
+            reader.GetInt32(5) != 0 && (reader.IsDBNull(7) ||
+                ImageExifReader.IsSameSourcePath(reader.GetString(7),
+                    reader.GetString(4))),
             reader.IsDBNull(6) ? null : reader.GetInt64(6));
     }
 
