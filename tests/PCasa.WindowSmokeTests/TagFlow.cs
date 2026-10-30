@@ -2772,6 +2772,70 @@ internal static class TagFlow
             }
             Console.WriteLine("PASS: GPS map receives all 5,201 selected positions despite EXIF cache drift.");
 
+            // Error review: the FIRST failed attempt is visible immediately.
+            // An internal ExifTool/reader cancellation with the scheduler
+            // token still active is a real failure; a scheduler yield is not.
+            var tryOriginal = typeof(PCasa.App.MainWindow).GetMethod(
+                "TryWriteOriginal",System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var writeErrors = new OriginalWriteFailureRepository(db);
+            const string testWriteKey = "gps:synthetic:reader-timeout";
+            try
+            {
+                using (var schedulerYield = new CancellationTokenSource())
+                {
+                    schedulerYield.Cancel();
+                    try
+                    {
+                        tryOriginal.Invoke(window, [
+                            OriginalWriteFailureRepository.Gps,testWriteKey,
+                            gpsA,null,schedulerYield.Token,
+                            (Action)(() => throw new OperationCanceledException(
+                                "Normal scheduler priority yield"))
+                        ]);
+                        throw new Exception("Cancelled scheduler work unexpectedly completed.");
+                    }
+                    catch (System.Reflection.TargetInvocationException ex)
+                        when (ex.InnerException is OperationCanceledException) { }
+                    if (writeErrors.Unresolved(includeRetrying:true)
+                        .Any(entry => entry.PackageKey == testWriteKey))
+                        throw new Exception("Normal scheduler yield was recorded as file error.");
+                }
+
+                for (var attempt = 1; attempt <= 3; attempt++)
+                {
+                    try
+                    {
+                        var done = (bool)tryOriginal.Invoke(window, [
+                            OriginalWriteFailureRepository.Gps,testWriteKey,
+                            gpsA,null,CancellationToken.None,
+                            (Action)(() => throw new OperationCanceledException(
+                                "ExifTool reader stopped without scheduler cancellation"))
+                        ])!;
+                        if (attempt != 3 || done)
+                            throw new Exception("Faulty GPS original was never parked.");
+                    }
+                    catch (System.Reflection.TargetInvocationException ex)
+                        when (ex.InnerException is DurablePackageRetryException &&
+                              attempt < 3) { }
+                    var live = writeErrors.Unresolved(includeRetrying:true)
+                        .SingleOrDefault(entry => entry.PackageKey == testWriteKey)
+                        ?? throw new Exception("First failed GPS write did not appear in review.");
+                    if (live.Attempts != attempt)
+                        throw new Exception("GPS review showed the wrong current attempt number.");
+                    if (attempt < 3 && writeErrors.Unresolved()
+                            .Any(entry => entry.PackageKey == testWriteKey))
+                        throw new Exception("GPS failure parked before three attempts.");
+                }
+                if (writeErrors.Unresolved().All(entry => entry.PackageKey != testWriteKey))
+                    throw new Exception("Third failure was not permanently parked.");
+                Console.WriteLine("PASS: First internal write abort is visible; yields are not errors; three attempts park file.");
+            }
+            finally
+            {
+                writeErrors.Clear(OriginalWriteFailureRepository.Gps,gpsA);
+            }
+
             // Explicitly leave an EXIF reader and keyword writer session
             // alive (not disposed) when closing. The app MUST kill both
             // owned native children after the scheduler's journal finishes.
