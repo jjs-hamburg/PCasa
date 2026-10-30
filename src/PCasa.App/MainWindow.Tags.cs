@@ -375,16 +375,12 @@ public partial class MainWindow
         foreach (var pair in filtered)
         {
             var row = new DockPanel { Margin = new Thickness(3, 5, 3, 5) };
-            var deleteGlyph = new System.Windows.Shapes.Path
+            var deleteGlyph = new ContentControl
             {
-                Data = System.Windows.Media.Geometry.Parse("M 4,4 L 16,16 M 16,4 L 4,16"),
-                Stroke = System.Windows.Media.Brushes.IndianRed,
-                StrokeThickness = 1.8,
-                StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
-                StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
-                Width = 12,
-                Height = 12,
-                Stretch = System.Windows.Media.Stretch.Uniform
+                Width = 20,
+                Height = 20,
+                Template = (ControlTemplate)Application.Current.FindResource(
+                    "PcasaDeleteGlyphTemplate")
             };
             var remove = new Button
             {

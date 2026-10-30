@@ -669,11 +669,10 @@
                         <Button.Template>
                             <ControlTemplate TargetType="Button">
                                 <Border x:Name="ClearBackground" Background="Transparent" CornerRadius="3">
-                                    <TextBlock Text="✕" FontFamily="Segoe UI Symbol"
-                                               FontSize="17" FontWeight="Bold"
-                                               Foreground="#E34848"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"/>
+                                    <ContentControl Template="{StaticResource PcasaDeleteGlyphTemplate}"
+                                                    Width="19" Height="19"
+                                                    HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center"/>
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
@@ -798,8 +797,9 @@
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                    <Path Data="M 15.8,10 L 23.2,22 M 23.2,10 L 15.8,22"
-                                          Stroke="#F04444" StrokeThickness="3.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    <ContentControl Canvas.Left="12.2" Canvas.Top="10"
+                                                    Width="12" Height="12"
+                                                    Template="{StaticResource PcasaCloseGlyphTemplate}"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Expand / Compress'}" Click="FolderTreeToggle_Click">
@@ -1055,12 +1055,12 @@
                                     <Canvas Width="32" Height="32">
                                         <Path Data="M 28,5 L 28,27"
                                               Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="3.2"
+                                              StrokeThickness="2.1"
                                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                         <Path x:Name="GpsExpandArrow"
                                               Data="M 25,16 L 6,16 M 15,7 L 6,16 L 15,25"
                                               Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="3.5"
+                                              StrokeThickness="2.2"
                                               StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                               StrokeLineJoin="Round"/>
                                     </Canvas>
@@ -1076,15 +1076,18 @@
                                         <Path x:Name="GpsFullscreenCorners"
                                               Data="M 12,4 L 4,4 L 4,12 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20"
                                               Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="3.6"
+                                              StrokeThickness="2.2"
                                               StrokeStartLineCap="Square" StrokeEndLineCap="Square"
                                               StrokeLineJoin="Miter"/>
                                     </Canvas>
                                 </Viewbox>
                             </Button>
-                            <Button Content="✕" Width="35" Height="42" Padding="0"
+                            <Button x:Name="CloseSidebarButton" Width="35" Height="42" Padding="0"
                                     ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click"/>
+                                    Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click">
+                                <ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}"
+                                                Width="23" Height="23"/>
+                            </Button>
                         </StackPanel>
                         <TextBlock x:Name="SidePanelHeading" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
                     </DockPanel>
@@ -1273,9 +1276,14 @@
                                     BorderThickness="1" Padding="7">
                                 <StackPanel>
                                     <DockPanel>
-                                        <Button Content="✕" DockPanel.Dock="Right" Width="22"
+                                        <Button x:Name="GpsPhotoCloseButton" DockPanel.Dock="Right"
+                                                Width="25" Height="25" Padding="0"
+                                                ToolTip="{loc:Tr Key='Foto-Vorschau schließen'}"
                                                 Click="GpsPhotoClose_Click"
-                                                Style="{StaticResource PcasaStatusButtonStyle}"/>
+                                                Style="{StaticResource PcasaStatusButtonStyle}">
+                                            <ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}"
+                                                            Width="18" Height="18"/>
+                                        </Button>
                                         <TextBlock x:Name="GpsPhotoName" FontWeight="SemiBold"
                                                    MaxWidth="205" TextTrimming="CharacterEllipsis"
                                                    VerticalAlignment="Center"/>

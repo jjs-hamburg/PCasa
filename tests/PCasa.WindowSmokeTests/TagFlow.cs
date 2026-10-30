@@ -529,6 +529,51 @@ internal static class TagFlow
                 ?? throw new Exception("GPS fullscreen button is missing.");
             var sidebarPanel = (Border?)window.FindName("InfoSidebarPanel")
                 ?? throw new Exception("GPS panel is missing.");
+
+            // Picasa-inspired circled X is ONE centrally defined vector
+            // drawing per semantic action: muted = dismiss, red = remove.
+            var closeGlyph = (ControlTemplate?)window.FindResource(
+                "PcasaCloseGlyphTemplate")
+                ?? throw new Exception("Shared muted circled close glyph missing.");
+            var deleteGlyph = (ControlTemplate?)window.FindResource(
+                "PcasaDeleteGlyphTemplate")
+                ?? throw new Exception("Shared red circled remove glyph missing.");
+            if (ReferenceEquals(closeGlyph, deleteGlyph) ||
+                window.FindResource("PcasaDeleteIconBrush")
+                    is not SolidColorBrush deleteBrush ||
+                deleteBrush.Color.R <= deleteBrush.Color.B)
+                throw new Exception("Close and delete symbols lost distinct action semantics.");
+            var sidebarClose = (Button?)window.FindName("CloseSidebarButton")
+                ?? throw new Exception("Sidebar close icon button missing.");
+            var popupClose = (Button?)window.FindName("GpsPhotoCloseButton")
+                ?? throw new Exception("GPS preview close icon button missing.");
+            if (sidebarClose.Content is not ContentControl sidebarGlyph ||
+                !ReferenceEquals(sidebarGlyph.Template, closeGlyph) ||
+                popupClose.Content is not ContentControl previewGlyph ||
+                !ReferenceEquals(previewGlyph.Template, closeGlyph))
+                throw new Exception("Sidebar and GPS photo use different close symbols.");
+
+            // Expand/fullscreen may change direction, NOT control dimensions.
+            // Stroke weight was reduced to match the other PCasa glyphs.
+            var expandArrow = (System.Windows.Shapes.Path?)window.FindName(
+                "GpsExpandArrow")
+                ?? throw new Exception("GPS expand glyph missing.");
+            var fullscreenCorners = (System.Windows.Shapes.Path?)window.FindName(
+                "GpsFullscreenCorners")
+                ?? throw new Exception("GPS fullscreen glyph missing.");
+            if (gpsExpand.Width != 43 || gpsExpand.Height != 42 ||
+                gpsFullscreen.Width != 43 || gpsFullscreen.Height != 42 ||
+                expandArrow.StrokeThickness > 2.3 ||
+                fullscreenCorners.StrokeThickness > 2.3)
+                throw new Exception("Expand/fullscreen size or slim stroke regression.");
+
+            var zoomNavigator = new PhotoZoomNavigator();
+            var navigatorHeader = ((StackPanel)zoomNavigator.Child).Children[0] as Grid;
+            var zoomClose = navigatorHeader?.Children.OfType<Button>().SingleOrDefault();
+            if (zoomClose?.Content is not ContentControl zoomCloseGlyph ||
+                !ReferenceEquals(zoomCloseGlyph.Template, closeGlyph))
+                throw new Exception("Photo zoom navigator still uses an unrelated X.");
+            Console.WriteLine("PASS: Circled close/remove glyphs are shared; GPS expand/fullscreen stroke is lighter.");
             void Click(Button button) =>
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
 

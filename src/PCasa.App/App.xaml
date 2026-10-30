@@ -19,6 +19,37 @@
         <SolidColorBrush x:Key="PcasaSearchActiveBrush" po:Freeze="False" Color="#424447" />
         <SolidColorBrush x:Key="PcasaSearchActiveTextBrush" po:Freeze="False" Color="#F5F5F5" />
         <SolidColorBrush x:Key="PcasaAccentBrush" Color="#25A4F4" />
+        <SolidColorBrush x:Key="PcasaDeleteIconBrush" po:Freeze="False" Color="#DF4A54" />
+
+        <!-- All PCasa-action X icons share these scale-independent Picasa-like
+             circled glyphs. Grey = dismiss/close, red = remove/clear. Native
+             Windows title-bar buttons are outside the application's chrome. -->
+        <ControlTemplate x:Key="PcasaCloseGlyphTemplate" TargetType="{x:Type ContentControl}">
+            <Viewbox Stretch="Uniform">
+                <Canvas Width="24" Height="24">
+                    <Ellipse Canvas.Left="2.5" Canvas.Top="2.5" Width="19" Height="19"
+                             Fill="Transparent" Stroke="{DynamicResource PcasaMutedTextBrush}"
+                             StrokeThickness="2"/>
+                    <Path Data="M 8.5,8.5 L 15.5,15.5 M 15.5,8.5 L 8.5,15.5"
+                          Stroke="{DynamicResource PcasaMutedTextBrush}"
+                          StrokeThickness="2" StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"/>
+                </Canvas>
+            </Viewbox>
+        </ControlTemplate>
+        <ControlTemplate x:Key="PcasaDeleteGlyphTemplate" TargetType="{x:Type ContentControl}">
+            <Viewbox Stretch="Uniform">
+                <Canvas Width="24" Height="24">
+                    <Ellipse Canvas.Left="2.5" Canvas.Top="2.5" Width="19" Height="19"
+                             Fill="Transparent" Stroke="{DynamicResource PcasaDeleteIconBrush}"
+                             StrokeThickness="2"/>
+                    <Path Data="M 8.5,8.5 L 15.5,15.5 M 15.5,8.5 L 8.5,15.5"
+                          Stroke="{DynamicResource PcasaDeleteIconBrush}"
+                          StrokeThickness="2" StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round"/>
+                </Canvas>
+            </Viewbox>
+        </ControlTemplate>
 
         <!-- Controls shared by the main window, detached popups and modeless dialogs. -->
         <Style TargetType="TextBox">

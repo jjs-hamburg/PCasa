@@ -427,6 +427,7 @@ public partial class MainWindow
         SetColor("PcasaPanelAltBrush", useLight ? "#E7E7E5" : "#2B2C2F");
         SetColor("PcasaTextBrush", useLight ? "#212121" : "#E7E7E7");
         SetColor("PcasaMutedTextBrush", useLight ? "#606064" : "#A9AAAC");
+        SetColor("PcasaDeleteIconBrush", useLight ? "#BE2736" : "#DF4A54");
         SetColor("PcasaDividerBrush", useLight ? "#CFCFCD" : "#383A3D");
         SetColor("PcasaSelectionBrush", useLight ? "#BBD8EB" : "#42474B");
         SetColor("PcasaHoverBrush", useLight ? "#E0EBF4" : "#303235");

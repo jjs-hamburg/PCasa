@@ -62,8 +62,14 @@ public sealed class PhotoZoomNavigator : Border
 
         var close = new Button
         {
-            Content = "×",
-            Padding = new Thickness(3, 0, 3, 0),
+            Content = new ContentControl
+            {
+                Width = 18,
+                Height = 18,
+                Template = (ControlTemplate)Application.Current.FindResource(
+                    "PcasaCloseGlyphTemplate")
+            },
+            Padding = new Thickness(0),
             Height = 20,
             MinWidth = 20,
             FontSize = 12,
