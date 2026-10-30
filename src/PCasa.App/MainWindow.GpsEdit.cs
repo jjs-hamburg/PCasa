@@ -356,14 +356,28 @@ public partial class MainWindow
             var key = "gps:edit:" + Guid.NewGuid().ToString("N");
             var payload = JsonSerializer.Serialize(request);
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", ids.Length);
-            var completion = _scheduler.EnqueueDurablePackageAsync(
-                BuildGpsEditPackage(key, payload), "gps-edit-v1", payload,
-                SchedulerPriority.ManualAction);
-            // The persisted newer GPS intent supersedes any older failed
-            // coordinate write for these images. Never offer stale retries.
+            // Retire old errors before a new worker can begin. If accepting
+            // the durable recipe fails, restore the old errors in the ledger.
             var writeErrors = new OriginalWriteFailureRepository(_database);
+            var previousErrors = writeErrors.Unresolved()
+                .Where(error => error.Kind == OriginalWriteFailureRepository.Gps &&
+                                ids.Contains(error.ImageId)).ToArray();
             foreach (var imageId in ids)
                 writeErrors.Clear(OriginalWriteFailureRepository.Gps, imageId);
+            Task completion;
+            try
+            {
+                completion = _scheduler.EnqueueDurablePackageAsync(
+                    BuildGpsEditPackage(key, payload), "gps-edit-v1", payload,
+                    SchedulerPriority.ManualAction);
+            }
+            catch
+            {
+                foreach (var oldError in previousErrors)
+                    writeErrors.RecordFailure(oldError.Kind, oldError.PackageKey,
+                        oldError.ImageId, new IOException(oldError.Error), permanent: true);
+                throw;
+            }
             StatusText.Text = UiLanguage.Format(
                 "GPS-Auftrag für {0} Bilder gespeichert.", ids.Length);
             // An accepted persistent package owns an immutable coordinate
