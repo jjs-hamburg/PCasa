@@ -591,6 +591,79 @@ public sealed class ImageTagRepository
         }
     }
 
+    /// <summary>
+    /// Explicitly abandon pending tag writes. Because tag drafts already
+    /// update the gallery projection, restore it from the authoritative
+    /// ORIGINAL (read-only) before deleting any pending revisions. If the
+    /// source cannot be read or a newer revision appears, keep both intents
+    /// and error visible in the review dialog.
+    /// </summary>
+    public bool DiscardPendingImageEdits(long imageId, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        using var db = _database.OpenConnection();
+        string path;
+        long indexedTicks;
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = "SELECT local_path,modified_utc_ticks FROM images WHERE id=$id;";
+            cmd.Parameters.AddWithValue("$id", imageId);
+            using var row = cmd.ExecuteReader();
+            if (!row.Read()) return false;
+            path = row.GetString(0);
+            indexedTicks = row.GetInt64(1);
+        }
+        using (SourceFileLocks.Enter(path, token))
+        {
+            var prior = PendingEditsForImage(imageId);
+            if (prior.Count == 0) return true;
+            token.ThrowIfCancellationRequested();
+            using var writer = new ExifToolKeywordWriter.Session();
+            var snapshot = writer.ReadSnapshot(path, token);
+            var originalKeywords = string.Join("\n",
+                snapshot.Combined.Distinct(StringComparer.OrdinalIgnoreCase));
+            using var tx = db.BeginTransaction();
+            var current = new List<(string Tag,long Revision)>();
+            using (var cmd = db.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText =
+                    "SELECT tag,revision FROM pending_tag_edits WHERE image_id=$id ORDER BY updated_utc;";
+                cmd.Parameters.AddWithValue("$id", imageId);
+                using var rows = cmd.ExecuteReader();
+                while (rows.Read()) current.Add((rows.GetString(0),rows.GetInt64(1)));
+            }
+            if (current.Count != prior.Count ||
+                prior.Where((edit, i) =>
+                    edit.Tag != current[i].Tag || edit.Revision != current[i].Revision).Any())
+                throw new IOException("Neuere Tag-Änderungen sind eingetroffen; Verwerfen erneut bestätigen.");
+            using (var update = db.CreateCommand())
+            {
+                update.Transaction = tx;
+                update.CommandText = """
+                    INSERT INTO image_tags(image_id,keywords,source_modified_utc_ticks)
+                    VALUES ($id,$tags,$ticks)
+                    ON CONFLICT(image_id) DO UPDATE SET
+                        keywords=excluded.keywords,
+                        source_modified_utc_ticks=excluded.source_modified_utc_ticks;
+                    """;
+                update.Parameters.AddWithValue("$id", imageId);
+                update.Parameters.AddWithValue("$tags", originalKeywords);
+                update.Parameters.AddWithValue("$ticks", indexedTicks);
+                update.ExecuteNonQuery();
+            }
+            using (var delete = db.CreateCommand())
+            {
+                delete.Transaction = tx;
+                delete.CommandText = "DELETE FROM pending_tag_edits WHERE image_id=$id;";
+                delete.Parameters.AddWithValue("$id", imageId);
+                delete.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        return true;
+    }
+
     // Commas/semicolons separate distinct Tag requirements. Matching is
     // AND across all supplied terms; no file/ExifTool/NAS reads are involved.
     // A single unseparated query retains its established FTS-prefix behavior.
