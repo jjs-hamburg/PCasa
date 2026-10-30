@@ -25,7 +25,8 @@ public partial class MainWindow
         string? path, CancellationToken token, Action write)
     {
         var errors = new OriginalWriteFailureRepository(_database);
-        if (errors.IsParked(kind, imageId))
+        if (errors.IsParked(kind, imageId,
+                kind == OriginalWriteFailureRepository.Gps ? packageKey : null))
             return false;
         try
         {
