@@ -848,8 +848,16 @@ internal static class TagFlow
             // A single gallery selection without GPS coordinates is still a
             // FILMSTRIP PHOTO. The map may have no pin, but the strip must
             // show and open it, and closing the overlay must not remove it.
-            var noGpsPhoto = catalog.GetImages(a.Id)
-                .First(image => image.Id != gpsA).Id;
+            long noGpsPhoto;
+            using (var connection = db.OpenConnection())
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText =
+                    "SELECT id FROM images WHERE photo_folder_id=$folder AND id<>$gps LIMIT 1;";
+                cmd.Parameters.AddWithValue("$folder", a.Id);
+                cmd.Parameters.AddWithValue("$gps", gpsA);
+                noGpsPhoto = (long)cmd.ExecuteScalar()!;
+            }
             var preservedGpsSelection = selected.ToHashSet();
             var updateStrip = typeof(PCasa.App.MainWindow).GetMethod(
                 "UpdateGpsFilmstrip", System.Reflection.BindingFlags.Instance |
