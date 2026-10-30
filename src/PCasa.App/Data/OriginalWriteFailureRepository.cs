@@ -135,6 +135,22 @@ public sealed class OriginalWriteFailureRepository
         cmd.ExecuteNonQuery();
     }
 
+    // A superseded older GPS package may finish AFTER a newer package
+    // already failed. It must never clear the newer package's error.
+    public void ClearIfOwned(string kind, long imageId, string packageKey)
+    {
+        using var db = database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM original_write_failures
+             WHERE kind=$kind AND image_id=$id AND package_key=$key;
+            """;
+        cmd.Parameters.AddWithValue("$kind", kind);
+        cmd.Parameters.AddWithValue("$id", imageId);
+        cmd.Parameters.AddWithValue("$key", packageKey);
+        cmd.ExecuteNonQuery();
+    }
+
     public IReadOnlyList<FailedFile> Unresolved()
     {
         using var db = database.OpenConnection();
