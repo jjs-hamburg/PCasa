@@ -386,23 +386,54 @@ public partial class MainWindow
                lat is < -90 or > 90 || lon is < -180 or > 180)))
             throw new InvalidDataException("GPS-Auftrag enthält ungültige Koordinaten.");
         var package = new SchedulerTaskPackage(key);
+        var failures = new GpsWriteFailureRepository(_database);
         for (var i = 0; i < request.ImageIds.Length; i++)
         {
             var id = request.ImageIds[i];
             var finished = i + 1;
             package.AddStep(token =>
             {
-                var repository = new GpsMetadataRepository(_database);
-                repository.Apply(id, request.Latitude, request.Longitude,
-                    request.Mode, token,
-                    path => _scheduler.ReportProgress(key,
-                        "GPS in Originaldateien schreiben",
-                        finished - 1, request.ImageIds.Length, path),
-                    packageKey: key);
+                string? currentPath = null;
+                try
+                {
+                    var repository = new GpsMetadataRepository(_database);
+                    repository.Apply(id, request.Latitude, request.Longitude,
+                        request.Mode, token,
+                        path =>
+                        {
+                            currentPath = path;
+                            _scheduler.ReportProgress(key,
+                                "GPS in Originaldateien schreiben",
+                                finished - 1, request.ImageIds.Length, path);
+                        }, packageKey: key);
+                }
+                catch (Exception ex) when (ex is IOException or
+                    UnauthorizedAccessException or InvalidDataException or
+                    TimeoutException or System.ComponentModel.Win32Exception)
+                {
+                    token.ThrowIfCancellationRequested();
+                    // Do not mistake an inaccessible NAS/VPN root for a
+                    // permanently corrupt file. SourceAvailabilityGate already
+                    // coalesces the root probe and the scheduler owns retries.
+                    if (currentPath is not null &&
+                        ex is IOException or UnauthorizedAccessException &&
+                        !_scheduler.SourceAvailability.CheckAfterSourceError(
+                            currentPath, token))
+                        throw new DurablePackageRetryException(
+                            "GPS-Quelle vorübergehend nicht erreichbar: " +
+                            SourceAvailabilityGate.RootOf(currentPath));
+                    var attempts = failures.RecordFailure(key, id, ex);
+                    if (attempts < 3)
+                        throw new DurablePackageRetryException(
+                            $"GPS-Datei {id}: Versuch {attempts}/3 fehlgeschlagen. " +
+                            "Wiederholung durch den bestehenden Scheduler.");
+                    // After three verified per-file failures, the ledger
+                    // retains the path and error. Completing THIS step lets
+                    // all remaining photos continue at their original P0.
+                    PCasaDiagnostics.Write("GPS.Edit.FileSkipped:" + id, ex);
+                }
                 _scheduler.ReportProgress(key, "GPS in Originaldateien schreiben",
                     finished, request.ImageIds.Length);
-                // Only committed files may appear at the next regular
-                // map refresh. Do not queue one expensive query per image.
                 return Task.CompletedTask;
             });
         }
