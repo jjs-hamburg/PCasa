@@ -347,5 +347,10 @@
   "Zum Einfügen einen Zielordner im Ordnerbaum auswählen": "Choose a destination folder in the folder tree to paste",
   "Zum Invertieren einen Bildordner auswählen.": "Select an image folder before inverting the selection.",
   "Zur Fotokarte": "Back to photo map",
-  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images"
+  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images",
+  "Wählen": "Pick",
+  "Übernehmen": "Assign",
+  "Ändern": "Replace",
+  "Im Ausschnitt": "In view",
+  "Aufheben": "Clear"
 }

@@ -683,6 +683,24 @@ internal static class Program
                         " jumped to unrelated thumbnails.");
             }
             Console.WriteLine("PASS: Tag/Info/GPS sidebar modes preserve actual gallery image.");
+            // GPS rows never wrap or get locked to the old sidebar width.
+            var gpsControls = window.FindName("GpsControlsPanel") as Grid
+                ?? throw new Exception("GPS controls must use a fixed-row grid.");
+            var gpsHeader = window.FindName("InfoSidebarHeader") as Grid
+                ?? throw new Exception("GPS header must be a grid.");
+            var gpsCoords = window.FindName("GpsCoordinatesText") as TextBlock
+                ?? throw new Exception("GPS coordinates missing.");
+            var gpsActions = window.FindName("GpsEditPanel") as Grid
+                ?? throw new Exception("GPS action row missing.");
+            if (Grid.GetColumn(gpsCoords) != 1 ||
+                gpsControls.RowDefinitions.Count != 4 ||
+                gpsActions.ColumnDefinitions.Count != 4 ||
+                Grid.GetRow(gpsActions) != 1 ||
+                gpsActions.Visibility != Visibility.Visible ||
+                !double.IsNaN(gpsHeader.Width) || !double.IsNaN(gpsControls.Width))
+                throw new Exception("GPS controls are not fixed and compact.");
+            Console.WriteLine("PASS: GPS header/controls stay in fixed rows.");
+
 
             var tagButton = Descendants<Button>(window)
                 .First(button => Equals(button.Tag, "Tags"));

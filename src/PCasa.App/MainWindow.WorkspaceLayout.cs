@@ -47,19 +47,25 @@ public partial class MainWindow
         RestoreAnchorAfterSidebarLayout();
     }
 
-    // Keep GPS controls in their NORMAL sidebar positions even while
-    // expanded/fullscreen. Only the map (and filmstrip) may consume the
-    // additional width. This is a presentation measurement, not a second
-    // application state or a map camera setting.
-    private double _gpsNormalSidebarControlWidth;
-
-    private void CaptureNormalGpsControlWidth()
+    // Fixed action rows; narrow panes show icon-only controls with tooltips.
+    private void GpsControlsPanel_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_sidebarMode != "GPS" || _gpsExpanded || _gpsFullscreen)
-            return;
-        var currentWidth = InfoSidebarPanel.ActualWidth;
-        if (double.IsFinite(currentWidth) && currentWidth >= 225)
-            _gpsNormalSidebarControlWidth = currentWidth;
+        var primary = e.NewSize.Width >= 580
+            ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var label in new[]
+        {
+            GpsPickPositionToggleCaption, GpsApplyMissingButtonCaption,
+            GpsReplaceButtonCaption, GpsRemoveButtonCaption
+        })
+            if (label is not null) label.Visibility = primary;
+        var secondary = e.NewSize.Width >= 490
+            ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var label in new[]
+        {
+            GpsShowAreaCaption, GpsClearAreaCaption,
+            GpsCopyButtonCaption, GpsGoogleButtonCaption
+        })
+            if (label is not null) label.Visibility = secondary;
     }
 
     private void ApplyWorkspaceLayout()
@@ -106,32 +112,10 @@ public partial class MainWindow
         Grid.SetColumnSpan(InfoSidebarPanel, fullscreen ? 5 : 1);
         Panel.SetZIndex(InfoSidebarPanel, fullscreen ? 10 : 0);
 
-        // The header and all GPS action rows retain their original physical
-        // width/left position. Stretch the map viewport, never the editor
-        // text field or the space between Copy and map-provider buttons.
-        if (gps && (expanded || fullscreen))
-        {
-            // Handles starting the program with saved expanded mode before a
-            // normal sidebar has ever been measured in this process.
-            var normalFraction = WorkspaceFraction(
-                _appearance.SidebarFraction, 0.25, 0.17, 0.48);
-            var fallbackWidth = Math.Max(225,
-                BrowseWorkspaceGrid.ActualWidth * normalFraction);
-            var normalWidth = _gpsNormalSidebarControlWidth >= 225
-                ? _gpsNormalSidebarControlWidth : fallbackWidth;
-            InfoSidebarHeader.Width = Math.Max(1, normalWidth - 24);
-            InfoSidebarHeader.HorizontalAlignment = HorizontalAlignment.Left;
-            GpsControlsPanel.Width = Math.Max(1, normalWidth - 20);
-            GpsControlsPanel.HorizontalAlignment = HorizontalAlignment.Left;
-        }
-        else
-        {
-            // Returning to normal also returns to its responsive behaviour.
-            InfoSidebarHeader.Width = double.NaN;
-            InfoSidebarHeader.HorizontalAlignment = HorizontalAlignment.Stretch;
-            GpsControlsPanel.Width = double.NaN;
-            GpsControlsPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-        }
+        // No captured sidebar width: controls remain in their rows.
+        // The map viewport receives additional width and height.
+        GpsCoordinatesText.Visibility = gps
+            ? Visibility.Visible : Visibility.Collapsed;
 
         GpsExpandButton.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
         GpsExpandButton.Tag = expanded ? "expanded" : "normal";
@@ -166,8 +150,8 @@ public partial class MainWindow
         GpsMapPanel.Visibility = gps ? Visibility.Visible : Visibility.Collapsed;
         // Leaving GPS also closes its temporary search/edit context.
         // The map camera and gallery/filmstrip selection are not changed.
-        if (!gps && GpsEditorToggle.IsChecked == true)
-            GpsEditorToggle.IsChecked = false;
+        if (!gps && (GpsPlaceSearchBox.Text.Length > 0 || _gpsDraft is not null))
+            ClearGpsEditorDraft();
         if (!gps && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();
     }
@@ -183,7 +167,6 @@ public partial class MainWindow
     private void GpsExpand_Click(object sender, RoutedEventArgs e)
     {
         if (_sidebarMode != "GPS" || _gpsFullscreen) return;
-        CaptureNormalGpsControlWidth();
         _gpsExpanded = !_gpsExpanded;
         _appearance.GpsExpanded = _gpsExpanded;
         UpdateWorkspaceLayoutPreservingGallery();
@@ -193,7 +176,6 @@ public partial class MainWindow
     private void GpsFullscreen_Click(object sender, RoutedEventArgs e)
     {
         if (_sidebarMode != "GPS") return;
-        CaptureNormalGpsControlWidth();
         _gpsFullscreen = !_gpsFullscreen;
         if (_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();

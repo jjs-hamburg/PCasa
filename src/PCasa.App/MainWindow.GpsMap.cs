@@ -329,7 +329,6 @@ public partial class MainWindow
                 GpsPickPosition_Changed(this, new RoutedEventArgs());
             }
             else if (data.Kind == "draft" &&
-                     GpsEditorToggle.IsChecked == true &&
                      data.Latitude is double dLat &&
                      data.Longitude is double dLon)
             {
@@ -461,7 +460,6 @@ public partial class MainWindow
         if (_gpsHighlightedImageId != imageId)
         {
             ClearGpsEditorDraft();
-            GpsEditorToggle.IsChecked = false;
         }
         _gpsHighlightedImageId = imageId;
         var photo = _gpsPoints.FirstOrDefault(p => p.Id == imageId);

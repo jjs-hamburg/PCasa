@@ -1025,53 +1025,19 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <DockPanel x:Name="InfoSidebarHeader" Margin="4,0,0,12">
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                            <Button x:Name="GpsExpandButton" Width="43" Height="42" Padding="0"
-                                    Margin="0,0,6,0" Visibility="Collapsed"
-                                    ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}"
-                                    Click="GpsExpand_Click">
-                                <Viewbox Width="26" Height="26" Stretch="Uniform">
-                                    <Canvas Width="32" Height="32">
-                                        <Path Data="M 28,5 L 28,27"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="2.1"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                        <Path x:Name="GpsExpandArrow"
-                                              Data="M 25,16 L 6,16 M 15,7 L 6,16 L 15,25"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="2.2"
-                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                              StrokeLineJoin="Round"/>
-                                    </Canvas>
-                                </Viewbox>
-                            </Button>
-                            <Button x:Name="GpsFullscreenButton" Width="43" Height="42" Padding="0"
-                                    Margin="0,0,6,0" Visibility="Collapsed"
-                                    ToolTip="{loc:Tr Key='GPS-Vollbild'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}"
-                                    Click="GpsFullscreen_Click">
-                                <Viewbox Width="26" Height="26" Stretch="Uniform">
-                                    <Canvas Width="32" Height="32">
-                                        <Path x:Name="GpsFullscreenCorners"
-                                              Data="M 12,4 L 4,4 L 4,12 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20"
-                                              Stroke="{DynamicResource PcasaTextBrush}"
-                                              StrokeThickness="2.2"
-                                              StrokeStartLineCap="Square" StrokeEndLineCap="Square"
-                                              StrokeLineJoin="Miter"/>
-                                    </Canvas>
-                                </Viewbox>
-                            </Button>
-                            <Button x:Name="CloseSidebarButton" Width="35" Height="42" Padding="0"
-                                    ToolTip="{loc:Tr Key='Seitenleiste schließen'}"
-                                    Style="{StaticResource PcasaStatusButtonStyle}" Click="CloseSidebar_Click">
-                                <ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}"
-                                                Width="23" Height="23"/>
-                            </Button>
-                        </StackPanel>
-                        <TextBlock x:Name="SidePanelHeading" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    </DockPanel>
+                    <Grid x:Name="InfoSidebarHeader" Margin="4,0,0,9">
+ <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+ <TextBlock x:Name="SidePanelHeading" Grid.Column="0" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
+ <TextBlock x:Name="GpsCoordinatesText" Grid.Column="1" Visibility="Collapsed" Margin="11,0,7,0" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Text="{loc:Tr Key='GPS-Positionen werden geladen'}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+ <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+ <Button x:Name="GpsExpandButton" Width="40" Height="38" Padding="0" Margin="0,0,5,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsExpand_Click">
+ <Viewbox Width="24" Height="24"><Canvas Width="32" Height="32"><Path Data="M28,5 L28,27" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6"/><Path x:Name="GpsExpandArrow" Data="M25,16 L6,16 M15,7 L6,16 L15,25" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.65" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas></Viewbox>
+ </Button>
+ <Button x:Name="GpsFullscreenButton" Width="40" Height="38" Padding="0" Margin="0,0,5,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Vollbild'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsFullscreen_Click">
+ <Viewbox Width="24" Height="24"><Canvas Width="32" Height="32"><Path x:Name="GpsFullscreenCorners" Data="M12,4 L4,4 L4,12 M20,4 L28,4 L28,12 M28,20 L28,28 L20,28 M12,28 L4,28 L4,20" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.65" StrokeStartLineCap="Square" StrokeEndLineCap="Square"/></Canvas></Viewbox>
+ </Button>
+ <Button x:Name="CloseSidebarButton" Width="35" Height="38" Padding="0" Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Seitenleiste schließen'}" Click="CloseSidebar_Click"><ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}" Width="22" Height="22"/></Button>
+ </StackPanel></Grid>
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
                     </ScrollViewer>
@@ -1082,62 +1048,15 @@
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <StackPanel x:Name="GpsControlsPanel" Grid.Row="0" Margin="0,0,0,6">
-                            <!-- The launcher shares the coordinate line. The regular
-                                 map controls stay at their original widths, even in
-                                 the narrow default GPS sidebar. -->
-                            <DockPanel LastChildFill="True" Margin="0,0,0,5">
-                                <ToggleButton x:Name="GpsEditorToggle" DockPanel.Dock="Right"
-                                              Width="31" Height="28" Padding="4" Margin="6,0,0,0"
-                                              ToolTip="{loc:Tr Key='GPS-Werkzeuge: suchen, bearbeiten und filtern'}"
-                                              Checked="GpsEditorToggle_Changed"
-                                              Unchecked="GpsEditorToggle_Changed">
-                                    <Viewbox Width="19" Height="19">
-                                        <Canvas Width="24" Height="24">
-                                            <Path Data="M 12,2 C 7,2 4,6 4,11 C 4,16 12,22 12,22 C 12,22 20,16 20,11 C 20,6 17,2 12,2 Z"
-                                                  Stroke="{DynamicResource PcasaTextBrush}"
-                                                  Fill="Transparent" StrokeThickness="2"/>
-                                            <Ellipse Canvas.Left="9" Canvas.Top="8"
-                                                     Width="6" Height="6"
-                                                     Stroke="{DynamicResource PcasaTextBrush}"
-                                                     StrokeThickness="1.8"/>
-                                        </Canvas>
-                                    </Viewbox>
-                                </ToggleButton>
-                                <TextBlock x:Name="GpsCoordinatesText"
-                                           Text="{loc:Tr Key='GPS-Positionen werden geladen'}"
-                                           TextWrapping="Wrap" FontSize="12"
-                                           VerticalAlignment="Center"/>
-                            </DockPanel>
-                            <!-- Edit tools stay collapsed during ordinary GPS viewing.
-                                 Search/target are drafts, never the coordinates of the photo. -->
-                            <StackPanel x:Name="GpsEditPanel" Visibility="Collapsed">
-                            <Grid Margin="0,2,0,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0"
-                                         Height="27" VerticalContentAlignment="Center"
-                                         Padding="8,0,28,0"
-                                         ToolTip="{loc:Tr Key='Ort, Adresse oder Sehenswürdigkeit suchen'}"
-                                         KeyDown="GpsPlaceSearch_KeyDown"
-                                         TextChanged="GpsPlaceSearch_TextChanged"/>
-                                <Button x:Name="GpsPlaceSearchClearButton" Grid.Column="0"
-                                        HorizontalAlignment="Right" VerticalAlignment="Center"
-                                        Margin="0,0,2,0"
-                                        Style="{StaticResource PcasaSearchClearButtonStyle}"
-                                        ToolTip="{loc:Tr Key='Suchfilter löschen'}"
-                                        Visibility="Collapsed"
-                                        Click="GpsPlaceSearchClear_Click"/>
-                                <Button x:Name="GpsPlaceSearchButton" Grid.Column="1"
-                                        Margin="4,0,0,0" Padding="8,2"
-                                        Content="{loc:Tr Key='Suchen'}"
-                                        Click="GpsPlaceSearch_Click"/>
-                                <!-- A floating list does not reserve a second row in
-                                     the GPS sidebar. StaysOpen=False dismisses it
-                                     on outside clicks, including a map click. -->
-                                <Popup x:Name="GpsPlaceResultsPopup" Grid.Column="0"
+                        <Grid x:Name="GpsControlsPanel" Grid.Row="0" Margin="0,0,0,5" SizeChanged="GpsControlsPanel_SizeChanged">
+ <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+ <Grid Grid.Row="0" Margin="0,0,0,4">
+  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+  <TextBox x:Name="GpsPlaceSearchBox" Grid.Column="0" Height="27" VerticalContentAlignment="Center" Padding="8,0,28,0"
+    ToolTip="{loc:Tr Key='Ort, Adresse oder Sehenswürdigkeit suchen'}" KeyDown="GpsPlaceSearch_KeyDown" TextChanged="GpsPlaceSearch_TextChanged"/>
+  <Button x:Name="GpsPlaceSearchClearButton" Grid.Column="0" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,2,0" Style="{StaticResource PcasaSearchClearButtonStyle}" ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed" Click="GpsPlaceSearchClear_Click"/>
+  <Button x:Name="GpsPlaceSearchButton" Grid.Column="1" Margin="4,0,0,0" Padding="8,2" Content="{loc:Tr Key='Suchen'}" Click="GpsPlaceSearch_Click"/>
+  <Popup x:Name="GpsPlaceResultsPopup" Grid.Column="0"
                                        PlacementTarget="{Binding ElementName=GpsPlaceSearchBox}"
                                        Placement="Bottom" VerticalOffset="2"
                                        Width="{Binding ActualWidth, ElementName=GpsPlaceSearchBox}"
@@ -1166,91 +1085,48 @@
                                         </ListBox>
                                     </Border>
                                 </Popup>
-                            </Grid>
-                            <WrapPanel Margin="0,0,0,3">
-                                <ToggleButton x:Name="GpsPickPositionToggle" Padding="6,3"
-                                              Margin="0,0,4,3"
-                                              Content="{loc:Tr Key='Position wählen'}"
-                                              ToolTip="{loc:Tr Key='Auf Karte klicken oder Marker ziehen'}"
-                                              Checked="GpsPickPosition_Changed"
-                                              Unchecked="GpsPickPosition_Changed"/>
-                                <Button x:Name="GpsApplyMissingButton" Padding="6,3"
-                                        Margin="0,0,4,3" IsEnabled="False"
-                                        Content="{loc:Tr Key='GPS übernehmen'}"
-                                        ToolTip="{loc:Tr Key='Nur Bilder ohne GPS verorten'}"
-                                        Click="GpsApplyMissing_Click"/>
-                                <Button x:Name="GpsReplaceButton" Padding="6,3"
-                                        Margin="0,0,4,3" IsEnabled="False"
-                                        Content="{loc:Tr Key='GPS ändern'}"
-                                        Click="GpsReplace_Click"/>
-                                <Button x:Name="GpsRemoveButton" Padding="6,3"
-                                        Margin="0,0,4,3" IsEnabled="False"
-                                        Content="{loc:Tr Key='GPS entfernen'}"
-                                        Click="GpsRemove_Click"/>
-                            </WrapPanel>
-                            <WrapPanel Margin="0,0,0,3">
-                                <Button x:Name="GpsShowAreaButton" Padding="6,3"
-                                        Margin="0,0,4,3"
-                                        Content="{loc:Tr Key='Fotos im Ausschnitt'}"
-                                        Click="GpsShowArea_Click"/>
-                                <Button x:Name="GpsClearAreaButton" Padding="6,3"
-                                        Margin="0,0,4,3" IsEnabled="False"
-                                        Content="{loc:Tr Key='Filter aufheben'}"
-                                        Click="GpsClearArea_Click"/>
-                            </WrapPanel>
-                            <TextBlock x:Name="GpsDraftCoordinates" FontSize="11"
-                                       TextWrapping="Wrap" Margin="0,0,0,2"/>
-                            <TextBlock x:Name="GpsEditStatus" FontSize="11"
-                                       TextWrapping="Wrap" Margin="0,0,0,4"
-                                       Foreground="{DynamicResource PcasaTextBrush}"/>
-                            </StackPanel>
-                            <DockPanel LastChildFill="False">
-                                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-
-                                    <Button x:Name="GpsProviderButton"
-                                            Width="82" Height="31" Padding="1,0"
-                                            ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}"
-                                            Style="{StaticResource PcasaStatusButtonStyle}"
-                                            Click="GpsProviderButton_Click">
-                                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                                            <TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/>
-                                            <Path Data="M 2,3 L 7,8 L 12,3" Width="11" Height="8"
-                                                  Margin="7,4,0,0" Stretch="Fill"
-                                                  Stroke="{DynamicResource PcasaTextBrush}"
-                                                  StrokeThickness="2.3"/>
-                                        </StackPanel>
-                                    </Button>
-                                    <ToggleButton x:Name="GpsFilmstripToggle" Width="34" Height="31"
-                                                  Margin="5,0,0,0" Padding="3"
-                                                  ToolTip="{loc:Tr Key='Filmstreifen'}"
-                                                  Checked="GpsFilmstripToggle_Changed"
-                                                  Unchecked="GpsFilmstripToggle_Changed">
-                                        <Viewbox Width="21" Height="19">
-                                            <Canvas Width="28" Height="24">
-                                                <Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18"
-                                                           RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}"
-                                                           StrokeThickness="2.2"/>
-                                                <Path Data="M 8,3 V21 M 20,3 V21"
-                                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"/>
-                                                <Path Data="M 3,8 H6 M 3,16 H6 M 22,8 H25 M 22,16 H25"
-                                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.0"/>
-                                                <Path Data="M 11,8 L17,12 L11,16 Z"
-                                                      Fill="{DynamicResource PcasaTextBrush}"/>
-                                            </Canvas>
-                                        </Viewbox>
-                                    </ToggleButton>
-                                </StackPanel>
-                                <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                                    <Button x:Name="GpsCopyButton" Padding="6,2"
-                                            Content="{loc:Tr Key='GPS kopieren'}"
-                                            Margin="0,0,6,0"
-                                            Click="GpsCopy_Click" IsEnabled="False"/>
-                                    <Button x:Name="GpsGoogleButton" Padding="6,2"
-                                            Content="{loc:Tr Key='Google Maps'}"
-                                            Click="GpsGoogle_Click" IsEnabled="False"/>
-                                </StackPanel>
-                            </DockPanel>
-                        </StackPanel>
+ </Grid>
+ <Grid x:Name="GpsEditPanel" Grid.Row="1" Margin="0,0,0,4">
+  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+  <ToggleButton x:Name="GpsPickPositionToggle" Grid.Column="0" Height="31" Padding="3,1" Margin="0,0,3,0" Checked="GpsPickPosition_Changed" Unchecked="GpsPickPosition_Changed" ToolTip="{loc:Tr Key='Auf Karte klicken oder Marker ziehen'}">
+ <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M12,2 C7,2 4,6 4,11 C4,16 12,22 12,22 C12,22 20,16 20,11 C20,6 17,2 12,2 Z M9,11 A3,3 0 1 0 15,11 A3,3 0 1 0 9,11" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsPickPositionToggleCaption" Text="{loc:Tr Key='Wählen'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
+ </ToggleButton>
+  <Button x:Name="GpsApplyMissingButton" Grid.Column="1" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsApplyMissing_Click" ToolTip="{loc:Tr Key='Nur Bilder ohne GPS verorten'}">
+ <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M3,4 H13 L22,13 L13,22 L3,12 Z M7,9 L7.2,9" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsApplyMissingButtonCaption" Text="{loc:Tr Key='Übernehmen'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
+ </Button>
+  <Button x:Name="GpsReplaceButton" Grid.Column="2" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsReplace_Click" ToolTip="{loc:Tr Key='GPS ändern'}">
+ <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M4,8 V5 H20 L16,1 M20,5 L16,9 M20,16 V19 H4 L8,15 M4,19 L8,23" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsReplaceButtonCaption" Text="{loc:Tr Key='Ändern'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
+ </Button>
+  <Button x:Name="GpsRemoveButton" Grid.Column="3" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsRemove_Click" ToolTip="{loc:Tr Key='GPS entfernen'}">
+ <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M4,6 H20 M9,6 V3 H15 V6 M7,8 L8,21 H16 L17,8 M10,11 V18 M14,11 V18" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsRemoveButtonCaption" Text="{loc:Tr Key='Entfernen'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
+ </Button>
+ </Grid>
+ <Grid Grid.Row="2" Height="31" Margin="0,0,0,4">
+  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+  <Button x:Name="GpsShowAreaButton" Grid.Column="0" Margin="0,0,4,0" Padding="3,1" ToolTip="{loc:Tr Key='Fotos im Ausschnitt'}" Click="GpsShowArea_Click">
+   <StackPanel Orientation="Horizontal"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M3,4 H21 V20 H3 Z M5,17 L10,11 L13,14 L17,10 L21,16" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsShowAreaCaption" Text="{loc:Tr Key='Im Ausschnitt'}" FontSize="12" VerticalAlignment="Center"/></StackPanel></Button>
+  <Button x:Name="GpsClearAreaButton" Grid.Column="1" Margin="0,0,4,0" Padding="3,1" IsEnabled="False" ToolTip="{loc:Tr Key='Filter aufheben'}" Click="GpsClearArea_Click">
+   <StackPanel Orientation="Horizontal"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M3,4 H21 L14,12 V20 L10,22 V12 Z" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsClearAreaCaption" Text="{loc:Tr Key='Aufheben'}" FontSize="12" VerticalAlignment="Center"/></StackPanel></Button>
+  <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="5,0,0,0">
+   <TextBlock x:Name="GpsDraftCoordinates" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+   <TextBlock x:Name="GpsEditStatus" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource PcasaTextBrush}"/>
+  </StackPanel>
+ </Grid>
+ <Grid Grid.Row="3" Height="31">
+  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+  <Button x:Name="GpsCopyButton" Grid.Column="0" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsCopy_Click" ToolTip="{loc:Tr Key='GPS kopieren'}">
+ <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M5,3 H15 L20,8 V21 H5 Z M15,3 V8 H20" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsCopyButtonCaption" Text="{loc:Tr Key='GPS kopieren'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
+ </Button>
+  <Button x:Name="GpsGoogleButton" Grid.Column="1" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsGoogle_Click" ToolTip="{loc:Tr Key='Google Maps'}">
+ <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M14,4 H21 V11 M21,4 L11,14 M19,14 V20 H4 V5 H11" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsGoogleButtonCaption" Text="{loc:Tr Key='Google Maps'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
+ </Button>
+  <Button x:Name="GpsProviderButton" Grid.Column="2" Width="82" Height="31" Padding="1,0" ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsProviderButton_Click">
+   <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/><Path Data="M2,3 L7,8 L12,3" Width="11" Height="8" Margin="7,4,0,0" Stretch="Fill" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/></StackPanel></Button>
+  <ToggleButton x:Name="GpsFilmstripToggle" Grid.Column="3" Width="34" Height="31" Margin="5,0,0,0" Padding="3" ToolTip="{loc:Tr Key='Filmstreifen'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed">
+   <Viewbox Width="21" Height="19"><Canvas Width="28" Height="24"><Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18" RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"/><Path Data="M8,3 V21 M20,3 V21 M3,8 H6 M3,16 H6 M22,8 H25 M22,16 H25" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/><Path Data="M11,8 L17,12 L11,16 Z" Fill="{DynamicResource PcasaTextBrush}"/></Canvas></Viewbox>
+  </ToggleButton>
+ </Grid>
+</Grid>
                         <Grid Grid.Row="2" x:Name="GpsMapHost" Background="{DynamicResource PcasaWindowBrush}"
                               ClipToBounds="True">
                             <TextBlock x:Name="GpsMapStatus"

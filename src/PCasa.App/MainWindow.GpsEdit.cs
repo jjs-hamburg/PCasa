@@ -43,17 +43,6 @@ public partial class MainWindow
     private readonly HashSet<long> _gpsEditSelectionIds = new();
     private long? _gpsEditFocusedImageId;
 
-    private void GpsEditorToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        if (GpsEditPanel is null) return;
-        var isOpen = GpsEditorToggle.IsChecked == true;
-        GpsEditPanel.Visibility = isOpen ? Visibility.Visible : Visibility.Collapsed;
-        if (isOpen)
-            GpsPlaceSearchBox.Focus();
-        else
-            ClearGpsEditorDraft();
-    }
-
     // Called synchronously before the selected photo's async GPS lookup.
     // The draft belongs to the previous photo selection, NOT to the map
     // camera or to the newly focused photo.
@@ -67,7 +56,6 @@ public partial class MainWindow
         _gpsEditSelectionIds.UnionWith(selectedIds);
         _gpsEditFocusedImageId = _gallerySelection.FocusedId;
         ClearGpsEditorDraft();
-        GpsEditorToggle.IsChecked = false;
         GpsCoordinatesText.Text = UiLanguage.T("GPS-Positionen werden geladen");
     }
 
@@ -282,9 +270,9 @@ public partial class MainWindow
 
     private void SetGpsDraft(double lat, double lon, bool recenter)
     {
-        // Ignore a delayed Chromium drag event after switching to another
-        // photo or closing the GPS editing tools.
-        if (GpsEditorToggle.IsChecked != true) return;
+        // A delayed Chromium drag from an inactive GPS sidebar must never
+        // create an editable target for another selection.
+        if (_sidebarMode != "GPS") return;
         if (!double.IsFinite(lat) || !double.IsFinite(lon) ||
             lat < -90 || lat > 90 || lon < -180 || lon > 180) return;
         _gpsDraft = (lat, lon);
@@ -375,8 +363,7 @@ public partial class MainWindow
                 "GPS-Auftrag für {0} Bilder gespeichert.", ids.Length);
             // An accepted persistent package owns an immutable coordinate
             // snapshot; keeping its draft in the editor is misleading.
-            GpsEditorToggle.IsChecked = false;
-            ClearGpsEditorDraft();
+                ClearGpsEditorDraft();
             _ = ObserveGpsEditAsync(completion, key);
         }
         catch (Exception ex)
