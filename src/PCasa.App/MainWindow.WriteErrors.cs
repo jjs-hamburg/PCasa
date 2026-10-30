@@ -151,15 +151,19 @@ public partial class MainWindow
 
         void Refresh()
         {
-            var list = errors.Unresolved().ToArray();
+            var list = errors.Unresolved(includeRetrying: true).ToArray();
             table.ItemsSource = list;
-            caption.Text = UiLanguage.Format("{0} unerledigte Schreibfehler (GPS und Tags)", list.Length);
-            retrySelected.IsEnabled = discardSelected.IsEnabled = list.Length > 0;
-            retryAll.IsEnabled = discardAll.IsEnabled = list.Length > 0;
+            caption.Text = UiLanguage.Format("{0} Schreibfehler (GPS und Tags)", list.Length) +
+                " · " + UiLanguage.T("Bis zum dritten Versuch erfolgt die Wiederholung automatisch.");
+            retrySelected.IsEnabled = discardSelected.IsEnabled = list.Any(entry =>
+                entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts);
+            retryAll.IsEnabled = discardAll.IsEnabled = retrySelected.IsEnabled;
         }
         OriginalWriteFailureRepository.FailedFile[] Selected(bool all) =>
-            all ? errors.Unresolved().ToArray()
-                : table.SelectedItems.Cast<OriginalWriteFailureRepository.FailedFile>().ToArray();
+            (all ? errors.Unresolved(includeRetrying: true)
+                : table.SelectedItems.Cast<OriginalWriteFailureRepository.FailedFile>())
+            .Where(entry => entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts)
+            .ToArray();
 
         async Task Perform(bool retry, bool all)
         {
