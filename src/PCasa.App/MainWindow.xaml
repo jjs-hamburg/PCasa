@@ -882,27 +882,6 @@
                         </Border>
                     </Grid>
 
-                        <!-- The GPS photo viewer is placed in the GALLERY workspace,
-                             never on the map; its preview follows the filmstrip
-                             without replacing the main gallery selection. -->
-                        <Grid x:Name="GpsFullscreenImageOverlay" Panel.ZIndex="30"
-                              Visibility="Collapsed" Background="#F51C1D20"
-                              Cursor="Hand"
-                              MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
-                            <Image x:Name="GpsFullscreenImage" Stretch="Uniform"
-                                   Margin="18,38,18,18" IsHitTestVisible="False"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                            <TextBlock x:Name="GpsFullscreenImageStatus"
-                                       Text="{loc:Tr Key='Bild wird geladen'}"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center" TextWrapping="Wrap"
-                                       Foreground="White" IsHitTestVisible="False"/>
-                            <TextBlock x:Name="GpsFullscreenImageCaption"
-                                       HorizontalAlignment="Left" VerticalAlignment="Top"
-                                       Margin="18,12" FontSize="13" Foreground="White"
-                                       IsHitTestVisible="False"/>
-                        </Grid>
-
                     <StackPanel x:Name="EmptyPanel"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -1268,6 +1247,31 @@
                     </Grid>
                 </Grid>
             </Border>
+            <!-- Shared overlay is a workspace-level sibling above the GPS map.
+                 Side-by-side shows it in the gallery column; GPS fullscreen
+                 shows a floating photo while the map stays fullscreen. -->
+            <Grid x:Name="GpsFullscreenImageOverlay" Grid.Column="2"
+                  Panel.ZIndex="30" Visibility="Collapsed"
+                  Background="#F51C1D20" Cursor="Hand"
+                  MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
+                <Border x:Name="GpsFullscreenImageFrame" Background="#F51C1D20"
+                        CornerRadius="5">
+                    <Grid>
+                        <Image x:Name="GpsFullscreenImage" Stretch="Uniform"
+                               Margin="18,38,18,18" IsHitTestVisible="False"
+                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <TextBlock x:Name="GpsFullscreenImageStatus"
+                                   Text="{loc:Tr Key='Bild wird geladen'}"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center" TextWrapping="Wrap"
+                                   Foreground="White" IsHitTestVisible="False"/>
+                        <TextBlock x:Name="GpsFullscreenImageCaption"
+                                   HorizontalAlignment="Left" VerticalAlignment="Top"
+                                   Margin="18,12" FontSize="13" Foreground="White"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
+                </Border>
+            </Grid>
         </Grid>
 
         <Border Grid.Row="3"
