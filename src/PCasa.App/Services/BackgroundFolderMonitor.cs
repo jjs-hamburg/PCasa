@@ -209,15 +209,11 @@ public sealed class BackgroundFolderMonitor : IDisposable
             BackgroundFolderChangeKind.RemovePath,
             Recursive: false));
 
-        var parent = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(parent))
-        {
-            Raise(new BackgroundFolderChange(
-                state.Folder.Id,
-                parent,
-                BackgroundFolderChangeKind.ScanDirectory,
-                Recursive: false));
-        }
+        // A deletion (including a directory) is already reconciled by the
+        // targeted RemovePath request. Re-enumerating its entire parent here
+        // caused thousands of unrelated images to be checked after ExifTool's
+        // safe original-file replacement. The watcher also emits Created and
+        // Changed for the resulting file, each handled by ScanFile.
     }
 
     private void OnRenamed(WatcherState state, RenamedEventArgs e)
@@ -245,15 +241,14 @@ public sealed class BackgroundFolderMonitor : IDisposable
 
         if (FolderScanner.IsSupportedImagePath(e.FullPath))
         {
-            var parent = Path.GetDirectoryName(e.FullPath);
-            if (!string.IsNullOrWhiteSpace(parent))
-            {
-                Raise(new BackgroundFolderChange(
-                    state.Folder.Id,
-                    parent,
-                    BackgroundFolderChangeKind.ScanDirectory,
-                    Recursive: false));
-            }
+            // The destination FILE (not its parent) owns this inventory.
+            // Its source metadata and packed thumbnail will be checked via
+            // the same scanner path as an ordinary Changed/Created event.
+            Raise(new BackgroundFolderChange(
+                state.Folder.Id,
+                e.FullPath,
+                BackgroundFolderChangeKind.ScanFile,
+                Recursive: false));
         }
     }
 
