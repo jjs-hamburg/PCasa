@@ -252,6 +252,23 @@ internal static class Program
             // light theme they must be pale gray with dark labels; in the
             // dark theme they keep the original charcoal/white appearance.
             ChooseAppearance("theme", "Light");
+            // App palettes alone are not sufficient: native dialog controls
+            // and window chrome must follow the WPF Fluent theme too.
+#pragma warning disable WPF0001
+            if (Application.Current.ThemeMode != ThemeMode.Light)
+                throw new Exception("Light appearance left WPF controls in Dark mode.");
+#pragma warning restore WPF0001
+            ConfigureAppearance(dialog =>
+            {
+                var nativeControls = Descendants<Control>(dialog)
+                    .Where(control => control is RadioButton or CheckBox or Button).ToArray();
+                if (nativeControls.Length < 20 || nativeControls.Any(control =>
+                        control.Foreground is not SolidColorBrush foreground ||
+                        foreground.Color.R > 100 ||
+                        foreground.Color.G > 100 ||
+                        foreground.Color.B > 100))
+                    throw new Exception("Light appearance dialog has unreadable control text.");
+            }, false);
             var checkedTags = (RadioButton?)window.FindName("SearchTagsMode")
                 ?? throw new Exception("Tags filter missing.");
             var checkedAll = (RadioButton?)window.FindName("SearchAllScope")
@@ -282,6 +299,21 @@ internal static class Program
                 throw new Exception("Light NOT or inactive label has wrong contrast.");
             ChooseAppearance("theme", "Dark");
             Flush(window);
+#pragma warning disable WPF0001
+            if (Application.Current.ThemeMode != ThemeMode.Dark)
+                throw new Exception("Dark appearance left WPF controls in Light mode.");
+#pragma warning restore WPF0001
+            ConfigureAppearance(dialog =>
+            {
+                var nativeControls = Descendants<Control>(dialog)
+                    .Where(control => control is RadioButton or CheckBox or Button).ToArray();
+                if (nativeControls.Length < 20 || nativeControls.Any(control =>
+                        control.Foreground is not SolidColorBrush foreground ||
+                        foreground.Color.R < 180 ||
+                        foreground.Color.G < 180 ||
+                        foreground.Color.B < 180))
+                    throw new Exception("Dark appearance dialog has unreadable control text.");
+            }, false);
             if (checkedTags.Foreground is not SolidColorBrush darkText ||
                 darkText.Color.R < 220 ||
                 notForColors.Foreground is not SolidColorBrush darkNotText ||
@@ -1052,13 +1084,72 @@ internal static class Program
             {
                 viewerOpenField.SetValue(window, true);
                 viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
-                    999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 2400, 1600));
+                    999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 4000, 1000));
                 panel.Visibility = Visibility.Visible;
                 Flush(window);
                 fitField.SetValue(window, true);
                 zoomField.SetValue(window, 100d);
                 applyLayout.Invoke(window, null);
                 Flush(window);
+                // Exercise a real measured sidebar transition while the
+                // picture viewer is active, without invoking network/GPS IO.
+                var sidebarModeField = viewerType.GetField("_sidebarMode", reflectFlags)!;
+                var relayoutWorkspace = viewerType.GetMethod(
+                    "UpdateWorkspaceLayoutPreservingGallery", reflectFlags)!;
+                var previousMode = sidebarModeField.GetValue(window);
+                try
+                {
+                    sidebarModeField.SetValue(window, null);
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    var fullWidth = viewerScroller.ViewportWidth;
+                    var fullImageWidth = viewerImage.Width;
+                    sidebarModeField.SetValue(window, "GPS");
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    var narrowedWidth = viewerScroller.ViewportWidth;
+                    var narrowedImageWidth = viewerImage.Width;
+                    if (narrowedWidth >= fullWidth - 50 ||
+                        narrowedImageWidth >= fullImageWidth - 20 ||
+                        narrowedImageWidth > narrowedWidth + 2)
+                        throw new Exception("GPS sidebar did not refit the open viewer.");
+                    sidebarModeField.SetValue(window, null);
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    if (viewerScroller.ViewportWidth <= narrowedWidth + 50 ||
+                        viewerImage.Width <= narrowedImageWidth + 20 ||
+                        viewerImage.Width > viewerScroller.ViewportWidth + 2 ||
+                        !(bool)fitField.GetValue(window)!)
+                        throw new Exception("Closing GPS did not fill the restored Fit viewport.");
+
+                    fitField.SetValue(window, false);
+                    zoomField.SetValue(window, 135d);
+                    applyLayout.Invoke(window, null);
+                    Flush(window);
+                    var manualWidth = viewerImage.Width;
+                    sidebarModeField.SetValue(window, "GPS");
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    sidebarModeField.SetValue(window, null);
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    if ((bool)fitField.GetValue(window)! ||
+                        Math.Abs((double)zoomField.GetValue(window)! - 135d) > .01 ||
+                        Math.Abs(viewerImage.Width - manualWidth) > 2)
+                        throw new Exception("Sidebar switch changed manual zoom percentage.");
+                    Console.WriteLine(
+                        "PASS: GPS toggle refits Fit and preserves explicit zoom.");
+                }
+                finally
+                {
+                    sidebarModeField.SetValue(window, previousMode);
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    fitField.SetValue(window, true);
+                    zoomField.SetValue(window, 100d);
+                    applyLayout.Invoke(window, null);
+                    Flush(window);
+                }
                 toggleFullscreen.Invoke(window, null);
                 Flush(window);
                 if (fullscreenField.GetValue(window) is not Window)
