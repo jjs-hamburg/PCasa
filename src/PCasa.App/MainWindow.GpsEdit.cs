@@ -439,9 +439,6 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("GPS.Edit.Package", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                GpsEditStatus.Text = UiLanguage.T(
-                    "GPS-Schreibvorgang unterbrochen; im Scheduler gespeichert.");
         }
         finally
         {
