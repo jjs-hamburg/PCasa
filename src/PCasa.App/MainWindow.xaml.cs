@@ -36,6 +36,9 @@ public partial class MainWindow : Window
 
         _database = new LocalDatabase();
         _database.Initialize();
+        // Prepare the shared write-error ledger and migrate older GPS errors
+        // before scheduler recovery can start any original-file write.
+        _ = new OriginalWriteFailureRepository(_database).Unresolved();
         _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
         _scheduler.EnableDurablePackages(_database);
         _durableGalleryTransfers.PruneCompleted();
