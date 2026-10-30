@@ -93,8 +93,8 @@ public partial class MainWindow
         {
             Owner = this,
             Title = UiLanguage.T("Schreibfehler"),
-            Width = 1020, Height = 580,
-            MinWidth = 650, MinHeight = 350,
+            Width = 1280, Height = 600,
+            MinWidth = 850, MinHeight = 360,
             WindowStartupLocation = WindowStartupLocation.CenterOwner
         };
         dialog.SetResourceReference(Window.BackgroundProperty, "PcasaWindowBrush");
@@ -212,7 +212,7 @@ public partial class MainWindow
                     list.Add(deferred);
             table.ItemsSource = list;
             caption.Text = UiLanguage.Format("{0} Schreibfehler (GPS und Tags)", list.Count) +
-                " · " + UiLanguage.T("Bis zum dritten Versuch erfolgt die Wiederholung automatisch.");
+                " · " + UiLanguage.T("Ab Versuch 3: Erneut oder Verwerfen direkt in der Zeile wählen.");
             UpdateButtons();
         }
         OriginalWriteFailureRepository.FailedFile[] Selected(bool all) =>
