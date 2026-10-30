@@ -345,7 +345,11 @@ public partial class MainWindow
                 GpsMapStatus.Visibility = Visibility.Collapsed;
                 ApplyGpsMapProvider();
                 SendGpsPointsToMap();
-                if (_appearance.GpsMapCenterLat is double savedCenterLat &&
+                // Restore an old viewport ONLY if no current GPS selection
+                // owns the camera. Otherwise the transfer's fitBounds must
+                // win; a persisted single-photo viewport hid whole continents.
+                if (_selectedImageIds.Count == 0 &&
+                    _appearance.GpsMapCenterLat is double savedCenterLat &&
                     _appearance.GpsMapCenterLon is double savedCenterLon &&
                     _appearance.GpsMapZoom is double savedZoom)
                     _gpsBrowser.ExecuteScriptAsync("window.pcasaRestoreViewport?.(" +
@@ -537,6 +541,17 @@ public partial class MainWindow
             ? UiLanguage.Format("GPS für {0:N0} ausgewählte Fotos wird gelesen …", selectedIds.Length)
             : UiLanguage.T("GPS-Positionen werden geladen");
         ResetGpsEditorOnSelectionChange(selectedIds);
+        if (!_gpsGoogleWebsiteActive && _gpsBrowserReady &&
+            _gpsBrowser is { IsDisposed: false } map)
+        {
+            // Invalidate an older map transfer as soon as selection changes.
+            // Never display a stale Italy marker while 6,229 photos are
+            // awaiting their new catalog query.
+            var loadingRevision = ++_gpsMapTransferRevision;
+            map.ExecuteScriptAsync("window.pcasaBeginPoints(" +
+                loadingRevision + ",0);window.pcasaCommitPoints(" +
+                loadingRevision + ")");
+        }
         var folderId = _activePhotoFolderId;
         try
         {
