@@ -43,6 +43,10 @@ jobs:
       - name: Bundle pinned MapLibre JS and CSS into PCasa.App.dll
         shell: pwsh
         run: ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+      - name: Run WPF window smoke tests
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
       - name: Probe EXIF reader, GPS fields and legacy backfill
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
@@ -60,10 +64,6 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release
-      - name: Run WPF window smoke tests
-        shell: pwsh
-        run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
       - name: Exercise real WPF context-menu folder removal under active cache lock
         shell: pwsh
         run: |
