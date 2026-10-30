@@ -416,7 +416,7 @@ public partial class MainWindow
                     // permanently corrupt file. SourceAvailabilityGate already
                     // coalesces the root probe and the scheduler owns retries.
                     if (currentPath is not null &&
-                        ex is IOException or UnauthorizedAccessException &&
+                        (ex is IOException or UnauthorizedAccessException) &&
                         !_scheduler.SourceAvailability.CheckAfterSourceError(
                             currentPath, token))
                         throw new DurablePackageRetryException(
