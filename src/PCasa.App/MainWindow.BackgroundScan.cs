@@ -181,7 +181,8 @@ public partial class MainWindow
         {
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
-            var (folders, availability, exclusions, pendingInitialIds) = await _scheduler.RunAsync(
+            var (folders, availability, exclusions, pendingInitialIds,
+                interruptedInventories) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -196,7 +197,12 @@ public partial class MainWindow
                     // monitor snapshot, not by a second SQLite read on WPF.
                     var pending = _folderRepository.GetPendingInitialScans()
                         .Select(root => root.Id).ToHashSet();
-                    return (roots, states, rules, pending);
+                    // Read the already committed inventory identities in
+                    // the SAME scheduler snapshot. A process restart must
+                    // continue an unfinished automatic scan, not manufacture
+                    // another root scan with a different checkpoint key.
+                    var inventories = _folderRepository.GetPendingAutomaticInventories();
+                    return (roots, states, rules, pending, inventories);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -255,11 +261,27 @@ public partial class MainWindow
                     continue;
                 if (_backgroundKnownFolderIds.Add(folder.Id))
                 {
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        folder.Id,
-                        folder.LocalPath,
-                        BackgroundFolderChangeKind.RescanRoot,
-                        Recursive: true));
+                    // The scanner itself owns all file/directory checkpoints.
+                    // Restore its original request identity after restart,
+                    // not merely a new request for the same root.
+                    var restored = interruptedInventories
+                        .Where(receipt => receipt.MonitoredFolderId == folder.Id)
+                        .Select(TryRecoverAutomaticInventory)
+                        .Where(request => request is not null)
+                        .Cast<BackgroundFolderChange>()
+                        .ToArray();
+                    if (restored.Length > 0)
+                    {
+                        foreach (var request in restored)
+                            QueueBackgroundChange(request);
+                    }
+                    else
+                    {
+                        QueueBackgroundChange(new BackgroundFolderChange(
+                            folder.Id, folder.LocalPath,
+                            BackgroundFolderChangeKind.RescanRoot,
+                            Recursive: true));
+                    }
                 }
             }
         }
@@ -313,6 +335,37 @@ public partial class MainWindow
         foreach (var child in item.Items.OfType<System.Windows.Controls.TreeViewItem>())
         {
             SetFolderTreeAvailability(child, inheritedOffline || unavailable);
+        }
+    }
+
+    private static BackgroundFolderChange? TryRecoverAutomaticInventory(
+        FolderRepository.PendingAutomaticInventory receipt)
+    {
+        var prefix = $"background:inventory:{receipt.MonitoredFolderId}:" +
+                     $"{receipt.SourceGeneration}:";
+        if (!receipt.ScanKey.StartsWith(prefix, StringComparison.Ordinal))
+            return null;
+        var parts = receipt.ScanKey[prefix.Length..]
+            .Split(new[] { ':' }, 3);
+        if (parts.Length != 3 ||
+            !Enum.TryParse<BackgroundFolderChangeKind>(parts[0], out var kind) ||
+            kind is not (BackgroundFolderChangeKind.RescanRoot or
+                         BackgroundFolderChangeKind.ScanDirectory) ||
+            !bool.TryParse(parts[1], out var recursive))
+            return null;
+        try
+        {
+            var path = Path.GetFullPath(parts[2]).Replace('/', '\\');
+            if (!string.Equals(path, receipt.ScanRoot,
+                    StringComparison.OrdinalIgnoreCase))
+                return null;
+            return new BackgroundFolderChange(
+                receipt.MonitoredFolderId, path, kind, recursive);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException
+                                   or PathTooLongException)
+        {
+            return null;
         }
     }
 
