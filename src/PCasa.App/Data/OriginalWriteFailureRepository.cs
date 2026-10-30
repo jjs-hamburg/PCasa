@@ -97,7 +97,7 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
-    public bool IsParked(string kind, long imageId)
+    public bool IsParked(string kind, long imageId, string? packageKey = null)
     {
         using var db = database.OpenConnection();
         EnsureSchema(db);
@@ -105,11 +105,13 @@ public sealed class OriginalWriteFailureRepository(LocalDatabase database)
         cmd.CommandText = """
             SELECT EXISTS(SELECT 1 FROM original_write_failures
                 WHERE kind=$kind AND image_id=$id AND resolved=0
-                  AND attempts >= $maximum);
+                  AND attempts >= $maximum
+                  AND ($key IS NULL OR package_key=$key));
             """;
         cmd.Parameters.AddWithValue("$kind", kind);
         cmd.Parameters.AddWithValue("$id", imageId);
         cmd.Parameters.AddWithValue("$maximum", MaximumAttempts);
+        cmd.Parameters.AddWithValue("$key", (object?)packageKey ?? DBNull.Value);
         return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
     }
 
