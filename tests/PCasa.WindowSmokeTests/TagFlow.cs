@@ -2836,6 +2836,58 @@ internal static class TagFlow
                 writeErrors.Clear(OriginalWriteFailureRepository.Gps,gpsA);
             }
 
+            // Real modal error review: BOTH actions must be available for
+            // a selected three-attempt failure, and not for a transient one.
+            // This guards the previously unusable "Write errors" dialog.
+            var sharedErrors = new OriginalWriteFailureRepository(db);
+            const string reviewKey = "gps:test:review-buttons";
+            sharedErrors.RecordFailure(OriginalWriteFailureRepository.Gps,
+                reviewKey, gpsA, new TimeoutException("Synthetic GPS write timed out"),
+                permanent: true);
+            Exception? reviewFailure = null;
+            try
+            {
+                window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle,
+                    new Action(() =>
+                    {
+                        var review = Application.Current.Windows.Cast<Window>()
+                            .FirstOrDefault(w => w.Title == UiLanguage.T("Schreibfehler"));
+                        try
+                        {
+                            if (review?.Content is not Grid reviewRoot)
+                                throw new Exception("Write errors modal is not open.");
+                            var table = reviewRoot.Children.OfType<DataGrid>().Single();
+                            var row = table.Items.Cast<OriginalWriteFailureRepository.FailedFile>()
+                                .FirstOrDefault(item => item.PackageKey == reviewKey)
+                                ?? throw new Exception("Parked GPS original is missing from error table.");
+                            var templates = table.Columns.OfType<DataGridTemplateColumn>().ToArray();
+                            if (templates.Length != 2)
+                                throw new Exception("Write errors has no explicit row Retry/Discard actions.");
+                            foreach (var template in templates)
+                            {
+                                var button = (Button?)template.CellTemplate.LoadContent()
+                                    ?? throw new Exception("Review action button missing.");
+                                button.DataContext = row;
+                                button.ApplyTemplate();
+                                if (!button.IsEnabled)
+                                    throw new Exception("A three-attempt error has disabled row actions.");
+                                button.DataContext = row with { Attempts = 1 };
+                                button.ApplyTemplate();
+                                if (button.IsEnabled)
+                                    throw new Exception("A transient failure allows premature discard.");
+                            }
+                        }
+                        catch (Exception ex) { reviewFailure = ex; }
+                        finally { review?.Close(); }
+                    }));
+                typeof(PCasa.App.MainWindow).GetMethod("ShowWriteErrorsDialog",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!.Invoke(window,null);
+                if (reviewFailure is not null) throw reviewFailure;
+            }
+            finally { sharedErrors.Clear(OriginalWriteFailureRepository.Gps,gpsA); }
+            Console.WriteLine("PASS: Write errors modal offers working per-file decisions after third attempt.");
+
             // Explicitly leave an EXIF reader and keyword writer session
             // alive (not disposed) when closing. The app MUST kill both
             // owned native children after the scheduler's journal finishes.
