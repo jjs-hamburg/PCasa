@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private readonly LocalDatabase _database;
     private readonly FolderRepository _folderRepository;
     private readonly ImageCatalogRepository _imageCatalog;
+    private readonly OriginalWriteFailureRepository _originalWriteFailures;
     private readonly FolderScanner _folderScanner;
     private readonly HashSet<long> _selectedImageIds = new();
     private readonly Dictionary<long, TreeViewItem> _folderTreeItems = new();
@@ -38,7 +39,7 @@ public partial class MainWindow : Window
         _database.Initialize();
         // Prepare the shared write-error ledger and migrate older GPS errors
         // before scheduler recovery can start any original-file write.
-        _ = new OriginalWriteFailureRepository(_database).Unresolved();
+        _originalWriteFailures = new OriginalWriteFailureRepository(_database);
         _durableGalleryTransfers = new DurableGalleryTransferJournal(_database);
         _scheduler.EnableDurablePackages(_database);
         _durableGalleryTransfers.PruneCompleted();
