@@ -57,7 +57,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] { "Datei", "Bearbeiten",
-                    "Ordner", "Optionen", "Hilfe" }))
+                    "Ordner", "Optionen", "Darstellung", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             Console.WriteLine("PASS: Real MainWindow creates expected menu.");
