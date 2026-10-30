@@ -151,9 +151,13 @@ public partial class MainWindow
 
         void Refresh()
         {
-            var list = errors.Unresolved(includeRetrying: true).ToArray();
+            var list = errors.Unresolved(includeRetrying: true).ToList();
+            foreach (var deferred in errors.DeferredGpsSteps())
+                if (!list.Any(entry => entry.Kind == deferred.Kind &&
+                    entry.ImageId == deferred.ImageId))
+                    list.Add(deferred);
             table.ItemsSource = list;
-            caption.Text = UiLanguage.Format("{0} Schreibfehler (GPS und Tags)", list.Length) +
+            caption.Text = UiLanguage.Format("{0} Schreibfehler (GPS und Tags)", list.Count) +
                 " · " + UiLanguage.T("Bis zum dritten Versuch erfolgt die Wiederholung automatisch.");
             retrySelected.IsEnabled = discardSelected.IsEnabled = list.Any(entry =>
                 entry.Attempts >= OriginalWriteFailureRepository.MaximumAttempts);
