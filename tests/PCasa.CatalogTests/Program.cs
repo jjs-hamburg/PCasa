@@ -1009,8 +1009,14 @@ internal static class Program
         for (var i = 0; i < 9; i++)
             WriteJpeg(Path.Combine(directory, $"photo-{i:D4}.jpg"));
         var (db, root, scanner) = sandbox.Prepare();
-        var generation = new FolderRepository(db)
-            .GetSourceState(root.CanonicalPath)!.Value.Generation;
+        var folders = new FolderRepository(db);
+        var generation = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        // This test models an ORDINARY background reconciliation after the
+        // root was imported previously. An open first-import receipt is
+        // owned by the independent durable initial-import recovery path.
+        if (!folders.CompleteInitialScan(root.Id, generation,
+                folders.GetScanEpoch(root.CanonicalPath)))
+            throw new Exception("Test root was not marked as previously imported.");
         var key = $"background:inventory:{root.Id}:{generation}:RescanRoot:True:{root.LocalPath}";
         using var stop = new CancellationTokenSource();
         var interrupted = false;
@@ -1029,7 +1035,6 @@ internal static class Program
             throw new Exception("Regular inventory ignored cancellation.");
         }
         catch (OperationCanceledException) when (interrupted) { }
-        var folders = new FolderRepository(db);
         var saved = folders.BeginOrResumeRegularScan(key, root.Id,
             root.LocalPath, root.CanonicalPath, beginManualEpoch: false);
         if (saved.Checked != 1 ||
