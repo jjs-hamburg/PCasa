@@ -268,6 +268,13 @@ internal static class Program
                         foreground.Color.G > 100 ||
                         foreground.Color.B > 100))
                     throw new Exception("Light appearance dialog has unreadable control text.");
+                foreach (var button in nativeControls.OfType<Button>())
+                {
+                    if (button.Template.FindName("ButtonBorder", button) is not Border ||
+                        button.Background is not SolidColorBrush surface ||
+                        surface.Color.R < 180 || surface.Color.G < 180)
+                        throw new Exception("Light dialog button surface has wrong contrast.");
+                }
             }, false);
             var checkedTags = (RadioButton?)window.FindName("SearchTagsMode")
                 ?? throw new Exception("Tags filter missing.");
@@ -313,6 +320,13 @@ internal static class Program
                         foreground.Color.G < 180 ||
                         foreground.Color.B < 180))
                     throw new Exception("Dark appearance dialog has unreadable control text.");
+                foreach (var button in nativeControls.OfType<Button>())
+                {
+                    if (button.Template.FindName("ButtonBorder", button) is not Border ||
+                        button.Background is not SolidColorBrush surface ||
+                        surface.Color.R > 110 || surface.Color.G > 110)
+                        throw new Exception("Dark dialog button has a pale native background.");
+                }
             }, false);
             if (checkedTags.Foreground is not SolidColorBrush darkText ||
                 darkText.Color.R < 220 ||
@@ -1150,6 +1164,64 @@ internal static class Program
                     applyLayout.Invoke(window, null);
                     Flush(window);
                 }
+                // GPS fullscreen is an overlay on the MAP, not a request to
+                // close the map and expand the two-column photo layout.
+                // Use the active synthetic viewer photo, with no map/network IO.
+                var gpsFullscreenFlag = viewerType.GetField("_gpsFullscreen", reflectFlags)!;
+                var gpsFullscreenClick = viewerType.GetMethod("GpsFullscreen_Click", reflectFlags)!;
+                var gpsPhotoShow = viewerType.GetMethod("ShowGpsFullscreenImage", reflectFlags)!;
+                var gpsOverlay = (Grid?)window.FindName("GpsFullscreenImageOverlay")
+                    ?? throw new Exception("GPS photo overlay missing.");
+                var gpsPhotoFrame = (Border?)window.FindName("GpsFullscreenImageFrame")
+                    ?? throw new Exception("Floating photo frame missing.");
+                var workspace = (Grid?)window.FindName("BrowseWorkspaceGrid")
+                    ?? throw new Exception("Workspace grid missing.");
+                var gpsSidebar = (Border?)window.FindName("InfoSidebarPanel")
+                    ?? throw new Exception("GPS sidebar missing.");
+                var previousGpsMode = sidebarModeField.GetValue(window);
+                try
+                {
+                    sidebarModeField.SetValue(window, "GPS");
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                    gpsFullscreenClick.Invoke(window, new object[] {
+                        window, new RoutedEventArgs(Button.ClickEvent) });
+                    Flush(window);
+                    if (!(bool)gpsFullscreenFlag.GetValue(window)! ||
+                        gpsOverlay.Visibility != Visibility.Visible ||
+                        Grid.GetColumn(gpsOverlay) != 0 ||
+                        Grid.GetColumnSpan(gpsOverlay) != 5 ||
+                        Panel.GetZIndex(gpsOverlay) <= Panel.GetZIndex(gpsSidebar) ||
+                        gpsPhotoFrame.ActualWidth >= workspace.ActualWidth)
+                        throw new Exception(
+                            "An open photo is not floating above the fullscreen GPS map.");
+                    gpsPhotoShow.Invoke(window, new object[] { 999L });
+                    Flush(window);
+                    if (!(bool)gpsFullscreenFlag.GetValue(window)! ||
+                        gpsOverlay.Visibility != Visibility.Visible)
+                        throw new Exception(
+                            "Filmstrip photo double-click exited GPS fullscreen.");
+                    gpsFullscreenClick.Invoke(window, new object[] {
+                        window, new RoutedEventArgs(Button.ClickEvent) });
+                    Flush(window);
+                    if ((bool)gpsFullscreenFlag.GetValue(window)! ||
+                        gpsOverlay.Visibility == Visibility.Visible ||
+                        !panel.IsVisible)
+                        throw new Exception(
+                            "Exiting GPS fullscreen did not restore the open viewer.");
+                    Console.WriteLine(
+                        "PASS: GPS fullscreen overlays photo without changing map mode.");
+                }
+                finally
+                {
+                    if ((bool)gpsFullscreenFlag.GetValue(window)!)
+                        gpsFullscreenClick.Invoke(window, new object[] {
+                            window, new RoutedEventArgs(Button.ClickEvent) });
+                    sidebarModeField.SetValue(window, previousGpsMode);
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                }
+
                 toggleFullscreen.Invoke(window, null);
                 Flush(window);
                 if (fullscreenField.GetValue(window) is not Window)
