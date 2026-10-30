@@ -1044,7 +1044,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <DockPanel Margin="4,0,0,12">
+                    <DockPanel x:Name="InfoSidebarHeader" Margin="4,0,0,12">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                             <Button x:Name="GpsExpandButton" Width="43" Height="42" Padding="0"
                                     Margin="0,0,6,0" Visibility="Collapsed"
@@ -1101,7 +1101,7 @@
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <StackPanel Grid.Row="0" Margin="0,0,0,6">
+                        <StackPanel x:Name="GpsControlsPanel" Grid.Row="0" Margin="0,0,0,6">
                             <!-- The launcher shares the coordinate line. The regular
                                  map controls stay at their original widths, even in
                                  the narrow default GPS sidebar. -->

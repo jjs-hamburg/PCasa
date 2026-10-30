@@ -1115,6 +1115,17 @@ internal static class TagFlow
                 !folderPane.IsVisible)
                 throw new Exception("GPS normal layout is not relative with folders visible.");
             var normalGpsWidth = gpsColumn.ActualWidth;
+            var gpsControls = (StackPanel?)window.FindName("GpsControlsPanel")
+                ?? throw new Exception("GPS controls panel missing.");
+            var gpsHeader = (DockPanel?)window.FindName("InfoSidebarHeader")
+                ?? throw new Exception("Sidebar header missing.");
+            var gpsMapHost = (Grid?)window.FindName("GpsMapHost")
+                ?? throw new Exception("GPS map host missing.");
+            var normalControlWidth = gpsControls.ActualWidth;
+            var normalHeaderWidth = gpsHeader.ActualWidth;
+            var normalMapWidth = gpsMapHost.ActualWidth;
+            if (normalControlWidth < 200 || normalHeaderWidth < 200)
+                throw new Exception("Normal GPS controls do not have usable width.");
             Click(gpsExpand);
             window.UpdateLayout();
             if (folderPane.Visibility != Visibility.Collapsed ||
@@ -1123,11 +1134,23 @@ internal static class TagFlow
                 !galleryColumn.Width.IsStar ||
                 !selected.SetEquals(selectionBeforeLayout))
                 throw new Exception("GPS expansion did not free folder space or preserve selection.");
+            if (Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 1 ||
+                Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 1 ||
+                gpsControls.HorizontalAlignment != HorizontalAlignment.Left ||
+                gpsMapHost.ActualWidth <= normalMapWidth)
+                throw new Exception(
+                    "Expanded GPS stretched or moved controls instead of only widening the map.");
             Click(gpsFullscreen);
             window.UpdateLayout();
             if (Grid.GetColumn(sidebarPanel) != 0 ||
                 Grid.GetColumnSpan(sidebarPanel) != workspace.ColumnDefinitions.Count)
                 throw new Exception("GPS fullscreen is not an in-place workspace overlay.");
+            if (Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 1 ||
+                Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 1 ||
+                gpsMapHost.ActualWidth <= normalMapWidth)
+                throw new Exception("Fullscreen GPS displaced the original control positions.");
+            Console.WriteLine(
+                "PASS: GPS expand and fullscreen only widen the map, never stretch the controls.");
 
             // Opening a GPS image from full-map mode must restore the
             // gallery alongside the map. The filmstrip and map stay visible,
