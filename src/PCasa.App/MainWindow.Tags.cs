@@ -483,25 +483,15 @@ public partial class MainWindow
                 var edits = repo.PendingEditsForImage(imageId);
                 if (edits.Count > 0)
                 {
-                    try
+                    TryWriteOriginal(OriginalWriteFailureRepository.Tags,
+                        key, imageId, GetOriginalImagePath(imageId), token, () =>
                     {
                         using var writer = new ExifToolKeywordWriter.Session();
                         repo.ApplyPendingImageEdits(imageId, edits, writer, token,
                             path => _scheduler.ReportProgress(key,
                                 "Tags in Originaldateien schreiben",
                                 completed - 1, ids.Length, path));
-                    }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
-                    {
-                        // Legacy V1 must not claim a successful scheduler
-                        // step when the physical file write failed. Preserve
-                        // its P0 cursor and still-pending SQLite intent.
-                        PCasaDiagnostics.Write("Tags.RecoveryWrite", ex);
-                        throw new DurablePackageRetryException(
-                            "Tag-Schreibvorgang weiterhin offen: " +
-                            imageId + ": " + ex.Message);
-                    }
+                    });
                 }
                 _scheduler.ReportProgress(key, "Tags wiederherstellen",
                     completed, ids.Length);
@@ -528,7 +518,14 @@ public partial class MainWindow
         {
             token.ThrowIfCancellationRequested();
             var repo = new ImageTagRepository(_database);
-            var images = repo.PendingImagePaths();
+            // Failed originals are parked for deliberate review. They stay
+            // pending in SQLite, but must never spin through P0 recovery.
+            var errorStore = new OriginalWriteFailureRepository(_database);
+            var parked = errorStore.Unresolved()
+                .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
+                .Select(error => error.ImageId).ToHashSet();
+            var images = repo.PendingImagePaths()
+                .Where(image => !parked.Contains(image.ImageId)).ToArray();
             var failures = new List<string>();
             var unreachableRoots = new HashSet<string>(
                 StringComparer.OrdinalIgnoreCase);
@@ -556,11 +553,15 @@ public partial class MainWindow
                     var edits = repo.PendingEditsForImage(imageId);
                     if (edits.Count > 0)
                     {
-                        using var writer = new ExifToolKeywordWriter.Session();
-                        repo.ApplyPendingImageEdits(imageId, edits, writer, token,
-                            path => _scheduler.ReportProgress(key,
-                                "Tags in Originaldateien schreiben",
-                                confirmed, images.Count, path));
+                        TryWriteOriginal(OriginalWriteFailureRepository.Tags,
+                            key, imageId, originalPath, token, () =>
+                        {
+                            using var writer = new ExifToolKeywordWriter.Session();
+                            repo.ApplyPendingImageEdits(imageId, edits, writer, token,
+                                path => _scheduler.ReportProgress(key,
+                                    "Tags in Originaldateien schreiben",
+                                    confirmed, images.Length, path));
+                        });
                     }
                 }
                 catch (OperationCanceledException) { throw; }
@@ -590,7 +591,11 @@ public partial class MainWindow
                     _ = Dispatcher.BeginInvoke(new Action(() =>
                         _ = RefreshPendingTagDotsAsync()));
             }
-            var remaining = repo.PendingEdits(1).Count > 0;
+            var parkedAfter = errorStore.Unresolved()
+                .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
+                .Select(error => error.ImageId).ToHashSet();
+            var remaining = repo.PendingImagePaths()
+                .Any(pending => !parkedAfter.Contains(pending.ImageId));
             if (remaining)
             {
                 _scheduler.ReportProgress(key,
@@ -733,8 +738,12 @@ public partial class MainWindow
     private void StartPendingTagDrain()
     {
         if (Dispatcher.HasShutdownStarted) return;
+        var parked = new OriginalWriteFailureRepository(_database).Unresolved()
+            .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
+            .Select(error => error.ImageId).ToHashSet();
         var imageIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
-            .Select(edit => edit.ImageId).Distinct().ToArray();
+            .Select(edit => edit.ImageId).Distinct()
+            .Where(id => !parked.Contains(id)).ToArray();
         if (imageIds.Length == 0)
         {
             ReconcileSatisfiedTagRecovery();
@@ -892,11 +901,15 @@ public partial class MainWindow
                 var edits = repo.PendingEditsForImage(id);
                 if (edits.Count > 0)
                 {
-                    using var writer = new ExifToolKeywordWriter.Session();
-                    repo.ApplyPendingImageEdits(id, edits, writer, token,
-                        path => _scheduler.ReportProgress(key,
-                            "Tags in Originaldateien schreiben",
-                            completed - 1, request.ImageIds.Length, path));
+                    TryWriteOriginal(OriginalWriteFailureRepository.Tags, key,
+                        id, GetOriginalImagePath(id), token, () =>
+                    {
+                        using var writer = new ExifToolKeywordWriter.Session();
+                        repo.ApplyPendingImageEdits(id, edits, writer, token,
+                            path => _scheduler.ReportProgress(key,
+                                "Tags in Originaldateien schreiben",
+                                completed - 1, request.ImageIds.Length, path));
+                    });
                 }
                 _scheduler.ReportProgress(key, "Originaldateien schreiben",
                     completed, request.ImageIds.Length);
