@@ -1148,7 +1148,7 @@ internal static class TagFlow
                 ?? throw new Exception("GPS map host missing.");
             var gpsSearchField = (TextBox?)window.FindName("GpsPlaceSearchBox")
                 ?? throw new Exception("GPS search missing.");
-            var gpsAction = (ToggleButton?)window.FindName("GpsPickPositionToggle")
+            var gpsAction = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GpsPickPositionToggle")
                 ?? throw new Exception("GPS Pick missing.");
             var gpsCopy = (Button?)window.FindName("GpsCopyButton")
                 ?? throw new Exception("GPS Copy missing.");
