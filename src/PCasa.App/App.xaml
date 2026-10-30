@@ -192,12 +192,9 @@
             <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}" />
         </Style>
-        <!-- Default control templates remain Fluent/light-or-dark; a shared
-             foreground resource keeps every generated dialog readable. -->
+        <!-- Native radio/checkbox glyphs keep WPF semantics while their
+             captions use the same palette as the host window. -->
         <Style TargetType="RadioButton">
-            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
-        </Style>
-        <Style TargetType="Button">
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
         </Style>
         <Style TargetType="CheckBox">
@@ -219,6 +216,46 @@
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="ButtonBorder" Property="Background" Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.53"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Default buttons must own *both* foreground and surface.
+             Fluent's light button surface paired with a separately patched
+             dark foreground made labels illegible after changing themes.
+             Reuse the existing PCasa button template everywhere. -->
+        <Style TargetType="Button" BasedOn="{StaticResource PcasaStatusButtonStyle}" />
+
+        <Style TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}" />
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="ToggleBorder" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"
+                                              RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ToggleBorder" Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="ToggleBorder" Property="BorderBrush"
+                                        Value="{DynamicResource PcasaAccentBrush}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.53"/>
