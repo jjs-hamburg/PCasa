@@ -674,7 +674,7 @@
             </Grid>
         </Border>
 
-        <Grid x:Name="BrowseWorkspaceGrid" Grid.Row="2">
+        <Grid x:Name="BrowseWorkspaceGrid" Grid.Row="2" SizeChanged="BrowseWorkspace_SizeChanged">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="FolderSidebarColumn" Width="0.22*" MinWidth="170" />
                 <ColumnDefinition x:Name="FolderSidebarDividerColumn" Width="5" />
