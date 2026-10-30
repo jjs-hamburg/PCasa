@@ -16,6 +16,11 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private bool _viewerOpen;
+    // GPS filmstrip owns the gallery's selection projection. Entering the
+    // ordinary viewer temporarily singles out one picture; restore the
+    // original gallery selection upon leaving so the GPS strip never shrinks.
+    private long[]? _gpsSelectionBeforeViewer;
+
     private int _viewerCurrentIndex = -1;
     private PhotoSequence? _viewerSequence;
     private readonly PhotoViewerSettings _viewerSettings = PhotoViewerSettings.Load();
@@ -67,6 +72,9 @@ public partial class MainWindow
             return;
         }
 
+        _gpsSelectionBeforeViewer =
+            _sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip
+                ? _selectedImageIds.ToArray() : null;
         // Never change the gallery's viewport while the viewer is open.
         _viewerOpeningScrollOffset = BrowseScrollViewer.VerticalOffset;
         _viewerCurrentIndex = index;
@@ -1366,6 +1374,18 @@ public partial class MainWindow
             SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
             UpdateComparisonButtons();
         }
+        if (_gpsSelectionBeforeViewer is { Length: > 0 } gpsSelection &&
+            _sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip)
+        {
+            _selectedImageIds.Clear();
+            foreach (var imageId in gpsSelection) _selectedImageIds.Add(imageId);
+            BrowseSurface.SetSelection(_selectedImageIds);
+            SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
+            UpdateComparisonButtons();
+            _ = UpdateSidebarContentAsync();
+        }
+        _gpsSelectionBeforeViewer = null;
+
 
         // Restore after the viewer overlay has been removed, without replacing
         // the gallery or rebuilding its index.
