@@ -468,15 +468,17 @@ public partial class MainWindow
         // Transfer all selected coordinates in bounded, ordered chunks.
         // The renderer applies them atomically after the final chunk.
         var revision = ++_gpsMapTransferRevision;
-        browser.ExecuteScriptAsync("window.pcasaBeginPoints(" + revision + ")");
-        foreach (var chunk in _gpsPoints.Chunk(180))
+        var chunks = _gpsPoints.Chunk(180).ToArray();
+        browser.ExecuteScriptAsync("window.pcasaBeginPoints(" + revision +
+            "," + chunks.Length + ")");
+        for (var i = 0; i < chunks.Length; i++)
         {
-            var json = JsonSerializer.Serialize(chunk.Select(p => new
+            var json = JsonSerializer.Serialize(chunks[i].Select(p => new
             {
                 id = p.Id, name = p.Name, lat = p.Lat, lon = p.Lon, selected = p.Selected
             }));
             browser.ExecuteScriptAsync("window.pcasaAppendPoints(" +
-                revision + "," + json + ")");
+                revision + "," + i + "," + json + ")");
         }
         browser.ExecuteScriptAsync("window.pcasaCommitPoints(" + revision + ")");
         if (_gpsHighlightedImageId is long selected)
