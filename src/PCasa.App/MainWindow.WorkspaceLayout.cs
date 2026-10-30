@@ -112,6 +112,7 @@ public partial class MainWindow
         Grid.SetColumn(InfoSidebarPanel, fullscreen ? 0 : 4);
         Grid.SetColumnSpan(InfoSidebarPanel, fullscreen ? 5 : 1);
         Panel.SetZIndex(InfoSidebarPanel, fullscreen ? 10 : 0);
+        UpdateGpsPhotoOverlayPlacement();
 
         // Control positions are anchored to the unchanged right edge of
         // the workspace, NOT to the map pane's movable left edge.
@@ -177,6 +178,43 @@ public partial class MainWindow
             CloseGpsFullscreenImage();
     }
 
+    // One photo overlay, two placements. Never transfer photo ownership to
+    // the map or replace gallery selection when GPS becomes fullscreen.
+    private void UpdateGpsPhotoOverlayPlacement()
+    {
+        var floating = _sidebarMode == "GPS" && _gpsFullscreen;
+        Grid.SetColumn(GpsFullscreenImageOverlay, floating ? 0 : 2);
+        Grid.SetColumnSpan(GpsFullscreenImageOverlay, floating ? 5 : 1);
+        GpsFullscreenImageOverlay.Background = floating
+            ? System.Windows.Media.Brushes.Transparent
+            : new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromArgb(245, 28, 29, 32));
+        GpsFullscreenImageFrame.HorizontalAlignment = floating
+            ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+        GpsFullscreenImageFrame.VerticalAlignment = floating
+            ? VerticalAlignment.Center : VerticalAlignment.Stretch;
+        GpsFullscreenImageFrame.Margin = floating
+            ? new Thickness(20) : new Thickness(0);
+        if (floating)
+        {
+            GpsFullscreenImageFrame.Width = Math.Max(200,
+                Math.Min(1000, BrowseWorkspaceGrid.ActualWidth * 0.80));
+            GpsFullscreenImageFrame.Height = Math.Max(160,
+                Math.Min(730, BrowseWorkspaceGrid.ActualHeight * 0.80));
+        }
+        else
+        {
+            GpsFullscreenImageFrame.Width = double.NaN;
+            GpsFullscreenImageFrame.Height = double.NaN;
+        }
+    }
+
+    private void BrowseWorkspace_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_gpsFullscreen && _sidebarMode == "GPS")
+            UpdateGpsPhotoOverlayPlacement();
+    }
+
     private void FolderSidebarToggle_Click(object sender, RoutedEventArgs e)
     {
         if (_sidebarMode == "GPS" && (_gpsExpanded || _gpsFullscreen)) return;
@@ -200,9 +238,14 @@ public partial class MainWindow
         if (_sidebarMode != "GPS") return;
         CaptureGpsControlPlacement();
         _gpsFullscreen = !_gpsFullscreen;
-        if (_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+        if (!_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();
         UpdateWorkspaceLayoutPreservingGallery();
+        // Entering fullscreen must keep the currently opened photo visible
+        // above the map. The existing viewer and its zoom state stay intact.
+        if (_gpsFullscreen && _viewerOpen && _viewerSequence is not null &&
+            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count)
+            ShowGpsFullscreenImage(_viewerSequence.At(_viewerCurrentIndex).ImageId);
     }
 
     private void WorkspaceSplitter_DragStarted(object sender, DragStartedEventArgs e)
