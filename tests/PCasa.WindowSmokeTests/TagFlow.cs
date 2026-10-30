@@ -2686,6 +2686,92 @@ internal static class TagFlow
                 "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
                 "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
+            // Regression: selecting ALL 5,200+ photos must send ALL stored
+            // GPS coordinates, including records whose cached EXIF source
+            // fingerprint temporarily differs after a metadata-only write.
+            // Context markers are capped; SELECTED photo markers never are.
+            const int selectedGpsCount = 5201;
+            var largeGpsPrefix = Path.Combine(sourceRoot, "gps-load-fixture-");
+            using (var connection = db.OpenConnection())
+            {
+                using var transaction = connection.BeginTransaction();
+                for (var first = 1; first <= selectedGpsCount; first += 500)
+                {
+                    using var insert = connection.CreateCommand();
+                    insert.Transaction = transaction;
+                    insert.CommandText = """
+                        WITH RECURSIVE seq(n) AS (
+                            SELECT $first
+                            UNION ALL SELECT n+1 FROM seq WHERE n<$last)
+                        INSERT INTO images (
+                            folder_id,photo_folder_id,local_path,canonical_path,
+                            file_name,extension,file_size,modified_utc_ticks,
+                            width,height,thumbnail_path,indexed_utc)
+                        SELECT $root,$photoFolder,
+                               $prefix||n||'.jpg',$prefix||n||'.jpg',
+                               'gps-load-'||n||'.jpg','.jpg',111,111,
+                               64,64,'',strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                        FROM seq;
+                        """;
+                    insert.Parameters.AddWithValue("$first",first);
+                    insert.Parameters.AddWithValue("$last",
+                        Math.Min(selectedGpsCount,first+499));
+                    insert.Parameters.AddWithValue("$root",root.Id);
+                    insert.Parameters.AddWithValue("$photoFolder",a.Id);
+                    insert.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                    insert.ExecuteNonQuery();
+                }
+                using var gps = connection.CreateCommand();
+                gps.Transaction = transaction;
+                gps.CommandText = """
+                    INSERT INTO image_exif (
+                        image_id,source_modified_utc_ticks,source_file_size,
+                        exif_json,gps_latitude,gps_longitude)
+                    SELECT id,222,222,'{}',40.0+(id%25)*0.01,-3.7+(id%25)*0.01
+                      FROM images WHERE local_path LIKE $prefix||'%';
+                    """;
+                gps.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                gps.ExecuteNonQuery();
+                transaction.Commit();
+            }
+            try
+            {
+                long[] loadIds;
+                using (var connection = db.OpenConnection())
+                using (var cmd = connection.CreateCommand())
+                {
+                    cmd.CommandText =
+                        "SELECT id FROM images WHERE local_path LIKE $prefix||'%' ORDER BY id;";
+                    cmd.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                    using var reader = cmd.ExecuteReader();
+                    var selectedLoadIds = new List<long>();
+                    while (reader.Read()) selectedLoadIds.Add(reader.GetInt64(0));
+                    loadIds = selectedLoadIds.ToArray();
+                }
+                if (loadIds.Length != selectedGpsCount)
+                    throw new Exception("Large selected GPS test fixture was incomplete.");
+                var allGps = ((System.Collections.IEnumerable)readGps.Invoke(
+                    window,[loadIds,a.Id,CancellationToken.None])!).Cast<object>().ToArray();
+                var selectedAll = allGps.Where(item =>
+                    (bool)item.GetType().GetProperty("Selected")!.GetValue(item)!)
+                    .Select(item => (long)item.GetType().GetProperty("Id")!.GetValue(item)!)
+                    .ToHashSet();
+                if (selectedAll.Count != selectedGpsCount ||
+                    !loadIds.All(selectedAll.Contains))
+                    throw new Exception(
+                        "GPS map omitted selected positions above 5,000 or rejected stale EXIF fingerprints.");
+            }
+            finally
+            {
+                using var connection = db.OpenConnection();
+                using var delete = connection.CreateCommand();
+                delete.CommandText =
+                    "DELETE FROM images WHERE local_path LIKE $prefix||'%';";
+                delete.Parameters.AddWithValue("$prefix",largeGpsPrefix);
+                delete.ExecuteNonQuery();
+            }
+            Console.WriteLine("PASS: GPS map receives all 5,201 selected positions despite EXIF cache drift.");
+
             // Explicitly leave an EXIF reader and keyword writer session
             // alive (not disposed) when closing. The app MUST kill both
             // owned native children after the scheduler's journal finishes.
