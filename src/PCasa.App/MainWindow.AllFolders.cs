@@ -158,6 +158,16 @@ public partial class MainWindow
         => _allFolderProjectionRootPath is string root &&
            FolderExclusionRules.IsAtOrBelow(path, root);
 
+    // WPF TreeViewItem shows its expander only when Items.Count > 0.
+    // This UI-only sentinel enables lazy Explorer enumeration for folders
+    // with no indexed children. It is NEVER a directory and must not
+    // appear among real folders, even during slow NAS operations.
+    private static TreeViewItem CreateExplorerExpanderSentinel() => new()
+    {
+        Visibility = Visibility.Collapsed,
+        IsEnabled = false
+    };
+
     private void AddExplorerExpanders(ItemsControl parent)
     {
         // Include the selected start node itself. Previously only children
@@ -165,10 +175,7 @@ public partial class MainWindow
         // expand and never querying its immediate children.
         if (parent is TreeViewItem { Tag: FolderTreeTag } parentItem &&
             parentItem.Items.Count == 0)
-            parentItem.Items.Add(new TreeViewItem
-            {
-                Header = "Ordner laden …", IsEnabled = false
-            });
+            parentItem.Items.Add(CreateExplorerExpanderSentinel());
         foreach (var item in parent.Items.OfType<TreeViewItem>())
         {
             if (item.Tag is FolderTreeTag)
@@ -274,10 +281,7 @@ public partial class MainWindow
                     ToolTip = child,
                     Tag = CreateFolderTreeTag(child, indexed?.Id)
                 };
-                newNode.Items.Add(new TreeViewItem
-                {
-                    Header = "Ordner laden …", IsEnabled = false
-                });
+                newNode.Items.Add(CreateExplorerExpanderSentinel());
                 _explorerInsertedPaths.Add(child);
                 // Insert alphabetically among *existing* catalog items.
                 // Items.Sort/Items.Clear would replace open WPF nodes and

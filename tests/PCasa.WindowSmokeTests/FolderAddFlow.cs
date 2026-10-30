@@ -477,6 +477,24 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Explorer Ansicht replaced or collapsed the original folder tree.");
 
+            // Lazy Explorer children require a sentinel to show the
+            // expander; it must never render "Ordner laden ..." as a
+            // pseudo-folder, including during a blocked network probe.
+            var firstExplorerItem = Walk(tree).Single(item =>
+                SamePath(PathOf(item), firstExplorer));
+            var sentinel = firstExplorerItem.Items.OfType<TreeViewItem>()
+                .SingleOrDefault(child => child.Tag is null);
+            if (sentinel is null || sentinel.Visibility != Visibility.Collapsed ||
+                sentinel.IsEnabled || sentinel.Header is not null)
+                throw new Exception(
+                    "Explorer lazy expander displayed its internal loading placeholder.");
+            if (Walk(tree).Any(item => item.Tag is null &&
+                item.Visibility == Visibility.Visible))
+                throw new Exception(
+                    "Explorer exposed an internal placeholder as a folder.");
+            Console.WriteLine(
+                "PASS: Explorer lazy expansion does not show 'Ordner laden' rows.");
+
             var inactiveItem = Walk(tree).Single(item =>
                 SamePath(PathOf(item), inactiveExplorer));
             if (inactiveItem.Tag?.GetType().GetProperty("PhotoFolderId")?
