@@ -212,7 +212,7 @@ public sealed class FolderScanner
         if (FolderExclusionRules.IsExcluded(scanRoot, exclusions))
             return new ScanResult(0, 0, 0, 0);
 
-        var imageFilesSeen = resume?.ImageFilesSeen ?? 0;
+        var imageFilesSeen = resume?.ImageFilesSeen ?? regularCheckpoint?.Checked ?? 0;
         var updated = resume?.Updated ?? 0;
         var unchanged = resume?.Unchanged ?? 0;
         var added = resume?.Added ?? 0;
