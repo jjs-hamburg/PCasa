@@ -42,10 +42,14 @@ public partial class MainWindow
         }
         catch (OperationCanceledException) { throw; }
         catch (DurablePackageRetryException) { throw; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-            or InvalidDataException or NotSupportedException
-            or TimeoutException or System.ComponentModel.Win32Exception)
+        catch (Exception ex)
         {
+            // Every non-cancellation exception from reading, ExifTool,
+            // verification, or catalog commit belongs to THIS original.
+            // Previously only five exception classes were recorded; other
+            // failures deferred the whole durable package forever without
+            // ever entering the shared Schreibfehler list. Genuine scheduler
+            // yields/cancellation stay outside the per-file attempt counter.
             token.ThrowIfCancellationRequested();
             // A newer GPS package supersedes the failed immutable intent.
             if (kind == OriginalWriteFailureRepository.Gps &&
