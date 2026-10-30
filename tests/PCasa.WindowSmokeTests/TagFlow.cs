@@ -1267,8 +1267,9 @@ internal static class TagFlow
                 Grid.GetColumn(gpsOverlay) != 0 ||
                 Grid.GetColumnSpan(gpsOverlay) != workspace.ColumnDefinitions.Count ||
                 Grid.GetColumn(sidebarPanel) != 0 ||
-                gpsFrame.ActualWidth >= workspace.ActualWidth)
-                throw new Exception("Opening a GPS photo must float it OVER the fullscreen map.");
+                Math.Abs(gpsFrame.ActualWidth - workspace.ActualWidth) > 2 ||
+                Math.Abs(gpsFrame.ActualHeight - workspace.ActualHeight) > 2)
+                throw new Exception("GPS fullscreen photo must cover the entire map and filmstrip.");
             gpsOverlay.RaiseEvent(new MouseButtonEventArgs(
                 InputManager.Current.PrimaryMouseDevice,
                 Environment.TickCount, MouseButton.Left)
