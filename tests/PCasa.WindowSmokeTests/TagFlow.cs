@@ -643,7 +643,7 @@ internal static class TagFlow
             foreach (var controlName in new[]
             {
                 "GpsPlaceSearchBox", "GpsPlaceSearchButton", "GpsPlaceResults",
-                "GpsPlaceResultsPopup", "GpsEditPanel", "GpsEditorToggle",
+                "GpsPlaceResultsPopup", "GpsEditPanel",
                 "GpsPlaceSearchClearButton",
                 "GpsPickPositionToggle", "GpsApplyMissingButton",
                 "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
@@ -661,18 +661,14 @@ internal static class TagFlow
             if (removeGpsButton.IsEnabled && selected.Count == 0)
                 throw new Exception("GPS removal enabled without an actual selection.");
 
-            // The ordinary photo GPS view contains only a compact toolbar;
-            // place search, edit actions and area filter are opt-in tools.
-            var gpsTools = (System.Windows.Controls.Primitives.ToggleButton?)
-                window.FindName("GpsEditorToggle")
-                ?? throw new Exception("Compact GPS tools launcher missing.");
-            var gpsToolsPanel = (StackPanel?)window.FindName("GpsEditPanel")
-                ?? throw new Exception("GPS tools panel missing.");
-            if (gpsTools.IsChecked == true || gpsToolsPanel.Visibility != Visibility.Collapsed)
-                throw new Exception("GPS editor occupies space during ordinary photo viewing.");
-            gpsTools.IsChecked = true;
-            if (gpsToolsPanel.Visibility != Visibility.Visible)
-                throw new Exception("GPS tools launcher did not reveal the editor.");
+            // The GPS editing row is permanently visible. At narrow widths
+            // its captions collapse to icons, without moving the controls.
+            var gpsToolsPanel = (Grid?)window.FindName("GpsEditPanel")
+                ?? throw new Exception("GPS actions grid is missing.");
+            if (gpsToolsPanel.Visibility != Visibility.Visible ||
+                gpsToolsPanel.ColumnDefinitions.Count != 4)
+                throw new Exception("GPS Pick/Assign/Replace/Remove must remain in one row.");
+            Console.WriteLine("PASS: GPS tools are immediately available without an editor launcher.");
 
             // Search results are a popup UNDER the search box, not an
             // ever-visible white ComboBox consuming a second sidebar row.
@@ -751,9 +747,8 @@ internal static class TagFlow
                 throw new Exception("Tag entry clear X did not clear only the editor.");
             Console.WriteLine("PASS: Tag entry uses the shared clear-X style.");
 
-            // Switching gallery photos must never reuse the search text,
-            // pending target coordinate or marker from another photo. A
-            // second refresh of the SAME selection must preserve a live edit.
+            // GPS drafts belong to the current selection, but the editing
+            // row must stay visible after every gallery/filmstrip transition.
             var changeSelection = typeof(PCasa.App.MainWindow).GetMethod(
                 "ResetGpsEditorOnSelectionChange",
                 System.Reflection.BindingFlags.NonPublic |
@@ -761,26 +756,24 @@ internal static class TagFlow
                 ?? throw new Exception("GPS editor selection lifecycle owner missing.");
             searchBox.Text = "Burg Eltz";
             changeSelection.Invoke(window, [new long[] { gpsA }]);
-            if (gpsTools.IsChecked == true ||
-                gpsToolsPanel.Visibility != Visibility.Collapsed ||
+            if (gpsToolsPanel.Visibility != Visibility.Visible ||
                 resultPopup.IsOpen || searchBox.Text.Length != 0 ||
                 resultList.ItemsSource is not null ||
                 draftField.GetValue(window) is not null ||
                 ((TextBlock)window.FindName("GpsDraftCoordinates")!).Text.Length != 0)
                 throw new Exception("Changing photo left old GPS search or target visible.");
-            gpsTools.IsChecked = true;
             searchBox.Text = "Next target in progress";
             changeSelection.Invoke(window, [new long[] { gpsA }]);
-            if (gpsTools.IsChecked != true ||
-                gpsToolsPanel.Visibility != Visibility.Visible ||
+            if (gpsToolsPanel.Visibility != Visibility.Visible ||
                 searchBox.Text != "Next target in progress")
                 throw new Exception("Refreshing the same selection discarded a draft.");
             changeSelection.Invoke(window, [new long[] { gpsB }]);
-            if (gpsTools.IsChecked == true || searchBox.Text.Length != 0 ||
+            if (gpsToolsPanel.Visibility != Visibility.Visible ||
+                searchBox.Text.Length != 0 ||
                 !((TextBlock)window.FindName("GpsCoordinatesText")!).Text.Contains(
                     UiLanguage.T("GPS-Positionen werden geladen"), StringComparison.Ordinal))
-                throw new Exception("Next photo retained old search text or the previous photo's GPS.");
-            Console.WriteLine("PASS: GPS editing is compact and draft state belongs to the selected photos.");
+                throw new Exception("Next photo retained old GPS text or hid the tools.");
+            Console.WriteLine("PASS: GPS editor stays visible while draft state follows selected photos.");
 
             // Single-click filmstrip focus must preserve gallery multiselection
             // while replacing the coordinates displayed for the focused photo.
@@ -808,7 +801,6 @@ internal static class TagFlow
                     System.Reflection.BindingFlags.NonPublic |
                     System.Reflection.BindingFlags.Instance)
                     ?? throw new Exception("GPS focused photo display refresh missing.");
-                gpsTools.IsChecked = true;
                 searchBox.Text = "Old search from previous filmstrip photo";
                 focus.Invoke(window, [gpsB]);
                 var pointB = projected.Single(p =>
@@ -820,7 +812,7 @@ internal static class TagFlow
                     System.Reflection.BindingFlags.NonPublic |
                     System.Reflection.BindingFlags.Instance)!;
                 var shownGps = ((double Lat, double Lon)?)coordinateField.GetValue(window);
-                if (gpsTools.IsChecked == true || searchBox.Text != string.Empty ||
+                if (gpsToolsPanel.Visibility != Visibility.Visible || searchBox.Text != string.Empty ||
                     shownGps is not { } pos || Math.Abs(pos.Lat-latB)>0.000001 ||
                     Math.Abs(pos.Lon-lonB)>0.000001 ||
                     !selected.SetEquals(selectionBeforeLayout))
@@ -1148,42 +1140,56 @@ internal static class TagFlow
                 !folderPane.IsVisible)
                 throw new Exception("GPS normal layout is not relative with folders visible.");
             var normalGpsWidth = gpsColumn.ActualWidth;
-            var gpsControls = (StackPanel?)window.FindName("GpsControlsPanel")
-                ?? throw new Exception("GPS controls panel missing.");
-            var gpsHeader = (DockPanel?)window.FindName("InfoSidebarHeader")
-                ?? throw new Exception("Sidebar header missing.");
+            var gpsControls = (Grid?)window.FindName("GpsControlsPanel")
+                ?? throw new Exception("GPS controls grid missing.");
+            var gpsHeader = (Grid?)window.FindName("InfoSidebarHeader")
+                ?? throw new Exception("GPS header grid missing.");
             var gpsMapHost = (Grid?)window.FindName("GpsMapHost")
                 ?? throw new Exception("GPS map host missing.");
-            var normalControlWidth = gpsControls.ActualWidth;
-            var normalHeaderWidth = gpsHeader.ActualWidth;
+            var gpsSearchField = (TextBox?)window.FindName("GpsPlaceSearchBox")
+                ?? throw new Exception("GPS search missing.");
+            var gpsAction = (ToggleButton?)window.FindName("GpsPickPositionToggle")
+                ?? throw new Exception("GPS Pick missing.");
+            var gpsCopy = (Button?)window.FindName("GpsCopyButton")
+                ?? throw new Exception("GPS Copy missing.");
+            Point RelativePosition(FrameworkElement control)
+                => control.TranslatePoint(new Point(0, 0), sidebarPanel);
+            var originalSearch = RelativePosition(gpsSearchField);
+            var originalAction = RelativePosition(gpsAction);
+            var originalCopy = RelativePosition(gpsCopy);
+            var originalMap = RelativePosition(gpsMapHost);
             var normalMapWidth = gpsMapHost.ActualWidth;
-            if (normalControlWidth < 200 || normalHeaderWidth < 200)
-                throw new Exception("Normal GPS controls do not have usable width.");
+            if (gpsControls.ActualWidth < 200 || gpsHeader.ActualWidth < 200)
+                throw new Exception("GPS controls do not have usable width.");
+            void CheckFixedRows()
+            {
+                if (Math.Abs(RelativePosition(gpsSearchField).Y - originalSearch.Y) > 2 ||
+                    Math.Abs(RelativePosition(gpsAction).Y - originalAction.Y) > 2 ||
+                    Math.Abs(RelativePosition(gpsCopy).Y - originalCopy.Y) > 2 ||
+                    Math.Abs(RelativePosition(gpsMapHost).Y - originalMap.Y) > 2 ||
+                    Math.Abs(RelativePosition(gpsSearchField).X - originalSearch.X) > 2 ||
+                    Math.Abs(RelativePosition(gpsAction).X - originalAction.X) > 2 ||
+                    !double.IsNaN(gpsControls.Width) || !double.IsNaN(gpsHeader.Width))
+                    throw new Exception("GPS controls changed position between normal and expanded modes.");
+            }
             Click(gpsExpand);
             window.UpdateLayout();
             if (folderPane.Visibility != Visibility.Collapsed ||
                 folderColumn.ActualWidth != 0 ||
                 gpsColumn.ActualWidth <= normalGpsWidth ||
                 !galleryColumn.Width.IsStar ||
-                !selected.SetEquals(selectionBeforeLayout))
-                throw new Exception("GPS expansion did not free folder space or preserve selection.");
-            if (Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 1 ||
-                Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 1 ||
-                gpsControls.HorizontalAlignment != HorizontalAlignment.Left ||
+                !selected.SetEquals(selectionBeforeLayout) ||
                 gpsMapHost.ActualWidth <= normalMapWidth)
-                throw new Exception(
-                    "Expanded GPS stretched or moved controls instead of only widening the map.");
+                throw new Exception("GPS expansion changed selection or did not enlarge the map.");
+            CheckFixedRows();
             Click(gpsFullscreen);
             window.UpdateLayout();
             if (Grid.GetColumn(sidebarPanel) != 0 ||
-                Grid.GetColumnSpan(sidebarPanel) != workspace.ColumnDefinitions.Count)
-                throw new Exception("GPS fullscreen is not an in-place workspace overlay.");
-            if (Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 1 ||
-                Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 1 ||
+                Grid.GetColumnSpan(sidebarPanel) != workspace.ColumnDefinitions.Count ||
                 gpsMapHost.ActualWidth <= normalMapWidth)
-                throw new Exception("Fullscreen GPS displaced the original control positions.");
-            Console.WriteLine(
-                "PASS: GPS expand and fullscreen only widen the map, never stretch the controls.");
+                throw new Exception("GPS fullscreen is not an in-place workspace overlay.");
+            CheckFixedRows();
+            Console.WriteLine("PASS: GPS search, action and footer rows retain their positions in both map modes.");
 
             // Opening a GPS image from full-map mode must restore the
             // gallery alongside the map. The filmstrip and map stay visible,

@@ -1030,13 +1030,13 @@
  <TextBlock x:Name="SidePanelHeading" Grid.Column="0" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
  <TextBlock x:Name="GpsCoordinatesText" Grid.Column="1" Visibility="Collapsed" Margin="11,0,7,0" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Text="{loc:Tr Key='GPS-Positionen werden geladen'}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
  <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
- <Button x:Name="GpsExpandButton" Width="40" Height="38" Padding="0" Margin="0,0,5,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsExpand_Click">
+ <Button x:Name="GpsExpandButton" Width="43" Height="42" Padding="0" Margin="0,0,5,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsExpand_Click">
  <Viewbox Width="24" Height="24"><Canvas Width="32" Height="32"><Path Data="M28,5 L28,27" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6"/><Path x:Name="GpsExpandArrow" Data="M25,16 L6,16 M15,7 L6,16 L15,25" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.65" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas></Viewbox>
  </Button>
- <Button x:Name="GpsFullscreenButton" Width="40" Height="38" Padding="0" Margin="0,0,5,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Vollbild'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsFullscreen_Click">
+ <Button x:Name="GpsFullscreenButton" Width="43" Height="42" Padding="0" Margin="0,0,5,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Vollbild'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsFullscreen_Click">
  <Viewbox Width="24" Height="24"><Canvas Width="32" Height="32"><Path x:Name="GpsFullscreenCorners" Data="M12,4 L4,4 L4,12 M20,4 L28,4 L28,12 M28,20 L28,28 L20,28 M12,28 L4,28 L4,20" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.65" StrokeStartLineCap="Square" StrokeEndLineCap="Square"/></Canvas></Viewbox>
  </Button>
- <Button x:Name="CloseSidebarButton" Width="35" Height="38" Padding="0" Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Seitenleiste schließen'}" Click="CloseSidebar_Click"><ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}" Width="22" Height="22"/></Button>
+ <Button x:Name="CloseSidebarButton" Width="35" Height="42" Padding="0" Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Seitenleiste schließen'}" Click="CloseSidebar_Click"><ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}" Width="22" Height="22"/></Button>
  </StackPanel></Grid>
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
