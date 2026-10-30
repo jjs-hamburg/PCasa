@@ -1009,7 +1009,9 @@ internal static class Program
         for (var i = 0; i < 9; i++)
             WriteJpeg(Path.Combine(directory, $"photo-{i:D4}.jpg"));
         var (db, root, scanner) = sandbox.Prepare();
-        var key = $"background:inventory:{root.Id}:root";
+        var generation = new FolderRepository(db)
+            .GetSourceState(root.CanonicalPath)!.Value.Generation;
+        var key = $"background:inventory:{root.Id}:{generation}:RescanRoot:True:{root.LocalPath}";
         using var stop = new CancellationTokenSource();
         var interrupted = false;
         var first = new InlineProgress<ScanProgress>(progress =>
@@ -1034,6 +1036,10 @@ internal static class Program
             !saved.Cursors.TryGetValue(directory, out var fileName) ||
             fileName != "photo-0000.jpg")
             throw new Exception("Automatic inventory did not persist its last committed file.");
+        var pending = folders.GetPendingAutomaticInventories();
+        if (pending.Count != 1 || pending[0].ScanKey != key ||
+            pending[0].ScanRoot != root.LocalPath)
+            throw new Exception("Startup recovery did not find the original unfinished root scan.");
 
         // A partial directory inventory MUST NOT authorize deletion of the
         // photo that the new process skipped using its persisted cursor.
