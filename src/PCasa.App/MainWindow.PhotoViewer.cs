@@ -676,7 +676,15 @@ public partial class MainWindow
     }
 
     private void PhotoViewerScroller_ScrollChanged(object sender, ScrollChangedEventArgs e)
-        => UpdateViewerNavigator();
+    {
+        UpdateViewerNavigator();
+        // ScrollViewer.ViewportWidth/Height can change after SizeChanged,
+        // especially when scrollbars appear/disappear. The viewport is the
+        // actual Fit constraint, not the surrounding grid's old width.
+        if (Math.Abs(e.ViewportWidthChange) > 0.01 ||
+            Math.Abs(e.ViewportHeightChange) > 0.01)
+            ScheduleViewerViewportRelayout();
+    }
 
     private void ViewerFullscreenScroller_ScrollChanged(object sender, ScrollChangedEventArgs e)
         => UpdateViewerNavigator();
@@ -801,13 +809,30 @@ public partial class MainWindow
     }
 
     private void PhotoViewerViewport_SizeChanged(object sender, SizeChangedEventArgs e)
+        => ScheduleViewerViewportRelayout();
+
+    private bool _viewerViewportRelayoutQueued;
+
+    private void ScheduleViewerViewportRelayout()
     {
-        if (!_viewerOpen) return;
-        ApplyViewerImageLayout();
-        if (_viewerFitToScreen)
+        // All layout changes (sidebar, GPS expansion, splitter, window size
+        // and scrollbar viewport changes) converge on this ONE Fit/zoom path.
+        // SizeChanged can fire while WPF is still measuring the old viewport.
+        // Coalesce and recalculate only after the new columns have been laid out.
+        if (!_viewerOpen || _viewerFullscreenWindow is not null ||
+            _viewerViewportRelayoutQueued || Dispatcher.HasShutdownStarted)
+            return;
+
+        _viewerViewportRelayoutQueued = true;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            ScheduleViewerZoomRefinement();
-        }
+            _viewerViewportRelayoutQueued = false;
+            if (!_viewerOpen || _viewerFullscreenWindow is not null) return;
+            ApplyViewerImageLayout();
+            // A changed Fit viewport may need a larger decoded original,
+            // while a manually chosen percentage must remain untouched.
+            if (_viewerFitToScreen) ScheduleViewerZoomRefinement();
+        }), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void ScheduleViewerZoomRefinement()
