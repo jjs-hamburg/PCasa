@@ -103,16 +103,28 @@ public sealed class ImageExifReader : IDisposable
             if (!entry.TryGetProperty("SourceFile", out var source) ||
                 source.ValueKind != JsonValueKind.String)
                 return !requireSource; // unchanged older catalogs
-            var sourcePath = source.GetString();
-            if (string.IsNullOrWhiteSpace(sourcePath)) return false;
-            static string Normalize(string p) =>
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(p))
-                    .Replace('/', '\\');
-            return string.Equals(Normalize(sourcePath), Normalize(requestedPath),
-                StringComparison.OrdinalIgnoreCase);
+            return IsSameSourcePath(source.GetString(), requestedPath);
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException
             or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    public static bool IsSameSourcePath(string? sourcePath, string expectedPath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath)) return false;
+        try
+        {
+            static string Normalize(string p) =>
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(p))
+                    .Replace('/', '\\');
+            return string.Equals(Normalize(sourcePath), Normalize(expectedPath),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException
+            or PathTooLongException)
         {
             return false;
         }
