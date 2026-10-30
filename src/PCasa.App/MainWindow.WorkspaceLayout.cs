@@ -47,25 +47,19 @@ public partial class MainWindow
         RestoreAnchorAfterSidebarLayout();
     }
 
-    // Fixed action rows; narrow panes show icon-only controls with tooltips.
-    private void GpsControlsPanel_SizeChanged(object sender, SizeChangedEventArgs e)
+    // The normal sidebar fixes the width and absolute right-edge location
+    // of the GPS control block. Expand/fullscreen only enlarges the map.
+    private double _gpsNormalControlWidth;
+    private double _gpsNormalHeaderWidth;
+
+    private void CaptureGpsControlPlacement()
     {
-        var primary = e.NewSize.Width >= 580
-            ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var label in new[]
-        {
-            GpsPickPositionToggleCaption, GpsApplyMissingButtonCaption,
-            GpsReplaceButtonCaption, GpsRemoveButtonCaption
-        })
-            if (label is not null) label.Visibility = primary;
-        var secondary = e.NewSize.Width >= 490
-            ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var label in new[]
-        {
-            GpsShowAreaCaption, GpsClearAreaCaption,
-            GpsCopyButtonCaption, GpsGoogleButtonCaption
-        })
-            if (label is not null) label.Visibility = secondary;
+        if (_sidebarMode != "GPS" || _gpsExpanded || _gpsFullscreen)
+            return;
+        if (GpsControlsPanel.ActualWidth >= 360)
+            _gpsNormalControlWidth = GpsControlsPanel.ActualWidth;
+        if (InfoSidebarHeader.ActualWidth >= 350)
+            _gpsNormalHeaderWidth = InfoSidebarHeader.ActualWidth;
     }
 
     private void ApplyWorkspaceLayout()
@@ -97,7 +91,7 @@ public partial class MainWindow
 
         GalleryWorkspaceColumn.MinWidth = 240;
         GalleryWorkspaceColumn.Width = new GridLength(galleryFraction, GridUnitType.Star);
-        InfoSidebarColumn.MinWidth = gps ? 225 : sidebarOpen ? 170 : 0;
+        InfoSidebarColumn.MinWidth = gps ? 420 : sidebarOpen ? 170 : 0;
         InfoSidebarColumn.Width = sidebarOpen
             ? new GridLength(sidebarFraction, GridUnitType.Star) : new GridLength(0);
         InfoSidebarDividerColumn.Width =
@@ -112,8 +106,28 @@ public partial class MainWindow
         Grid.SetColumnSpan(InfoSidebarPanel, fullscreen ? 5 : 1);
         Panel.SetZIndex(InfoSidebarPanel, fullscreen ? 10 : 0);
 
-        // No captured sidebar width: controls remain in their rows.
-        // The map viewport receives additional width and height.
+        // Control positions are anchored to the unchanged right edge of
+        // the workspace, NOT to the map pane's movable left edge.
+        // Width is the one measured in the normal GPS sidebar. All button
+        // captions stay visible; the map alone uses the expanded area.
+        if (gps && (expanded || fullscreen))
+        {
+            var fallback = Math.Max(400, BrowseWorkspaceGrid.ActualWidth *
+                WorkspaceFraction(_appearance.SidebarFraction, 0.25, 0.17, 0.48) - 20);
+            GpsControlsPanel.Width = _gpsNormalControlWidth >= 360
+                ? _gpsNormalControlWidth : fallback;
+            InfoSidebarHeader.Width = _gpsNormalHeaderWidth >= 350
+                ? _gpsNormalHeaderWidth : Math.Max(360, fallback - 4);
+            GpsControlsPanel.HorizontalAlignment = HorizontalAlignment.Right;
+            InfoSidebarHeader.HorizontalAlignment = HorizontalAlignment.Right;
+        }
+        else
+        {
+            GpsControlsPanel.Width = double.NaN;
+            InfoSidebarHeader.Width = double.NaN;
+            GpsControlsPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+            InfoSidebarHeader.HorizontalAlignment = HorizontalAlignment.Stretch;
+        }
         GpsCoordinatesText.Visibility = gps
             ? Visibility.Visible : Visibility.Collapsed;
 
@@ -167,6 +181,7 @@ public partial class MainWindow
     private void GpsExpand_Click(object sender, RoutedEventArgs e)
     {
         if (_sidebarMode != "GPS" || _gpsFullscreen) return;
+        CaptureGpsControlPlacement();
         _gpsExpanded = !_gpsExpanded;
         _appearance.GpsExpanded = _gpsExpanded;
         UpdateWorkspaceLayoutPreservingGallery();
@@ -176,6 +191,7 @@ public partial class MainWindow
     private void GpsFullscreen_Click(object sender, RoutedEventArgs e)
     {
         if (_sidebarMode != "GPS") return;
+        CaptureGpsControlPlacement();
         _gpsFullscreen = !_gpsFullscreen;
         if (_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();
@@ -189,6 +205,7 @@ public partial class MainWindow
 
     private void WorkspaceSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
     {
+        CaptureGpsControlPlacement();
         // One proportion owner for both WPF splitters; persist ratios, never
         // the temporary pixel widths GridSplitter uses during a drag.
         var denominator = FolderSidebarColumn.ActualWidth +

@@ -150,6 +150,7 @@ public partial class MainWindow
             }
             else
             {
+                DisposeQueuedScanCursors();
                 _backgroundPending.Clear();
                 _backgroundCurrentScanCancellation?.Cancel();
             }
@@ -340,7 +341,9 @@ public partial class MainWindow
         }
     }
 
-    private void QueueBackgroundChange(BackgroundFolderChange change)
+    private void QueueBackgroundChange(BackgroundFolderChange change,
+        FolderScanner.ScanResumeState? interruptedCursor = null,
+        long? cursorGeneration = null)
     {
         if (!_backgroundScanInitialized ||
             _backgroundScanSettings?.Enabled != true)
@@ -368,9 +371,24 @@ public partial class MainWindow
         var key = $"{change.MonitoredFolderId}|{change.Kind}|{normalized}";
         if (_backgroundPending.TryGetValue(key, out var existing))
         {
+            // A watcher may add more work while a suspended request is
+            // waiting. Preserve its one authoritative scanner cursor.
+            var retained = interruptedCursor ?? existing.Resume;
+            if (interruptedCursor is not null &&
+                existing.Resume is not null &&
+                !ReferenceEquals(interruptedCursor, existing.Resume))
+                existing.Resume.Dispose();
             _backgroundPending[key] = existing with
             {
-                Recursive = existing.Recursive || change.Recursive
+                Recursive = existing.Recursive || change.Recursive,
+                Resume = retained,
+                ResumeGeneration = interruptedCursor is not null
+                    ? cursorGeneration : existing.ResumeGeneration,
+                // Never coalesce a later watcher event into an older partial
+                // scan without preserving the need for a final fresh pass.
+                NeedsFollowup = existing.NeedsFollowup ||
+                    (existing.Resume is not null && interruptedCursor is null) ||
+                    (existing.Resume is null && interruptedCursor is not null)
             };
         }
         else
@@ -379,7 +397,9 @@ public partial class MainWindow
                 change.MonitoredFolderId,
                 normalized,
                 change.Kind,
-                change.Recursive);
+                change.Recursive,
+                interruptedCursor,
+                cursorGeneration);
         }
 
         if (change.Kind is not (BackgroundFolderChangeKind.RemovePath or BackgroundFolderChangeKind.RecoverCache))
@@ -444,6 +464,11 @@ public partial class MainWindow
             for (; nextRequestIndex < requests.Length; nextRequestIndex++)
             {
                 var request = requests[nextRequestIndex];
+                // The resume state belongs to this queued scan request, not
+                // to an individual worker attempt. Manual preemption may
+                // requeue this SAME request without revisiting old files.
+                FolderScanner.ScanResumeState? scanResume = request.Resume;
+                var resumeGeneration = request.ResumeGeneration;
                 _backgroundLifetime.Token.ThrowIfCancellationRequested();
                 if (_manualContextScanActive || _manualScanAllActive ||
                     _manualFileTransferActive || _folderRemovalPending)
@@ -579,6 +604,10 @@ public partial class MainWindow
                 if (!_scheduler.SourceAvailability.CanAccess(scanPath,
                         _backgroundLifetime.Token) || IsPathKnownOffline(scanPath))
                 {
+                    // An OS directory iterator is not safe across a lost
+                    // network mount. The next source reconnection gets a
+                    // fresh inventory; initial imports have durable receipts.
+                    scanResume?.Dispose();
                     continue;
                 }
 
@@ -600,7 +629,10 @@ public partial class MainWindow
                     }, cancellationToken: _backgroundLifetime.Token,
                     workKind: SchedulerWorkKind.SourceProbe);
                 if (!scanPathExists)
+                {
+                    scanResume?.Dispose();
                     continue;
+                }
                 // Directory.Exists can outlive cancellation on a dead NAS.
                 // A manual request that arrived during the probe must still
                 // supersede this background request before it gets scheduled.
@@ -645,9 +677,30 @@ public partial class MainWindow
                     });
                     var sourceState = _folderRepository.GetSourceState(folder.CanonicalPath);
                     if (sourceState is not { DesiredPresent: true })
+                    {
+                        scanResume?.Dispose();
                         continue;
+                    }
                     ScanResult? scanResult = null;
-                    using var resume = new FolderScanner.ScanResumeState();
+                    // Discard only a genuinely obsolete cursor (removed
+                    // source or changed inclusion/exclusion generation).
+                    // Preemption itself never invalidates the iterator.
+                    if (scanResume is not null &&
+                        resumeGeneration != sourceState.Value.Generation)
+                    {
+                        scanResume.Dispose();
+                        scanResume = null;
+                    }
+                    scanResume ??= new FolderScanner.ScanResumeState();
+                    resumeGeneration = sourceState.Value.Generation;
+                    request = request with
+                    {
+                        Resume = scanResume,
+                        ResumeGeneration = resumeGeneration
+                    };
+                    // The outer finally requeues the original array on a
+                    // manual interruption: keep its receipt up to date.
+                    requests[nextRequestIndex] = request;
                     await _scheduler.EnqueueAsync(
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}",
                         // Automatic discovery must make progress even during
@@ -658,12 +711,16 @@ public partial class MainWindow
                             token.ThrowIfCancellationRequested();
                             // Running (not queued) scan: make progress visible
                             // even before a NAS directory yields its first file.
-                            scanProgress.Report(new ScanProgress(0, 0, 0, 0, scanPath));
+                            scanProgress.Report(new ScanProgress(
+                                scanResume.ImageFilesSeen, scanResume.Updated,
+                                scanResume.Unchanged, scanResume.Failed, scanPath,
+                                scanResume.Added, scanResume.Changed,
+                                scanResume.CacheRepaired));
                             scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
                                 ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token)
                                 : _folderScanner.ScanDirectory(
                                     folder, scanPath, request.Recursive,
-                                    progress: scanProgress, token, resume);
+                                    progress: scanProgress, token, scanResume);
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
@@ -671,7 +728,21 @@ public partial class MainWindow
                         scanCancellation.Token,
                         workKind: SchedulerWorkKind.CatalogScan);
                     var result = scanResult ?? throw new OperationCanceledException();
+                    scanResume.Dispose();
+                    scanResume = null;
+                    var followup = request.NeedsFollowup;
+                    request = request with
+                    {
+                        Resume = null,
+                        ResumeGeneration = null,
+                        NeedsFollowup = false
+                    };
+                    requests[nextRequestIndex] = request;
                     catalogChanged |= result.CatalogChanged;
+                    if (followup)
+                        QueueBackgroundChange(new BackgroundFolderChange(
+                            request.MonitoredFolderId, request.Path,
+                            request.Kind, request.Recursive));
                     TrackFolderActivity(
                         request.Kind == BackgroundFolderChangeKind.ScanFile
                             ? Path.GetDirectoryName(scanPath) ?? scanPath
@@ -681,6 +752,17 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException)
                 {
+                    // Preserve a scanner's live iterator on scheduler/manual
+                    // preemption. Shutdown and disabled monitoring release it.
+                    if (_backgroundLifetime.IsCancellationRequested ||
+                        _backgroundMonitorClosing ||
+                        _backgroundScanSettings?.Enabled != true)
+                    {
+                        scanResume?.Dispose();
+                        scanResume = null;
+                        request = request with { Resume = null, ResumeGeneration = null };
+                        requests[nextRequestIndex] = request;
+                    }
                     // A preempted scan is NOT running. The old code left
                     // "Working" in the tree indefinitely and recursively
                     // painted unrelated descendants with spinning arrows.
@@ -699,10 +781,15 @@ public partial class MainWindow
                     // Unexpected cancellation still needs a future attempt.
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.MonitoredFolderId, request.Path,
-                        request.Kind, request.Recursive));
+                        request.Kind, request.Recursive), scanResume, resumeGeneration);
+                    scanResume = null;
                 }
                 catch
                 {
+                    scanResume?.Dispose();
+                    scanResume = null;
+                    request = request with { Resume = null, ResumeGeneration = null };
+                    requests[nextRequestIndex] = request;
                     TrackFolderActivity(
                         request.Kind == BackgroundFolderChangeKind.ScanFile
                             ? Path.GetDirectoryName(scanPath) ?? scanPath
@@ -791,7 +878,8 @@ public partial class MainWindow
                 foreach (var remaining in requests.Skip(nextRequestIndex))
                     QueueBackgroundChange(new BackgroundFolderChange(
                         remaining.MonitoredFolderId, remaining.Path,
-                        remaining.Kind, remaining.Recursive));
+                        remaining.Kind, remaining.Recursive),
+                        remaining.Resume, remaining.ResumeGeneration);
 
                 // Scans already completed before preemption can leave durable
                 // cache jobs. Resume that work later without rescanning images.
@@ -894,12 +982,22 @@ public partial class MainWindow
         _backgroundLifetime?.Dispose();
         _backgroundCurrentScanCancellation = null;
         _backgroundLifetime = null;
+        DisposeQueuedScanCursors();
         _backgroundPending.Clear();
+    }
+
+    private void DisposeQueuedScanCursors()
+    {
+        foreach (var request in _backgroundPending.Values)
+            request.Resume?.Dispose();
     }
 
     private sealed record PendingBackgroundScan(
         long MonitoredFolderId,
         string Path,
         BackgroundFolderChangeKind Kind,
-        bool Recursive);
+        bool Recursive,
+        FolderScanner.ScanResumeState? Resume = null,
+        long? ResumeGeneration = null,
+        bool NeedsFollowup = false);
 }

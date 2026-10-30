@@ -1152,26 +1152,59 @@ internal static class TagFlow
                 ?? throw new Exception("GPS Pick missing.");
             var gpsCopy = (Button?)window.FindName("GpsCopyButton")
                 ?? throw new Exception("GPS Copy missing.");
+            var gpsTitle = (TextBlock?)window.FindName("SidePanelHeading")
+                ?? throw new Exception("GPS title missing.");
+            var gpsProvider = (Button?)window.FindName("GpsProviderButton")
+                ?? throw new Exception("GPS map selector missing.");
             Point RelativePosition(FrameworkElement control)
-                => control.TranslatePoint(new Point(0, 0), sidebarPanel);
+                => control.TranslatePoint(new Point(0, 0), window);
+            var originalTitle = RelativePosition(gpsTitle);
             var originalSearch = RelativePosition(gpsSearchField);
             var originalAction = RelativePosition(gpsAction);
             var originalCopy = RelativePosition(gpsCopy);
+            var originalProvider = RelativePosition(gpsProvider);
             var originalMap = RelativePosition(gpsMapHost);
             var normalMapWidth = gpsMapHost.ActualWidth;
+            var normalControlWidth = gpsControls.ActualWidth;
+            var normalHeaderWidth = gpsHeader.ActualWidth;
             if (gpsControls.ActualWidth < 200 || gpsHeader.ActualWidth < 200)
                 throw new Exception("GPS controls do not have usable width.");
             void CheckFixedRows()
             {
-                if (Math.Abs(RelativePosition(gpsSearchField).Y - originalSearch.Y) > 2 ||
+                foreach (var captionName in new[] {
+                    "GpsPickPositionToggleCaption", "GpsApplyMissingButtonCaption",
+                    "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
+                    "GpsShowAreaCaption", "GpsClearAreaCaption",
+                    "GpsCopyButtonCaption", "GpsGoogleButtonCaption" })
+                    if (window.FindName(captionName) is not TextBlock caption ||
+                        caption.Visibility != Visibility.Visible ||
+                        string.IsNullOrWhiteSpace(caption.Text))
+                        throw new Exception("GPS caption disappeared: " + captionName);
+                if (Math.Abs(RelativePosition(gpsTitle).X - originalTitle.X) > 2 ||
+                    Math.Abs(RelativePosition(gpsTitle).Y - originalTitle.Y) > 2 ||
+                    Math.Abs(RelativePosition(gpsProvider).X - originalProvider.X) > 2 ||
+                    Math.Abs(RelativePosition(gpsProvider).Y - originalProvider.Y) > 2 ||
+                    Math.Abs(RelativePosition(gpsSearchField).Y - originalSearch.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsAction).Y - originalAction.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsCopy).Y - originalCopy.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsMapHost).Y - originalMap.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsSearchField).X - originalSearch.X) > 2 ||
                     Math.Abs(RelativePosition(gpsAction).X - originalAction.X) > 2 ||
-                    !double.IsNaN(gpsControls.Width) || !double.IsNaN(gpsHeader.Width))
+                    Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 2 ||
+                    Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 2 ||
+                    gpsControls.HorizontalAlignment != HorizontalAlignment.Right ||
+                    gpsHeader.HorizontalAlignment != HorizontalAlignment.Right)
                     throw new Exception("GPS controls changed position between normal and expanded modes.");
             }
+            foreach (var captionName in new[] {
+                "GpsPickPositionToggleCaption", "GpsApplyMissingButtonCaption",
+                "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
+                "GpsShowAreaCaption", "GpsClearAreaCaption",
+                "GpsCopyButtonCaption", "GpsGoogleButtonCaption" })
+                if (window.FindName(captionName) is not TextBlock text ||
+                    text.Visibility != Visibility.Visible ||
+                    string.IsNullOrWhiteSpace(text.Text))
+                    throw new Exception("GPS button caption missing: " + captionName);
             Click(gpsExpand);
             window.UpdateLayout();
             if (folderPane.Visibility != Visibility.Collapsed ||

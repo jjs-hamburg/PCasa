@@ -365,7 +365,10 @@ public partial class MainWindow
             // the running scan step and validated the source. Even when NAS
             // enumeration takes a long time to return its first file, the
             // single progress presenter must already show the active scan.
-            progress?.Report(new ScanProgress(0, 0, 0, 0, directory));
+            progress?.Report(new ScanProgress(
+                _resume.ImageFilesSeen, _resume.Updated, _resume.Unchanged,
+                _resume.Failed, directory, _resume.Added, _resume.Changed,
+                _resume.CacheRepaired));
             try
             {
                 Result = owner._folderScanner.ScanDirectory(

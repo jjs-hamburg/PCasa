@@ -1048,7 +1048,7 @@
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <Grid x:Name="GpsControlsPanel" Grid.Row="0" Margin="0,0,0,5" SizeChanged="GpsControlsPanel_SizeChanged">
+                        <Grid x:Name="GpsControlsPanel" Grid.Row="0" Margin="0,0,0,5">
  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
  <Grid Grid.Row="0" Margin="0,0,0,4">
   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -1087,7 +1087,7 @@
                                 </Popup>
  </Grid>
  <Grid x:Name="GpsEditPanel" Grid.Row="1" Margin="0,0,0,4">
-  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
   <ToggleButton x:Name="GpsPickPositionToggle" Grid.Column="0" Height="31" Padding="3,1" Margin="0,0,3,0" Checked="GpsPickPosition_Changed" Unchecked="GpsPickPosition_Changed" ToolTip="{loc:Tr Key='Auf Karte klicken oder Marker ziehen'}">
  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M12,2 C7,2 4,6 4,11 C4,16 12,22 12,22 C12,22 20,16 20,11 C20,6 17,2 12,2 Z M9,11 A3,3 0 1 0 15,11 A3,3 0 1 0 9,11" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsPickPositionToggleCaption" Text="{loc:Tr Key='Wählen'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
  </ToggleButton>
@@ -1114,16 +1114,16 @@
   </Grid>
  </Grid>
  <Grid Grid.Row="3" Height="31">
-  <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
   <Button x:Name="GpsCopyButton" Grid.Column="0" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsCopy_Click" ToolTip="{loc:Tr Key='GPS kopieren'}">
  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M5,3 H15 L20,8 V21 H5 Z M15,3 V8 H20" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsCopyButtonCaption" Text="{loc:Tr Key='GPS kopieren'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
  </Button>
   <Button x:Name="GpsGoogleButton" Grid.Column="1" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsGoogle_Click" ToolTip="{loc:Tr Key='Google Maps'}">
  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M14,4 H21 V11 M21,4 L11,14 M19,14 V20 H4 V5 H11" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsGoogleButtonCaption" Text="{loc:Tr Key='Google Maps'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
  </Button>
-  <Button x:Name="GpsProviderButton" Grid.Column="2" Width="82" Height="31" Padding="1,0" ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsProviderButton_Click">
+  <Button x:Name="GpsProviderButton" Grid.Column="3" Width="82" Height="31" Padding="1,0" ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsProviderButton_Click">
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/><Path Data="M2,3 L7,8 L12,3" Width="11" Height="8" Margin="7,4,0,0" Stretch="Fill" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/></StackPanel></Button>
-  <ToggleButton x:Name="GpsFilmstripToggle" Grid.Column="3" Width="34" Height="31" Margin="5,0,0,0" Padding="3" ToolTip="{loc:Tr Key='Filmstreifen'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed">
+  <ToggleButton x:Name="GpsFilmstripToggle" Grid.Column="4" Width="34" Height="31" Margin="5,0,0,0" Padding="3" ToolTip="{loc:Tr Key='Filmstreifen'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed">
    <Viewbox Width="21" Height="19"><Canvas Width="28" Height="24"><Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18" RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"/><Path Data="M8,3 V21 M20,3 V21 M3,8 H6 M3,16 H6 M22,8 H25 M22,16 H25" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/><Path Data="M11,8 L17,12 L11,16 Z" Fill="{DynamicResource PcasaTextBrush}"/></Canvas></Viewbox>
   </ToggleButton>
  </Grid>

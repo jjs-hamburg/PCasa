@@ -697,7 +697,8 @@ internal static class Program
                 gpsActions.ColumnDefinitions.Count != 4 ||
                 Grid.GetRow(gpsActions) != 1 ||
                 gpsActions.Visibility != Visibility.Visible ||
-                !double.IsNaN(gpsHeader.Width) || !double.IsNaN(gpsControls.Width))
+                gpsControls.HorizontalAlignment != HorizontalAlignment.Stretch ||
+                gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch)
                 throw new Exception("GPS controls are not fixed and compact.");
             Console.WriteLine("PASS: GPS header/controls stay in fixed rows.");
 
