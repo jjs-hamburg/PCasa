@@ -151,7 +151,10 @@ public sealed class OriginalWriteFailureRepository
         cmd.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<FailedFile> Unresolved()
+    // Normal scheduling only sees exhausted (parked) failures. The explicit
+    // error-review dialog can also display the FIRST failed attempt, before
+    // the central scheduler's automatic retries finish.
+    public IReadOnlyList<FailedFile> Unresolved(bool includeRetrying = false)
     {
         using var db = database.OpenConnection();
         using var cmd = db.CreateCommand();
@@ -159,10 +162,11 @@ public sealed class OriginalWriteFailureRepository
             SELECT kind,package_key,image_id,file_path,attempts,
                    last_error,last_attempt_utc
               FROM original_write_failures
-             WHERE resolved=0 AND attempts >= $max
+             WHERE resolved=0 AND (attempts >= $max OR $showRetrying = 1)
              ORDER BY last_attempt_utc DESC;
             """;
         cmd.Parameters.AddWithValue("$max", MaximumAttempts);
+        cmd.Parameters.AddWithValue("$showRetrying", includeRetrying ? 1 : 0);
         var result = new List<FailedFile>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
