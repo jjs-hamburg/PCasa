@@ -1236,15 +1236,16 @@ internal static class TagFlow
             CheckFixedRows();
             Console.WriteLine("PASS: GPS search, action and footer rows retain their positions in both map modes.");
 
-            // Opening a GPS image from full-map mode must restore the
-            // gallery alongside the map. The filmstrip and map stay visible,
-            // while one click on the gallery's photo restores thumbnails.
-            // The scheduler/decoder remains the existing viewer path.
+            // The full-map GPS photo remains a floating overlay ABOVE the
+            // map, never forces the map back to an enlarged side panel, and
+            // never changes the gallery selection.
             var gpsOverlay = (Grid?)window.FindName("GpsFullscreenImageOverlay")
                 ?? throw new Exception("Fullscreen photo image overlay missing.");
             var gpsImage = (System.Windows.Controls.Image?)
                 window.FindName("GpsFullscreenImage")
                 ?? throw new Exception("Fullscreen photo surface missing.");
+            var gpsFrame = (Border?)window.FindName("GpsFullscreenImageFrame")
+                ?? throw new Exception("Floating photo frame missing.");
             var projectedType = projected[0].GetType();
             var pointArray = Array.CreateInstance(projectedType, projected.Length);
             for (var i = 0; i < projected.Length; i++)
@@ -1258,28 +1259,27 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
             showGpsPhoto.Invoke(window, [gpsA]);
+            window.UpdateLayout();
             if (gpsOverlay.Visibility != Visibility.Visible ||
                 !selected.SetEquals(selectionBeforeLayout) ||
                 !gpsFullscreen.IsVisible ||
-                gpsOverlay.Parent is not Grid galleryPhotoRoot ||
-                galleryPhotoRoot.Parent is not Grid galleryWorkspace ||
-                Grid.GetColumn(galleryWorkspace) != 2 ||
-                Grid.GetColumn(sidebarPanel) != 4 ||
-                Grid.GetColumnSpan(sidebarPanel) != 1)
-                throw new Exception("Opening a GPS photo must show it in the gallery BESIDE the map.");
+                !ReferenceEquals(gpsOverlay.Parent, workspace) ||
+                Grid.GetColumn(gpsOverlay) != 0 ||
+                Grid.GetColumnSpan(gpsOverlay) != workspace.ColumnDefinitions.Count ||
+                Grid.GetColumn(sidebarPanel) != 0 ||
+                gpsFrame.ActualWidth >= workspace.ActualWidth)
+                throw new Exception("Opening a GPS photo must float it OVER the fullscreen map.");
             gpsOverlay.RaiseEvent(new MouseButtonEventArgs(
                 InputManager.Current.PrimaryMouseDevice,
                 Environment.TickCount, MouseButton.Left)
             { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
             if (gpsOverlay.Visibility != Visibility.Collapsed ||
-                Grid.GetColumn(sidebarPanel) != 4 ||
+                Grid.GetColumn(sidebarPanel) != 0 ||
                 !selected.SetEquals(selectionBeforeLayout))
-                throw new Exception("Single click did not restore gallery thumbnails.");
+                throw new Exception("Closing the photo overlay must keep GPS fullscreen.");
             Click(gpsFullscreen);
-            if (Grid.GetColumn(sidebarPanel) != 0)
-                throw new Exception("GPS fullscreen could not be reopened.");
-            Click(gpsFullscreen);
-            if (Grid.GetColumn(sidebarPanel) != 4 || Grid.GetColumnSpan(sidebarPanel) != 1)
+            if (Grid.GetColumn(sidebarPanel) != 4 ||
+                Grid.GetColumnSpan(sidebarPanel) != 1)
                 throw new Exception("Leaving GPS fullscreen did not restore the panel.");
 
             // Regression: double-clicking a thumbnail used to enter the normal
@@ -1328,9 +1328,9 @@ internal static class TagFlow
                 filmDoubleClick.Invoke(window, [filmList, doubleClick]);
                 if (gpsOverlay.Visibility != Visibility.Visible ||
                     gpsOverlay.Tag is not long openedId || openedId != gpsA ||
-                    gpsOverlay.Parent is not Grid adjacentGallery ||
-                    adjacentGallery.Parent is not Grid adjacentWorkspace ||
-                    Grid.GetColumn(adjacentWorkspace) != 2 ||
+                    !ReferenceEquals(gpsOverlay.Parent, workspace) ||
+                    Grid.GetColumn(gpsOverlay) != 2 ||
+                    Grid.GetColumnSpan(gpsOverlay) != 1 ||
                     Grid.GetColumn(sidebarPanel) != 4 ||
                     (bool)viewerOpenField.GetValue(window)! ||
                     !selected.SetEquals(keepSelection))
