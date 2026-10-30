@@ -43,6 +43,9 @@ jobs:
       - name: Bundle pinned MapLibre JS and CSS into PCasa.App.dll
         shell: pwsh
         run: ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+      - name: Verify selected GPS overlay at 6,000 photos and across continents
+        shell: pwsh
+        run: node tests/gps-map-overlay.test.cjs
       - name: Run WPF window smoke tests
         shell: pwsh
         run: |

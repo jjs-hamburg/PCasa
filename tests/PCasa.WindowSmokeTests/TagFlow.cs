@@ -642,7 +642,7 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.Instance)
                 ?? throw new Exception("GPS catalog projection not found.");
             var projected = ((System.Collections.IEnumerable)readGps.Invoke(
-                window, [new long[] { gpsA }, b.Id, CancellationToken.None])!)
+                window, [new long[] { gpsA }, b.Id, CancellationToken.None, null])!)
                 .Cast<object>().ToArray();
             bool HasPoint(long id, bool isSelected) => projected.Any(point =>
                 (long)point.GetType().GetProperty("Id")!.GetValue(point)! == id &&
@@ -1344,7 +1344,7 @@ internal static class TagFlow
             // subsequent SINGLE click on a different thumbnail swaps photos.
             // Neither action may alter the catalog selection or map viewport.
             var multiProjection = ((System.Collections.IEnumerable)readGps.Invoke(
-                window, [new long[] { gpsA, gpsB }, b.Id, CancellationToken.None])!)
+                window, [new long[] { gpsA, gpsB }, b.Id, CancellationToken.None, null])!)
                 .Cast<object>().ToArray();
             var multiArray = Array.CreateInstance(projectedType, multiProjection.Length);
             for (var i = 0; i < multiProjection.Length; i++)

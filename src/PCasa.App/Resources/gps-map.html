@@ -10,6 +10,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
 .pcasa-pin{width:17px;height:17px;box-sizing:border-box;background:#df4550;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 5px #222b;cursor:pointer}
 .pcasa-pin-target{width:24px;height:24px;background:#f0a030;border:3px solid #111;outline:2px solid #fff;outline-offset:0}
 .pcasa-pin-target:before{content:'';display:block;width:7px;height:7px;background:#fff;border-radius:50%;margin:5.5px auto 0}
+#pcasa-selected-overlay{position:absolute;inset:0;pointer-events:none;z-index:3}
 </style></head><body><div id="map"></div><div id="fallback"></div>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.js"
  onerror="document.getElementById('fallback').textContent='MapLibre konnte nicht geladen werden.'"></script>
@@ -74,36 +75,91 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
        paint:{'circle-radius':8,'circle-color':'#df4550',
               'circle-stroke-width':2.3,'circle-stroke-color':'#fff'}});
    }
-   // Selected photos have their own unclustered source and are always on top.
-   // A cluster at identical coordinates must never swallow the selected marker.
-   if (!map.getSource('pcasa-selected')) {
-     // Cluster only nearby selected coordinates at low zoom so thousands of
-     // photos at the same place do not hide other regions of the world.
-     map.addSource('pcasa-selected',{type:'geojson',data:geojson([]),
-       cluster:true,clusterRadius:38,clusterMaxZoom:15});
-     map.addLayer({id:'pcasa-selected-clusters',type:'circle',
-       source:'pcasa-selected',filter:['has','point_count'],
-       paint:{'circle-radius':['step',['get','point_count'],14,10,18,100,23],
-              'circle-color':'#f0a030','circle-stroke-width':3,
-              'circle-stroke-color':'#111'}});
-     map.addLayer({id:'pcasa-selected-cluster-count',type:'symbol',
-       source:'pcasa-selected',filter:['has','point_count'],
-       layout:{'text-field':['get','point_count_abbreviated'],'text-size':12},
-       paint:{'text-color':'#111'}});
-     map.addLayer({id:'pcasa-selected-points',type:'circle',source:'pcasa-selected',
-       filter:['!',['has','point_count']],
-       paint:{'circle-radius':10,'circle-color':'#f0a030',
-              'circle-stroke-width':3,'circle-stroke-color':'#111'}});
-     map.addLayer({id:'pcasa-selected-center',type:'circle',source:'pcasa-selected',
-       filter:['!',['has','point_count']],
-       paint:{'circle-radius':4,'circle-color':'#fff'}});
-   }
    updatePhotos();
  }
+ // All selected locations use ONE style-independent canvas projection.
+ // Unlike MapLibre style layers, it survives basemap reloads. One draw pass
+ // groups close pixels without imposing an arbitrary image-count limit.
+ const selectedOverlay=document.createElement('canvas');
+ selectedOverlay.id='pcasa-selected-overlay';
+ map.getContainer().appendChild(selectedOverlay);
+ let visibleSelectedCells=[], overlayFrameQueued=false;
+ function renderSelectedOverlay() {
+   const host=map.getContainer();
+   const width=host.clientWidth, height=host.clientHeight;
+   if(width<=0||height<=0) return;
+   const ratio=Math.max(1,window.devicePixelRatio||1);
+   const physicalWidth=Math.round(width*ratio), physicalHeight=Math.round(height*ratio);
+   if(selectedOverlay.width!==physicalWidth)selectedOverlay.width=physicalWidth;
+   if(selectedOverlay.height!==physicalHeight)selectedOverlay.height=physicalHeight;
+   selectedOverlay.style.width=width+'px';
+   selectedOverlay.style.height=height+'px';
+   const ctx=selectedOverlay.getContext('2d');
+   if(!ctx)return;
+   ctx.setTransform(ratio,0,0,ratio,0,0);
+   ctx.clearRect(0,0,width,height);
+   const cells=new Map();
+   for(const photo of points) {
+     if(!photo.selected)continue;
+     const location=map.project([photo.lon,photo.lat]);
+     if(!Number.isFinite(location.x)||!Number.isFinite(location.y)||
+        location.x< -24||location.x>width+24||
+        location.y< -24||location.y>height+24)continue;
+     const key=Math.floor(location.x/36)+','+Math.floor(location.y/36);
+     let cell=cells.get(key);
+     if(!cell){cell={x:0,y:0,lat:0,lon:0,count:0,id:photo.id};cells.set(key,cell);}
+     cell.x+=location.x;cell.y+=location.y;
+     cell.lat+=photo.lat;cell.lon+=photo.lon;cell.count++;
+   }
+   visibleSelectedCells=[...cells.values()].map(cell=>({
+     x:cell.x/cell.count,y:cell.y/cell.count,
+     lat:cell.lat/cell.count,lon:cell.lon/cell.count,
+     count:cell.count,id:cell.id
+   }));
+   for(const cell of visibleSelectedCells) {
+     const radius=cell.count>1?16:10;
+     ctx.beginPath();ctx.arc(cell.x,cell.y,radius,0,Math.PI*2);
+     ctx.fillStyle='#f0a030';ctx.fill();
+     ctx.lineWidth=3;ctx.strokeStyle='#111';ctx.stroke();
+     if(cell.count>1) {
+       ctx.fillStyle='#111';ctx.textAlign='center';ctx.textBaseline='middle';
+       ctx.font='bold 12px Segoe UI, sans-serif';
+       ctx.fillText(String(cell.count),cell.x,cell.y);
+     } else {
+       ctx.beginPath();ctx.arc(cell.x,cell.y,3,0,Math.PI*2);
+       ctx.fillStyle='#fff';ctx.fill();
+     }
+   }
+ }
+ function scheduleSelectedOverlay() {
+   if(overlayFrameQueued)return;
+   overlayFrameQueued=true;
+   window.requestAnimationFrame(()=>{
+     overlayFrameQueued=false;
+     renderSelectedOverlay();
+   });
+ }
+ function clickSelectedOverlay(event) {
+   let closest=null,best=Infinity;
+   for(const cell of visibleSelectedCells) {
+     const dx=event.point.x-cell.x,dy=event.point.y-cell.y;
+     const distance=dx*dx+dy*dy;
+     const limit=cell.count>1?21:15;
+     if(distance<limit*limit&&distance<best){closest=cell;best=distance;}
+   }
+   if(!closest)return false;
+   if(closest.count>1&&map.getZoom()<15)
+     map.easeTo({center:[closest.lon,closest.lat],
+       zoom:Math.min(map.getZoom()+2,16),duration:300});
+   else post({type:'select',id:Number(closest.id)});
+   return true;
+ }
+ map.on('move',scheduleSelectedOverlay);
+ map.on('resize',scheduleSelectedOverlay);
  function updatePhotos() {
    map.getSource('pcasa-photos')?.setData(geojson(points.filter(p=>!p.selected)));
-   map.getSource('pcasa-selected')?.setData(geojson(points.filter(p=>p.selected)));
    syncSelectedMarkers();
+   scheduleSelectedOverlay();
  }
  function syncSelectedMarkers() {
    // ALL selected photos already have unclustered, clickable MapLibre circle
@@ -229,18 +285,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if(Number.isSafeInteger(id)) post({type:'select',id});
  }
  map.on('click','pcasa-points',selectPhoto);
- map.on('click','pcasa-selected-points',selectPhoto);
- map.on('click','pcasa-selected-clusters',event=>{
-   const features=map.queryRenderedFeatures(event.point,{layers:['pcasa-selected-clusters']});
-   if(!features.length)return;
-   const cluster=features[0];
-   map.getSource('pcasa-selected').getClusterExpansionZoom(
-     cluster.properties.cluster_id).then(
-       zoom=>map.easeTo({center:cluster.geometry.coordinates,zoom})
-     ).catch(()=>{});
- });
 
- for(const layer of ['pcasa-points','pcasa-selected-points','pcasa-selected-clusters']) {
+ for(const layer of ['pcasa-points']) {
    map.on('mouseenter',layer,()=>map.getCanvas().style.cursor='pointer');
    map.on('mouseleave',layer,()=>map.getCanvas().style.cursor='');
  }
@@ -274,8 +320,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    map.getCanvas().style.cursor=placementEnabled ? 'crosshair' : '';
  };
  map.on('click',event=>{
+   if (clickSelectedOverlay(event)) return;
    if (!placementEnabled) return;
-   const ids=['pcasa-points','pcasa-selected-points','pcasa-clusters']
+   const ids=['pcasa-points','pcasa-clusters']
      .filter(id=>!!map.getLayer(id));
    if (ids.length && map.queryRenderedFeatures(event.point,{layers:ids}).length) return;
    const lat=event.lngLat.lat,lon=event.lngLat.lng;
@@ -295,7 +342,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    const p=map.getCenter();
    post({type:'viewport',lat:p.lat,lon:p.lng,zoom:map.getZoom()});
  });
- window.pcasaResize = () => map.resize();
+ window.pcasaResize = () => {map.resize();scheduleSelectedOverlay();};
  map.on('load',()=>{fallback.remove();});
 })();
 </script></body></html>
