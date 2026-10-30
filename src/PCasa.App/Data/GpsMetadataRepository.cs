@@ -171,6 +171,9 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 exif.ExecuteNonQuery();
             }
             tx.Commit();
+            // Only the verified source+catalog commit may clear a previous
+            // file-specific GPS error, including after a later manual retry.
+            new GpsWriteFailureRepository(database).MarkResolved(imageId);
             PCasaDiagnostics.WriteMessage("GPS.Edit.Timing",
                 $"ImageId={imageId}; Changed={shouldWrite}; Bytes={after.Length}; " +
                 $"ReadMs={readMilliseconds}; NativeWriteMs={writeMilliseconds}; " +
