@@ -359,6 +359,11 @@ public partial class MainWindow
             var completion = _scheduler.EnqueueDurablePackageAsync(
                 BuildGpsEditPackage(key, payload), "gps-edit-v1", payload,
                 SchedulerPriority.ManualAction);
+            // The persisted newer GPS intent supersedes any older failed
+            // coordinate write for these images. Never offer stale retries.
+            var writeErrors = new OriginalWriteFailureRepository(_database);
+            foreach (var imageId in ids)
+                writeErrors.Clear(OriginalWriteFailureRepository.Gps, imageId);
             StatusText.Text = UiLanguage.Format(
                 "GPS-Auftrag für {0} Bilder gespeichert.", ids.Length);
             // An accepted persistent package owns an immutable coordinate
@@ -386,54 +391,27 @@ public partial class MainWindow
                lat is < -90 or > 90 || lon is < -180 or > 180)))
             throw new InvalidDataException("GPS-Auftrag enthält ungültige Koordinaten.");
         var package = new SchedulerTaskPackage(key);
-        var failures = new GpsWriteFailureRepository(_database);
         for (var i = 0; i < request.ImageIds.Length; i++)
         {
             var id = request.ImageIds[i];
-            var finished = i + 1;
+            var completed = i + 1;
             package.AddStep(token =>
             {
-                string? currentPath = null;
-                try
-                {
-                    var repository = new GpsMetadataRepository(_database);
-                    repository.Apply(id, request.Latitude, request.Longitude,
+                string? path = null;
+                TryWriteOriginal(OriginalWriteFailureRepository.Gps, key, id,
+                    GetOriginalImagePath(id), token,
+                    () => new GpsMetadataRepository(_database).Apply(
+                        id, request.Latitude, request.Longitude,
                         request.Mode, token,
-                        path =>
+                        current =>
                         {
-                            currentPath = path;
+                            path = current;
                             _scheduler.ReportProgress(key,
                                 "GPS in Originaldateien schreiben",
-                                finished - 1, request.ImageIds.Length, path);
-                        }, packageKey: key);
-                }
-                catch (Exception ex) when (ex is IOException or
-                    UnauthorizedAccessException or InvalidDataException or
-                    TimeoutException or System.ComponentModel.Win32Exception)
-                {
-                    token.ThrowIfCancellationRequested();
-                    // Do not mistake an inaccessible NAS/VPN root for a
-                    // permanently corrupt file. SourceAvailabilityGate already
-                    // coalesces the root probe and the scheduler owns retries.
-                    if (currentPath is not null &&
-                        (ex is IOException or UnauthorizedAccessException) &&
-                        !_scheduler.SourceAvailability.CheckAfterSourceError(
-                            currentPath, token))
-                        throw new DurablePackageRetryException(
-                            "GPS-Quelle vorübergehend nicht erreichbar: " +
-                            SourceAvailabilityGate.RootOf(currentPath));
-                    var attempts = failures.RecordFailure(key, id, ex);
-                    if (attempts < 3)
-                        throw new DurablePackageRetryException(
-                            $"GPS-Datei {id}: Versuch {attempts}/3 fehlgeschlagen. " +
-                            "Wiederholung durch den bestehenden Scheduler.");
-                    // After three verified per-file failures, the ledger
-                    // retains the path and error. Completing THIS step lets
-                    // all remaining photos continue at their original P0.
-                    PCasaDiagnostics.Write("GPS.Edit.FileSkipped:" + id, ex);
-                }
+                                completed - 1, request.ImageIds.Length, current);
+                        }, packageKey: key));
                 _scheduler.ReportProgress(key, "GPS in Originaldateien schreiben",
-                    finished, request.ImageIds.Length);
+                    completed, request.ImageIds.Length);
                 return Task.CompletedTask;
             });
         }
@@ -461,52 +439,8 @@ public partial class MainWindow
                 if (_browseInitialized)
                     await RefreshBrowseGalleryAsync(forceIndexReload: true);
                 if (_sidebarMode == "GPS") await RefreshGpsMapAsync();
-                var summary = GpsFailureSummary();
-                if (summary.Length > 0) GpsEditStatus.Text = summary;
             }
         }
-    }
-
-    private string GpsFailureSummary()
-    {
-        var count = new GpsWriteFailureRepository(_database).Unresolved().Count;
-        return count == 0 ? string.Empty
-            : UiLanguage.Format("{0} GPS-Schreibfehler – anklicken", count);
-    }
-
-    private void GpsEditStatus_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        var failed = new GpsWriteFailureRepository(_database).Unresolved();
-        if (failed.Count == 0) return;
-        var details = string.Join(Environment.NewLine + Environment.NewLine,
-            failed.Select(f => f.Path + Environment.NewLine +
-                UiLanguage.Format("Versuche: {0}", f.Attempts) +
-                " | " + f.LastAttemptUtc + Environment.NewLine + f.Error));
-        // Readable, scrollable list backed by SQLite, also after restart.
-        // Uses the same application-level light/dark resources as other dialogs.
-        var contents = new TextBox
-        {
-            Text = details,
-            IsReadOnly = true,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            Margin = new Thickness(14),
-            Padding = new Thickness(8)
-        };
-        var dialog = new Window
-        {
-            Title = UiLanguage.T("GPS-Schreibfehler"),
-            Width = 820, Height = 530,
-            MinWidth = 450, MinHeight = 280,
-            Owner = this,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = contents
-        };
-        dialog.SetResourceReference(Window.BackgroundProperty, "PcasaWindowBrush");
-        dialog.SetResourceReference(Window.ForegroundProperty, "PcasaTextBrush");
-        dialog.ShowDialog();
-        e.Handled = true;
     }
 
     private void GpsShowArea_Click(object sender, RoutedEventArgs e)
