@@ -35,8 +35,9 @@ class MapStub {
 class MarkerStub{constructor(){this.element={};}setLngLat(){return this;}addTo(){return this;}remove(){}}
 class Bounds{constructor(){this.points=[];}extend(p){this.points.push(p);}}
 const window={devicePixelRatio:1,requestAnimationFrame:f=>f(),CefSharp:{PostMessage:json=>messages.push(JSON.parse(json))}};
-vm.runInNewContext(script,{window,document,Map,Number,console,
- maplibregl:{Map:MapStub,Marker:MarkerStub,LngLatBounds:Bounds,NavigationControl:class{}}});
+const maplibregl={Map:MapStub,Marker:MarkerStub,LngLatBounds:Bounds,NavigationControl:class{}};
+window.maplibregl=maplibregl;
+vm.runInNewContext(script,{window,document,Map,Number,console,maplibregl});
 activeMap.emit('style.load');
 assert.ok(messages.some(m=>m.type==='ready'));
 const worldwide=Array.from({length:6000},(_,i)=>({
