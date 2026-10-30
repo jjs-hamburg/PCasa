@@ -1836,6 +1836,27 @@ internal static class TagFlow
                     .Any(row => row.Children.OfType<TextBlock>().Any(label =>
                         label.Text.Contains(editableTag, StringComparison.Ordinal))),
                 "Red-X tag removal did not update original files and visible tag list.");
+            // This test next injects pending edits directly into SQLite, outside
+            // the user's normal tag-edit package. Await the preceding real WPF
+            // edit's UI completion as well as its journal completion first.
+            // Otherwise its late ObserveTagPackageAsync callback can launch an
+            // automatic recovery for our synthetic backlog and race the exact
+            // recovery package we intend to test below.
+            var visibleTagOperationsField = typeof(PCasa.App.MainWindow).GetField(
+                "_visibleManualOperations",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Shared manual progress projection missing.");
+            var visibleTagOperations =
+                (System.Collections.IDictionary)visibleTagOperationsField.GetValue(window)!;
+            Until(window, () =>
+                !visibleTagOperations.Keys.Cast<string>()
+                    .Any(key => key.StartsWith("tags:", StringComparison.Ordinal)) &&
+                !new DurablePackageJournal(db).Pending().Any(record =>
+                    record.Type.StartsWith("tag-edit-", StringComparison.Ordinal) ||
+                    record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal)) &&
+                new ImageTagRepository(db).PendingEdits(1).Count == 0,
+                "Previous WPF tag package or its recovery observer did not finish.");
             // Durable intent is committed locally before touching the image,
             // and restarted repositories can replay several tags in ONE write.
             var restartedTags = new ImageTagRepository(db);
