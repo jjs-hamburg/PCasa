@@ -130,6 +130,7 @@ internal static class Program
         Run("Faulted file watcher is rebuilt after an Error event", FaultedWatcherIsRebuilt, failures);
         Run("Individual watcher file events never scan their entire parent", WatcherFileEventsStayTargeted, failures);
         Run("GPS bad-file attempts are durable, bounded and resolvable", GpsWriteFailuresSurviveRestart, failures);
+        Run("New tag edit supersedes old errors and discard restores source projection", TagWriteFailureSupersededAndDiscarded, failures);
         Run("Canceled reconciliation never commits deletions", CanceledReconciliationPreservesCatalog, failures);
         Run("Partial folder scan preserves siblings", PartialScanPreservesSibling, failures);
         Run("Nonrecursive scan preserves unseen descendants", NonrecursiveScanPreservesDescendants, failures);
@@ -3781,29 +3782,83 @@ internal static class Program
         using var sandbox = new Sandbox();
         var (db, _, _) = sandbox.Prepare();
         const string key = "gps:edit:synthetic-file-failure";
-        var store = new GpsWriteFailureRepository(db);
+        var store = new OriginalWriteFailureRepository(db);
         for (var attempt = 1; attempt <= 3; attempt++)
         {
-            var count = store.RecordFailure(key, 319L,
-                new IOException("Simulated original-file write failure"));
+            var count = store.RecordFailure(OriginalWriteFailureRepository.Gps,
+                key, 319L, new IOException("Simulated GPS original-file failure"));
             if (count != attempt)
-                throw new Exception("File-specific GPS failure count was not durable.");
+                throw new Exception("GPS per-file attempts were not durable.");
             if (attempt < 3 && store.Unresolved().Count != 0)
-                throw new Exception("Transient GPS write failed too early.");
+                throw new Exception("GPS write error parked before three attempts.");
         }
         db.Initialize();
-        var restored = new GpsWriteFailureRepository(db);
-        var issues = restored.Unresolved(key);
+        var restored = new OriginalWriteFailureRepository(db);
+        var issues = restored.Unresolved();
         if (issues.Count != 1 || issues[0].Attempts != 3 ||
-            !issues[0].Error.Contains("Simulated original-file write failure"))
-            throw new Exception("Restart lost the GPS original-file error report.");
-        if (restored.RecordFailure(key, 320L,
-            new InvalidDataException("Other file has its own error")) != 1 ||
-            restored.Unresolved().Count != 1)
-            throw new Exception("GPS error attempts leaked between different files.");
-        restored.MarkResolved(319L);
+            !issues[0].Error.Contains("Simulated GPS original-file failure"))
+            throw new Exception("Restart lost GPS write errors.");
+        if (restored.RecordFailure(OriginalWriteFailureRepository.Tags,
+            "tags:synthetic", 319L, new IOException("Simulated tag original failure"),
+            permanent: true) != 3 || restored.Unresolved().Count != 2)
+            throw new Exception("Shared ledger merged different original-write kinds.");
+        restored.Clear(OriginalWriteFailureRepository.Gps, 319L);
+        if (restored.Unresolved().Count != 1 ||
+            restored.Unresolved()[0].Kind != OriginalWriteFailureRepository.Tags)
+            throw new Exception("Resolving GPS must not erase a Tag error.");
+        restored.Clear(OriginalWriteFailureRepository.Tags, 319L);
         if (restored.Unresolved().Count != 0)
-            throw new Exception("Verified GPS correction did not clear its error.");
+            throw new Exception("Resolved original-write error did not disappear.");
+
+        const string original = "gps:edit:older";
+        const string current = "gps:edit:newer";
+        var journal = new DurablePackageJournal(db);
+        const string oldRecipe = "{\"ImageIds\":[319],\"Latitude\":10,\"Longitude\":20,\"Mode\":1}";
+        const string newRecipe = "{\"ImageIds\":[319],\"Latitude\":11,\"Longitude\":21,\"Mode\":1}";
+        journal.Put(original,"gps-edit-v1",oldRecipe,
+            SchedulerPriority.ManualAction,SchedulerWorkKind.Catalog);
+        if (restored.HasNewerGpsIntent(original,319L))
+            throw new Exception("GPS newer-intent check found an imaginary package.");
+        journal.Put(current,"gps-edit-v1",newRecipe,
+            SchedulerPriority.ManualAction,SchedulerWorkKind.Catalog);
+        if (!restored.HasNewerGpsIntent(original,319L))
+            throw new Exception("GPS must never retry an older coordinate request.");
+    }
+
+    private static void TagWriteFailureSupersededAndDiscarded()
+    {
+        using var sandbox = new Sandbox();
+        WriteJpeg(Path.Combine(sandbox.Images, "original.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        long imageId;
+        using (var conn = db.OpenConnection())
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT id FROM images LIMIT 1";
+            imageId = Convert.ToInt64(cmd.ExecuteScalar());
+        }
+        var tags = new ImageTagRepository(db);
+        var errors = new OriginalWriteFailureRepository(db);
+        tags.QueueTagEdit([imageId], "first", false);
+        errors.RecordFailure(OriginalWriteFailureRepository.Tags,
+            "tags:original", imageId, new IOException("Simulated blocked file"),
+            permanent: true);
+        if (!errors.IsParked(OriginalWriteFailureRepository.Tags,imageId))
+            throw new Exception("Failed tag file should be parked.");
+        tags.QueueTagEdit([imageId], "newer", false);
+        if (errors.Unresolved().Count != 0 ||
+            errors.IsParked(OriginalWriteFailureRepository.Tags,imageId))
+            throw new Exception("Newer tag intent did not supersede old write error.");
+        errors.RecordFailure(OriginalWriteFailureRepository.Tags,
+            "tags:newer", imageId, new IOException("Still locked"), permanent:true);
+        if (!tags.DiscardPendingImageEdits(imageId,CancellationToken.None))
+            throw new Exception("Tag discard could not read original.");
+        errors.Clear(OriginalWriteFailureRepository.Tags,imageId);
+        if (tags.PendingEditsForImage(imageId).Count != 0 ||
+            errors.Unresolved().Count != 0 ||
+            !string.IsNullOrEmpty(tags.GetKeywords(imageId)))
+            throw new Exception("Discard left an optimistic tag not present in original.");
     }
 
     private static void WatcherFileEventsStayTargeted()
