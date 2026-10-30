@@ -337,6 +337,29 @@ public sealed class LocalDatabase
             regularScan.ExecuteNonQuery();
         }
 
+        // Original write failures belong to one shared durable ledger, not
+        // separate GPS and tag queues. Create the table during DB setup so
+        // direct repository callers (tests/CLI) also support supersession.
+        using (var writeFailures = connection.CreateCommand())
+        {
+            writeFailures.CommandText = """
+                CREATE TABLE IF NOT EXISTS original_write_failures (
+                    kind TEXT NOT NULL,
+                    image_id INTEGER NOT NULL,
+                    package_key TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    attempts INTEGER NOT NULL CHECK(attempts >= 0),
+                    last_error TEXT NOT NULL,
+                    last_attempt_utc TEXT NOT NULL,
+                    resolved INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(kind,image_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_original_write_failures_open
+                    ON original_write_failures(resolved,kind,attempts);
+                """;
+            writeFailures.ExecuteNonQuery();
+        }
+
         // One-time upgrade for folders added by older builds that never
         // initiated their first scan: do not strand an empty monitored root.
         // Completed (including intentionally empty) scans are not repeatedly
