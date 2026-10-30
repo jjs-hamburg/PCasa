@@ -311,8 +311,7 @@ internal static class Program
                     .GetProperty("BoldThumbnailFileNames").GetBoolean())
                     throw new Exception("Bold filename choice did not persist.");
             }
-            filenameBoldMenu.IsChecked = false;
-            filenameBoldMenu.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, filenameBoldMenu));
+            ConfigureAppearance(dlg => dlg.BoldFileNamesCheck.IsChecked = false);
             if ((bool)boldField.GetValue(gallerySurface)!)
                 throw new Exception("Disabling bold filenames did not restore normal weight.");
             Console.WriteLine("PASS: Filename boldness toggles renderer and persists without another settings owner.");
