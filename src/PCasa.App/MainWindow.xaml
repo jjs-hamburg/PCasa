@@ -505,6 +505,10 @@
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
                     </MenuItem>
+                    <MenuItem Header="{loc:Tr Key='Extras'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem Header="{loc:Tr Key='Schreibfehler'}"
+                                  Click="WriteErrorsMenu_Click" />
+                    </MenuItem>
                     <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
                               Margin="0,0,20,0" HorizontalAlignment="Left"
                               Click="AppearanceSettings_Click"/>
