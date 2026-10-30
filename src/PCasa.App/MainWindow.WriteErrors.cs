@@ -166,23 +166,26 @@ public partial class MainWindow
                 return;
             retrySelected.IsEnabled = retryAll.IsEnabled =
                 discardSelected.IsEnabled = discardAll.IsEnabled = false;
-            try
+            var errorsDuringReview = new List<string>();
+            foreach (var entry in selected)
             {
-                foreach (var entry in selected)
+                try
                 {
                     if (retry) await RetryOriginalWriteAsync(entry);
                     else await DiscardOriginalWriteAsync(entry);
                 }
-                Refresh();
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("OriginalWrite.ManualReview", ex);
+                    errorsDuringReview.Add(entry.Path + ": " + ex.Message);
+                }
             }
-            catch (Exception ex)
-            {
-                PCasaDiagnostics.Write("OriginalWrite.ManualReview", ex);
-                MessageBox.Show(dialog, ex.Message,
+            Refresh();
+            if (errorsDuringReview.Count > 0)
+                MessageBox.Show(dialog,
+                    string.Join(Environment.NewLine, errorsDuringReview.Take(12)),
                     UiLanguage.T("Schreibfehler"), MessageBoxButton.OK,
                     MessageBoxImage.Warning);
-                Refresh();
-            }
         }
         retrySelected.Click += async (_,_) => await Perform(true,false);
         retryAll.Click += async (_,_) => await Perform(true,true);
