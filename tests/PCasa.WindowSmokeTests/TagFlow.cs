@@ -2751,7 +2751,7 @@ internal static class TagFlow
                 if (loadIds.Length != selectedGpsCount)
                     throw new Exception("Large selected GPS test fixture was incomplete.");
                 var allGps = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window,[loadIds,a.Id,CancellationToken.None])!).Cast<object>().ToArray();
+                    window,[loadIds,a.Id,CancellationToken.None,null])!).Cast<object>().ToArray();
                 var selectedAll = allGps.Where(item =>
                     (bool)item.GetType().GetProperty("Selected")!.GetValue(item)!)
                     .Select(item => (long)item.GetType().GetProperty("Id")!.GetValue(item)!)
