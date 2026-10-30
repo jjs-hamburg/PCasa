@@ -1195,12 +1195,34 @@ internal static class Program
                         gpsPhotoFrame.ActualWidth >= workspace.ActualWidth)
                         throw new Exception(
                             "An open photo is not floating above the fullscreen GPS map.");
-                    gpsPhotoShow.Invoke(window, new object[] { 999L });
+                    // A real filmstrip double-click (not only the image
+                    // loader method) must reopen the floating window while
+                    // preserving the fullscreen GPS mode.
+                    viewerType.GetMethod("CloseGpsFullscreenImage", reflectFlags)!
+                        .Invoke(window, null);
+                    var filmstripList = (ListBox?)window.FindName("GpsFilmstripList")
+                        ?? throw new Exception("GPS filmstrip list missing.");
+                    filmstripList.ItemsSource = new[] {
+                        new PCasa.App.MainWindow.GpsFilmstripEntry {
+                            Id = 999, Name = "synthetic-viewer-photo.jpg"
+                        }
+                    };
+                    filmstripList.SelectedIndex = 0;
+                    var filmstripDblClick = viewerType.GetMethod(
+                        "GpsFilmstrip_MouseDoubleClick", reflectFlags)!;
+                    filmstripDblClick.Invoke(window, new object[] {
+                        filmstripList,
+                        new System.Windows.Input.MouseButtonEventArgs(
+                            System.Windows.Input.Mouse.PrimaryDevice, 0,
+                            System.Windows.Input.MouseButton.Left)
+                    });
                     Flush(window);
                     if (!(bool)gpsFullscreenFlag.GetValue(window)! ||
-                        gpsOverlay.Visibility != Visibility.Visible)
+                        gpsOverlay.Visibility != Visibility.Visible ||
+                        gpsOverlay.Tag is not long shownId || shownId != 999L)
                         throw new Exception(
-                            "Filmstrip photo double-click exited GPS fullscreen.");
+                            "Filmstrip double-click exited fullscreen or failed to show the photo.");
+                    filmstripList.ItemsSource = null;
                     gpsFullscreenClick.Invoke(window, new object[] {
                         window, new RoutedEventArgs(Button.ClickEvent) });
                     Flush(window);
