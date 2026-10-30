@@ -15,9 +15,11 @@ public partial class MainWindow
     {
         if (_sidebarMode != "GPS") return;
         var item = _gpsPoints.FirstOrDefault(p => p.Id == imageId);
-        var sameViewerPhoto = _viewerOpen && _viewerSequence is not null &&
-            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count &&
-            _viewerSequence.At(_viewerCurrentIndex).ImageId == imageId;
+        var sameViewerPhoto = _viewerOpen &&
+            (_viewerImageInfo?.Id == imageId ||
+             (_viewerSequence is not null &&
+              _viewerCurrentIndex >= 0 && _viewerCurrentIndex < _viewerSequence.Count &&
+              _viewerSequence.At(_viewerCurrentIndex).ImageId == imageId));
         if (item is null && !sameViewerPhoto) return;
 
         // Do not change GPS fullscreen/expanded mode: an open viewer photo
