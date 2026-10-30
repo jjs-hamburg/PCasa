@@ -520,7 +520,7 @@ public partial class MainWindow
             var repo = new ImageTagRepository(_database);
             // Failed originals are parked for deliberate review. They stay
             // pending in SQLite, but must never spin through P0 recovery.
-            var errorStore = new OriginalWriteFailureRepository(_database);
+            var errorStore = _originalWriteFailures;
             var parked = errorStore.Unresolved()
                 .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
                 .Select(error => error.ImageId).ToHashSet();
@@ -734,7 +734,7 @@ public partial class MainWindow
     private void StartPendingTagDrain()
     {
         if (Dispatcher.HasShutdownStarted) return;
-        var parked = new OriginalWriteFailureRepository(_database).Unresolved()
+        var parked = _originalWriteFailures.Unresolved()
             .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
             .Select(error => error.ImageId).ToHashSet();
         var imageIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
