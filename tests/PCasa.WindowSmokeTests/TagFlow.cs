@@ -2863,22 +2863,34 @@ internal static class TagFlow
                             var templates = table.Columns.OfType<DataGridTemplateColumn>().ToArray();
                             if (templates.Length != 2)
                                 throw new Exception("Write errors has no explicit row Retry/Discard actions.");
-                            foreach (var template in templates)
+                            // Attach the template to a real WPF visual tree:
+                            // detached buttons have no reliable DataContext
+                            // binding and previously produced a false failure.
+                            var probeHost = new StackPanel();
+                            Grid.SetRow(probeHost,0);
+                            reviewRoot.Children.Add(probeHost);
+                            try
                             {
-                                var button = (Button?)template.CellTemplate.LoadContent()
-                                    ?? throw new Exception("Review action button missing.");
-                                var enabledBinding = System.Windows.Data.BindingOperations
-                                    .GetBinding(button, Button.IsEnabledProperty)
-                                    ?? throw new Exception("Review action has no attempt-limit binding.");
-                                var gate = enabledBinding.Converter
-                                    ?? throw new Exception("Review button has no activation rule.");
-                                if (gate.Convert(row.Attempts, typeof(bool), null,
-                                        System.Globalization.CultureInfo.InvariantCulture) is not true)
-                                    throw new Exception("A three-attempt error cannot be decided.");
-                                if (gate.Convert(1, typeof(bool), null,
-                                        System.Globalization.CultureInfo.InvariantCulture) is not false)
-                                    throw new Exception("A transient failure allows premature discard.");
+                                foreach (var template in templates)
+                                {
+                                    var button = (Button?)template.CellTemplate.LoadContent()
+                                        ?? throw new Exception("Review action button missing.");
+                                    probeHost.Children.Add(button);
+                                    button.DataContext = row;
+                                    probeHost.UpdateLayout();
+                                    System.Windows.Data.BindingOperations.GetBindingExpression(
+                                        button, Button.IsEnabledProperty)?.UpdateTarget();
+                                    if (!button.IsEnabled)
+                                        throw new Exception("A three-attempt error cannot be decided.");
+                                    button.DataContext = row with { Attempts = 1 };
+                                    probeHost.UpdateLayout();
+                                    System.Windows.Data.BindingOperations.GetBindingExpression(
+                                        button, Button.IsEnabledProperty)?.UpdateTarget();
+                                    if (button.IsEnabled)
+                                        throw new Exception("A transient failure allows premature discard.");
+                                }
                             }
+                            finally { reviewRoot.Children.Remove(probeHost); }
                         }
                         catch (Exception ex) { reviewFailure = ex; }
                         finally { review?.Close(); }
