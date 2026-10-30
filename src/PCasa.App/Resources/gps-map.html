@@ -48,7 +48,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('sourcedata', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
  let previousSelectedIds = null;
- let transferRevision=-1,transferPoints=[],transferActive=false;
+ let transferRevision=-1,transferParts=[],transferExpected=0,
+     transferActive=false,transferCommitRequested=false;
 
  const selectedMarkers = new Map();
  function geojson(list) {
@@ -168,23 +169,35 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  // A single huge ExecuteScriptAsync payload previously left stale map data
  // (often one focused photo) after large gallery selections. Only commit a
  // complete, matching transfer; never expose partial continents.
- window.pcasaBeginPoints=(version)=>{
-   if(!Number.isSafeInteger(version)||version<transferRevision)return;
-   transferRevision=version;transferPoints=[];transferActive=true;
+ function completePointTransfer() {
+   if(!transferActive||!transferCommitRequested ||
+      transferParts.filter(Array.isArray).length!==transferExpected)return;
+   const assembled=transferParts.flat();
+   const version=transferRevision;
+   transferActive=false;transferParts=[];
+   window.pcasaSetPoints(assembled);
+   // Acknowledge the complete version, never a partial geographic overview.
+   post({type:'gps-sync',version,received:points.length,
+     selected:points.filter(p=>p.selected).length});
+ }
+ window.pcasaBeginPoints=(version,count)=>{
+   if(!Number.isSafeInteger(version)||version<transferRevision ||
+      !Number.isSafeInteger(count)||count<0)return;
+   transferRevision=version;transferExpected=count;
+   transferParts=new Array(count);transferCommitRequested=false;
+   transferActive=true;
  };
- window.pcasaAppendPoints=(version,chunk)=>{
-   if(!transferActive||version!==transferRevision||!Array.isArray(chunk))return;
-   transferPoints.push(...chunk);
+ window.pcasaAppendPoints=(version,index,chunk)=>{
+   if(!transferActive||version!==transferRevision ||
+      !Number.isInteger(index)||index<0||index>=transferExpected ||
+      !Array.isArray(chunk))return;
+   transferParts[index]=chunk;
+   completePointTransfer();
  };
  window.pcasaCommitPoints=(version)=>{
    if(!transferActive||version!==transferRevision)return;
-   transferActive=false;
-   window.pcasaSetPoints(transferPoints);
-   // The renderer acknowledges the COMPLETE update so C# can detect a
-   // truncated/discarded transfer instead of silently retaining old pins.
-   post({type:'gps-sync',version,received:points.length,
-     selected:points.filter(p=>p.selected).length});
-   transferPoints=[];
+   transferCommitRequested=true;
+   completePointTransfer();
  };
  window.pcasaApplyProvider = (provider) => {
    if (!provider || !provider.url) return;
