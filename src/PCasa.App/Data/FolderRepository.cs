@@ -302,6 +302,39 @@ public sealed class FolderRepository
         return cursors;
     }
 
+    public sealed record PendingAutomaticInventory(
+        long MonitoredFolderId, string ScanKey, string ScanRoot,
+        long SourceGeneration);
+
+    // An unfinished automatic scan is a durable identity, not just a progress
+    // counter. Startup must recover this exact key before considering a fresh
+    // root inventory, otherwise a new request rechecks already committed files.
+    // Only receipts still valid for the source generation AND scan epoch count.
+    public IReadOnlyList<PendingAutomaticInventory> GetPendingAutomaticInventories()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT j.monitored_folder_id, j.scan_key, j.scan_root,
+                   j.source_generation
+            FROM scan_resume_jobs j
+            JOIN monitored_folders m ON m.id=j.monitored_folder_id
+            JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+            WHERE j.scan_key LIKE 'background:inventory:%'
+              AND j.source_generation=s.generation
+              AND j.scan_epoch=s.scan_epoch
+              AND s.desired_present=1 AND m.initial_scan_pending=0
+            ORDER BY j.started_utc, j.scan_key;
+            """;
+        var result = new List<PendingAutomaticInventory>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            result.Add(new PendingAutomaticInventory(
+                reader.GetInt64(0), reader.GetString(1),
+                reader.GetString(2), reader.GetInt64(3)));
+        return result;
+    }
+
     public sealed record RegularScanCheckpoint(
         long Generation, long Epoch, int Checked,
         HashSet<string> Completed, Dictionary<string, string> Cursors);
