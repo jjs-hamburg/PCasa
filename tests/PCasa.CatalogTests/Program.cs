@@ -40,6 +40,7 @@ internal static class Program
         }
         var failures = new List<string>();
         Run("One UI translation catalog switches de/en and preserves user metadata", LanguageSwitchPreservesUserMetadata, failures);
+        Run("Diagnostic log rotates to three one-megabyte files and trims old oversized logs", BoundedDiagnosticsRotateAndTrim, failures);
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
@@ -1001,6 +1002,45 @@ internal static class Program
         resumedScanner.Scan(root);
         if (new ImageCatalogRepository(db).CountAll() != 7)
             throw new Exception("Later full inventory did not reconcile deleted image.");
+    }
+
+    private static void BoundedDiagnosticsRotateAndTrim()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "bounded-errors.log");
+        var diagnostics = typeof(SourceAvailabilityGate).Assembly.GetType(
+            "PCasa.App.Services.PCasaDiagnostics")
+            ?? throw new Exception("Diagnostics writer not found.");
+        var binding = System.Reflection.BindingFlags.NonPublic |
+                      System.Reflection.BindingFlags.Static;
+        var write = diagnostics.GetMethod("WriteEntryToPath", binding)
+            ?? throw new Exception("Bounded diagnostic log writer missing.");
+        const int capacity = 1024 * 1024;
+        var message = new string('X', 16500);
+        for (var i = 0; i < 224; i++)
+            write.Invoke(null, [path, $"sample-{i:D4}: {message}"]);
+        var files = new[] {
+            path,
+            Path.Combine(sandbox.Images, "bounded-errors.1.log"),
+            Path.Combine(sandbox.Images, "bounded-errors.2.log")
+        };
+        if (files.Any(file => !File.Exists(file) ||
+            new FileInfo(file).Length > capacity) ||
+            files.Sum(file => new FileInfo(file).Length) > 3L * capacity)
+            throw new Exception("Diagnostics exceeded its strict 3 MB archive limit.");
+        if (!File.ReadAllText(path).Contains("sample-0223:"))
+            throw new Exception("Rotating log lost most recent error.");
+
+        var legacy = Path.Combine(sandbox.Images, "legacy.log");
+        File.WriteAllText(legacy, string.Concat(
+            Enumerable.Repeat("2020-01-01 [Old] " + message + "\n", 200)) +
+            "2026-10-31 [Latest] marker\n");
+        var trim = diagnostics.GetMethod("TrimOversizedFile", binding)
+            ?? throw new Exception("Legacy log trimming method missing.");
+        trim.Invoke(null, [legacy]);
+        if (new FileInfo(legacy).Length > capacity ||
+            !File.ReadAllText(legacy).EndsWith("2026-10-31 [Latest] marker\n"))
+            throw new Exception("Old unbounded logs were not trimmed to the most recent content.");
     }
 
     private static void SkippedImageAdvancesDurableCursor()
@@ -3767,6 +3807,8 @@ internal static class Program
         Require(db, 1);
 
         using var monitor = new BackgroundFolderMonitor();
+        var events = new List<BackgroundFolderChange>();
+        monitor.Changed += (_, item) => events.Add(item);
         var watched = new[] { root };
         var disconnected = sandbox.Images + "-disconnected";
         if (!monitor.Refresh(watched, enabled: true)[root.Id])
@@ -3791,7 +3833,9 @@ internal static class Program
 
             if (!monitor.Refresh(watched, enabled: true)[root.Id])
                 throw new Exception($"Reconnect not detected in cycle {cycle}.");
-            scanner.Scan(root);
+            if (events.Count != 0)
+                throw new Exception("Offline/reconnect emitted an unnecessary scan request.");
+            scanner.Scan(root); // Explicit user-requested inventory only.
             Require(db, 1);
         }
     }
