@@ -17,6 +17,9 @@ public sealed record SchedulerJobSnapshot(
     public int Processed { get; init; }
     public int Total { get; init; }
     public string? CurrentPath { get; init; }
+    // A priority alone is not proof of a write: interactive catalog reads
+    // must never force shutdown to wait for a blocked network source.
+    public SchedulerWorkKind WorkKind { get; init; } = SchedulerWorkKind.Catalog;
 }
 
 /// <summary>
@@ -532,7 +535,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     operation, isCurrent, cancellationToken);
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
-                    SchedulerJobState.Queued, DateTimeOffset.UtcNow, null));
+                    SchedulerJobState.Queued, DateTimeOffset.UtcNow, null)
+                { WorkKind = workKind });
                 TrimHistoryUnsafe();
                 _signals[LaneFor(priority, workKind)].Release();
                 completion = item.Completion.Task;
