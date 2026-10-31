@@ -731,6 +731,120 @@ internal static class Program
             if (originalIndex < 0 || scroller.VerticalOffset < 200)
                 throw new Exception("The WPF window did not scroll to synthetic images.");
 
+            // Regression: a background import inserts entire rows while the
+            // image viewer/GPS sidebar is open. Closing must recover the SAME
+            // photo identity, not the now-stale opening pixel coordinate.
+            var returnFlags = System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance;
+            var returnType = typeof(PCasa.App.MainWindow);
+            var returnFocus = (GallerySelection)returnType.GetField(
+                "_gallerySelection", returnFlags)!.GetValue(window)!;
+            var displayedField = returnType.GetField(
+                "_displayedBrowseIndex", returnFlags)!;
+            var openingAnchorField = returnType.GetField(
+                "_viewerOpeningGalleryAnchor", returnFlags)!;
+            var openingFocusField = returnType.GetField(
+                "_viewerOpeningFocusedImageId", returnFlags)!;
+            var openingOffsetField = returnType.GetField(
+                "_viewerOpeningScrollOffset", returnFlags)!;
+            var viewerSequenceField = returnType.GetField(
+                "_viewerSequence", returnFlags)!;
+            var viewerIndexField = returnType.GetField(
+                "_viewerCurrentIndex", returnFlags)!;
+            var viewerActiveField = returnType.GetField(
+                "_viewerOpen", returnFlags)!;
+            var returnQueue = returnType.GetMethod(
+                "QueueGalleryAnchorRestore", returnFlags, null, Type.EmptyTypes, null)!;
+            var closeViewer = returnType.GetMethod("ClosePhotoViewer", returnFlags)!;
+            var originalDisplayed = displayedField.GetValue(window);
+            var returnSettings = PhotoViewerSettings.Load();
+            var savedReturnPosition = returnSettings.ReturnPosition;
+            var inserted = Enumerable.Range(0, 80)
+                .Select(i => new BrowseThumbnailIndexEntry(9000 + i,
+                    100, 192, "no-image.pack", 0, 1, 180, 120))
+                .ToArray();
+            var expandedIndex = inserted.Concat(synthetic).ToArray();
+            var expandedGroups = new[] {
+                new PhotoFolderSummary(100, 1, @"C:\synthetic\first",
+                    @"C:\synthetic\first", "First", 320),
+                groups[1]
+            };
+            try
+            {
+                foreach (var mode in new[] {
+                    ViewerReturnPosition.OpeningPosition,
+                    ViewerReturnPosition.CurrentImage
+                })
+                {
+                    pages.SetIndex(synthetic);
+                    surface.SetData(synthetic, groups, pages);
+                    Flush(window);
+                    scroller.ScrollToVerticalOffset(2800);
+                    Flush(window);
+                    var startingAnchor = surface.CaptureImageAnchor(
+                        scroller.VerticalOffset)
+                        ?? throw new Exception("No viewer opening anchor.");
+                    var savedOffset = scroller.VerticalOffset;
+                    var viewedId = mode == ViewerReturnPosition.CurrentImage
+                        ? synthetic[300].ImageId : startingAnchor.ImageId;
+                    var sequence = PhotoSequence.Create(synthetic,
+                        new HashSet<long>(), viewedId, PhotoSequenceScope.Gallery);
+                    returnSettings.ReturnPosition = mode;
+                    returnSettings.Save();
+                    returnFocus.SetFocus(startingAnchor.ImageId);
+                    displayedField.SetValue(window, synthetic);
+                    openingAnchorField.SetValue(window, startingAnchor);
+                    openingFocusField.SetValue(window, (long?)startingAnchor.ImageId);
+                    openingOffsetField.SetValue(window, savedOffset);
+                    viewerSequenceField.SetValue(window, sequence);
+                    viewerIndexField.SetValue(window, sequence.IndexOfImage(viewedId));
+                    viewerActiveField.SetValue(window, true);
+                    returnQueue.Invoke(window, null);
+                    pages.SetIndex(expandedIndex);
+                    surface.SetData(expandedIndex, expandedGroups, pages);
+                    displayedField.SetValue(window, expandedIndex);
+                    Flush(window);
+                    // Simulate the old pixel coordinate being kept despite
+                    // new rows. This is exactly what the former close did.
+                    scroller.ScrollToVerticalOffset(savedOffset);
+                    Flush(window);
+                    closeViewer.Invoke(window, null);
+                    Flush(window);
+                    var expected = mode == ViewerReturnPosition.OpeningPosition
+                        ? surface.GetImageAnchorOffset(
+                            startingAnchor.ImageId, startingAnchor.RelativeY)
+                        : surface.GetImageOffset(Array.FindIndex(expandedIndex,
+                            item => item.ImageId == viewedId));
+                    if (expected is null ||
+                        Math.Abs(scroller.VerticalOffset - expected.Value) > 3 ||
+                        returnFocus.FocusedId != (mode == ViewerReturnPosition.CurrentImage
+                            ? viewedId : startingAnchor.ImageId))
+                        throw new Exception("Viewer return lost stable image focus " +
+                            "after an in-flight catalog insertion (" + mode + ").");
+                }
+                Console.WriteLine(
+                    "PASS: Viewer/GPS return keeps focused image and anchor across live scan insertions.");
+            }
+            finally
+            {
+                returnSettings.ReturnPosition = savedReturnPosition;
+                returnSettings.Save();
+                viewerActiveField.SetValue(window, false);
+                viewerSequenceField.SetValue(window, null);
+                viewerIndexField.SetValue(window, -1);
+                openingAnchorField.SetValue(window, null);
+                openingFocusField.SetValue(window, null);
+                displayedField.SetValue(window, originalDisplayed);
+                pages.SetIndex(synthetic);
+                surface.SetData(synthetic, groups, pages);
+                Flush(window);
+                var originalTop = surface.GetImageAnchorOffset(
+                    anchored.ImageId, anchored.RelativeY);
+                if (originalTop is double top)
+                    scroller.ScrollToVerticalOffset(top);
+                Flush(window);
+            }
+
             var sidebar = (FrameworkElement?)window.FindName("InfoSidebarPanel")
                 ?? throw new Exception("Sidebar not found.");
             var tagsPanel = (FrameworkElement?)window.FindName("TagSidebar")
