@@ -689,6 +689,13 @@ internal static class FolderAddFlow
             // checks only inspected a queued refresh timer, which can fire
             // without ever publishing the image to the viewport.
             new BackgroundScanSettings { Enabled = false }.Save();
+            // Simulate the production state of an ongoing background scan:
+            // OnCatalogImageCommitted is deliberately disabled then, so the
+            // targeted indexed-image publication MUST work on its own.
+            var runningScanField = typeof(PCasa.App.MainWindow).GetField(
+                "_isScanning", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var previousRunningScan = (bool)runningScanField.GetValue(window)!;
+            runningScanField.SetValue(window, true);
             var liveRoot = roots.GetAll().Single(root =>
                 SamePath(root.LocalPath, initialRoot));
             var liveScanner = new FolderScanner(new ImageCatalogRepository(db),
@@ -738,6 +745,7 @@ internal static class FolderAddFlow
                 liveScroller.ScrollableHeight - liveScroller.VerticalOffset > 2)
                 throw new Exception("Live scan displaced the end-of-gallery scroll position.");
             Console.WriteLine("PASS: Real second JPG arrives at end live edge.");
+            runningScanField.SetValue(window, previousRunningScan);
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");
