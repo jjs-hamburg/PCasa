@@ -4789,6 +4789,42 @@ internal static class Program
             if (Convert.ToInt32(missing.ExecuteScalar()) != 1)
                 throw new Exception("Backfill failed to create exactly one EXIF row.");
         }
+
+        // Simulate the old ExifTool response mix-up: the gallery ID and
+        // thumbnail are correct, but EXIF claims another original and its
+        // indexed coordinates point to Fort Lauderdale rather than Hamburg.
+        // The provenance audit must discover this row WITHOUT walking the
+        // directory; the SAME scanner then restores real original metadata
+        // without touching original bytes or thumbnail identity.
+        var originalBytes = File.ReadAllBytes(path);
+        using (var corrupt = conn.CreateCommand())
+        {
+            corrupt.CommandText = """
+                UPDATE image_exif SET
+                    exif_json=json_set(exif_json,'$.SourceFile',$wrong),
+                    gps_latitude=26.12,gps_longitude=-80.14
+                WHERE image_id=$id;
+                """;
+            corrupt.Parameters.AddWithValue("$wrong", @"C:\other-photo.jpg");
+            corrupt.Parameters.AddWithValue("$id", before.Id);
+            if (corrupt.ExecuteNonQuery() != 1)
+                throw new Exception("Couldn't seed misassociated GPS source.");
+        }
+        var audit = new GpsSourceIntegrityAudit(db);
+        var bad = audit.ReadPage(root.Id, 0, 100);
+        if (bad.MismatchedPaths.Count != 1 ||
+            !string.Equals(bad.MismatchedPaths[0], path, StringComparison.OrdinalIgnoreCase))
+            throw new Exception("Catalog provenance audit missed a wrong GPS association.");
+        result = scanner.ScanFile(root, path);
+        var repaired = Read(conn);
+        if (result.MetadataUpdated != 1 || repaired.Id != before.Id ||
+            repaired.Cache != before.Cache ||
+            Math.Abs((repaired.Lat ?? 0) - 53.5) > 0.001 ||
+            Math.Abs((repaired.Lon ?? 0) - 10.25) > 0.001 ||
+            audit.ReadPage(root.Id, 0, 100).MismatchedPaths.Count != 0 ||
+            !File.ReadAllBytes(path).SequenceEqual(originalBytes))
+            throw new Exception(
+                "Targeted EXIF repair failed to restore original GPS without rebuilding the thumbnail or changing the file.");
     }
 
     private static string RunExifTool(params string[] arguments)
