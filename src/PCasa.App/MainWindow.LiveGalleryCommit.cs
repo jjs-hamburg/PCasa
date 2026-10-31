@@ -28,13 +28,22 @@ public partial class MainWindow
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!_browseInitialized || _folderManagerOpen ||
-                _folderRemovalPending || _activePhotoFolderId != photoFolderId ||
-                _activeBrowseTier is not int tier)
+                _folderRemovalPending || _activeBrowseTier is not int tier)
                 return;
-            // Catalog and EXIF already committed. Holding the visual update
-            // while the user is scrolling avoids one full layout reflow per
-            // incoming file. Only one fresh catalog snapshot is later needed.
+            // A stable interior viewport never reflows for scanner images.
+            // At either live edge, however, EVERY committed folder belongs
+            // to the continuous gallery, not just the currently focused one.
             if (DeferScanGalleryPublication()) return;
+            if (_activePhotoFolderId != photoFolderId)
+            {
+                // The existing coalesced catalog publisher refreshes the
+                // globally ordered projection across folder boundaries.
+                // No independent list, timer, or per-image full-index load.
+                ScheduleCatalogGalleryPublication();
+                return;
+            }
+            // The active folder has a cheaper, identity-preserving insertion
+            // through the same canonical thumbnail-index projection.
             _ = InsertIndexedGalleryImageAsync(canonicalPath, photoFolderId, tier);
         }), DispatcherPriority.Background);
     }
