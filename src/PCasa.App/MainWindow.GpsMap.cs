@@ -42,6 +42,9 @@ public partial class MainWindow
     private long _gpsQueryRevision;
     private long _gpsMapTransferRevision;
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
+    private IReadOnlyList<GpsPhotoCluster> _gpsPresentedClusters = [];
+    private long _gpsClusterRequestRevision;
+    private double _gpsCurrentMapZoom = 2;
     private (double Lat, double Lon)? _gpsCurrentCoordinates;
 
     private IEnumerable<GpsMapProvider> AllGpsProviders()
@@ -67,6 +70,7 @@ public partial class MainWindow
         Closed += (_, _) =>
         {
             _gpsQueryRevision++;
+            _gpsClusterRequestRevision++;
             _gpsFilmstripRevision++;
             CloseGpsFullscreenImage();
             if (_gpsBrowser is not null)
@@ -231,7 +235,8 @@ public partial class MainWindow
         string Kind, long Id = 0, string? Error = null,
         double? Latitude = null, double? Longitude = null, double? Zoom = null,
         double? South = null, double? West = null, double? North = null,
-        double? East = null, int? Received = null, int? SelectedCount = null);
+        double? East = null, int? Received = null, int? SelectedCount = null,
+        long Version = 0);
 
     private static GpsMapMessage? ParseGpsJavascriptMessage(string message)
     {
@@ -271,6 +276,14 @@ public partial class MainWindow
                         Received: total, SelectedCount: count)
                     : null;
             }
+            case "cluster-click":
+                return root.TryGetProperty("version", out var v) &&
+                    v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var rev) &&
+                    root.TryGetProperty("id", out var cluster) &&
+                    cluster.ValueKind == JsonValueKind.Number &&
+                    cluster.TryGetInt64(out var clusterId)
+                    ? new GpsMapMessage("cluster-click", Id: clusterId,
+                        Version: rev) : null;
             case "gps-overlay-empty":
             {
                 return root.TryGetProperty("version", out var v) &&
@@ -387,7 +400,7 @@ public partial class MainWindow
                 _gpsBrowserReady = true;
                 GpsMapStatus.Visibility = Visibility.Collapsed;
                 ApplyGpsMapProvider();
-                SendGpsPointsToMap();
+                _ = PublishGpsClustersAsync(fitSelection: _selectedImageIds.Count > 0);
                 // Restore an old viewport ONLY if no current GPS selection
                 // owns the camera. Otherwise the transfer's fitBounds must
                 // win; a persisted single-photo viewport hid whole continents.
@@ -431,28 +444,24 @@ public partial class MainWindow
                 _appearance.GpsMapCenterLon = lon;
                 _appearance.GpsMapZoom = zoom;
                 SaveAppearance();
+                if (Math.Abs(zoom - _gpsCurrentMapZoom) > 0.02)
+                {
+                    _gpsCurrentMapZoom = zoom;
+                    _ = PublishGpsClustersAsync();
+                }
             }
-            else if (data.Kind == "point-group" && data.Id > 0 &&
-                     data.South is double groupSouth && data.North is double groupNorth &&
-                     data.West is double groupWest && data.East is double groupEast &&
-                     _gpsPoints.Any(x => x.Id == data.Id && x.Selected))
+            else if (data.Kind == "cluster-click" &&
+                     data.Version == _gpsMapTransferRevision)
             {
-                // MapLibre's vector-tile event properties can round numeric
-                // coordinates. They identify the clicked feature but must
-                // NEVER become the authority for a strict floating-point
-                // catalog lookup. Resolve all photos at this exact geographic
-                // location by the anchor image ID from the WPF projection.
-                var anchor = _gpsPoints.First(p => p.Id == data.Id && p.Selected);
-                if (Math.Abs(anchor.Lat - groupSouth) > 0.01 ||
-                    Math.Abs(anchor.Lat - groupNorth) > 0.01 ||
-                    Math.Abs(anchor.Lon - groupWest) > 0.01 ||
-                    Math.Abs(anchor.Lon - groupEast) > 0.01)
-                    return; // Stale or unrelated click after map replacement.
-                var group = _gpsPoints
-                    .Where(p => p.Selected &&
-                        p.Lat == anchor.Lat && p.Lon == anchor.Lon)
-                    .Select(p => p.Id).ToHashSet();
-                ShowGpsPointGroup(group, anchor.Id);
+                // PCasa owns cluster membership; the map supplies only
+                // the ID from this exact snapshot, never guessed bounds.
+                var cluster = _gpsPresentedClusters.FirstOrDefault(
+                    item => item.Id == data.Id);
+                if (cluster is null || cluster.ImageIds.Count == 0) return;
+                ShowGpsPointGroup(cluster.ImageIds.ToHashSet(),
+                    cluster.ImageIds[0]);
+                if (cluster.ImageIds.Count == 1 && !_gpsFullscreen)
+                    ShowGpsPhotoPopup(cluster.ImageIds[0]);
             }
             else if (data.Kind == "select" && data.Id > 0 &&
                      _gpsPoints.Any(x => x.Id == data.Id))
@@ -633,8 +642,10 @@ public partial class MainWindow
             // times; clearing on every refresh left one/photo selections
             // blank whenever the scheduler yielded or canceled the query.
             var loadingRevision = ++_gpsMapTransferRevision;
-            map.ExecuteScriptAsync("window.pcasaBeginPoints(" +
-                loadingRevision + ",0);window.pcasaCommitPoints(" +
+            _gpsClusterRequestRevision++;
+            _gpsPresentedClusters = [];
+            map.ExecuteScriptAsync("window.pcasaBeginClusters(" +
+                loadingRevision + ",0,0,0);window.pcasaCommitClusters(" +
                 loadingRevision + ")");
         }
         var folderId = _activePhotoFolderId;
@@ -723,7 +734,7 @@ public partial class MainWindow
             if (_gpsGoogleWebsiteActive)
                 NavigateGoogleMapsToSelection();
             else
-                SendGpsPointsToMap();
+                _ = PublishGpsClustersAsync(fitSelection: selectionChanged);
             if (_appearance.ShowGpsFilmstrip)
                 GpsPhotoPopup.Visibility = Visibility.Collapsed;
             else
