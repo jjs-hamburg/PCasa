@@ -639,7 +639,7 @@ public partial class MainWindow
                 foreach (var (rootId, path) in mismatchedSources.Distinct())
                     QueueBackgroundChange(new BackgroundFolderChange(
                         rootId, path, BackgroundFolderChangeKind.ScanFile,
-                        Recursive: false));
+                        Recursive: false, ForceExifRefresh: true));
             }
             _gpsPoints = points;
             // Foreground selection and folder context are intentionally
