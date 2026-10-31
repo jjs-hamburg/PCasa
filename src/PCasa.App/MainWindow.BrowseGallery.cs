@@ -1452,7 +1452,11 @@ public partial class MainWindow
     private void BrowseWindow_Closed(object? sender, EventArgs e)
     {
         _appearance.ThumbnailWidth = ThumbnailSizeSlider.Value;
-        SaveGalleryPosition();
+        // Normal PCasa shutdown saved the actual gallery/tree position in
+        // Closing, BEFORE awaiting scheduler disposal. Do not overwrite that
+        // snapshot with late scan-driven layout changes during shutdown.
+        if (!_shutdownStarted)
+            SaveGalleryPosition();
         SaveAppearance();
         CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
         CatalogChanges.ImageIndexed -= OnCatalogImageIndexed;
