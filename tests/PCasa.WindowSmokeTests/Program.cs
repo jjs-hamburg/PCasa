@@ -840,12 +840,17 @@ internal static class Program
                     Flush(window);
                     var queued = (int)catalogPending.GetValue(window)!;
                     var deferred = (bool)scanDirtyField.GetValue(window)!;
-                    if (queued != 1 || deferred)
+                    // An indexed-photo notification now uses ONE small
+                    // photo-index publication for EVERY folder. A full
+                    // catalog re-read for another folder is the regression
+                    // that made large galleries appear static during scans.
+                    // This synthetic notification has no backed image, so
+                    // the real SQLite/visible-image test lives in FolderAddFlow.
+                    if (queued != 0 || deferred)
                         throw new Exception(
-                            $"Cross-folder scanner commit did not queue a live edge refresh: " +
-                            $"AtStart={atStart}; CurrentFolder={activeAtEdge}; " +
-                            $"IncomingFolder={incomingOtherFolder}; Queued={queued}; Deferred={deferred}; " +
-                            $"Offset={scroller.VerticalOffset}; Scrollable={scroller.ScrollableHeight}.");
+                            $"Cross-folder indexed-photo arrival scheduled a full gallery reload " +
+                            $"or froze a live edge: AtStart={atStart}; " +
+                            $"Queued={queued}; Deferred={deferred}.");
                     ((DispatcherTimer?)catalogTimer.GetValue(window))?.Stop();
                     catalogPending.SetValue(window, 0);
                 }
