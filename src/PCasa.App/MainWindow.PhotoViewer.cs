@@ -25,6 +25,10 @@ public partial class MainWindow
     private PhotoSequence? _viewerSequence;
     private readonly PhotoViewerSettings _viewerSettings = PhotoViewerSettings.Load();
     private double _viewerOpeningScrollOffset;
+    // Preserve the IMAGE identities of the pre-viewer gallery position/focus.
+    // Background imports may insert rows and make the old pixel offset stale.
+    private (long ImageId, double RelativeY)? _viewerOpeningGalleryAnchor;
+    private long? _viewerOpeningFocusedImageId;
     private CancellationTokenSource? _viewerDecodeCancellation;
     private int _viewerImageRequest;
     private bool _viewerHasOriginal;
@@ -77,6 +81,8 @@ public partial class MainWindow
                 ? _selectedImageIds.ToArray() : null;
         // Never change the gallery's viewport while the viewer is open.
         _viewerOpeningScrollOffset = BrowseScrollViewer.VerticalOffset;
+        _viewerOpeningGalleryAnchor = CaptureGalleryAnchor();
+        _viewerOpeningFocusedImageId = _gallerySelection.FocusedId ?? e.ImageId;
         _viewerCurrentIndex = index;
         _viewerOpen = true;
         if (!_viewerNavigatorWired)
@@ -130,6 +136,7 @@ public partial class MainWindow
 
     private void SelectViewerImage(long imageId)
     {
+        _gallerySelection.SetFocus(imageId);
         _selectedImageIds.Clear();
         _selectedImageIds.Add(imageId);
         BrowseSurface.SetSelection(_selectedImageIds);
@@ -1317,6 +1324,15 @@ public partial class MainWindow
             ? _viewerSequence.At(_viewerCurrentIndex).ImageId : (long?)null;
         var lastGalleryIndex = lastImageId is long id
             ? GallerySelection.Find(_displayedBrowseIndex, id) : -1;
+        var settings = PhotoViewerSettings.Load();
+        var returnToCurrent = settings.ReturnPosition == ViewerReturnPosition.CurrentImage;
+        var returnAnchor = returnToCurrent && lastImageId is long current
+            ? ((long ImageId, double RelativeY)?)(current, 0)
+            : _viewerOpeningGalleryAnchor;
+        var returnFocusId = returnToCurrent
+            ? lastImageId : _viewerOpeningFocusedImageId;
+        var fallbackOffset = _viewerOpeningScrollOffset;
+        var navigationVersion = _explicitGalleryNavigationVersion;
         _viewerOpen = false;
         _viewerCurrentIndex = -1;
         _viewerSequence = null;
@@ -1353,13 +1369,6 @@ public partial class MainWindow
         UpdateComparisonButtons();
         SetViewerBitmap(null);
         SetViewerQualityMessage(null);
-        var settings = PhotoViewerSettings.Load();
-        var target = settings.ReturnPosition == ViewerReturnPosition.CurrentImage
-            ? (lastGalleryIndex >= 0
-                ? BrowseSurface.GetImageOffset(lastGalleryIndex) : null)
-                  ?? _viewerOpeningScrollOffset
-            : _viewerOpeningScrollOffset;
-
         if (settings.ReturnPosition == ViewerReturnPosition.CurrentImage &&
             lastGalleryIndex >= 0 && lastImageId is long lastId)
         {
@@ -1386,16 +1395,48 @@ public partial class MainWindow
         }
         _gpsSelectionBeforeViewer = null;
 
+        // The return location and focus belong to IMAGE IDs, not to the
+        // ordinal/pixel position they had before new scan results arrived.
+        if (returnFocusId is long focus)
+            _gallerySelection.SetFocus(focus);
+        _viewerOpeningGalleryAnchor = null;
+        _viewerOpeningFocusedImageId = null;
+        _pendingGalleryAnchor = returnAnchor;
+        if (returnAnchor is not null) _restoringGalleryLayoutAnchor = true;
 
-        // Restore after the viewer overlay has been removed, without replacing
-        // the gallery or rebuilding its index.
+        // Restore after the viewer overlay has been removed. Resolve the
+        // image's CURRENT gallery position only after WPF has measured the
+        // latest catalog projection, and do not override later user navigation.
         _ = Dispatcher.BeginInvoke(() =>
         {
-            if (!Dispatcher.HasShutdownStarted)
+            if (Dispatcher.HasShutdownStarted ||
+                navigationVersion != _explicitGalleryNavigationVersion)
+                return;
+            BrowseScrollViewer.UpdateLayout();
+            double? target = null;
+            if (returnToCurrent && lastImageId is long currentId)
             {
-                BrowseScrollViewer.ScrollToVerticalOffset(target);
-                Keyboard.Focus(BrowseSurface);
+                var currentIndex = GallerySelection.Find(_displayedBrowseIndex, currentId);
+                if (currentIndex >= 0)
+                    target = BrowseSurface.GetImageOffset(currentIndex);
             }
-        }, System.Windows.Threading.DispatcherPriority.Loaded);
+            else if (returnAnchor is { } image)
+            {
+                target = BrowseSurface.GetImageAnchorOffset(image.ImageId, image.RelativeY);
+            }
+            var revision = ++_galleryLayoutRestoreRevision;
+            _restoringGalleryLayoutAnchor = true;
+            _pendingGalleryAnchor = null;
+            BrowseScrollViewer.ScrollToVerticalOffset(
+                Math.Max(0, target ?? fallbackOffset));
+            BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                if (revision == _galleryLayoutRestoreRevision)
+                    _restoringGalleryLayoutAnchor = false;
+            }, DispatcherPriority.ContextIdle);
+            Keyboard.Focus(BrowseSurface);
+        }, DispatcherPriority.Loaded);
     }
 }
