@@ -48,6 +48,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('styledata', collapseAttributionInitially);
  map.on('sourcedata', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
+ const smallSelectionLimit=64;
+ const smallSelectedMarkers=new Map();
  let previousSelectedSignature = null;
  let transferRevision=-1,transferParts=[],transferExpected=0,
      transferActive=false,transferCommitRequested=false;
@@ -123,6 +125,11 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      count:cell.count,id:cell.id,highlighted:cell.highlighted,
      south:cell.south,north:cell.north,west:cell.west,east:cell.east
    }));
+   // The previous release replaced reliable MapLibre DOM pins with this
+   // canvas for EVERY selection, including one picture. Use DOM pins for
+   // small selections; keep the grouped canvas only for large selections.
+   // Hit-testing still uses the same projected cells in either mode.
+   if(points.filter(p=>p.selected).length<=smallSelectionLimit)return;
    for(const cell of visibleSelectedCells) {
      const radius=cell.count>1?16:10;
      ctx.beginPath();ctx.arc(cell.x,cell.y,radius,0,Math.PI*2);
@@ -177,13 +184,37 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    scheduleSelectedOverlay();
  }
  function syncSelectedFocus() {
-   // One renderer for every selected point, including the focused photo.
-   // A separate DOM pin used to conceal the count and steal clicks when
-   // hundreds of originals share exactly the same GPS coordinates.
    const selected=points.filter(p=>p.selected);
    if(selected.length&&!selected.some(p=>String(p.id)===String(highlightedId)))
      highlightedId=String(selected[0].id);
    if(!selected.length)highlightedId=null;
+   // A real DOM pin was the last reliably visible single-photo marker.
+   // Restore that renderer for small selections, without retaining stale
+   // markers or creating a second selected catalog/selection owner.
+   // Large selections continue using one bounded canvas draw pass.
+   const visible=selected.length<=smallSelectionLimit?selected:[];
+   const keep=new Set();
+   for(const p of visible) {
+     const id=String(p.id);
+     keep.add(id);
+     const focused=id===String(highlightedId);
+     let entry=smallSelectedMarkers.get(id);
+     if(!entry) {
+       const el=document.createElement('div');
+       // Canvas/map click handler resolves coordinate groups. Let events
+       // pass through the pin so a cluster at the same spot is clickable.
+       el.style.pointerEvents='none';
+       el.style.zIndex='5';
+       el.style.backgroundColor='#f0a030';
+       const marker=new maplibregl.Marker({element:el,anchor:'center'})
+         .setLngLat([p.lon,p.lat]).addTo(map);
+       entry={marker,el};smallSelectedMarkers.set(id,entry);
+     } else entry.marker.setLngLat([p.lon,p.lat]);
+     entry.el.className=focused?'pcasa-pin pcasa-pin-target':'pcasa-pin';
+     entry.el.title=p.name||'Foto';
+   }
+   for(const [id,entry] of smallSelectedMarkers)
+     if(!keep.has(id)){entry.marker.remove();smallSelectedMarkers.delete(id);}
  }
  window.pcasaHighlightPoint = (id) => {
    const p=points.find(p=>String(p.id)===String(id) && p.selected);
