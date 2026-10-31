@@ -10,7 +10,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
 .pcasa-pin{width:17px;height:17px;box-sizing:border-box;background:#df4550;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 5px #222b;cursor:pointer}
 .pcasa-pin-target{width:24px;height:24px;background:#f0a030;border:3px solid #111;outline:2px solid #fff;outline-offset:0}
 .pcasa-pin-target:before{content:'';display:block;width:7px;height:7px;background:#fff;border-radius:50%;margin:5.5px auto 0}
-#pcasa-selected-overlay{position:absolute;inset:0;pointer-events:none;z-index:3}
+.pcasa-pin-count{display:flex;align-items:center;justify-content:center;width:27px;height:27px;background:#f0a030;border:3px solid #111;color:#111;font:bold 11px Segoe UI,sans-serif}
 </style></head><body><div id="map"></div><div id="fallback"></div>
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.9.0/dist/maplibre-gl.js"
  onerror="document.getElementById('fallback').textContent='MapLibre konnte nicht geladen werden.'"></script>
@@ -76,170 +76,109 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
        paint:{'circle-radius':8,'circle-color':'#df4550',
               'circle-stroke-width':2.3,'circle-stroke-color':'#fff'}});
    }
+   if (!map.getSource('pcasa-selected')) {
+     // MapLibre's real geographic projection owns selected features, even
+     // for 6,000+ images. No viewport clipping, grid or pixel clustering.
+     map.addSource('pcasa-selected',{type:'geojson',data:geojson([])});
+     map.addLayer({id:'pcasa-selected-points',type:'circle',source:'pcasa-selected',
+       paint:{'circle-radius':['case',['>', ['get','count'],1],16,10],
+         'circle-color':'#f0a030','circle-stroke-width':3,
+         'circle-stroke-color':['case',['boolean',['get','highlighted'],false],'#fff','#111']}});
+     map.addLayer({id:'pcasa-selected-count',type:'symbol',source:'pcasa-selected',
+       filter:['>', ['get','count'],1],
+       layout:{'text-field':['to-string',['get','count']],'text-size':12,
+         'text-allow-overlap':true},
+       paint:{'text-color':'#111'}});
+   }
    updatePhotos();
  }
- // All selected locations use ONE style-independent canvas projection.
- // Unlike MapLibre style layers, it survives basemap reloads. One draw pass
- // groups close pixels without imposing an arbitrary image-count limit.
- const selectedOverlay=document.createElement('canvas');
- selectedOverlay.id='pcasa-selected-overlay';
- map.getContainer().appendChild(selectedOverlay);
- let visibleSelectedCells=[], overlayFrameQueued=false;
- function renderSelectedOverlay() {
-   const host=map.getContainer();
-   const width=host.clientWidth, height=host.clientHeight;
-   if(width<=0||height<=0) return;
-   const ratio=Math.max(1,window.devicePixelRatio||1);
-   const physicalWidth=Math.round(width*ratio), physicalHeight=Math.round(height*ratio);
-   if(selectedOverlay.width!==physicalWidth)selectedOverlay.width=physicalWidth;
-   if(selectedOverlay.height!==physicalHeight)selectedOverlay.height=physicalHeight;
-   selectedOverlay.style.width=width+'px';
-   selectedOverlay.style.height=height+'px';
-   const ctx=selectedOverlay.getContext('2d');
-   if(!ctx)return;
-   ctx.setTransform(ratio,0,0,ratio,0,0);
-   ctx.clearRect(0,0,width,height);
-   // Group only points that are truly close IN SCREEN SPACE. The earlier
-   // floor(x/36),floor(y/36) binning created artificial straight rows of
-   // orange pins and even grouped photos separated by 50px at cell corners.
-   // A nearest-neighbour spatial hash is linear for thousands of photos.
-   const radius=21, radiusSquared=radius*radius;
-   const buckets=new Map(), clusters=[];
-   const bucketKey=(x,y)=>Math.floor(x/radius)+','+Math.floor(y/radius);
-   for(const photo of points) {
-     if(!photo.selected)continue;
-     const location=map.project([photo.lon,photo.lat]);
-     if(!Number.isFinite(location.x)||!Number.isFinite(location.y)||
-        location.x< -24||location.x>width+24||
-        location.y< -24||location.y>height+24)continue;
-     const bx=Math.floor(location.x/radius),by=Math.floor(location.y/radius);
-     let chosen=null, best=radiusSquared;
-     for(let yy=by-1;yy<=by+1;yy++)
-       for(let xx=bx-1;xx<=bx+1;xx++) {
-         for(const cell of buckets.get(xx+','+yy)||[]) {
-           const dx=cell.x-location.x,dy=cell.y-location.y;
-           const distance=dx*dx+dy*dy;
-           if(distance<best){chosen=cell;best=distance;}
-         }
-       }
-     if(!chosen) {
-       chosen={x:location.x,y:location.y,lat:photo.lat,lon:photo.lon,
-         count:0,id:photo.id,south:photo.lat,north:photo.lat,
-         west:photo.lon,east:photo.lon,highlighted:false};
-       clusters.push(chosen);
-       const key=bucketKey(chosen.x,chosen.y);
-       if(!buckets.has(key))buckets.set(key,[]);
-       buckets.get(key).push(chosen);
+ // Selected features belong to exact geographic positions, NOT screen cells.
+ // Exact duplicate GPS coordinates produce ONE counted map pin. Nearby
+ // locations remain independent points at every zoom level, even when
+ // they overlap visually until the user zooms in.
+ function selectedLocations(selected) {
+   const locations=new Map();
+   for(const photo of selected) {
+     const key=JSON.stringify([photo.lon,photo.lat]);
+     let entry=locations.get(key);
+     if(!entry) {
+       entry={id:photo.id,lat:photo.lat,lon:photo.lon,count:0,highlighted:false};
+       locations.set(key,entry);
      }
-     chosen.south=Math.min(chosen.south,photo.lat);
-     chosen.north=Math.max(chosen.north,photo.lat);
-     chosen.west=Math.min(chosen.west,photo.lon);
-     chosen.east=Math.max(chosen.east,photo.lon);
-     if(String(photo.id)===String(highlightedId))chosen.highlighted=true;
-     // Pin stays at a REAL photographic coordinate. Never snap or
-     // redistribute map markers to an arbitrary on-screen grid.
-     chosen.count++;
+     entry.count++;
+     if(String(photo.id)===String(highlightedId))entry.highlighted=true;
    }
-   visibleSelectedCells=clusters;
-   // The previous release replaced reliable MapLibre DOM pins with this
-   // canvas for EVERY selection, including one picture. Use DOM pins for
-   // small selections; keep the grouped canvas only for large selections.
-   // Hit-testing still uses the same projected cells in either mode.
-   if(points.filter(p=>p.selected).length<=smallSelectionLimit)return;
-   for(const cell of visibleSelectedCells) {
-     const radius=cell.count>1?16:10;
-     ctx.beginPath();ctx.arc(cell.x,cell.y,radius,0,Math.PI*2);
-     ctx.fillStyle='#f0a030';ctx.fill();
-     ctx.lineWidth=3;ctx.strokeStyle='#111';ctx.stroke();
-     if(cell.highlighted) {
-       // A visible halo, not just a color change, marks the focused image.
-       ctx.beginPath();ctx.arc(cell.x,cell.y,radius+5,0,Math.PI*2);
-       ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.stroke();
-     }
-     if(cell.count>1) {
-       ctx.fillStyle='#111';ctx.textAlign='center';ctx.textBaseline='middle';
-       ctx.font='bold 12px Segoe UI, sans-serif';
-       ctx.fillText(String(cell.count),cell.x,cell.y);
-     } else {
-       ctx.beginPath();ctx.arc(cell.x,cell.y,3,0,Math.PI*2);
-       ctx.fillStyle='#fff';ctx.fill();
-     }
-   }
+   return [...locations.values()];
  }
- function scheduleSelectedOverlay() {
-   if(overlayFrameQueued)return;
-   overlayFrameQueued=true;
-   window.requestAnimationFrame(()=>{
-     overlayFrameQueued=false;
-     renderSelectedOverlay();
-   });
+ function selectedGeojson(selected) {
+   return {type:'FeatureCollection',features:selectedLocations(selected).map(p=>({
+     type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]},
+     properties:{id:String(p.id),lat:p.lat,lon:p.lon,
+       count:p.count,highlighted:p.highlighted}
+   }))};
  }
- function clickSelectedOverlay(event) {
-   let closest=null,best=Infinity;
-   for(const cell of visibleSelectedCells) {
-     const dx=event.point.x-cell.x,dy=event.point.y-cell.y;
+ function sendSelectedPoint(photo) {
+   const id=Number(photo.id),lat=Number(photo.lat),lon=Number(photo.lon);
+   const count=Number(photo.count);
+   if(!Number.isSafeInteger(id)||!Number.isFinite(lat)||!Number.isFinite(lon))return;
+   if(count>1)
+     post({type:'point-group',id,south:lat,north:lat,west:lon,east:lon});
+   else post({type:'select',id});
+ }
+ function clickSmallSelectedMarker(event) {
+   const selected=points.filter(p=>p.selected);
+   if(selected.length===0||selected.length>smallSelectionLimit)return false;
+   let nearest=null,best=16*16;
+   for(const photo of selectedLocations(selected)) {
+     const screen=map.project([photo.lon,photo.lat]);
+     const dx=screen.x-event.point.x,dy=screen.y-event.point.y;
      const distance=dx*dx+dy*dy;
-     const limit=cell.count>1?21:15;
-     if(distance<limit*limit&&distance<best){closest=cell;best=distance;}
+     if(distance<=best){nearest=photo;best=distance;}
    }
-   if(!closest)return false;
-   // Every click opens the photos represented by the hit cell. Never
-   // silently zoom a dense marker without showing which pictures it owns.
-   if(closest.count>1)
-     post({type:'point-group',id:Number(closest.id),
-       south:closest.south,north:closest.north,
-       west:closest.west,east:closest.east});
-   else post({type:'select',id:Number(closest.id)});
+   if(!nearest)return false;
+   sendSelectedPoint(nearest);
    return true;
  }
- map.on('move',scheduleSelectedOverlay);
- map.on('resize',scheduleSelectedOverlay);
  function updatePhotos() {
    map.getSource('pcasa-photos')?.setData(geojson(points.filter(p=>!p.selected)));
-   syncSelectedFocus();
-   scheduleSelectedOverlay();
- }
- function syncSelectedFocus() {
    const selected=points.filter(p=>p.selected);
+   const large=selected.length>smallSelectionLimit;
+   // A single native GeoJSON layer renders EVERY distinct selected place.
+   // Small selections retain the proven MapLibre DOM marker path.
+   map.getSource('pcasa-selected')?.setData(
+     selectedGeojson(large?selected:[]));
+   syncSelectedFocus(selected);
+ }
+ function syncSelectedFocus(selected=points.filter(p=>p.selected)) {
    if(selected.length&&!selected.some(p=>String(p.id)===String(highlightedId)))
      highlightedId=String(selected[0].id);
    if(!selected.length)highlightedId=null;
-   // A real DOM pin was the last reliably visible single-photo marker.
-   // Restore that renderer for small selections, without retaining stale
-   // markers or creating a second selected catalog/selection owner.
-   // Large selections continue using one bounded canvas draw pass.
-   const visible=selected.length<=smallSelectionLimit?selected:[];
+   const visible=selected.length<=smallSelectionLimit
+     ?selectedLocations(selected):[];
    const keep=new Set();
    for(const p of visible) {
-     const id=String(p.id);
-     keep.add(id);
-     const focused=id===String(highlightedId);
+     const id=String(p.id);keep.add(id);
      let entry=smallSelectedMarkers.get(id);
      if(!entry) {
        const el=document.createElement('div');
-       // Canvas/map click handler resolves coordinate groups. Let events
-       // pass through the pin so a cluster at the same spot is clickable.
        el.style.pointerEvents='none';
        el.style.zIndex='5';
-       el.style.backgroundColor='#f0a030';
        const marker=new maplibregl.Marker({element:el,anchor:'center'})
          .setLngLat([p.lon,p.lat]).addTo(map);
        entry={marker,el};smallSelectedMarkers.set(id,entry);
      } else entry.marker.setLngLat([p.lon,p.lat]);
-     entry.el.className=focused?'pcasa-pin pcasa-pin-target':'pcasa-pin';
-     entry.el.title=p.name||'Foto';
+     entry.el.className=(p.highlighted?'pcasa-pin pcasa-pin-target':'pcasa-pin')+
+       (p.count>1?' pcasa-pin-count':'');
+     entry.el.textContent=p.count>1?String(p.count):'';
    }
    for(const [id,entry] of smallSelectedMarkers)
      if(!keep.has(id)){entry.marker.remove();smallSelectedMarkers.delete(id);}
  }
  window.pcasaHighlightPoint = (id) => {
-   const p=points.find(p=>String(p.id)===String(id) && p.selected);
-   if(!p)return;
+   if(!points.some(p=>String(p.id)===String(id)&&p.selected))return;
    highlightedId=String(id);
-   // Highlight only: the user must retain the exact map extent while
-   // comparing selected photos, even at identical GPS coordinates.
-   syncSelectedFocus();
-   scheduleSelectedOverlay();
+   // Focus does not zoom or change the gallery selection.
+   updatePhotos();
  };
  function zoomSelection() {
    const selected = points.filter(p=>p.selected);
@@ -330,8 +269,12 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if(Number.isSafeInteger(id)) post({type:'select',id});
  }
  map.on('click','pcasa-points',selectPhoto);
+ map.on('click','pcasa-selected-points',event=>{
+   if(!event.features?.length)return;
+   sendSelectedPoint(event.features[0].properties);
+ });
 
- for(const layer of ['pcasa-points']) {
+ for(const layer of ['pcasa-points','pcasa-selected-points']) {
    map.on('mouseenter',layer,()=>map.getCanvas().style.cursor='pointer');
    map.on('mouseleave',layer,()=>map.getCanvas().style.cursor='');
  }
@@ -365,7 +308,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    map.getCanvas().style.cursor=placementEnabled ? 'crosshair' : '';
  };
  map.on('click',event=>{
-   if (clickSelectedOverlay(event)) return;
+   if (clickSmallSelectedMarker(event)) return;
    if (!placementEnabled) return;
    const ids=['pcasa-points','pcasa-clusters']
      .filter(id=>!!map.getLayer(id));
@@ -387,7 +330,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    const p=map.getCenter();
    post({type:'viewport',lat:p.lat,lon:p.lng,zoom:map.getZoom()});
  });
- window.pcasaResize = () => {map.resize();scheduleSelectedOverlay();};
+ window.pcasaResize = () => map.resize();
  map.on('load',()=>{fallback.remove();});
 })();
 </script></body></html>
