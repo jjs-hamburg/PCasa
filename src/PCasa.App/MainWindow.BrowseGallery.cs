@@ -799,12 +799,20 @@ public partial class MainWindow
 
     private void OnCatalogImageCommitted()
     {
-        // A running scan must not repeatedly rebuild the whole gallery.
-        // A targeted committed-image projection will handle live ingestion.
-        // Until that path is wired, preserve the stable existing gallery.
+        // A scanner commit for the visible photo folder is published by
+        // OnCatalogImageIndexed, without a full index rebuild. New photos
+        // elsewhere at the live edges use the same coalesced publisher below.
         if (_isScanning &&
             System.Threading.Volatile.Read(ref _galleryHasIndexedImages) != 0)
             return;
+        ScheduleCatalogGalleryPublication();
+    }
+
+    private void ScheduleCatalogGalleryPublication()
+    {
+        // Single existing 750ms coalesced catalog publication owner.
+        // Both catalog commits and live-edge commits from another folder
+        // enter here; never refresh the complete 500k gallery per image.
         if (Dispatcher.HasShutdownStarted) return;
         if (System.Threading.Interlocked.Exchange(
             ref _catalogPublicationPending, 1) != 0) return;
