@@ -1465,6 +1465,18 @@ internal static class Program
                 var savedClusters = clusterField.GetValue(window);
                 var savedCatalog = catalogField.GetValue(window);
                 var savedVersion = versionField.GetValue(window);
+                var gpsPointsField = viewerType.GetField("_gpsPoints", reflectFlags)!;
+                var savedGpsPoints = gpsPointsField.GetValue(window);
+                var gpsPointType = viewerType.GetNestedType("GpsPoint",
+                    System.Reflection.BindingFlags.NonPublic)!;
+                var syntheticPoint = Activator.CreateInstance(gpsPointType,
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic,
+                    null, new object[] { 1003L, "synthetic.jpg",
+                        28.416d, -16.567d, true }, null)!;
+                var gpsPointArray = Array.CreateInstance(gpsPointType, 1);
+                gpsPointArray.SetValue(syntheticPoint, 0);
                 var savedGpsMode = sidebarModeField.GetValue(window);
                 var strip = (ListBox?)window.FindName("GpsFilmstripList")
                     ?? throw new Exception("GPS filmstrip missing.");
@@ -1475,6 +1487,7 @@ internal static class Program
                 {
                     sidebarModeField.SetValue(window, "GPS");
                     catalogField.SetValue(window, synthetic);
+                    gpsPointsField.SetValue(window, gpsPointArray);
                     versionField.SetValue(window, 77L);
                     clusterField.SetValue(window,
                         new[] { new GpsPhotoCluster(1000, 28.415, -16.568,
@@ -1507,6 +1520,7 @@ internal static class Program
                     clusterField.SetValue(window, savedClusters);
                     catalogField.SetValue(window, savedCatalog);
                     versionField.SetValue(window, savedVersion);
+                    gpsPointsField.SetValue(window, savedGpsPoints);
                     if (stripToggle.IsChecked != savedToggle)
                         stripToggle.IsChecked = savedToggle;
                     sidebarModeField.SetValue(window, savedGpsMode);
