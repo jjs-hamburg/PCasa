@@ -155,4 +155,20 @@ window.pcasaBeginClusters(7,1,1,1);
 window.pcasaAppendClusters(6,0,big);window.pcasaCommitClusters(6);
 window.pcasaAppendClusters(7,0,single);window.pcasaCommitClusters(7);
 assert.equal(sum(),1,'Superseded transfers cannot republish old clusters');
+// Moving to another folder with Selected: 0 must remove EVERY old marker
+// immediately. The old app incorrectly loaded up to 5,000 unrelated GPS
+// photos across the whole catalog when no photo was selected.
+send(8,[],0,0);
+assert.equal(live().length,0,
+  'No gallery selection must leave zero GPS markers, not a world full of context dots');
+assert.ok(messages.some(m=>m.type==='gps-sync'&&m.version===8&&
+  m.received===0&&m.selected===0),
+  'Empty projection is a complete, versioned GPS transfer');
+activeMap.emit('moveend');
+window.pcasaApplyProvider({format:'style',url:'https://example.test/other.json'});
+activeMap.emit('style.load');
+assert.equal(live().length,0,
+  'Changing map provider or zoom must not resurrect old no-selection markers');
+send(9,single,1,1);
+assert.equal(live().length,1,'A new explicit selection restores only its photo');
 console.log('GPS map PASS: 7200 photos, provider-independent cluster markers, click identity, single-photo popup protocol, counted atomic transfers and style switches');
