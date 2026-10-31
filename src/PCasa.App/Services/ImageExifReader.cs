@@ -149,11 +149,17 @@ public sealed class ImageExifReader : IDisposable
     public static ImageExifData Parse(string json)
     {
         using var document = JsonDocument.Parse(json);
-        if (document.RootElement.ValueKind != JsonValueKind.Array ||
-            document.RootElement.GetArrayLength() != 1 ||
-            document.RootElement[0].ValueKind != JsonValueKind.Object)
-            throw new InvalidDataException("Unerwartete ExifTool-Antwort.");
-        var obj = document.RootElement[0];
+        // Live ExifTool returns a one-object JSON array. The existing
+        // catalog persists the unwrapped object (ImageExifData.Json).
+        // Both must use exactly the SAME GPS parsing and reference-sign rules.
+        var obj = document.RootElement.ValueKind switch
+        {
+            JsonValueKind.Object => document.RootElement,
+            JsonValueKind.Array when document.RootElement.GetArrayLength() == 1 &&
+                document.RootElement[0].ValueKind == JsonValueKind.Object =>
+                document.RootElement[0],
+            _ => throw new InvalidDataException("Unerwartete ExifTool-Antwort.")
+        };
         var latitude = NumericTag(obj, "GPSLatitude");
         var longitude = NumericTag(obj, "GPSLongitude");
         if (latitude is double lat && longitude is double lon)
