@@ -70,7 +70,7 @@ window.pcasaAppendPoints(1,1,worldwide.slice(2000,4000));
 assert.equal(activeMap.bounds.length,6000,'Fit bounds uses every selected coordinate');
 assert.equal(selectedFeatures().length,2,'Identical GPS coordinates share exactly one pin');
 assert.equal(selectedPhotoCount(),6000,'All 6,000 images counted');
-assert.deepEqual(selectedFeatures().map(f=>f.properties.count),[3000,3000]);
+assert.deepEqual(Array.from(selectedFeatures()).map(f=>f.properties.count),[3000,3000]);
 assert.ok(messages.some(m=>m.type==='gps-sync'&&m.received===6000&&m.selected===6000));
 const europe=selectedFeatures().find(f=>f.properties.lon===10);
 activeMap.emitLayer('click','pcasa-selected-points',{features:[europe]});
@@ -149,8 +149,8 @@ window.pcasaBeginPoints(8,1);
 window.pcasaAppendPoints(8,0,close);window.pcasaCommitPoints(8);
 assert.equal(selectedFeatures().length,3,
  'Distinct locations must never merge based on pixel distance or grid cells');
-assert.deepEqual(selectedFeatures().map(f=>f.properties.count),[63,1,1]);
-assert.deepEqual(selectedFeatures().slice(1).map(f=>f.geometry.coordinates[0]),[-1.5,4]);
+assert.deepEqual(Array.from(selectedFeatures()).map(f=>f.properties.count),[63,1,1]);
+assert.deepEqual(Array.from(selectedFeatures()).slice(1).map(f=>f.geometry.coordinates[0]),[-1.5,4]);
 // MapLibre style reload reinstalls the selected source and restores ALL
 // geographic features without requiring another WPF catalog query.
 activeMap.setStyle();activeMap.emit('style.load');
