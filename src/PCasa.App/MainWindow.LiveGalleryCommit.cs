@@ -187,7 +187,7 @@ public partial class MainWindow
         finally
         {
             RestorePendingGalleryAnchor();
-            if (followGalleryEnd && !GalleryScrollIsActive())
+            if (followGalleryEnd)
             {
                 BrowseScrollViewer.UpdateLayout();
                 BrowseScrollViewer.ScrollToBottom();
