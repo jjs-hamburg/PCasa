@@ -141,7 +141,22 @@ public partial class MainWindow
         try
         {
             await Task.Delay(180, cancellation.Token);
-            await ApplyTagFilterAsync(true, cancellation.Token);
+            if (_scanGalleryPublicationDeferred)
+            {
+                // Searching is explicit user navigation, not a scanner
+                // publication. Include all already committed photos before
+                // evaluating the query; otherwise the stable visual snapshot
+                // would hide newly imported matching files from search.
+                _scanGalleryPublicationDeferred = false;
+                await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                    warmViewport: false);
+                cancellation.Token.ThrowIfCancellationRequested();
+                BrowseScrollViewer.ScrollToTop();
+            }
+            else
+            {
+                await ApplyTagFilterAsync(true, cancellation.Token);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
