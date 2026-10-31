@@ -88,8 +88,25 @@ internal static class GalleryFileOperationFlow
             finally
             {
                 release.TrySetResult();
-                Until(window, () => background.IsCompleted,
-                    "Background worker did not recover after manual copy.");
+                try
+                {
+                    Until(window, () => background.IsCompleted,
+                        "Background worker did not recover after manual copy.");
+                }
+                catch (TimeoutException ex)
+                {
+                    var states = string.Join(" | ", scheduler.Snapshot()
+                        .Where(job => job.State is SchedulerJobState.Queued or
+                            SchedulerJobState.Running or SchedulerJobState.YieldRequested)
+                        .Take(30).Select(job =>
+                            $"{job.Key}: {job.Priority}/{job.State}"));
+                    var pending = string.Join(" | ", new DurablePackageJournal(db)
+                        .Pending().Take(30).Select(item =>
+                            $"{item.Key}: {item.Priority}/{item.State} step={item.CompletedSteps}"));
+                    throw new TimeoutException(
+                        $"{ex.Message}; background={background.Status}; "+
+                        $"active jobs=[{states}]; durable=[{pending}]", ex);
+                }
                 background.GetAwaiter().GetResult();
             }
             Console.WriteLine("PASS: Manual file transfer preempts occupied background scheduler.");
