@@ -276,7 +276,6 @@ public sealed class FolderScanner
         void DirectoryCompleted(string directory)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (failedDirectories.Contains(directory)) return;
             if (!Directory.Exists(folder.LocalPath) || !Directory.Exists(directory))
                 throw new DirectoryNotFoundException(
                     $"Verzeichnis vor Checkpoint nicht erreichbar: {directory}");
@@ -287,8 +286,12 @@ public sealed class FolderScanner
                 StringComparer.OrdinalIgnoreCase);
             // A restarted partial directory did not revisit earlier files.
             // Its observed set is incomplete and must NEVER authorize deletes.
-            if (restartedPartialDirectories?.Contains(directory) != true)
+            if (restartedPartialDirectories?.Contains(directory) != true &&
+                !failedDirectories.Contains(directory))
             {
+                // A file read/decode failed: its path may not have reached
+                // observedPaths, so pruning this directory is unsafe. The
+                // enumeration itself still completes and its cursor commits.
                 var cleanup = new CatalogRemovalService(_catalog.Database);
                 removedByCompletedDirectories += cleanup.RemoveMissing(
                     folder.Id, directory, seen,
@@ -562,9 +565,16 @@ public sealed class FolderScanner
                 catch (Exception ex)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // Database/write failures may compromise the transaction.
+                    // Do not treat them as a harmless corrupt JPEG and advance
+                    // the durable cursor over uncommitted catalog state.
+                    if (ex is Microsoft.Data.Sqlite.SqliteException)
+                        throw;
                     scanSession.RollbackPending();
                     failed++;
                     failedDirectories.Add(Path.GetDirectoryName(localPath) ?? scanRoot);
+                    PCasaDiagnostics.WriteMessage("Scan.FileSkipped",
+                        $"File={localPath}; {ex.GetType().Name}: {ex.Message}");
                     if (firstFailure is null)
                     {
                         firstFailure = ex;
@@ -591,11 +601,12 @@ public sealed class FolderScanner
                     resume.CurrentFile = null;
                 }
 
-                // Persist after the file's SQLite commit, never in advance of
-                // indexing. An interruption therefore retries at most one
-                // uncommitted file. Do not move past a failed file.
-                if (persistentScan &&
-                    !failedDirectories.Contains(Path.GetDirectoryName(localPath) ?? scanRoot))
+                // File errors are intentionally SKIPPED for this inventory.
+                // Advance the durable checkpoint after the file has either
+                // committed or had its failure recorded, so a single bad
+                // image cannot rewind the next launch by thousands of files.
+                // Database errors still abort before reaching this point.
+                if (persistentScan)
                 {
                     var directory = Path.GetDirectoryName(localPath) ?? scanRoot;
                     var fileName = Path.GetFileName(localPath);
@@ -688,19 +699,15 @@ public sealed class FolderScanner
                 expectedGeneration: generation, expectedScanEpoch: scanEpoch);
         }
 
-        if (imageFilesSeen > 0 && updated == 0 && unchanged == 0 && failed == imageFilesSeen)
-        {
-            throw new InvalidOperationException(
-                $"Keine der {imageFilesSeen:N0} gefundenen Bilddateien konnte eingelesen werden.\n\n" +
-                $"Erste fehlerhafte Datei:\n{firstFailurePath}\n\n" +
-                $"Ursache:\n{firstFailure?.Message}",
-                firstFailure);
-        }
+        // A completely unreadable set of picture files is not a reason
+        // to replay the inventory. Each bad file was logged and skipped;
+        // missing-source and directory-enumeration failures still throw.
+
 
         // Exactly the same complete scanner path clears the persistent
         // first-import request, whether invoked manually or by the monitor.
         // A partial/file scan or a failed enumeration never acknowledges it.
-        if (specificFile is null && recursive && failed == 0 &&
+        if (specificFile is null && recursive &&
             string.Equals(FolderExclusionRules.Normalize(scanRoot),
                 FolderExclusionRules.Normalize(folder.LocalPath),
                 StringComparison.OrdinalIgnoreCase))
@@ -709,9 +716,9 @@ public sealed class FolderScanner
             _folderRepository.CompleteInitialScan(folder.Id, generation, scanEpoch);
         }
 
-        // Success releases this inventory's receipt; the NEXT new scan must
-        // start fresh. Failed/interrupted inventories retain their cursor.
-        if (durableScanKey is not null && failed == 0)
+        // A fully enumerated scan is complete even if a picture was skipped.
+        // Only an interrupted/unavailable source retains a restart cursor.
+        if (durableScanKey is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             _folderRepository.FinishRegularScan(durableScanKey, generation, scanEpoch);
