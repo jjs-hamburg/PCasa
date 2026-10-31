@@ -37,6 +37,7 @@ public partial class MainWindow
     private string? _gpsGoogleLoadedUrl;
     private long? _gpsHighlightedImageId;
     private int _gpsSelectionCount;
+    private HashSet<long> _gpsFilmstripSelectionSnapshot = [];
     private string? _gpsAppliedProviderId;
     private long _gpsQueryRevision;
     private long _gpsMapTransferRevision;
@@ -569,9 +570,14 @@ public partial class MainWindow
         if (_sidebarMode != "GPS") return;
         var revision = ++_gpsQueryRevision;
         var selectedIds = _selectedImageIds.ToArray();
-        // A map-point filmstrip is a temporary view. A real gallery selection
-        // change replaces it with the new selection; it never owns selection.
-        _gpsFilmstripPointIds = null;
+        // A map-point filmstrip is a temporary view. Only a REAL change of
+        // gallery selection replaces it. Background photo imports may
+        // refresh the map repeatedly while the user explores one GPS point.
+        if (!_gpsFilmstripSelectionSnapshot.SetEquals(selectedIds))
+        {
+            _gpsFilmstripSelectionSnapshot = selectedIds.ToHashSet();
+            _gpsFilmstripPointIds = null;
+        }
         // The previous selection's map and coordinates must not masquerade
         // as the newly selected 6,000 photos while catalog reads are queued.
         // Keep the scheduler as the only read owner; publish loading state
