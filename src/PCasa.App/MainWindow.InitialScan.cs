@@ -140,6 +140,8 @@ public partial class MainWindow
             // Initial imports and explicit scans share one scheduler-owned
             // scan / thumbnail / reconciliation code path.
             scanActive = true;
+            PCasaDiagnostics.WriteMessage("Scan.InitialImport",
+                $"Resume pending first-import for monitored folder: {folder.LocalPath}");
             var result = await ScheduleCompleteFolderScanAsync(
                 folder.LocalPath, SchedulerPriority.Background,
                 progress, cancellation.Token, folder.Id,
