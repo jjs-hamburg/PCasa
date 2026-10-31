@@ -641,14 +641,24 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)
                 ?? throw new Exception("GPS catalog projection not found.");
-            var projected = ((System.Collections.IEnumerable)readGps.Invoke(
+            var singlePhoto = ((System.Collections.IEnumerable)readGps.Invoke(
                 window, [new long[] { gpsA }, b.Id, CancellationToken.None, null])!)
                 .Cast<object>().ToArray();
-            bool HasPoint(long id, bool isSelected) => projected.Any(point =>
-                (long)point.GetType().GetProperty("Id")!.GetValue(point)! == id &&
-                (bool)point.GetType().GetProperty("Selected")!.GetValue(point)! == isSelected);
-            if (!HasPoint(gpsA, true) || !HasPoint(gpsB, false))
-                throw new Exception("GPS selection dropped the surrounding folder's markers.");
+            long GpsId(object point) =>
+                (long)point.GetType().GetProperty("Id")!.GetValue(point)!;
+            if (singlePhoto.Length != 1 || GpsId(singlePhoto[0]) != gpsA ||
+                !(bool)singlePhoto[0].GetType().GetProperty("Selected")!.GetValue(singlePhoto[0])!)
+                throw new Exception("Single GPS photo was mixed with unrelated folder context.");
+            // Folder context is still available when the gallery has NO
+            // selection. Keep both fixtures for the later filmstrip focus test.
+            var contextPhotos = ((System.Collections.IEnumerable)readGps.Invoke(
+                window, [Array.Empty<long>(), b.Id, CancellationToken.None, null])!)
+                .Cast<object>().ToArray();
+            if (!contextPhotos.Any(p => GpsId(p) == gpsB))
+                throw new Exception("Empty-selection GPS folder context was lost.");
+            var projected = singlePhoto.Concat(contextPhotos.Where(p =>
+                GpsId(p) != gpsA)).ToArray();
+            Console.WriteLine("PASS: Single GPS selection returns only its own photo, while empty selection retains folder context.");
 
             // GPS edits use the existing map and selected gallery images.
             // Search is a draft; only explicit buttons may write originals.
@@ -2760,6 +2770,13 @@ internal static class TagFlow
                     !loadIds.All(selectedAll.Contains))
                     throw new Exception(
                         "GPS map omitted selected positions above 5,000 or rejected stale EXIF fingerprints.");
+                var onlyOne = ((System.Collections.IEnumerable)readGps.Invoke(
+                    window,[new long[]{loadIds[0]},a.Id,CancellationToken.None,null])!)
+                    .Cast<object>().ToArray();
+                if (onlyOne.Length != 1 ||
+                    (long)onlyOne[0].GetType().GetProperty("Id")!.GetValue(onlyOne[0])! != loadIds[0])
+                    throw new Exception(
+                        "Single GPS selection loaded thousands of unrelated catalog photos.");
             }
             finally
             {
