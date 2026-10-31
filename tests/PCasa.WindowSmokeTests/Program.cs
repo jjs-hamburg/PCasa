@@ -742,12 +742,8 @@ internal static class Program
                 "RegisterGalleryUserScroll", scrollFlags)!;
             var scrollDefer = scrollType.GetMethod(
                 "DeferScanGalleryPublication", scrollFlags)!;
-            var scrollActive = scrollType.GetMethod(
-                "GalleryScrollIsActive", scrollFlags)!;
             var scanDirtyField = scrollType.GetField(
                 "_scanGalleryPublicationDeferred", scrollFlags)!;
-            var timerField = scrollType.GetField(
-                "_scanGalleryScrollSettleTimer", scrollFlags)!;
             var scannerNotification = scrollType.GetMethod(
                 "OnCatalogImageIndexed", scrollFlags)!;
             var folderBeforeScroll = scrollType.GetField(
@@ -770,27 +766,38 @@ internal static class Program
                         new object[] { @"C:\synthetic\pending-photo.jpg", 100L });
                 }
                 Flush(window);
-                var guarded = (bool)scrollActive.Invoke(window, null)!;
                 var scanHeld = (bool)scanDirtyField.GetValue(window)!;
-                var hasAnchor = surface.CaptureImageAnchor(scroller.VerticalOffset) is not null;
-                if (!guarded || !scanHeld || !hasAnchor ||
+                var stationaryAnchor = surface.CaptureImageAnchor(scroller.VerticalOffset);
+                if (!scanHeld || stationaryAnchor is null ||
                     (bool)scrollDefer.Invoke(window, null)! != true)
-                    throw new Exception("Automatic scan publication not held: " +
-                        $"Guard={guarded}; Deferred={scanHeld}; Anchor={hasAnchor}; " +
-                        $"Offset={scroller.VerticalOffset}; Maximum={scroller.ScrollableHeight}; " +
-                        $"Folder={folderBeforeScroll.GetValue(window)}; " +
-                        $"Timer={(timerField.GetValue(window) as DispatcherTimer)?.IsEnabled}");
-                // In the resting middle of a large gallery the next
-                // publication is batched; the index is not rebuilt per
-                // individual indexed image.
+                    throw new Exception("Automatic scan publication not held in gallery interior.");
+
+                // The user has STOPPED scrolling: scanner UI notifications
+                // must continue to leave this published view untouched.
+                // Build #901 incorrectly flushed after 500 ms of inactivity.
+                for (var image = 0; image < 12; image++)
+                {
+                    scannerNotification.Invoke(window,
+                        new object[] { $@"C:\synthetic\stationary-{image}.jpg", 100L });
+                    Flush(window);
+                    if (!(bool)scanDirtyField.GetValue(window)! ||
+                        surface.CaptureImageAnchor(scroller.VerticalOffset) != stationaryAnchor)
+                        throw new Exception("Stationary viewport shifted after a scanner image.");
+                }
+                var refresh = scrollType.GetMethod(
+                    "RefreshBrowseGalleryAsync", scrollFlags)!;
+                var deferredTask = (Task)refresh.Invoke(window,
+                    new object[] { true, false, true })!;
+                if (!deferredTask.IsCompleted ||
+                    !(bool)scanDirtyField.GetValue(window)!)
+                    throw new Exception("Scanner refresh bypassed stable middle viewport.");
                 Console.WriteLine(
-                    "PASS: Rapid scrolling holds and coalesces live scanner gallery publications.");
+                    "PASS: Scan commits never reflow a stationary middle viewport.");
 
                 // Top and bottom remain live. Do not flush the synthetic
                 // index into the actual empty runner database during this
                 // policy test; only evaluate the publication gate.
                 scanDirtyField.SetValue(window, false);
-                (timerField.GetValue(window) as DispatcherTimer)?.Stop();
                 scroller.ScrollToTop();
                 Flush(window);
                 if ((bool)scrollDefer.Invoke(window, null)!)
@@ -804,7 +811,6 @@ internal static class Program
             finally
             {
                 scanDirtyField.SetValue(window, false);
-                (timerField.GetValue(window) as DispatcherTimer)?.Stop();
                 folderBeforeScroll.SetValue(window, activeFolderBeforeScroll);
                 tierForScanner.SetValue(window, previousTierForScanner);
                 scroller.ScrollToVerticalOffset(2800);
