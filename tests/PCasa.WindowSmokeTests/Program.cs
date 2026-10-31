@@ -784,6 +784,13 @@ internal static class Program
                         surface.CaptureImageAnchor(scroller.VerticalOffset) != stationaryAnchor)
                         throw new Exception("Stationary viewport shifted after a scanner image.");
                 }
+                // This deliberately spans the old 500-ms idle flush.
+                // A stopped user must never see a delayed scan reflow.
+                System.Threading.Thread.Sleep(850);
+                Flush(window);
+                if (!(bool)scanDirtyField.GetValue(window)! ||
+                    surface.CaptureImageAnchor(scroller.VerticalOffset) != stationaryAnchor)
+                    throw new Exception("Idle scanner timer displaced stationary gallery.");
                 var refresh = scrollType.GetMethod(
                     "RefreshBrowseGalleryAsync", scrollFlags)!;
                 var deferredTask = (Task)refresh.Invoke(window,
