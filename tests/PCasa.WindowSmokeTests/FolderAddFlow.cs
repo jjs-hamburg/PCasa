@@ -141,12 +141,12 @@ internal static class FolderAddFlow
                     CurrentPath = "ORG"
                 });
                 sharedProgress.UpdateScan(new ScanProgress(
-                    4, 2, 2, 0, "scan-background-latest.jpg", Added: 2));
+                    4, 2, 2, 0, "scan-background-latest.jpg", Added: 2, ReadingNew: true));
                 sharedProgress.EndManualOperation();
                 var phaseText = (TextBlock?)sharedProgress.FindName("PhaseText");
                 var currentFileText = (TextBlock?)sharedProgress.FindName("CurrentFileText");
                 var countText = (TextBlock?)sharedProgress.FindName("CountText");
-                if (phaseText?.Text != "Bilder werden eingelesen" ||
+                if (phaseText?.Text != "Bild einlesen" ||
                     currentFileText?.Text != "scan-background-latest.jpg" ||
                     countText?.Text != "Neu: 2 · geprüft: 4")
                     throw new Exception(
