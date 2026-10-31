@@ -2,34 +2,31 @@
 const fs=require('node:fs');
 const vm=require('node:vm');
 const assert=require('node:assert/strict');
+
 const html=fs.readFileSync('src/PCasa.App/Resources/gps-map.html','utf8');
 const script=html.match(/<script>\s*(\(\(\) => \{[\s\S]*?\}\)\(\);)\s*<\/script>/)?.[1];
-assert.ok(script,'Embedded map controller is present');
-
+assert.ok(script,'Embedded GPS map controller must exist');
 let messages=[],activeMap,markers=[];
-const host={clientWidth:1024,clientHeight:650,appendChild(){},querySelector(){return null;}};
+const host={clientWidth:1024,clientHeight:650,querySelector(){return null;}};
 const document={
   getElementById(){return {remove(){},textContent:''};},
   createElement(){return {style:{},classList:{toggle(){}},addEventListener(){}};}
 };
 class MapStub {
   constructor(){activeMap=this;this.handlers={};this.sources={};this.layers={};this.zoom=2;}
-  on(name,a,b){(this.handlers[name]??=[]).push({layer:b?a:null,handler:b||a});}
-  emit(name,event){for(const x of this.handlers[name]??[])if(!x.layer)x.handler(event);}
-  emitLayer(name,layer,event){for(const x of this.handlers[name]??[])
-    if(x.layer===layer)x.handler(event);}
+  on(name,a,b){(this.handlers[name]??=[]).push({layer:b?a:null,callback:b||a});}
+  emit(name,event={}){for(const h of this.handlers[name]??[])if(!h.layer)h.callback(event);}
   getContainer(){return host;}getCanvas(){return {style:{}};}
   addControl(){}
-  addSource(id,options){this.sources[id]={options,data:options.data,
-    setData(data){this.data=data;},
-    getClusterExpansionZoom(){return Promise.resolve(11);}};}
+  addSource(id,opts){this.sources[id]={data:opts.data,setData(data){this.data=data;}};}
   getSource(id){return this.sources[id];}
-  addLayer(layer){this.layers[layer.id]=layer;}
+  addLayer(obj){this.layers[obj.id]=obj;}
   getLayer(id){return this.layers[id];}
   queryRenderedFeatures(){return [];}
-  project(location){return {x:512+location[0]*4,y:325-location[1]*4};}
-  fitBounds(b){this.bounds=b.points;}
-  easeTo(args){this.lastEase=args;}
+  project(x){return {x:512+x[0]*4,y:325-x[1]*4};}
+  fitBounds(points){this.bounds=points;}
+  easeTo(value){this.lastEase=value;}
+  jumpTo(value){this.lastJump=value;}
   getZoom(){return this.zoom;}
   resize(){}
   getCenter(){return {lat:0,lng:0};}
@@ -38,130 +35,95 @@ class MapStub {
 }
 class MarkerStub {
   constructor({element}={}){this.element=element;this.removed=false;markers.push(this);}
-  setLngLat(coordinates){this.coordinates=coordinates;return this;}
+  setLngLat(coords){this.coordinates=coords;return this;}
   addTo(){this.attached=true;return this;}
   remove(){this.removed=true;}
 }
-class Bounds{constructor(){this.points=[];}extend(p){this.points.push(p);}}
-const liveMarkers=()=>markers.filter(m=>m.attached&&!m.removed);
-const markerCount=()=>liveMarkers().reduce((n,m)=>n+(Number(m.element.textContent)||1),0);
+const live=()=>markers.filter(x=>x.attached&&!x.removed);
+const sum=()=>live().reduce((n,x)=>n+(Number(x.element.textContent)||1),0);
 const window={devicePixelRatio:1,requestAnimationFrame:f=>f(),
-  CefSharp:{PostMessage:json=>messages.push(JSON.parse(json))}};
-const maplibregl={Map:MapStub,Marker:MarkerStub,LngLatBounds:Bounds,NavigationControl:class{}};
+  CefSharp:{PostMessage:x=>messages.push(JSON.parse(x))}};
+const maplibregl={Map:MapStub,Marker:MarkerStub,NavigationControl:class{}};
 window.maplibregl=maplibregl;
 vm.runInNewContext(script,{window,document,Map,Number,console,maplibregl});
 activeMap.emit('style.load');
-assert.ok(messages.some(m=>m.type==='ready'));
-assert.ok(activeMap.getSource('pcasa-photos'),'Context source still exists');
+assert.ok(messages.some(x=>x.type==='ready'));
 assert.equal(activeMap.getSource('pcasa-selected'),undefined,
-  'Selected photos must never use the formerly blank worker GeoJSON path');
+  'There must be no second selected GeoJSON renderer');
 
-const push=(version,data,chunkSize=180)=>{
-  const chunks=Math.ceil(data.length/chunkSize);
-  window.pcasaBeginPoints(version,chunks);
-  window.pcasaCommitPoints(version);
+function send(version,items,total,selected,chunk=150){
+  const chunks=Math.ceil(items.length/chunk);
+  window.pcasaBeginClusters(version,chunks,total,selected);
+  window.pcasaCommitClusters(version);
   for(let i=0;i<chunks;i++)
-    window.pcasaAppendPoints(version,i,data.slice(i*chunkSize,(i+1)*chunkSize));
-};
-const worldwide=Array.from({length:6000},(_,i)=>({
-  id:i+1,name:'photo '+i,lat:i<3000?53.5:26.1,
-  lon:i<3000?10:-80,selected:true}));
-window.pcasaBeginPoints(1,3);
-window.pcasaCommitPoints(1);
-window.pcasaAppendPoints(1,2,worldwide.slice(4000));
-window.pcasaAppendPoints(1,0,worldwide.slice(0,2000));
-assert.equal(liveMarkers().length,0,'No partially transferred selection may render');
-window.pcasaAppendPoints(1,1,worldwide.slice(2000,4000));
-assert.equal(markerCount(),6000);
-assert.equal(liveMarkers().length,2,'Exact duplicates aggregate geographically');
-assert.equal(activeMap.bounds.length,6000,'Fit bounds based on original GPS');
-assert.ok(messages.some(m=>m.type==='gps-sync'&&m.received===6000&&m.selected===6000));
-// Click on a counted exact position preserves filmstrip group semantics.
-const eu=liveMarkers().find(m=>m.coordinates[0]===10);
-activeMap.emit('click',{point:activeMap.project(eu.coordinates)});
-const firstGroup=messages.find(m=>m.type==='point-group');
-assert.equal(firstGroup.id,1);
-assert.equal(firstGroup.south,53.5);
+    window.pcasaAppendClusters(version,i,items.slice(i*chunk,(i+1)*chunk));
+}
+const big=[
+  {id:1,lat:53.5,lon:10,count:3000,selected:true},
+  {id:3001,lat:26.1,lon:-80,count:3000,selected:true}
+];
+window.pcasaBeginClusters(1,2,6000,6000);
+window.pcasaAppendClusters(1,1,big.slice(1));
+window.pcasaCommitClusters(1);
+assert.equal(live().length,0,'Incomplete transfer cannot expose partial geography');
+window.pcasaAppendClusters(1,0,big.slice(0,1));
+assert.equal(live().length,2);
+assert.equal(sum(),6000,'Photo counts, not distinct positions, are transferred');
+assert.ok(messages.some(x=>x.type==='gps-sync'&&x.received===6000&&x.selected===6000));
+activeMap.emit('click',{point:activeMap.project([10,53.5])});
+const clicked=messages.find(x=>x.type==='cluster-click');
+assert.deepEqual({id:clicked?.id,version:clicked?.version},{id:1,version:1},
+  'Click passes only identity + transfer version, never guesses photo coordinates');
 
-// The ONE marker path also renders a small selection.
-const small=[
-  {id:1,lat:52,lon:10,selected:true},
-  {id:2,lat:35,lon:-118,selected:true},
-  {id:3,lat:-24,lon:133,selected:true}];
-push(2,small);
-assert.equal(liveMarkers().length,3);
-assert.equal(markerCount(),3);
-activeMap.emit('click',{point:activeMap.project([10,52])});
-assert.ok(messages.some(m=>m.type==='select'&&m.id===1));
-activeMap.setStyle();activeMap.emit('style.load');
-assert.equal(liveMarkers().length,3,'Provider style replacement keeps map markers');
-window.pcasaBeginPoints(3,1);window.pcasaBeginPoints(4,1);
-window.pcasaAppendPoints(3,0,worldwide);window.pcasaCommitPoints(3);
-window.pcasaCommitPoints(4);window.pcasaAppendPoints(4,0,small);
-assert.equal(liveMarkers().length,3,'A stale transfer cannot overwrite newer selection');
+const single=[{id:77,lat:28.415,lon:-16.568,count:1,selected:true}];
+send(2,single,1,1);
+assert.equal(live().length,1);
+assert.equal(sum(),1);
+activeMap.emit('click',{point:activeMap.project([-16.568,28.415])});
+assert.ok(messages.some(x=>x.type==='cluster-click'&&x.id===77&&x.version===2),
+  'Single point click also returns a PCasa-owned cluster ID');
+window.pcasaHighlightCluster(77);
+assert.ok(live()[0].element.className.includes('target'));
+assert.deepEqual(Array.from(live()[0].coordinates),[-16.568,28.415],
+  'A single point is drawn at its ORIGINAL GPS position');
 
-// Geographic proximity must be measured in km, not equal GPS strings and
-// NOT by moving near-by markers onto a fabricated lat/lon grid line.
-const tenerife=Array.from({length:17},(_,i)=>({
-  id:8000+i,selected:true,
-  lat:28.415+i*0.00023,lon:-16.568+i*0.00017}));
-activeMap.zoom=11; // ~0.55km clustering radius
-push(5,tenerife);
-assert.ok(liveMarkers().length<17,
-  'Real coordinates differing by tens of meters must form geographical clusters');
-assert.equal(markerCount(),17);
-const grouped=liveMarkers().find(m=>Number(m.element.textContent)>1);
-assert.ok(grouped,'Nearby photos are grouped even without identical GPS');
-assert.ok(grouped.coordinates[0] < -16.565 && grouped.coordinates[0] > -16.569,
-  'Cluster center is derived from actual GPS longitudes');
-activeMap.lastEase=undefined;
-activeMap.emit('click',{point:activeMap.project(grouped.coordinates)});
-assert.ok(activeMap.lastEase&&activeMap.lastEase.zoom>11,
-  'Clicking several distinct positions zooms into that geographic group');
-assert.equal(messages.filter(m=>m.type==='point-group').length,1,
-  'Near-but-different positions must NOT be treated as identical originals');
+const worldwide=[
+  {id:101,lat:49,lon:10,count:1500,selected:true},
+  {id:102,lat:40,lon:-120,count:1900,selected:true},
+  {id:103,lat:-29,lon:134,count:800,selected:true},
+  {id:104,lat:-14,lon:-65,count:1700,selected:true},
+  {id:105,lat:17,lon:100,count:1300,selected:true}
+];
+send(3,worldwide,7200,7200,2);
+assert.equal(live().length,5,'World-scale map draws ALL PCasa geographic clusters');
+assert.equal(sum(),7200,'All 7200 GPS photos appear in the global cluster counts');
+assert.ok(live().some(x=>x.coordinates[0]< -110)&&
+  live().some(x=>x.coordinates[0]>130)&&live().some(x=>x.coordinates[0]>0),
+  'Locations in three continents survive the transfer');
+window.pcasaFitGpsExtent(3,-29,-120,49,134);
+assert.ok(activeMap.bounds,'Selection fits the actual photo extent');
+window.pcasaFitGpsExtent(2,0,0,0,0);
+assert.equal(activeMap.lastEase,undefined,'Old transfer cannot recenter the map');
 
-// Higher map zoom reduces the actual geographic radius and resolves the
-// same photos into the ORIGINAL underlying GPS positions, no pixel offsets.
-activeMap.zoom=20;
-activeMap.emit('moveend');
-assert.equal(liveMarkers().length,17,'High zoom resolves nearby real GPS positions');
-assert.equal(markerCount(),17);
-for(const photo of tenerife)
-  assert.ok(liveMarkers().some(m=>
-    Math.abs(m.coordinates[0]-photo.lon)<1e-9 &&
-    Math.abs(m.coordinates[1]-photo.lat)<1e-9));
-
-// More than 7,000 selected real worldwide GPS locations must never create
-// a BLANK world map. There is no special >64-photo renderer any more.
-activeMap.zoom=2;
-const world7200=Array.from({length:7200},(_,i)=>{
-  const region=Math.floor(i/1440),j=i%1440;
-  const base=[{lat:50,lon:10},{lat:38,lon:-120},{lat:-28,lon:135},
-    {lat:-15,lon:-65},{lat:15,lon:100}][region];
-  return {id:20000+i,lat:base.lat+(j%60)*0.031,
-    lon:base.lon+Math.floor(j/60)*0.034,selected:true};
-});
-push(6,world7200);
-assert.ok(liveMarkers().length>0&&liveMarkers().length<7200,
-  'World map must have visible geographically clustered markers');
-assert.equal(markerCount(),7200,'Every selected photo is counted exactly once');
-assert.ok(messages.some(m=>m.type==='gps-sync'&&m.received===7200&&m.selected===7200));
-const longs=liveMarkers().map(m=>m.coordinates[0]);
-assert.ok(longs.some(l=>l<-110)&&longs.some(l=>l>130)&&
-  longs.some(l=>l>0&&l<30),
-  'North America, Australia and Europe all visible in world view');
-// The provider swap may NOT requery or re-cluster by a provider-specific API.
-const initial=liveMarkers().map(m=>[...m.coordinates,Number(m.element.textContent)||1]);
-window.pcasaApplyProvider({format:'style',url:'https://example.test/vector.json'});
+const old=live().map(x=>JSON.stringify([...x.coordinates,x.element.textContent]));
+window.pcasaApplyProvider({format:'style',url:'https://example.test/style.json'});
 activeMap.emit('style.load');
-assert.deepEqual(liveMarkers().map(m=>[...m.coordinates,Number(m.element.textContent)||1]),
-  initial,'Vector style switch keeps exactly the same GPS clusters');
+assert.deepEqual(live().map(x=>JSON.stringify([...x.coordinates,x.element.textContent])),old,
+  'Vector basemap switch cannot re-cluster photo positions');
 window.pcasaApplyProvider({format:'xyz',url:'https://example.test/{z}/{x}/{y}.png'});
 activeMap.emit('style.load');
-assert.deepEqual(liveMarkers().map(m=>[...m.coordinates,Number(m.element.textContent)||1]),
-  initial,'Raster XYZ style switch keeps exactly the same GPS clusters');
-assert.equal(markerCount(),7200);
-assert.equal(activeMap.getSource('pcasa-selected'),undefined,
-  'No independent map-provider-selected overlay may reappear');
-console.log('GPS map PASS: 7200 selected photos on five continents, real-km zoom clustering, original coordinates, stable counts, group clicks, provider-independent DOM markers');
+assert.deepEqual(live().map(x=>JSON.stringify([...x.coordinates,x.element.textContent])),old,
+  'Raster XYZ basemap switch cannot re-cluster photo positions');
+
+window.pcasaBeginClusters(4,1,7200,7200);
+window.pcasaAppendClusters(4,0,[{id:200,lat:0,lon:0,count:7,selected:true}]);
+window.pcasaCommitClusters(4);
+assert.equal(sum(),7200,'Incomplete membership must never silently replace valid data');
+assert.ok(messages.some(x=>x.type==='error'&&x.message.includes('missing photo')));
+send(5,single,1,1);
+window.pcasaBeginClusters(6,1,6000,6000);
+window.pcasaBeginClusters(7,1,1,1);
+window.pcasaAppendClusters(6,0,big);window.pcasaCommitClusters(6);
+window.pcasaAppendClusters(7,0,single);window.pcasaCommitClusters(7);
+assert.equal(sum(),1,'Superseded transfers cannot republish old clusters');
+console.log('GPS map PASS: 7200 photos, provider-independent cluster markers, click identity, single-photo popup protocol, counted atomic transfers and style switches');
