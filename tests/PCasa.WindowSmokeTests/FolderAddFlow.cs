@@ -615,6 +615,28 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Startup manufactured a new root scan for already indexed monitored folders.");
             Console.WriteLine("PASS: Real WPF restart with enabled watchers does not invent whole-root inventory.");
+
+            // BackgroundScanSettings.Save always broadcasts Changed. Saving
+            // the ALREADY ENABLED setting must not manufacture 7,000-file
+            // root scans; no watcher was disconnected, so no reconcile is due.
+            for (var i = 0; i < 2; i++)
+            {
+                new BackgroundScanSettings { Enabled = true }.Save();
+                var settingsDispatched = false;
+                window.Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.ContextIdle,
+                    new Action(() => settingsDispatched = true));
+                Until(window, () => settingsDispatched,
+                    "Unchanged settings notification was not dispatched.");
+                if (scanScheduler.Snapshot().Any(job =>
+                        job.Key.StartsWith("background-scan:", StringComparison.Ordinal) &&
+                        job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
+                            SchedulerJobState.YieldRequested) ||
+                    roots.GetPendingAutomaticInventories().Count != 0)
+                    throw new Exception(
+                        "Saving unchanged enabled settings manufactured another full scan.");
+            }
+            Console.WriteLine("PASS: Repeated unchanged Enabled=true settings saves do not restart a completed inventory.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");
