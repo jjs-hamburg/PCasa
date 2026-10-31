@@ -2956,21 +2956,38 @@ internal static class TagFlow
                 while (idsReader.Read()) ids.Add(idsReader.GetInt64(0));
                 worldwideIds = ids.ToArray();
             }
-            if (worldwideIds.Length != 6100)
-                throw new Exception("Worldwide GPS fixture is incomplete.");
-            var worldwidePoints = ((System.Collections.IEnumerable)readGps.Invoke(
-                window, [worldwideIds, null, CancellationToken.None, null])!)
-                .Cast<object>().ToArray();
-            var locations = worldwidePoints.Select(p => (
-                Lat: (double)p.GetType().GetProperty("Lat")!.GetValue(p)!,
-                Lon: (double)p.GetType().GetProperty("Lon")!.GetValue(p)!,
-                Selected: (bool)p.GetType().GetProperty("Selected")!.GetValue(p)!))
-                .ToArray();
-            if (locations.Length != worldwideIds.Length ||
-                locations.Any(p => !p.Selected) ||
-                locations.Select(p => (p.Lat, p.Lon)).Distinct().Count() != 3)
-                throw new Exception("Large GPS selection dropped images or continents.");
-            Console.WriteLine("PASS: 6100 selected GPS photos from Europe, America and Australia survive the catalog projection.");
+            try
+            {
+                if (worldwideIds.Length != 6100)
+                    throw new Exception("Worldwide GPS fixture is incomplete.");
+                var worldwidePoints = ((System.Collections.IEnumerable)readGps.Invoke(
+                    window, [worldwideIds, null, CancellationToken.None, null])!)
+                    .Cast<object>().ToArray();
+                var locations = worldwidePoints.Select(p => (
+                    Lat: (double)p.GetType().GetProperty("Lat")!.GetValue(p)!,
+                    Lon: (double)p.GetType().GetProperty("Lon")!.GetValue(p)!,
+                    Selected: (bool)p.GetType().GetProperty("Selected")!.GetValue(p)!))
+                    .ToArray();
+                if (locations.Length != worldwideIds.Length ||
+                    locations.Any(p => !p.Selected) ||
+                    locations.Select(p => (p.Lat, p.Lon)).Distinct().Count() != 3)
+                    throw new Exception("Large GPS selection dropped images or continents.");
+                Console.WriteLine("PASS: 6100 selected GPS photos from Europe, America and Australia survive the catalog projection.");
+            }
+            finally
+            {
+                // This test runs before the real gallery-copy smoke test in the
+                // SAME Windows profile. Its synthetic, deliberately non-existent
+                // originals must not contaminate subsequent cache rebuilds.
+                using var cleanupConnection = db.OpenConnection();
+                using var cleanup = cleanupConnection.CreateCommand();
+                cleanup.CommandText = """
+                    DELETE FROM images WHERE file_name LIKE 'bulk-gps-%'
+                      AND photo_folder_id = $folder;
+                    """;
+                cleanup.Parameters.AddWithValue("$folder", b.Id);
+                cleanup.ExecuteNonQuery();
+            }
 
             // Explicitly leave an EXIF reader and keyword writer session
             // alive (not disposed) when closing. The app MUST kill both
