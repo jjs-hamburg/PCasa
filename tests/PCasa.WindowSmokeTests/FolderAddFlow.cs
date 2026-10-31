@@ -587,6 +587,37 @@ internal static class FolderAddFlow
             // fully indexed existing roots. Merely constructing watchers
             // must not schedule another recursive scan of those roots.
             // A new photo created while PCasa is running is covered above.
+            // A real, running PCasa must persist the selected tree folder
+            // and focused photo before asynchronous scheduler shutdown. The
+            // third window must recover them after the gallery index loads.
+            var savedTree = (TreeView)window.FindName("FoldersTree");
+            var rememberedItem = Walk(savedTree).First(item =>
+                SamePath(PathOf(item), initialRoot));
+            rememberedItem.IsSelected = true;
+            Until(window, () => ReferenceEquals(savedTree.SelectedItem, rememberedItem),
+                "Could not set remembered tree focus before restart.");
+            var sessionFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var appearanceObject = typeof(PCasa.App.MainWindow)
+                .GetField("_appearance", sessionFlags)!.GetValue(window)!;
+            appearanceObject.GetType().GetProperty("RestoreGalleryPosition")!
+                .SetValue(appearanceObject, true);
+            long rememberedImageId;
+            using (var connection = db.OpenConnection())
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE;";
+                cmd.Parameters.AddWithValue("$path", Path.Combine(initialRoot, "first.jpg"));
+                rememberedImageId = Convert.ToInt64(cmd.ExecuteScalar());
+            }
+            var oldSelection = (GallerySelection)typeof(PCasa.App.MainWindow)
+                .GetField("_gallerySelection", sessionFlags)!.GetValue(window)!;
+            var oldIds = (HashSet<long>)typeof(PCasa.App.MainWindow)
+                .GetField("_selectedImageIds", sessionFlags)!.GetValue(window)!;
+            oldIds.Clear();
+            oldIds.Add(rememberedImageId);
+            oldSelection.SetFocus(rememberedImageId);
+            ((BrowseGallerySurface)window.FindName("BrowseSurface")).SetSelection(oldIds);
+
             var previousWindow = window;
             previousWindow.Close();
             Until(previousWindow, () => !previousWindow.IsVisible,
@@ -615,6 +646,21 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Startup manufactured a new root scan for already indexed monitored folders.");
             Console.WriteLine("PASS: Real WPF restart with enabled watchers does not invent whole-root inventory.");
+            var restoredTree = (TreeView)window.FindName("FoldersTree");
+            var restoredSelection = (GallerySelection)typeof(PCasa.App.MainWindow)
+                .GetField("_gallerySelection", scanFlags)!.GetValue(window)!;
+            var restoredIds = (HashSet<long>)typeof(PCasa.App.MainWindow)
+                .GetField("_selectedImageIds", scanFlags)!.GetValue(window)!;
+            Until(window, () =>
+                typeof(PCasa.App.MainWindow).GetField("_galleryPositionRestored",
+                    scanFlags)!.GetValue(window) is true,
+                "Saved gallery position was never restored after startup.");
+            if (!SamePath(PathOf(restoredTree.SelectedItem as TreeViewItem), initialRoot) ||
+                restoredSelection.FocusedId != rememberedImageId ||
+                !restoredIds.Contains(rememberedImageId))
+                throw new Exception(
+                    "Gallery/tree focus or single-image selection was lost after PCasa restart.");
+            Console.WriteLine("PASS: Real restart restores tree focus and selected photo identity.");
 
             // BackgroundScanSettings.Save always broadcasts Changed. Saving
             // the ALREADY ENABLED setting must not manufacture 7,000-file
