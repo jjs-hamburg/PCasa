@@ -780,9 +780,12 @@ public partial class MainWindow
                     requests[nextRequestIndex] = request;
                     await _scheduler.EnqueueAsync(
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}",
-                        // Automatic discovery must make progress even during
-                        // a long first import. Manual actions stay higher.
-                        SchedulerPriority.UserAction,
+                        // A startup root verification is idle work (P4),
+                        // never a P2 user action. Concrete watcher changes
+                        // outrank it at P3; dedicated initial imports and
+                        // all manual P0/P1 packages keep their existing lanes.
+                        request.Kind == BackgroundFolderChangeKind.RescanRoot
+                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
                         token =>
                         {
                             token.ThrowIfCancellationRequested();
