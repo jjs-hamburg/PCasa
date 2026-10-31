@@ -1128,7 +1128,8 @@ public partial class MainWindow
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+        await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false,
+            fromScanner: true);
     }
 
     private void BackgroundScan_WindowClosed(object? sender, EventArgs e)
