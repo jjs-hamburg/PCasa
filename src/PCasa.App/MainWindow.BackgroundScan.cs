@@ -920,7 +920,8 @@ public partial class MainWindow
                     if (followup)
                         QueueBackgroundChange(new BackgroundFolderChange(
                             request.MonitoredFolderId, request.Path,
-                            request.Kind, request.Recursive));
+                            request.Kind, request.Recursive,
+                            ForceExifRefresh: request.ForceExifRefresh));
                     TrackFolderActivity(
                         request.Kind == BackgroundFolderChangeKind.ScanFile
                             ? Path.GetDirectoryName(scanPath) ?? scanPath
