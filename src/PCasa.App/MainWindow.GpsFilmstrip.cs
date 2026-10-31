@@ -33,6 +33,8 @@ public partial class MainWindow
     private bool _gpsFilmstripUpdating;
     private List<GpsFilmstripEntry> _gpsFilmstripEntries = [];
     private HashSet<long>? _gpsFilmstripPointIds;
+    private readonly Dictionary<long, BrowseThumbnailIndexEntry> _gpsFilmstripIndexes = [];
+    private readonly HashSet<long> _gpsFilmstripRequestedIds = [];
 
     private void InitializeGpsFilmstrip()
     {
@@ -96,11 +98,15 @@ public partial class MainWindow
         if (_sidebarMode != "GPS" || !_appearance.ShowGpsFilmstrip)
         {
             _gpsFilmstripEntries = [];
+            _gpsFilmstripIndexes.Clear();
+            _gpsFilmstripRequestedIds.Clear();
             GpsFilmstripList.ItemsSource = null;
             return;
         }
 
         var selected = _gpsFilmstripPointIds ?? _selectedImageIds.ToHashSet();
+        _gpsFilmstripIndexes.Clear();
+        _gpsFilmstripRequestedIds.Clear();
         // The strip is a projection of the GALLERY SELECTION, not of EXIF GPS
         // coverage. A selected photo must appear even when coordinates are
         // absent, invalid or awaiting reindexing.
@@ -111,7 +117,11 @@ public partial class MainWindow
         // ordering. No source file or NAS roundtrip for the strip.
         for (var imageIndex = 0; imageIndex < _browseIndex.Count; imageIndex++)
         {
-            if (entries.Count >= MaximumGpsFilmstripPhotos) break;
+            // Normal gallery selections retain the existing 160-photo bound.
+            // A clicked map cell must expose ALL its matching photo IDs; the
+            // WPF filmstrip is virtualized, and previews load by scroll page.
+            if (_gpsFilmstripPointIds is null &&
+                entries.Count >= MaximumGpsFilmstripPhotos) break;
             var index = _browseIndex[imageIndex];
             if (!selected.Contains(index.ImageId))
                 continue;
@@ -122,12 +132,19 @@ public partial class MainWindow
                     ? gpsName : index.FileName
             };
             entries.Add(item);
+            _gpsFilmstripIndexes[item.Id] = index;
             if (_browsePageCache is not null)
             {
                 if (_browsePageCache.TryGet(imageIndex, out var cached))
                     item.Bitmap = cached;
             }
-            if (item.Bitmap is null) packed.Add((item, index));
+            if (item.Bitmap is null &&
+                (_gpsFilmstripPointIds is null ||
+                 entries.Count <= MaximumGpsFilmstripPhotos))
+            {
+                packed.Add((item, index));
+                _gpsFilmstripRequestedIds.Add(item.Id);
+            }
         }
         _gpsFilmstripEntries = entries;
         _gpsFilmstripUpdating = true;
@@ -139,7 +156,8 @@ public partial class MainWindow
         GpsFilmstripToggle.ToolTip = UiLanguage.T("Filmstreifen") +
             (_gpsFilmstripPointIds is null ? "" :
                 $" · {selected.Count:N0} Fotos am Kartenpunkt") +
-            (selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160 sichtbar)" : "");
+            (_gpsFilmstripPointIds is null &&
+             selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160)" : "");
 
         if (packed.Count == 0) return;
         _ = LoadGpsFilmstripBitmapsAsync(packed, revision);
@@ -154,7 +172,9 @@ public partial class MainWindow
             // One scheduled, cancellable read package. One packed-file reader
             // owns its file handles; it never touches the originals.
             var images = await _scheduler.RunAsync(
-                "gps:filmstrip:" + revision,
+                // Scroll pages are independent reads of the SAME packed
+                // thumbnail store; never coalesce two different page requests.
+                "gps:filmstrip:" + revision + ":" + Guid.NewGuid().ToString("N"),
                 SchedulerPriority.Interactive,
                 token =>
                 {
@@ -230,6 +250,25 @@ public partial class MainWindow
     private void GpsFilmstrip_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         // The virtualizing WPF strip owns its scroll position; scrolling must
-        // never change the gallery selection or map viewport.
+        // never change the gallery selection or map viewport. Load only the
+        // newly visible page for point groups, never thousands of bitmaps.
+        if (_gpsFilmstripPointIds is null || !_appearance.ShowGpsFilmstrip ||
+            _gpsFilmstripEntries.Count == 0 || e.HorizontalChange == 0)
+            return;
+        var first = Math.Clamp((int)Math.Floor(e.HorizontalOffset) - 8,
+            0, _gpsFilmstripEntries.Count - 1);
+        var count = Math.Clamp((int)Math.Ceiling(e.ViewportWidth) + 16, 40, 96);
+        var pending = new List<(GpsFilmstripEntry Item, BrowseThumbnailIndexEntry Index)>();
+        for (var i = first; i < Math.Min(_gpsFilmstripEntries.Count, first + count); i++)
+        {
+            var item = _gpsFilmstripEntries[i];
+            if (item.Bitmap is not null ||
+                !_gpsFilmstripIndexes.TryGetValue(item.Id, out var index) ||
+                !_gpsFilmstripRequestedIds.Add(item.Id))
+                continue;
+            pending.Add((item, index));
+        }
+        if (pending.Count > 0)
+            _ = LoadGpsFilmstripBitmapsAsync(pending, _gpsFilmstripRevision);
     }
 }
