@@ -583,11 +583,18 @@ public partial class MainWindow
         // as the newly selected 6,000 photos while catalog reads are queued.
         // Keep the scheduler as the only read owner; publish loading state
         // synchronously, and only publish matching revision results.
-        _gpsCurrentCoordinates = null;
-        GpsCopyButton.IsEnabled = false;
-        GpsCoordinatesText.Text = selectedIds.Length > 1
-            ? UiLanguage.Format("GPS für {0:N0} ausgewählte Fotos wird gelesen …", selectedIds.Length)
-            : UiLanguage.T("GPS-Positionen werden geladen");
+        // A same-selection refresh is only an EXIF/catalog revalidation.
+        // Do not erase already verified coordinates or their Copy state
+        // while background imports contend for the scheduler. A canceled
+        // refresh must leave the last committed display usable.
+        if (selectionChanged)
+        {
+            _gpsCurrentCoordinates = null;
+            GpsCopyButton.IsEnabled = false;
+            GpsCoordinatesText.Text = selectedIds.Length > 1
+                ? UiLanguage.Format("GPS für {0:N0} ausgewählte Fotos wird gelesen …", selectedIds.Length)
+                : UiLanguage.T("GPS-Positionen werden geladen");
+        }
         ResetGpsEditorOnSelectionChange(selectedIds);
         if (selectionChanged && !_gpsGoogleWebsiteActive && _gpsBrowserReady &&
             _gpsBrowser is { IsDisposed: false } map)
