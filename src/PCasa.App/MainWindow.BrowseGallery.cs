@@ -740,7 +740,7 @@ public partial class MainWindow
                 BrowseScrollViewer.UpdateLayout();
                 RestoreGalleryPositionOnce();
                 RestorePendingGalleryAnchor();
-                if (followGalleryEnd && !GalleryScrollIsActive())
+                if (followGalleryEnd)
                     BrowseScrollViewer.ScrollToBottom();
                 BrowseSurface.SetViewport(
                     BrowseScrollViewer.VerticalOffset,
@@ -1238,6 +1238,16 @@ public partial class MainWindow
     private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
     {
             _activePhotoFolderId = photoFolderId;
+            // An explicit folder choice is a deliberate navigation. The
+            // postponed scanner catalog is published BEFORE deriving the
+            // destination folder's current geometry, not after navigating.
+            if (_scanGalleryPublicationDeferred)
+            {
+                _scanGalleryPublicationDeferred = false;
+                await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                    warmViewport: false);
+                if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
+            }
             var offset = BrowseSurface.GetFolderOffset(photoFolderId);
             if (offset is null && _browseInitialized && !_folderRemovalPending)
             {
@@ -1483,7 +1493,6 @@ public partial class MainWindow
         CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
         CatalogChanges.ImageIndexed -= OnCatalogImageIndexed;
         _catalogPublicationTimer?.Stop();
-        _scanGalleryScrollSettleTimer?.Stop();
         _browseProgressWindow?.Finish();
         _browseProgressWindow = null;
         _thumbnailSizeCancellation?.Cancel();
