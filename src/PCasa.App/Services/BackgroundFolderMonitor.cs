@@ -100,9 +100,8 @@ public sealed class BackgroundFolderMonitor : IDisposable
             {
                 continue;
             }
-            // A watcher that reported Error may have lost its OS handle.
-            // Rescanning once is necessary, but subsequent changes also
-            // require replacing that watcher rather than reusing it.
+            // A faulted watcher must be replaced, but transient SMB/VPN
+            // loss is NORMAL. Replacement must not start a full root scan.
 
             Remove(folder.Id);
             TryAdd(folder);
@@ -140,19 +139,10 @@ public sealed class BackgroundFolderMonitor : IDisposable
                 // The callback may run on another thread during Refresh().
                 // Do not mutate the watcher dictionary from this callback;
                 // only mark this particular watcher for replacement.
-                if (Interlocked.Exchange(ref state.Faulted, 1) != 0) return;
-                if (e.GetException() is { } error)
-                {
-                    PCasaDiagnostics.Write("FileSystemWatcher.Error", error);
-                }
-                PCasaDiagnostics.WriteMessage("Scan.WatcherRecovery",
-                    $"Full inventory requested after watcher error: {state.Folder.LocalPath}");
-
-                Raise(new BackgroundFolderChange(
-                    state.Folder.Id,
-                    state.Folder.LocalPath,
-                    BackgroundFolderChangeKind.RescanRoot,
-                    Recursive: true));
+                // Mark this handle unusable; the next ordinary monitor
+                // refresh will reattach a watcher. No action, no log and,
+                // critically, NO 7,000-file root inventory on failure.
+                Interlocked.Exchange(ref state.Faulted, 1);
             });
 
             watcher.EnableRaisingEvents = true;
