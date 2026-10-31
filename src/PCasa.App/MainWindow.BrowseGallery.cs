@@ -693,6 +693,10 @@ public partial class MainWindow
         // their moving viewport. A single refresh runs after the quiet period.
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
         if (fromScanner && DeferScanGalleryPublication()) return;
+        // A user may have moved after the initial async catalog read began.
+        // Anchor the CURRENT viewport, never the obsolete starting position.
+        if (fromScanner) QueueGalleryAnchorRestore();
+        var followGalleryEnd = fromScanner && GalleryAtTrailingLiveEdge();
         PublishPhotoFolderSnapshot(nextFolders, imageCount);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
             nextIndex = _browseIndex;
@@ -736,6 +740,8 @@ public partial class MainWindow
                 BrowseScrollViewer.UpdateLayout();
                 RestoreGalleryPositionOnce();
                 RestorePendingGalleryAnchor();
+                if (followGalleryEnd && !GalleryScrollIsActive())
+                    BrowseScrollViewer.ScrollToBottom();
                 BrowseSurface.SetViewport(
                     BrowseScrollViewer.VerticalOffset,
                     Math.Max(1, BrowseScrollViewer.ViewportHeight));
@@ -1283,13 +1289,13 @@ public partial class MainWindow
 
         const double pixelsPerWheelNotch = 96.0;
         var movement = e.Delta / 120.0 * pixelsPerWheelNotch;
+        var previous = BrowseScrollViewer.VerticalOffset;
         var target = Math.Clamp(
             BrowseScrollViewer.VerticalOffset - movement,
             0.0,
             BrowseScrollViewer.ScrollableHeight);
         BrowseScrollViewer.ScrollToVerticalOffset(target);
-        if (Math.Abs(BrowseScrollViewer.VerticalOffset - target) < 0.5 &&
-            Math.Abs(target - (target + movement)) > 0.5)
+        if (Math.Abs(previous - target) > 0.5)
             RegisterGalleryUserScroll();
         e.Handled = true;
     }
