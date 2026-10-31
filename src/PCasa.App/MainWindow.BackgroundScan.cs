@@ -24,6 +24,8 @@ public partial class MainWindow
     private bool _cacheMaintenanceRunning;
     private CancellationTokenSource? _backgroundLifetime;
     private CancellationTokenSource? _backgroundCurrentScanCancellation;
+    private BackgroundFolderChangeKind? _backgroundActiveInventoryKind;
+    private long? _backgroundActiveInventoryRootId;
     private bool _backgroundScanInitialized;
     private bool _backgroundWorkerRunning;
     private bool _manualFolderScanWaiting;
@@ -464,6 +466,16 @@ public partial class MainWindow
                     : normalized, "Pending", change.Recursive);
         }
 
+        // A file/directory watcher event outranks the startup root sweep.
+        // Yield the SAME scanner cursor and resume it after the exact change:
+        // never check thousands of known originals before admitting one new.
+        if ((change.Kind is BackgroundFolderChangeKind.ScanFile or
+             BackgroundFolderChangeKind.ScanDirectory) &&
+            _backgroundActiveInventoryKind == BackgroundFolderChangeKind.RescanRoot &&
+            _backgroundActiveInventoryRootId == change.MonitoredFolderId &&
+            _backgroundCurrentScanCancellation is { IsCancellationRequested: false } current)
+            current.Cancel();
+
         _cacheMaintenanceCancellation?.Cancel();
         _backgroundDebounceTimer?.Stop();
         _backgroundDebounceTimer?.Start();
@@ -498,7 +510,16 @@ public partial class MainWindow
         }
 
         var requests = _backgroundPending.Values
-            .OrderBy(request => request.Kind == BackgroundFolderChangeKind.RemovePath ? 0 : 1)
+            // A concrete file discovery must never queue behind the
+            // startup full-root verification. Both use this same scanner.
+            .OrderBy(request => request.Kind switch
+            {
+                BackgroundFolderChangeKind.RemovePath => 0,
+                BackgroundFolderChangeKind.ScanFile => 1,
+                BackgroundFolderChangeKind.ScanDirectory => 2,
+                BackgroundFolderChangeKind.RescanRoot => 3,
+                _ => 4
+            })
             .ThenBy(request => request.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         _backgroundPending.Clear();
@@ -703,6 +724,8 @@ public partial class MainWindow
                 using var scanCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                     _backgroundLifetime.Token);
                 _backgroundCurrentScanCancellation = scanCancellation;
+                _backgroundActiveInventoryKind = request.Kind;
+                _backgroundActiveInventoryRootId = folder.Id;
                 _activeScanCancellation = scanCancellation;
                 _activeScanFolderId = folder.Id;
 
@@ -869,6 +892,8 @@ public partial class MainWindow
                     if (ReferenceEquals(_backgroundCurrentScanCancellation, scanCancellation))
                     {
                         _backgroundCurrentScanCancellation = null;
+                        _backgroundActiveInventoryKind = null;
+                        _backgroundActiveInventoryRootId = null;
                     }
                 }
             }
