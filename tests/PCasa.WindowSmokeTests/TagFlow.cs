@@ -901,6 +901,35 @@ internal static class TagFlow
                 if (surviving.Length != 1 || surviving[0].Id != noGpsPhoto)
                     throw new Exception("Closing GPS photo removed selection from filmstrip.");
                 Console.WriteLine("PASS: Single no-GPS photo remains in filmstrip after opening and closing photo.");
+
+                // A click on a many-photo map marker must display ALL its
+                // represented photos through the existing strip, not replace
+                // the gallery selection or require a second image pipeline.
+                var groupView = typeof(PCasa.App.MainWindow).GetMethod(
+                    "ShowGpsPointGroup", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Map-point photo group handler missing.");
+                var pointGroupField = typeof(PCasa.App.MainWindow).GetField(
+                    "_gpsFilmstripPointIds", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Map-point filmstrip state missing.");
+                try
+                {
+                    groupView.Invoke(window,[new HashSet<long>{gpsA,gpsB},gpsA]);
+                    var groupRows = ((ListBox)window.FindName("GpsFilmstripList")!)
+                        .Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>()
+                        .Select(item=>item.Id).ToHashSet();
+                    if (!groupRows.SetEquals(new long[]{gpsA,gpsB}) ||
+                        !selected.SetEquals(new long[]{noGpsPhoto}))
+                        throw new Exception(
+                            "Map marker did not show its photos or replaced gallery selection.");
+                    Console.WriteLine("PASS: Clicking map point shows its pictures in filmstrip without changing gallery selection.");
+                }
+                finally
+                {
+                    pointGroupField.SetValue(window,null);
+                    updateStrip.Invoke(window,null);
+                }
             }
             finally
             {
