@@ -453,18 +453,9 @@ public partial class MainWindow
                     _ = PublishGpsClustersAsync();
                 }
             }
-            else if (data.Kind == "cluster-click" &&
-                     data.Version == _gpsMapTransferRevision)
+            else if (data.Kind == "cluster-click")
             {
-                // PCasa owns cluster membership; the map supplies only
-                // the ID from this exact snapshot, never guessed bounds.
-                var cluster = _gpsPresentedClusters.FirstOrDefault(
-                    item => item.Id == data.Id);
-                if (cluster is null || cluster.ImageIds.Count == 0) return;
-                ShowGpsPointGroup(cluster.ImageIds.ToHashSet(),
-                    cluster.ImageIds[0]);
-                if (cluster.ImageIds.Count == 1 && !_gpsFullscreen)
-                    ShowGpsPhotoPopup(cluster.ImageIds[0]);
+                ShowGpsClusterById(data.Id, data.Version);
             }
             else if (data.Kind == "select" && data.Id > 0 &&
                      _gpsPoints.Any(x => x.Id == data.Id))
@@ -604,6 +595,19 @@ public partial class MainWindow
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { PCasaDiagnostics.Write("GPS.ClusterProjection", ex); }
+    }
+
+    // The single bridge from map click identity to the ONE existing
+    // filmstrip. A stale map callback cannot display members of a newer
+    // zoom/selection. No GPS or photo matching is performed by coordinates.
+    private void ShowGpsClusterById(long clusterId, long transferRevision)
+    {
+        if (transferRevision != _gpsMapTransferRevision) return;
+        var cluster = _gpsPresentedClusters.FirstOrDefault(g => g.Id == clusterId);
+        if (cluster is null || cluster.ImageIds.Count == 0) return;
+        ShowGpsPointGroup(cluster.ImageIds.ToHashSet(), cluster.ImageIds[0]);
+        if (cluster.ImageIds.Count == 1 && !_gpsFullscreen)
+            ShowGpsPhotoPopup(cluster.ImageIds[0]);
     }
 
     private void HighlightGpsPointOnMap(long imageId)
