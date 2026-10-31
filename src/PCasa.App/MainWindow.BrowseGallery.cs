@@ -456,16 +456,21 @@ public partial class MainWindow
     private bool _galleryRefreshPending;
     private bool _galleryRefreshForceIndex;
     private bool _galleryRefreshWarmViewport;
+    private bool _galleryRefreshHasExplicitRequest;
 
     private Task RefreshBrowseGalleryAsync(
         bool forceIndexReload,
-        bool warmViewport = false)
+        bool warmViewport = false,
+        bool fromScanner = false)
     {
+        if (fromScanner && DeferScanGalleryPublication())
+            return Task.CompletedTask;
         lock (_galleryRefreshGate)
         {
             _galleryRefreshPending = true;
             _galleryRefreshForceIndex |= forceIndexReload;
             _galleryRefreshWarmViewport |= warmViewport;
+            _galleryRefreshHasExplicitRequest |= !fromScanner;
             if (!_galleryRefreshRunning)
             {
                 _galleryRefreshRunning = true;
@@ -485,7 +490,7 @@ public partial class MainWindow
         {
             while (!Dispatcher.HasShutdownStarted)
             {
-                bool force = false, warm = false, finished = false;
+                bool force = false, warm = false, manual = false, finished = false;
                 lock (_galleryRefreshGate)
                 {
                     if (!_galleryRefreshPending)
@@ -500,9 +505,11 @@ public partial class MainWindow
                     {
                         force = _galleryRefreshForceIndex;
                         warm = _galleryRefreshWarmViewport;
+                        manual = _galleryRefreshHasExplicitRequest;
                         _galleryRefreshPending = false;
                         _galleryRefreshForceIndex = false;
                         _galleryRefreshWarmViewport = false;
+                        _galleryRefreshHasExplicitRequest = false;
                     }
                 }
                 if (finished)
@@ -513,7 +520,8 @@ public partial class MainWindow
 
                 try
                 {
-                    await RefreshBrowseGalleryCoreAsync(force, warm);
+                    await RefreshBrowseGalleryCoreAsync(force, warm,
+                        fromScanner: !manual);
                 }
                 catch (OperationCanceledException) when (!Dispatcher.HasShutdownStarted)
                 {
@@ -524,6 +532,7 @@ public partial class MainWindow
                     {
                         _galleryRefreshPending = true;
                         _galleryRefreshForceIndex = true;
+                        _galleryRefreshHasExplicitRequest |= manual;
                     }
                     await Task.Yield();
                 }
@@ -555,7 +564,8 @@ public partial class MainWindow
 
     private async Task RefreshBrowseGalleryCoreAsync(
         bool forceIndexReload,
-        bool warmViewport = false)
+        bool warmViewport = false,
+        bool fromScanner = false)
     {
         if (!_browseInitialized ||
             _browseProfileRepository is null ||
@@ -678,11 +688,11 @@ public partial class MainWindow
             }
         }
 
-        // One WPF publication boundary. The summary and index have both
-        // finished loading, and the last source-selection/catalog read has
-        // validated this refresh request. Consumers cannot observe a newer
-        // folder list paired with the previous gallery index.
+        // One WPF publication boundary. If the user began scrolling while
+        // SQLite was loading, do not publish this stale scan snapshot over
+        // their moving viewport. A single refresh runs after the quiet period.
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
+        if (fromScanner && DeferScanGalleryPublication()) return;
         PublishPhotoFolderSnapshot(nextFolders, imageCount);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
             nextIndex = _browseIndex;
@@ -810,6 +820,7 @@ public partial class MainWindow
     private async void CatalogPublicationTimer_Tick(object? sender, EventArgs e)
     {
         _catalogPublicationTimer?.Stop();
+        if (DeferScanGalleryPublication()) return;
         if (_catalogPublicationBusy)
         {
             _catalogPublicationTimer?.Start();
@@ -824,7 +835,7 @@ public partial class MainWindow
             if (_browseInitialized && !_folderManagerOpen &&
                 !_folderRemovalPending && !Dispatcher.HasShutdownStarted)
                 await RefreshBrowseGalleryAsync(
-                    forceIndexReload: true, warmViewport: false);
+                    forceIndexReload: true, warmViewport: false, fromScanner: true);
         }
         catch (Exception ex)
         {
@@ -1277,6 +1288,9 @@ public partial class MainWindow
             0.0,
             BrowseScrollViewer.ScrollableHeight);
         BrowseScrollViewer.ScrollToVerticalOffset(target);
+        if (Math.Abs(BrowseScrollViewer.VerticalOffset - target) < 0.5 &&
+            Math.Abs(target - (target + movement)) > 0.5)
+            RegisterGalleryUserScroll();
         e.Handled = true;
     }
 
@@ -1295,11 +1309,13 @@ public partial class MainWindow
         // the user's folder-tree focus. They change gallery geometry,
         // not the selected source folder.
         if (e.VerticalChange == 0 || _pendingGalleryAnchor is not null ||
-            _restoringGalleryLayoutAnchor ||
-            !string.IsNullOrWhiteSpace(TagSearchBox?.Text))
+            _restoringGalleryLayoutAnchor)
         {
             return;
         }
+
+        RegisterGalleryUserScroll();
+        if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text)) return;
 
         var folderId = BrowseSurface.GetFolderIdAtOffset(e.VerticalOffset + 4);
         if (folderId is null || _activePhotoFolderId == folderId)
@@ -1461,6 +1477,7 @@ public partial class MainWindow
         CatalogChanges.ImageCommitted -= OnCatalogImageCommitted;
         CatalogChanges.ImageIndexed -= OnCatalogImageIndexed;
         _catalogPublicationTimer?.Stop();
+        _scanGalleryScrollSettleTimer?.Stop();
         _browseProgressWindow?.Finish();
         _browseProgressWindow = null;
         _thumbnailSizeCancellation?.Cancel();
