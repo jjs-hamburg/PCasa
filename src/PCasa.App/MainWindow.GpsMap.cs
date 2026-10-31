@@ -412,18 +412,22 @@ public partial class MainWindow
                      data.West is double groupWest && data.East is double groupEast &&
                      _gpsPoints.Any(x => x.Id == data.Id && x.Selected))
             {
-                // The canvas reports the exact geographic bounds of ALL
-                // images in the clicked screen-space cell. Resolve IDs using
-                // our immutable catalog projection, not a thumbnail index or
-                // stale visual position. There is no 1024-byte message limit
-                // on the number of matching photos.
+                // MapLibre's vector-tile event properties can round numeric
+                // coordinates. They identify the clicked feature but must
+                // NEVER become the authority for a strict floating-point
+                // catalog lookup. Resolve all photos at this exact geographic
+                // location by the anchor image ID from the WPF projection.
+                var anchor = _gpsPoints.First(p => p.Id == data.Id && p.Selected);
+                if (Math.Abs(anchor.Lat - groupSouth) > 0.01 ||
+                    Math.Abs(anchor.Lat - groupNorth) > 0.01 ||
+                    Math.Abs(anchor.Lon - groupWest) > 0.01 ||
+                    Math.Abs(anchor.Lon - groupEast) > 0.01)
+                    return; // Stale or unrelated click after map replacement.
                 var group = _gpsPoints
                     .Where(p => p.Selected &&
-                        p.Lat >= groupSouth && p.Lat <= groupNorth &&
-                        p.Lon >= groupWest && p.Lon <= groupEast)
+                        p.Lat == anchor.Lat && p.Lon == anchor.Lon)
                     .Select(p => p.Id).ToHashSet();
-                if (!group.Contains(data.Id)) return;
-                ShowGpsPointGroup(group, data.Id);
+                ShowGpsPointGroup(group, anchor.Id);
             }
             else if (data.Kind == "select" && data.Id > 0 &&
                      _gpsPoints.Any(x => x.Id == data.Id))
