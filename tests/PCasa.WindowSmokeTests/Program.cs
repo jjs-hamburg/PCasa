@@ -753,9 +753,13 @@ internal static class Program
             var folderBeforeScroll = scrollType.GetField(
                 "_activePhotoFolderId", scrollFlags)!;
             var activeFolderBeforeScroll = folderBeforeScroll.GetValue(window);
+            var tierForScanner = scrollType.GetField(
+                "_activeBrowseTier", scrollFlags)!;
+            var previousTierForScanner = tierForScanner.GetValue(window);
             try
             {
                 folderBeforeScroll.SetValue(window, (long?)100);
+                tierForScanner.SetValue(window, (int?)192);
                 for (var step = 0; step < 24; step++)
                 {
                     scroller.ScrollToVerticalOffset(2200 + (step % 7) * 60);
@@ -802,6 +806,7 @@ internal static class Program
                 scanDirtyField.SetValue(window, false);
                 (timerField.GetValue(window) as DispatcherTimer)?.Stop();
                 folderBeforeScroll.SetValue(window, activeFolderBeforeScroll);
+                tierForScanner.SetValue(window, previousTierForScanner);
                 scroller.ScrollToVerticalOffset(2800);
                 Flush(window);
             }
