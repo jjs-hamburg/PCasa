@@ -31,6 +31,10 @@ public partial class MainWindow
                 _folderRemovalPending || _activePhotoFolderId != photoFolderId ||
                 _activeBrowseTier is not int tier)
                 return;
+            // Catalog and EXIF already committed. Holding the visual update
+            // while the user is scrolling avoids one full layout reflow per
+            // incoming file. Only one fresh catalog snapshot is later needed.
+            if (DeferScanGalleryPublication()) return;
             _ = InsertIndexedGalleryImageAsync(canonicalPath, photoFolderId, tier);
         }), DispatcherPriority.Background);
     }
@@ -98,6 +102,11 @@ public partial class MainWindow
         if (!_browseInitialized || _browsePageCache is null ||
             _activeBrowseTier != change.Tier || Dispatcher.HasShutdownStarted)
             return;
+
+        // An indexed image may have been fetched BEFORE scrolling began.
+        // Guard the actual UI publication as well as the initial notification.
+        if (DeferScanGalleryPublication()) return;
+        var followGalleryEnd = GalleryAtTrailingLiveEdge();
 
         // If a complete catalog refresh was concurrently reading SQLite,
         // its previously sampled folder list must not supersede this newer
@@ -178,6 +187,13 @@ public partial class MainWindow
         finally
         {
             RestorePendingGalleryAnchor();
+            if (followGalleryEnd && !GalleryScrollIsActive())
+            {
+                BrowseScrollViewer.UpdateLayout();
+                BrowseScrollViewer.ScrollToBottom();
+                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            }
         }
     }
 }
