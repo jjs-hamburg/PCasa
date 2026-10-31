@@ -53,6 +53,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  let previousSelectedSignature = null;
  let transferRevision=-1,transferParts=[],transferExpected=0,
      transferActive=false,transferCommitRequested=false;
+ // Diagnose only a completely blank large selected overlay, once per
+ // transferred selection and basemap style; never log every camera frame.
+ let styleGeneration=0,lastOverlayCheck='';
 
  function geojson(list) {
    return {type:'FeatureCollection',features:list.map(p=>({
@@ -268,9 +271,32 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    } catch(err) { post({type:'error',message:String(err)}); }
  };
  map.on('style.load',()=>{
+   styleGeneration++;
    installPhotos();
    if(!ready){ready=true;post({type:'ready'});}
    // Style switching preserves the current camera instead of zooming again.
+ });
+ map.on('idle',()=>{
+   if(!ready||transferActive)return;
+   const selectedCount=points.filter(p=>p.selected).length;
+   if(selectedCount<=smallSelectionLimit)return; // DOM pins are separate.
+   const key=transferRevision+':'+styleGeneration;
+   if(lastOverlayCheck===key)return;
+   const layers=['pcasa-selected-clusters','pcasa-selected-points']
+     .filter(id=>!!map.getLayer(id));
+   // 'idle' means source/style placement finished. Query actual visible
+   // features, not only the GeoJSON data array; the old regression test
+   // could pass with 7,000 stored points and nothing drawn on screen.
+   let visible=0;
+   try {
+     if(layers.length===2)
+       visible=map.queryRenderedFeatures({layers}).length;
+   } catch(_) {return;}
+   lastOverlayCheck=key;
+   if(!visible)
+     post({type:'gps-overlay-empty',version:transferRevision,
+       selected:selectedCount,source:!!map.getSource('pcasa-selected'),
+       layers:layers.length});
  });
  map.on('error',event=>{const s=String(event.error?.message||'');if(s)post({type:'error',message:s.substring(0,250)});});
  map.on('click','pcasa-clusters',event=>{
