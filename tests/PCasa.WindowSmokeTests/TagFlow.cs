@@ -1163,12 +1163,12 @@ internal static class TagFlow
             {
                 scanPresentation.BeginCachePhase();
                 scanPresentation.UpdateScan(
-                    new ScanProgress(12, 0, 12, 0, null, Added: 0),
+                    new ScanProgress(12, 0, 12, 0, null, Added: 0, ReadingNew: false),
                     scanOwner: activeScanOwner);
                 var phase = (TextBlock?)scanPresentation.FindName("PhaseText");
                 var count = (TextBlock?)scanPresentation.FindName("CountText");
                 if (!scanPresentation.IsVisible || phase is null ||
-                    !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
+                    !phase.Text.Contains(UiLanguage.T("Datei überprüfen"),
                         StringComparison.OrdinalIgnoreCase) ||
                     count?.Text.Contains("12", StringComparison.OrdinalIgnoreCase) != true)
                     throw new Exception(
@@ -1179,17 +1179,17 @@ internal static class TagFlow
                     new BrowseCacheBuildProgress(20, 4, 0, null, null),
                     queuedCacheOwner);
                 if (!scanPresentation.IsVisible ||
-                    !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
+                    !phase.Text.Contains(UiLanguage.T("Datei überprüfen"),
                         StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Queued cache hid the active NAS scan.");
 
                 scanPresentation.BeginManualOperation("GPS in Originaldateien schreiben", 2);
                 scanPresentation.UpdateScan(
-                    new ScanProgress(13, 0, 13, 0, null, Added: 0),
+                    new ScanProgress(13, 0, 13, 0, null, Added: 0, ReadingNew: false),
                     scanOwner: activeScanOwner);
                 scanPresentation.EndManualOperation();
                 if (!scanPresentation.IsVisible ||
-                    !phase.Text.Contains(UiLanguage.T("Bilder werden eingelesen"),
+                    !phase.Text.Contains(UiLanguage.T("Datei überprüfen"),
                         StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Manual overlay did not restore the live NAS scan.");
 
@@ -2538,7 +2538,7 @@ internal static class TagFlow
             if (!scanAllowed)
                 throw new Exception("Queued Tag job incorrectly suppresses NAS progress.");
             scanPresenter.UpdateScan(new ScanProgress(5, 3, 2, 0,
-                @"S:\album\new-photo.jpg", Added: 3),
+                @"S:\album\new-photo.jpg", Added: 3, ReadingNew: true),
                 showWhileManualWaiting: scanAllowed);
             var repaint = typeof(PCasa.App.MainWindow).GetMethod(
                 "RenderVisibleTagSeries",
@@ -2547,7 +2547,7 @@ internal static class TagFlow
                 ?? throw new Exception("Shared tag aggregate projection missing.");
             repaint.Invoke(window, null);
             if ((scanPresenter.FindName("PhaseText") as TextBlock)?.Text !=
-                    "Bilder werden eingelesen" ||
+                    "Bild einlesen" ||
                 (scanPresenter.FindName("CurrentFileText") as TextBlock)?.Text !=
                     "new-photo.jpg" ||
                 (scanPresenter.FindName("CountText") as TextBlock)?.Text
