@@ -271,6 +271,19 @@ public partial class MainWindow
                         Received: total, SelectedCount: count)
                     : null;
             }
+            case "gps-overlay-empty":
+            {
+                return root.TryGetProperty("version", out var v) &&
+                    v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var revision) &&
+                    root.TryGetProperty("selected", out var s) &&
+                    s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var selected)
+                    ? new GpsMapMessage("gps-overlay-empty", Id: revision,
+                        SelectedCount: selected,
+                        Error: root.TryGetProperty("source", out var source) &&
+                            source.ValueKind == JsonValueKind.True
+                            ? "source=present" : "source=missing")
+                    : null;
+            }
             case "error":
                 return new GpsMapMessage("error",
                     Error: root.TryGetProperty("message", out var detail) &&
@@ -356,6 +369,18 @@ public partial class MainWindow
                     PCasaDiagnostics.WriteMessage("GPS.Map.Transfer",
                         $"Map transfer {data.Id}: received {data.Received}/{_gpsPoints.Count}, " +
                         $"selected {data.SelectedCount}/{expectedSelected}");
+            }
+            else if (data.Kind == "gps-overlay-empty" &&
+                     data.Id == _gpsMapTransferRevision &&
+                     data.SelectedCount is > 0)
+            {
+                // A successfully transferred data array is not proof that
+                // MapLibre actually rendered the selected overlay. This
+                // provider-independent diagnostic is emitted only once per
+                // transfer/style when its finished viewport contains no pins.
+                PCasaDiagnostics.WriteMessage("GPS.Map.EmptyOverlay",
+                    $"Version={data.Id}; Selected={data.SelectedCount}; " +
+                    $"{data.Error}; Provider={_appearance.ActiveGpsProviderId}");
             }
             else if (data.Kind == "ready")
             {
