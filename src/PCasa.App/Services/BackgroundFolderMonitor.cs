@@ -145,6 +145,8 @@ public sealed class BackgroundFolderMonitor : IDisposable
                 {
                     PCasaDiagnostics.Write("FileSystemWatcher.Error", error);
                 }
+                PCasaDiagnostics.WriteMessage("Scan.WatcherRecovery",
+                    $"Full inventory requested after watcher error: {state.Folder.LocalPath}");
 
                 Raise(new BackgroundFolderChange(
                     state.Folder.Id,
