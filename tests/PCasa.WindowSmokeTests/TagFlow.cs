@@ -313,6 +313,78 @@ internal static class TagFlow
                 throw new Exception("Leaving tag search did not restore photo position.");
             Console.WriteLine("PASS: Clearing live search restores original parent selection and photo anchor.");
 
+            // Regression: Appearance is presentation only. Toggling caption
+            // visibility changes row geometry, but must NOT move the current
+            // image anchor, focused image, selection or selected folder.
+            var appearanceItem = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
+                ?? throw new Exception("Appearance dialog option missing.");
+            var selector = (GallerySelection)typeof(PCasa.App.MainWindow)
+                .GetField("_gallerySelection",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+            var previousFocus = selector.FocusedId;
+            var previousChosen = selected.ToHashSet();
+            var preservedImage = surface.CaptureImageAnchor(scroller.VerticalOffset)
+                ?? throw new Exception("No visible image to anchor before Appearance.");
+            var originalTreeFocus = tree.SelectedItem;
+            var originalFolderFocus = typeof(PCasa.App.MainWindow).GetField(
+                "_activePhotoFolderId", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!.GetValue(window);
+            var captionFlag = typeof(BrowseGallerySurface).GetField(
+                "_showFileNames", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var previousCaptions = (bool)captionFlag.GetValue(surface)!;
+            selected.Clear();
+            selected.Add(preservedImage.ImageId);
+            selector.SetFocus(preservedImage.ImageId);
+            surface.SetSelection(selected);
+            void ChangeAppearanceCaptions(bool enabled)
+            {
+                Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
+                {
+                    var settings = Application.Current.Windows
+                        .OfType<PCasa.App.AppearanceSettingsWindow>().Single();
+                    settings.FileNamesCheck.IsChecked = enabled;
+                    settings.ConfirmButton.RaiseEvent(
+                        new RoutedEventArgs(Button.ClickEvent, settings.ConfirmButton));
+                }), DispatcherPriority.ContextIdle);
+                appearanceItem.RaiseEvent(
+                    new RoutedEventArgs(MenuItem.ClickEvent, appearanceItem));
+                window.UpdateLayout();
+                var frame = new DispatcherFrame();
+                window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,
+                    new Action(() => frame.Continue = false));
+                Dispatcher.PushFrame(frame);
+            }
+            try
+            {
+                ChangeAppearanceCaptions(!previousCaptions);
+                if ((bool)captionFlag.GetValue(surface)! == previousCaptions ||
+                    !selected.SetEquals(new long[]{preservedImage.ImageId}) ||
+                    selector.FocusedId != preservedImage.ImageId ||
+                    !ReferenceEquals(tree.SelectedItem, originalTreeFocus) ||
+                    !Equals(originalFolderFocus,
+                        typeof(PCasa.App.MainWindow).GetField("_activePhotoFolderId",
+                            System.Reflection.BindingFlags.NonPublic |
+                            System.Reflection.BindingFlags.Instance)!.GetValue(window)))
+                    throw new Exception("Appearance changed gallery selection or image/folder focus.");
+                var newOffset = surface.GetImageAnchorOffset(
+                    preservedImage.ImageId, preservedImage.RelativeY);
+                if (newOffset is null || Math.Abs(newOffset.Value -
+                    scroller.VerticalOffset) > 3)
+                    throw new Exception("Appearance changed the visible gallery image anchor.");
+                Console.WriteLine("PASS: Appearance caption reflow preserves exact gallery image, selection, folder focus and scroll anchor.");
+            }
+            finally
+            {
+                ChangeAppearanceCaptions(previousCaptions);
+                selected.Clear();
+                foreach (var chosen in previousChosen) selected.Add(chosen);
+                if (previousFocus is long focus) selector.SetFocus(focus);
+                else selector.Reset();
+                surface.SetSelection(selected);
+            }
+
             // Search type is independent of scope. File-name matching uses
             // the existing catalogue index (no filesystem walk).
             var fileMode = (RadioButton?)window.FindName("SearchFileNameMode")
