@@ -17,7 +17,11 @@ public sealed record ScanProgress(
     long? DiscoveredPhotoFolderId = null,
     string? DiscoveredPhotoFolderPath = null,
     string? CurrentThumbnailPath = null,
-    string? VerifiedDirectoryPath = null);
+    string? VerifiedDirectoryPath = null,
+    // The action on the CURRENT file, not a summary of all scan counts.
+    // null before the first source file; true while it is being indexed
+    // (new/changed), false while its existing index is verified.
+    bool? ReadingNew = null);
 
 public sealed record ScanResult(
     int ImageFilesSeen,
@@ -220,6 +224,7 @@ public sealed class FolderScanner
         var cacheRepaired = resume?.CacheRepaired ?? 0;
         var metadataUpdated = resume?.MetadataUpdated ?? 0;
         var failed = resume?.Failed ?? 0;
+        bool? readingNew = null;
         Exception? firstFailure = resume?.FirstFailure;
         string? firstFailurePath = resume?.FirstFailurePath;
         var photoFolderIds = resume?.PhotoFolderIds ??
@@ -424,13 +429,24 @@ public sealed class FolderScanner
                     }
 
                     var existing = scanSession.GetState(canonicalPath);
-                    if (existing is not null &&
+                    var currentIndex = existing is not null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
                         File.Exists(existing.ThumbnailPath) &&
                         (!RawImageSource.IsRawPath(localPath) ||
                          Path.GetFileName(existing.ThumbnailPath).StartsWith(
-                             "raw2-", StringComparison.OrdinalIgnoreCase)))
+                             "raw2-", StringComparison.OrdinalIgnoreCase));
+                    // Publish the actual pending operation BEFORE slow EXIF
+                    // or thumbnail work, not after it has finished. Emit the
+                    // extra UI callback only on a phase transition.
+                    var nextReadingNew = !currentIndex;
+                    if (readingNew != nextReadingNew)
+                    {
+                        readingNew = nextReadingNew;
+                        ReportProgress(localPath, force: true,
+                            localPreviewPath: currentIndex ? existing!.ThumbnailPath : null);
+                    }
+                    if (currentIndex)
                     {
                         if (existing.PhotoFolderId != photoFolderId ||
                             !string.Equals(existing.LocalPath, localPath, StringComparison.OrdinalIgnoreCase))
@@ -748,7 +764,8 @@ public sealed class FolderScanner
                 discoveredFolderId,
                 discoveredFolderPath,
                 localPreviewPath,
-                verifiedDirectoryPath));
+                verifiedDirectoryPath,
+                readingNew));
         }
     }
 
