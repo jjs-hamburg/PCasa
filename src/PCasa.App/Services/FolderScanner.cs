@@ -21,7 +21,10 @@ public sealed record ScanProgress(
     // The action on the CURRENT file, not a summary of all scan counts.
     // null before the first source file; true while it is being indexed
     // (new/changed), false while its existing index is verified.
-    bool? ReadingNew = null);
+    bool? ReadingNew = null,
+    // A phase notification precedes file work; only a post-commit callback
+    // may advertise a thumbnail as ready for preview.
+    bool PreviewCommitted = true);
 
 public sealed record ScanResult(
     int ImageFilesSeen,
@@ -444,7 +447,7 @@ public sealed class FolderScanner
                     {
                         readingNew = nextReadingNew;
                         ReportProgress(localPath, force: true,
-                            localPreviewPath: currentIndex ? existing!.ThumbnailPath : null);
+                            previewCommitted: false);
                     }
                     if (currentIndex)
                     {
@@ -744,7 +747,8 @@ public sealed class FolderScanner
         void ReportProgress(string? currentFile, bool force = false,
             long? discoveredFolderId = null, string? discoveredFolderPath = null,
             string? localPreviewPath = null,
-            string? verifiedDirectoryPath = null)
+            string? verifiedDirectoryPath = null,
+            bool previewCommitted = true)
         {
             if (!force && progressClock.ElapsedMilliseconds < 250)
             {
@@ -765,7 +769,8 @@ public sealed class FolderScanner
                 discoveredFolderPath,
                 localPreviewPath,
                 verifiedDirectoryPath,
-                readingNew));
+                readingNew,
+                previewCommitted));
         }
     }
 
