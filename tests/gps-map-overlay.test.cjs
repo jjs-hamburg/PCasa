@@ -5,7 +5,7 @@ const assert=require('node:assert/strict');
 const html=fs.readFileSync('src/PCasa.App/Resources/gps-map.html','utf8');
 const script=html.match(/<script>\s*(\(\(\) => \{[\s\S]*?\}\)\(\);)\s*<\/script>/)?.[1];
 assert.ok(script,'Embedded map controller is present');
-let canvasDraw=[], messages=[],activeMap;
+let canvasDraw=[], messages=[],activeMap, markers=[];
 const context={
   setTransform(){},clearRect(){canvasDraw=[];},beginPath(){},
   arc(x,y,r){canvasDraw.push({x,y,r});},fill(){},stroke(){},fillText(t){messages.push({label:t});}
@@ -33,7 +33,13 @@ class MapStub {
  getCenter(){return {lat:0,lng:0};}getBounds(){return {getSouth:()=>-90,getWest:()=>-180,getNorth:()=>90,getEast:()=>180};}
  setStyle(){}
 }
-class MarkerStub{constructor(){this.element={};}setLngLat(){return this;}addTo(){return this;}remove(){}}
+class MarkerStub {
+ constructor({element}={}){this.element=element;this.removed=false;markers.push(this);}
+ setLngLat(coordinates){this.coordinates=coordinates;return this;}
+ addTo(){this.attached=true;return this;}
+ remove(){this.removed=true;}
+}
+const liveMarkers=()=>markers.filter(m=>m.attached&&!m.removed);
 class Bounds{constructor(){this.points=[];}extend(p){this.points.push(p);}}
 const window={devicePixelRatio:1,requestAnimationFrame:f=>f(),CefSharp:{PostMessage:json=>messages.push(JSON.parse(json))}};
 const maplibregl={Map:MapStub,Marker:MarkerStub,LngLatBounds:Bounds,NavigationControl:class{}};
@@ -75,26 +81,40 @@ window.pcasaBeginPoints(2,2);
 window.pcasaAppendPoints(2,1,small.slice(1));
 window.pcasaCommitPoints(2);
 window.pcasaAppendPoints(2,0,small.slice(0,1));
-assert.equal(canvasDraw.filter(c=>c.r===10).length,3,
- 'Every separated selected location renders for small selections');
+assert.equal(liveMarkers().length,3,
+ 'Every selected photo in a small selection owns a visible DOM marker');
+assert.equal(canvasDraw.filter(c=>c.r===10).length,0,
+ 'Small selections must not depend on the canvas renderer');
+assert.ok(liveMarkers().every(m=>m.element.style.pointerEvents==='none'));
+assert.ok(liveMarkers().every(m=>m.element.style.zIndex==='5'));
 activeMap.emit('click',{point:{x:512+10*4,y:325-52*4},lngLat:{lat:52,lng:10}});
 assert.ok(messages.some(m=>m.type==='select'&&m.id===1),'Map click selects photo');
 activeMap.emit('style.load');
-assert.equal(canvasDraw.filter(c=>c.r===10).length,3,'Style reload retains selected points');
+assert.equal(liveMarkers().length,3,'Style reload retains DOM selected pins');
 window.pcasaBeginPoints(3,1);window.pcasaBeginPoints(4,1);
 window.pcasaAppendPoints(3,0,worldwide);window.pcasaCommitPoints(3);
 window.pcasaCommitPoints(4);window.pcasaAppendPoints(4,0,small);
-assert.equal(canvasDraw.filter(c=>c.r===10).length,3,'Stale transfer is ignored');
+assert.equal(liveMarkers().length,3,'Stale transfer preserves selected DOM pins');
 // A single GPS photo must render and center immediately. Re-indexing that
 // SAME image ID at corrected coordinates must also move the camera.
 window.pcasaBeginPoints(5,1);
 window.pcasaAppendPoints(5,0,[{id:77,lat:53.5,lon:10,selected:true}]);
 window.pcasaCommitPoints(5);
-assert.equal(canvasDraw.filter(c=>c.r===10).length,1);
+assert.equal(liveMarkers().length,1,
+ 'One selected photo MUST retain a DOM pin, independent of the canvas');
+assert.deepEqual(Array.from(liveMarkers()[0].coordinates),[10,53.5]);
 assert.deepEqual(Array.from(activeMap.lastEase.center),[10,53.5]);
 window.pcasaBeginPoints(6,1);
 window.pcasaAppendPoints(6,0,[{id:77,lat:26.1,lon:-80,selected:true}]);
 window.pcasaCommitPoints(6);
 assert.deepEqual(Array.from(activeMap.lastEase.center),[-80,26.1],
  'Corrected coordinates with same photo ID must recenter the map');
-console.log('GPS map overlay PASS: 6000 worldwide, point-group photo routing, single-photo recenter, small selections, style reload, stale chunks');
+assert.deepEqual(Array.from(liveMarkers()[0].coordinates),[-80,26.1],
+ 'Reposition the SAME visible DOM marker on metadata correction');
+window.pcasaBeginPoints(7,1);
+window.pcasaAppendPoints(7,0,worldwide);window.pcasaCommitPoints(7);
+assert.equal(liveMarkers().length,0,
+ 'Switching back to a large selection removes stale DOM pins');
+assert.equal(canvasDraw.filter(c=>c.r===16).length,2,
+ 'Large selection still uses grouped canvas');
+console.log('GPS map overlay PASS: worldwide canvas, DOM pins for single/small selection, metadata recenter, group click, style reload, stale chunks');
