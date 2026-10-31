@@ -10,7 +10,24 @@ let messages=[],activeMap,markers=[];
 const host={clientWidth:1024,clientHeight:650,querySelector(){return null;}};
 const document={
   getElementById(){return {remove(){},textContent:''};},
-  createElement(){return {style:{},classList:{toggle(){}},addEventListener(){}};}
+  createElement(){
+    const classes=new Set();
+    return {
+      style:{},addEventListener(){},
+      get className(){return [...classes].join(' ');},
+      set className(value){classes.clear();for(const n of value.split(/\\s+/))if(n)classes.add(n);},
+      classList:{
+        add(...names){for(const n of names)classes.add(n);},
+        remove(...names){for(const n of names)classes.delete(n);},
+        contains(name){return classes.has(name);},
+        toggle(name,force){
+          const enable=force===undefined?!classes.has(name):Boolean(force);
+          if(enable)classes.add(name);else classes.delete(name);
+          return enable;
+        }
+      }
+    };
+  }
 };
 class MapStub {
   constructor(){activeMap=this;this.handlers={};this.sources={};this.layers={};this.zoom=2;}
@@ -34,7 +51,10 @@ class MapStub {
   setStyle(){this.sources={};this.layers={};}
 }
 class MarkerStub {
-  constructor({element}={}){this.element=element;this.removed=false;markers.push(this);}
+  constructor({element}={}){
+    this.element=element;this.element.classList.add('maplibregl-marker');
+    this.removed=false;markers.push(this);
+  }
   setLngLat(coords){this.coordinates=coords;return this;}
   addTo(){this.attached=true;return this;}
   remove(){this.removed=true;}
@@ -68,6 +88,8 @@ window.pcasaCommitClusters(1);
 assert.equal(live().length,0,'Incomplete transfer cannot expose partial geography');
 window.pcasaAppendClusters(1,0,big.slice(0,1));
 assert.equal(live().length,2);
+assert.ok(live().every(m=>m.element.classList.contains('maplibregl-marker')),
+  'MapLibre absolute positioning class must survive first cluster draw');
 assert.equal(sum(),6000,'Photo counts, not distinct positions, are transferred');
 assert.ok(messages.some(x=>x.type==='gps-sync'&&x.received===6000&&x.selected===6000));
 activeMap.emit('click',{point:activeMap.project([10,53.5])});
@@ -84,6 +106,8 @@ assert.ok(messages.some(x=>x.type==='cluster-click'&&x.id===77&&x.version===2),
   'Single point click also returns a PCasa-owned cluster ID');
 window.pcasaHighlightCluster(77);
 assert.ok(live()[0].element.className.includes('target'));
+assert.ok(live()[0].element.classList.contains('maplibregl-marker'),
+  'Highlighting one photo must not remove MapLibre geolocation layout class');
 assert.deepEqual(Array.from(live()[0].coordinates),[-16.568,28.415],
   'A single point is drawn at its ORIGINAL GPS position');
 
@@ -96,6 +120,8 @@ const worldwide=[
 ];
 send(3,worldwide,7200,7200,2);
 assert.equal(live().length,5,'World-scale map draws ALL PCasa geographic clusters');
+assert.ok(live().every(m=>m.element.classList.contains('maplibregl-marker')),
+  'All 7200-photo world markers retain MapLibre CSS positioning, no vertical stripe');
 assert.equal(sum(),7200,'All 7200 GPS photos appear in the global cluster counts');
 assert.ok(live().some(x=>x.coordinates[0]< -110)&&
   live().some(x=>x.coordinates[0]>130)&&live().some(x=>x.coordinates[0]>0),
@@ -114,6 +140,9 @@ window.pcasaApplyProvider({format:'xyz',url:'https://example.test/{z}/{x}/{y}.pn
 activeMap.emit('style.load');
 assert.deepEqual(live().map(x=>JSON.stringify([...x.coordinates,x.element.textContent])),old,
   'Raster XYZ basemap switch cannot re-cluster photo positions');
+activeMap.emit('moveend');
+assert.ok(live().every(m=>m.element.classList.contains('maplibregl-marker')),
+  'Zooming and style switches must never stack GPS pins in one vertical column');
 
 window.pcasaBeginClusters(4,1,7200,7200);
 window.pcasaAppendClusters(4,0,[{id:200,lat:0,lon:0,count:7,selected:true}]);
