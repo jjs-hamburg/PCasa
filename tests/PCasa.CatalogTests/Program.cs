@@ -4570,10 +4570,23 @@ internal static class Program
         void Verify(bool expectUnchanged)
         {
             ScanProgress? observed = null;
+            var phaseStarted = false;
             var progress = new InlineProgress<ScanProgress>(p =>
             {
                 if (!string.Equals(p.CurrentFile, image,
                         StringComparison.OrdinalIgnoreCase)) return;
+                if (!p.PreviewCommitted)
+                {
+                    // This event describes CURRENT work, before slow
+                    // thumbnail/EXIF processing. No uncommitted photo may
+                    // be offered as a completed preview.
+                    phaseStarted = true;
+                    if (p.ReadingNew != !expectUnchanged ||
+                        p.CurrentThumbnailPath is not null)
+                        throw new Exception(
+                            "Active scan phase did not distinguish reading a new picture from checking an existing one.");
+                    return;
+                }
                 observed = p;
                 if (p.CurrentThumbnailPath is not string preview ||
                     !File.Exists(preview) ||
@@ -4585,8 +4598,8 @@ internal static class Program
                     throw new Exception("Scan preview was published before catalog commit.");
             });
             var result = scanner.Scan(root, progress);
-            if (result.Failed != 0 || observed is null)
-                throw new Exception("Scan never published its local image preview.");
+            if (result.Failed != 0 || observed is null || !phaseStarted)
+                throw new Exception("Scan never published its active operation and committed local preview.");
             if (expectUnchanged && result.Unchanged != 1)
                 throw new Exception("Unchanged scan image was unnecessarily decoded.");
         }
