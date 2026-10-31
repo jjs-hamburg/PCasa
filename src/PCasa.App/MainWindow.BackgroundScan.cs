@@ -12,6 +12,8 @@ public partial class MainWindow
     private readonly Dictionary<string, PendingBackgroundScan> _backgroundPending =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<long> _backgroundKnownFolderIds = new();
+    private readonly HashSet<long> _backgroundDeferredInventoryRoots = new();
+    private bool _backgroundFirstMonitorSnapshot = true;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
 
     private BackgroundFolderMonitor? _backgroundFolderMonitor;
@@ -148,6 +150,9 @@ public partial class MainWindow
             if (_backgroundScanSettings.Enabled)
             {
                 _backgroundKnownFolderIds.Clear();
+                // Re-enabled monitoring is an explicit change: reconcile
+                // what happened while the watchers were turned off.
+                _backgroundFirstMonitorSnapshot = false;
             }
             else
             {
@@ -242,49 +247,63 @@ public partial class MainWindow
 
             var currentIds = folders.Select(folder => folder.Id).ToHashSet();
             _backgroundKnownFolderIds.RemoveWhere(id => !currentIds.Contains(id));
+            _backgroundDeferredInventoryRoots.RemoveWhere(id => !currentIds.Contains(id));
 
-            var userInitialScanIds = pendingInitialIds;
-            // A durable first import owns only ITS OWN root. Never gate
-            // unrelated root reconciliation on another root's unfinished
-            // import; that global gate broke automatic NAS discovery.
+            // Installing a watcher on startup does NOT prove the directory
+            // changed. The old code manufactured a full RescanRoot on every
+            // process launch, ahead of unfinished first imports.
+            // A live watcher event, an offline->online transition or an
+            // explicit monitoring re-enable DOES justify reconciliation.
+            var firstSnapshot = _backgroundFirstMonitorSnapshot;
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
                 {
-                    // If the NAS reconnects later, it must receive a fresh scan.
                     _backgroundKnownFolderIds.Remove(folder.Id);
                     continue;
                 }
 
-                // No duplicate root inventory during its own first import.
-                // Other monitored roots must reconcile independently.
-                if (userInitialScanIds.Contains(folder.Id))
+                var firstKnown = _backgroundKnownFolderIds.Add(folder.Id);
+                if (pendingInitialIds.Contains(folder.Id))
+                    continue; // The durable initial-import scanner owns this root.
+
+                var deferred = _backgroundDeferredInventoryRoots.Contains(folder.Id);
+                if (!firstKnown && !deferred)
                     continue;
-                if (_backgroundKnownFolderIds.Add(folder.Id))
+
+                // Resume real interrupted inventory receipts without inventing
+                // a second scan key, but defer them until all first imports
+                // have finished. Live file watcher events are not deferred.
+                var restored = interruptedInventories
+                    .Where(receipt => receipt.MonitoredFolderId == folder.Id)
+                    .Select(TryRecoverAutomaticInventory)
+                    .Where(request => request is not null)
+                    .Cast<BackgroundFolderChange>()
+                    .ToArray();
+
+                var reconcile = (firstKnown && !firstSnapshot) || deferred;
+                if (pendingInitialIds.Count > 0 &&
+                    (restored.Length > 0 || reconcile))
                 {
-                    // The scanner itself owns all file/directory checkpoints.
-                    // Restore its original request identity after restart,
-                    // not merely a new request for the same root.
-                    var restored = interruptedInventories
-                        .Where(receipt => receipt.MonitoredFolderId == folder.Id)
-                        .Select(TryRecoverAutomaticInventory)
-                        .Where(request => request is not null)
-                        .Cast<BackgroundFolderChange>()
-                        .ToArray();
-                    if (restored.Length > 0)
-                    {
-                        foreach (var request in restored)
-                            QueueBackgroundChange(request);
-                    }
-                    else
-                    {
-                        QueueBackgroundChange(new BackgroundFolderChange(
-                            folder.Id, folder.LocalPath,
-                            BackgroundFolderChangeKind.RescanRoot,
-                            Recursive: true));
-                    }
+                    _backgroundDeferredInventoryRoots.Add(folder.Id);
+                    continue;
+                }
+
+                _backgroundDeferredInventoryRoots.Remove(folder.Id);
+                if (restored.Length > 0)
+                {
+                    foreach (var request in restored)
+                        QueueBackgroundChange(request);
+                }
+                else if (reconcile)
+                {
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        folder.Id, folder.LocalPath,
+                        BackgroundFolderChangeKind.RescanRoot,
+                        Recursive: true));
                 }
             }
+            _backgroundFirstMonitorSnapshot = false;
         }
         catch (Exception ex)
         {
