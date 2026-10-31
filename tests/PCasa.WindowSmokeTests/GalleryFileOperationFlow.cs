@@ -73,6 +73,7 @@ internal static class GalleryFileOperationFlow
                     entered.TrySetResult();
                     await release.Task.WaitAsync(token);
                 });
+            Exception? transferFailure = null;
             try
             {
                 Until(window, () => entered.Task.IsCompleted,
@@ -85,9 +86,24 @@ internal static class GalleryFileOperationFlow
                     throw new Exception(
                         "Manual copy waited for background job or bypassed highest scheduler priority.");
             }
+            catch (Exception ex)
+            {
+                transferFailure = ex;
+                Console.Error.WriteLine("Manual transfer failed before background cleanup: " + ex);
+                Console.Error.WriteLine("Scheduler jobs: " +
+                    string.Join(" | ", scheduler.Snapshot().TakeLast(30)
+                        .Select(job => $"{job.Key}: {job.Priority}/{job.State}")));
+                Console.Error.WriteLine("Durable packages: " +
+                    string.Join(" | ", new DurablePackageJournal(db).Pending()
+                        .Take(30).Select(item =>
+                            $"{item.Key}: {item.Priority}/{item.State} step={item.CompletedSteps}")));
+                throw;
+            }
             finally
             {
                 release.TrySetResult();
+                if (transferFailure is null)
+                {
                 try
                 {
                     Until(window, () => background.IsCompleted,
@@ -108,6 +124,7 @@ internal static class GalleryFileOperationFlow
                         $"active jobs=[{states}]; durable=[{pending}]", ex);
                 }
                 background.GetAwaiter().GetResult();
+                }
             }
             Console.WriteLine("PASS: Manual file transfer preempts occupied background scheduler.");
             Until(window, () => File.Exists(copied) &&
