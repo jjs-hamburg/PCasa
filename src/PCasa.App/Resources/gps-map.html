@@ -52,7 +52,6 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  let transferRevision=-1,transferParts=[],transferExpected=0,
      transferActive=false,transferCommitRequested=false;
 
- const selectedMarkers = new Map();
  function geojson(list) {
    return {type:'FeatureCollection',features:list.map(p=>({
      type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]},
@@ -128,8 +127,12 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      const radius=cell.count>1?16:10;
      ctx.beginPath();ctx.arc(cell.x,cell.y,radius,0,Math.PI*2);
      ctx.fillStyle='#f0a030';ctx.fill();
-     ctx.lineWidth=cell.highlighted?4:3;
-     ctx.strokeStyle=cell.highlighted?'#fff':'#111';ctx.stroke();
+     ctx.lineWidth=3;ctx.strokeStyle='#111';ctx.stroke();
+     if(cell.highlighted) {
+       // A visible halo, not just a color change, marks the focused image.
+       ctx.beginPath();ctx.arc(cell.x,cell.y,radius+5,0,Math.PI*2);
+       ctx.lineWidth=3;ctx.strokeStyle='#fff';ctx.stroke();
+     }
      if(cell.count>1) {
        ctx.fillStyle='#111';ctx.textAlign='center';ctx.textBaseline='middle';
        ctx.font='bold 12px Segoe UI, sans-serif';
@@ -170,40 +173,17 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('resize',scheduleSelectedOverlay);
  function updatePhotos() {
    map.getSource('pcasa-photos')?.setData(geojson(points.filter(p=>!p.selected)));
-   syncSelectedMarkers();
+   syncSelectedFocus();
    scheduleSelectedOverlay();
  }
- function syncSelectedMarkers() {
-   // ALL selected photos already have unclustered, clickable MapLibre circle
-   // features in pcasa-selected. A previous DOM-marker loop created only the
-   // FIRST 200 separate pins, misleadingly hiding large selections. Keep
-   // exactly one focus marker; use the vector layer for every other photo.
-   const selected = points.filter(p=>p.selected);
-   if (selected.length && !selected.some(p=>String(p.id)===String(highlightedId)))
+ function syncSelectedFocus() {
+   // One renderer for every selected point, including the focused photo.
+   // A separate DOM pin used to conceal the count and steal clicks when
+   // hundreds of originals share exactly the same GPS coordinates.
+   const selected=points.filter(p=>p.selected);
+   if(selected.length&&!selected.some(p=>String(p.id)===String(highlightedId)))
      highlightedId=String(selected[0].id);
-   if(!selected.length) highlightedId=null;
-   const focused=selected.find(p=>String(p.id)===String(highlightedId));
-   const keep=new Set(focused?[String(focused.id)]:[]);
-   if(focused) {
-     const key=String(focused.id);
-     let entry=selectedMarkers.get(key);
-     if(!entry) {
-       const el=document.createElement('div');
-       el.className='pcasa-pin pcasa-pin-target';
-       el.title=focused.name||'Foto';
-       // Let clicks reach the grouped canvas hit test. Otherwise the
-       // focused DOM marker steals clicks from every photo at its location.
-       el.style.zIndex='4';el.style.pointerEvents='none';
-       el.addEventListener('click',e=>{
-         e.stopPropagation();post({type:'select',id:Number(key)});
-       });
-       const marker=new maplibregl.Marker({element:el,anchor:'center'})
-         .setLngLat([focused.lon,focused.lat]).addTo(map);
-       entry={marker,el};selectedMarkers.set(key,entry);
-     } else entry.marker.setLngLat([focused.lon,focused.lat]);
-   }
-   for(const [key,entry] of selectedMarkers)
-     if(!keep.has(key)){entry.marker.remove();selectedMarkers.delete(key);}
+   if(!selected.length)highlightedId=null;
  }
  window.pcasaHighlightPoint = (id) => {
    const p=points.find(p=>String(p.id)===String(id) && p.selected);
@@ -211,7 +191,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    highlightedId=String(id);
    // Highlight only: the user must retain the exact map extent while
    // comparing selected photos, even at identical GPS coordinates.
-   syncSelectedMarkers();
+   syncSelectedFocus();
    scheduleSelectedOverlay();
  };
  function zoomSelection() {
