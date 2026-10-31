@@ -66,8 +66,8 @@ assert.equal(selectionSource().options.cluster,true,
 assert.equal(selectionSource().options.clusterRadius,52,
   'Geographic cluster radius is constant in screen pixels across zoom levels');
 assert.equal(selectionSource().options.clusterMaxZoom,17);
-assert.deepEqual(Array.from(selectionSource().options.clusterProperties.photo_count),
-  ['+',['get','count']],
+assert.equal(JSON.stringify(selectionSource().options.clusterProperties.photo_count),
+  JSON.stringify(['+',['get','count']]),
   'Cluster count must sum photos at locations, not number of different locations');
 assert.equal(activeMap.getLayer('pcasa-selected-points').filter[0],'!',
   'An unclustered selected pin must not also draw cluster features');
