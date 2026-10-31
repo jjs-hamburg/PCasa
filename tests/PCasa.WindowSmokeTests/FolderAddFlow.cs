@@ -556,10 +556,13 @@ internal static class FolderAddFlow
                     is not null,
                 "Explorer scanned folder was not published without rebuilding the tree.");
 
-            if (roots.GetPendingInitialScans().Any(root =>
-                SamePath(root.LocalPath, initialRoot)))
-                throw new Exception(
-                    "Successful targeted reactivation stranded a full-root pending first import.");
+            // Live gallery publication can now precede the durable scan's
+            // final source-receipt acknowledgement. That is correct: the
+            // photo committed first, the scan completes separately. Verify
+            // each lifecycle without assuming they finish in one UI tick.
+            Until(window, () => !roots.GetPendingInitialScans().Any(root =>
+                    SamePath(root.LocalPath, initialRoot)),
+                "Targeted reactivation did not eventually complete the pending first import.");
             if (!ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
                 !treeBefore.IsExpanded)
