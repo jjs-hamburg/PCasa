@@ -698,6 +698,8 @@ internal static class FolderAddFlow
             runningScanField.SetValue(window, true);
             var liveRoot = roots.GetAll().Single(root =>
                 SamePath(root.LocalPath, initialRoot));
+            var liveEndRoot = roots.GetAll().Single(root =>
+                SamePath(root.LocalPath, afterRestart));
             var liveScanner = new FolderScanner(new ImageCatalogRepository(db),
                 new ThumbnailCache(), roots, new BrowseThumbnailProfileRepository(db));
             var liveIndexField = typeof(PCasa.App.MainWindow).GetField(
@@ -743,11 +745,11 @@ internal static class FolderAddFlow
 
             // A second photo after the first real publication also has to
             // appear without a manual reload or navigation.
-            var secondLive = Path.Combine(laterFolder, "zzz-live-end.jpg");
+            var secondLive = Path.Combine(afterRestart, "zzz-live-end.jpg");
             WriteJpeg(secondLive);
             liveScroller.ScrollToBottom();
             activeFolderField.SetValue(window, (long?)firstFolder.Id);
-            var bottomScan = Task.Run(() => liveScanner.ScanFile(liveRoot, secondLive));
+            var bottomScan = Task.Run(() => liveScanner.ScanFile(liveEndRoot, secondLive));
             Until(window, () => bottomScan.IsCompleted,
                 "Real end-edge scanner could not commit a JPEG.");
             bottomScan.GetAwaiter().GetResult();
