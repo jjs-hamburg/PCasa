@@ -340,6 +340,14 @@ public partial class MainWindow
 
     private void AppearanceSettings_Click(object sender, RoutedEventArgs e)
     {
+        // Appearance is NOT navigation. Capture the actual top image BEFORE
+        // opening the modal editor: later layout reflows (including WPF's
+        // ThemeMode refresh after dialog close) must not choose a new anchor.
+        var originalGalleryAnchor = CaptureGalleryAnchor();
+        var originalGalleryOffset = BrowseScrollViewer.VerticalOffset;
+        var originalNavigationVersion = _explicitGalleryNavigationVersion;
+        var originalActiveFolderId = _activePhotoFolderId;
+
         // The only appearance editor stages all values until OK.
         // This is a snapshot; dialog controls never mutate persisted state.
         var current = new AppearanceDialogValues(
@@ -363,7 +371,10 @@ public partial class MainWindow
             next.BoldFileNames != _appearance.BoldThumbnailFileNames ||
             next.Icons != _appearance.ShowThumbnailIcons ||
             next.CaptionSize != _appearance.ThumbnailFilenameFontSize;
-        if (galleryLayoutChanged || visibilityChanged) QueueGalleryAnchorRestore();
+        // Use the original pre-dialog anchor for ALL appearance changes,
+        // including theme/texture changes that can remeasure the gallery.
+        _pendingGalleryAnchor = originalGalleryAnchor;
+        _restoringGalleryLayoutAnchor = true;
         _appearance.Theme = next.Theme;
         _appearance.Background = next.Background;
         _appearance.TextureFileName = next.Texture;
@@ -383,13 +394,15 @@ public partial class MainWindow
             UpdateGalleryFolderVisibility();
             RefreshGallerySearchAfterTreeVisibilityChange();
         }
-        if (galleryLayoutChanged || visibilityChanged)
-        {
-            BrowseScrollViewer.UpdateLayout();
-            RestorePendingGalleryAnchor();
-            BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
-                Math.Max(1, BrowseScrollViewer.ViewportHeight));
-        }
+        // Restore the same photo after synchronous layout and again at the
+        // next Loaded pass. WPF may schedule a second remeasure after the
+        // modal dialog and global theme finish changing.
+        RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
+            originalGalleryOffset, originalNavigationVersion, originalActiveFolderId);
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+            RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
+                originalGalleryOffset, originalNavigationVersion, originalActiveFolderId)),
+            DispatcherPriority.Loaded);
         if (Enum.TryParse<PhotoSequenceScope>(next.SequenceScope, out var sequence) &&
             Enum.IsDefined(sequence))
             ApplyPhotoSequenceScope(sequence);
