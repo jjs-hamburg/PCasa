@@ -125,7 +125,8 @@ public partial class MainWindow
             {
                 try
                 {
-                    await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+                    await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false,
+                    fromScanner: true);
                 }
                 catch (Exception ex)
                 {
