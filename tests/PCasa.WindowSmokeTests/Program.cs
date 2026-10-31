@@ -731,6 +731,77 @@ internal static class Program
             if (originalIndex < 0 || scroller.VerticalOffset < 200)
                 throw new Exception("The WPF window did not scroll to synthetic images.");
 
+            // Continuous user scroll must own the published viewport. A
+            // scanner notification must never insert/reflow thumbnails under
+            // the cursor while the user is moving. Use real WPF scroll offsets
+            // and the same auto-publication gate as the background scanner.
+            var scrollFlags = System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance;
+            var scrollType = typeof(PCasa.App.MainWindow);
+            var scrollMark = scrollType.GetMethod(
+                "RegisterGalleryUserScroll", scrollFlags)!;
+            var scrollDefer = scrollType.GetMethod(
+                "DeferScanGalleryPublication", scrollFlags)!;
+            var scrollActive = scrollType.GetMethod(
+                "GalleryScrollIsActive", scrollFlags)!;
+            var scanDirtyField = scrollType.GetField(
+                "_scanGalleryPublicationDeferred", scrollFlags)!;
+            var timerField = scrollType.GetField(
+                "_scanGalleryScrollSettleTimer", scrollFlags)!;
+            var scannerNotification = scrollType.GetMethod(
+                "OnCatalogImageIndexed", scrollFlags)!;
+            var folderBeforeScroll = scrollType.GetField(
+                "_activePhotoFolderId", scrollFlags)!;
+            var activeFolderBeforeScroll = folderBeforeScroll.GetValue(window);
+            try
+            {
+                folderBeforeScroll.SetValue(window, (long?)100);
+                for (var step = 0; step < 24; step++)
+                {
+                    scroller.ScrollToVerticalOffset(2200 + (step % 7) * 60);
+                    scrollMark.Invoke(window, null);
+                    // The rendered image list must not be replaced by a
+                    // newly indexed file while this scroll burst is active.
+                    scannerNotification.Invoke(window,
+                        new object[] { @"C:\synthetic\pending-photo.jpg", 100L });
+                }
+                Flush(window);
+                if (!(bool)scrollActive.Invoke(window, null)! ||
+                    !(bool)scanDirtyField.GetValue(window)! ||
+                    !ReferenceEquals(surface.GetType(), typeof(BrowseGallerySurface)) ||
+                    surface.CaptureImageAnchor(scroller.VerticalOffset) is null ||
+                    (bool)scrollDefer.Invoke(window, null)! != true)
+                    throw new Exception("Automatic scan publication was not held during rapid scrolling.");
+                // In the resting middle of a large gallery the next
+                // publication is batched; the index is not rebuilt per
+                // individual indexed image.
+                Console.WriteLine(
+                    "PASS: Rapid scrolling holds and coalesces live scanner gallery publications.");
+
+                // Top and bottom remain live. Do not flush the synthetic
+                // index into the actual empty runner database during this
+                // policy test; only evaluate the publication gate.
+                scanDirtyField.SetValue(window, false);
+                (timerField.GetValue(window) as DispatcherTimer)?.Stop();
+                scroller.ScrollToTop();
+                Flush(window);
+                if ((bool)scrollDefer.Invoke(window, null)!)
+                    throw new Exception("Top of gallery unexpectedly froze scanner publication.");
+                scroller.ScrollToBottom();
+                Flush(window);
+                if ((bool)scrollDefer.Invoke(window, null)!)
+                    throw new Exception("End of gallery unexpectedly froze scanner publication.");
+                Console.WriteLine("PASS: Gallery first and last rows remain live during scans.");
+            }
+            finally
+            {
+                scanDirtyField.SetValue(window, false);
+                (timerField.GetValue(window) as DispatcherTimer)?.Stop();
+                folderBeforeScroll.SetValue(window, activeFolderBeforeScroll);
+                scroller.ScrollToVerticalOffset(2800);
+                Flush(window);
+            }
+
             // Regression: a background import inserts entire rows while the
             // image viewer/GPS sidebar is open. Closing must recover the SAME
             // photo identity, not the now-stale opening pixel coordinate.
