@@ -582,6 +582,39 @@ internal static class FolderAddFlow
 
             Console.WriteLine(
                 "PASS: Explorer enables excluded subtree within original monitored root without duplicates or lost exclusions.");
+
+            // Real THIRD application launch, with enabled monitoring and
+            // fully indexed existing roots. Merely constructing watchers
+            // must not schedule another recursive scan of those roots.
+            // A new photo created while PCasa is running is covered above.
+            var previousWindow = window;
+            previousWindow.Close();
+            Until(previousWindow, () => !previousWindow.IsVisible,
+                "Previous WPF session did not close before scan-startup regression.");
+            window = null;
+            if (roots.GetPendingInitialScans().Count != 0 ||
+                roots.GetPendingAutomaticInventories().Count != 0)
+                throw new Exception("Startup scan regression fixture still has unfinished inventory.");
+            new BackgroundScanSettings { Enabled = true }.Save();
+            window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
+            window.Show();
+            var scanFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var firstSnapshotField = typeof(PCasa.App.MainWindow).GetField(
+                "_backgroundFirstMonitorSnapshot", scanFlags)
+                ?? throw new Exception("Startup monitor state not available.");
+            var scanScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", scanFlags)!.GetValue(window)!;
+            Until(window, () =>
+                firstSnapshotField.GetValue(window) is false,
+                "Startup monitor did not finish first availability snapshot.");
+            if (scanScheduler.Snapshot().Any(job =>
+                    job.Key.StartsWith("background-scan:", StringComparison.Ordinal) &&
+                    job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
+                        SchedulerJobState.YieldRequested) ||
+                roots.GetPendingAutomaticInventories().Count != 0)
+                throw new Exception(
+                    "Startup manufactured a new root scan for already indexed monitored folders.");
+            Console.WriteLine("PASS: Real WPF restart with enabled watchers does not invent whole-root inventory.");
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");
