@@ -32,6 +32,7 @@ public partial class MainWindow
     private long _gpsFilmstripRevision;
     private bool _gpsFilmstripUpdating;
     private List<GpsFilmstripEntry> _gpsFilmstripEntries = [];
+    private HashSet<long>? _gpsFilmstripPointIds;
 
     private void InitializeGpsFilmstrip()
     {
@@ -54,6 +55,7 @@ public partial class MainWindow
             GpsPhotoPopup.Visibility = Visibility.Collapsed;
         else
         {
+            _gpsFilmstripPointIds = null;
             _gpsHighlightedImageId = null;
             if (!_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
                 CloseGpsFullscreenImage();
@@ -61,6 +63,28 @@ public partial class MainWindow
         SaveAppearance();
         if (_sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip)
             UpdateGpsFilmstrip();
+    }
+
+    // A clicked cluster is a temporary VIEW of its photo identities, not a
+    // new gallery selection or an additional query/scheduler. Reuse the one
+    // existing filmstrip and its packed-thumbnail reader.
+    private void ShowGpsPointGroup(HashSet<long> ids, long anchorId)
+    {
+        if (ids.Count == 0 || !ids.Contains(anchorId)) return;
+        _gpsFilmstripPointIds = ids;
+        if (!_appearance.ShowGpsFilmstrip)
+        {
+            _appearance.ShowGpsFilmstrip = true;
+            _gpsFilmstripUpdating = true;
+            GpsFilmstripToggle.IsChecked = true;
+            _gpsFilmstripUpdating = false;
+            ApplyGpsFilmstripVisibility();
+            SaveAppearance();
+        }
+        FocusGpsPhotoForDisplay(anchorId);
+        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+        UpdateGpsFilmstrip();
+        HighlightGpsPointOnMap(anchorId);
     }
 
     // Called from the same catalog selection publication as the map markers.
@@ -76,7 +100,7 @@ public partial class MainWindow
             return;
         }
 
-        var selected = _selectedImageIds.ToHashSet();
+        var selected = _gpsFilmstripPointIds ?? _selectedImageIds.ToHashSet();
         // The strip is a projection of the GALLERY SELECTION, not of EXIF GPS
         // coverage. A selected photo must appear even when coordinates are
         // absent, invalid or awaiting reindexing.
@@ -113,7 +137,9 @@ public partial class MainWindow
             ?? entries.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
         _gpsFilmstripUpdating = false;
         GpsFilmstripToggle.ToolTip = UiLanguage.T("Filmstreifen") +
-            (selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160)" : "");
+            (_gpsFilmstripPointIds is null ? "" :
+                $" · {selected.Count:N0} Fotos am Kartenpunkt") +
+            (selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160 sichtbar)" : "");
 
         if (packed.Count == 0) return;
         _ = LoadGpsFilmstripBitmapsAsync(packed, revision);
