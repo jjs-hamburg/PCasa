@@ -2,8 +2,8 @@ using System.Threading;
 
 namespace PCasa.App.Services;
 
-// Single provider-independent GPS grouping authority. Originals remain
-// untouched: a cluster is a temporary UI projection of image identities.
+// One provider-neutral GPS grouping owner. Its transient results contain
+// immutable image identities, not approximated or edited source coordinates.
 public sealed record GpsPhotoPosition(long ImageId, double Latitude, double Longitude);
 public sealed record GpsPhotoCluster(
     long Id, double Latitude, double Longitude, IReadOnlyList<long> ImageIds)
@@ -19,15 +19,37 @@ public static class GpsGeographicClusterer
     public static double RadiusKm(double zoom) =>
         Math.Max(0.001, 280d * Math.Pow(2d, 2d - Math.Clamp(zoom, 0, 23)));
 
+    private static (double X, double Y, double Z) Sphere(double lat, double lon)
+    {
+        var latitude = lat * Radians;
+        var longitude = lon * Radians;
+        var cos = Math.Cos(latitude);
+        return (cos * Math.Cos(longitude), cos * Math.Sin(longitude),
+            Math.Sin(latitude));
+    }
+
     private static double DistanceKm(double lat1, double lon1, double lat2, double lon2)
     {
         var latDelta = (lat2 - lat1) * Radians;
-        // Smallest angular difference also handles ±180° antimeridian.
         var lonDelta = ((lon2 - lon1 + 540d) % 360d - 180d) * Radians;
         var h = Math.Pow(Math.Sin(latDelta / 2), 2) +
             Math.Cos(lat1 * Radians) * Math.Cos(lat2 * Radians) *
             Math.Pow(Math.Sin(lonDelta / 2), 2);
-        return 2d * EarthRadiusKm * Math.Asin(Math.Min(1d, Math.Sqrt(Math.Max(0d, h))));
+        return 2d * EarthRadiusKm *
+            Math.Asin(Math.Min(1d, Math.Sqrt(Math.Max(0d, h))));
+    }
+
+    // Cubic buckets in Earth-centered 3D coordinates are ONLY an index:
+    // unlike latitude/longitude grids, they have no antimeridian seam or
+    // increasing distortion toward the poles. They never determine a
+    // displayed marker position or whether two images are close enough.
+    private static (long X, long Y, long Z) Cell(
+        double lat, double lon, double chord)
+    {
+        var p = Sphere(lat, lon);
+        return ((long)Math.Floor((p.X + 1) / chord),
+            (long)Math.Floor((p.Y + 1) / chord),
+            (long)Math.Floor((p.Z + 1) / chord));
     }
 
     private sealed class Group(GpsPhotoPosition first)
@@ -36,18 +58,23 @@ public static class GpsGeographicClusterer
         public List<long> ImageIds { get; } = [];
         public double Latitude { get; private set; }
         public double Longitude { get; private set; }
-        private double _latitudeSum;
-        private double _longitudeSin;
-        private double _longitudeCos;
+        private double _x, _y, _z;
 
         public void Add(GpsPhotoPosition point)
         {
             ImageIds.Add(point.ImageId);
-            _latitudeSum += point.Latitude;
-            _longitudeSin += Math.Sin(point.Longitude * Radians);
-            _longitudeCos += Math.Cos(point.Longitude * Radians);
-            Latitude = _latitudeSum / ImageIds.Count;
-            Longitude = Math.Atan2(_longitudeSin, _longitudeCos) / Radians;
+            if (ImageIds.Count == 1)
+            {
+                Latitude = point.Latitude;
+                Longitude = point.Longitude; // singleton stays EXACT
+            }
+            var p = Sphere(point.Latitude, point.Longitude);
+            _x += p.X; _y += p.Y; _z += p.Z;
+            if (ImageIds.Count > 1)
+            {
+                Latitude = Math.Atan2(_z, Math.Sqrt(_x * _x + _y * _y)) / Radians;
+                Longitude = Math.Atan2(_y, _x) / Radians;
+            }
         }
 
         public GpsPhotoCluster Snapshot() =>
@@ -59,12 +86,23 @@ public static class GpsGeographicClusterer
         CancellationToken cancellationToken = default)
     {
         var radiusKm = RadiusKm(zoom);
-        var maxLatitudeDifference = radiusKm / 110.5d;
+        // A spherical chord has exactly the same geographic maximum
+        // distance as the user-visible radius, independently of latitude.
+        var chord = 2d * Math.Sin(radiusKm / (2d * EarthRadiusKm));
         var groups = new List<Group>();
-        var active = new List<Group>();
+        var buckets = new Dictionary<(long X, long Y, long Z), HashSet<Group>>();
+        void Insert((long X, long Y, long Z) key, Group group)
+        {
+            if (!buckets.TryGetValue(key, out var set))
+            {
+                set = [];
+                buckets.Add(key, set);
+            }
+            set.Add(group);
+        }
 
-        // Stable geographical order is important. Input order must never
-        // change a group's identity or make a camera move produce a grid.
+        // Sorting by true GPS values, then stable photo identity makes the
+        // projection independent of arbitrary gallery thumbnail order.
         var ordered = positions
             .Where(p => double.IsFinite(p.Latitude) && double.IsFinite(p.Longitude) &&
                 p.Latitude is >= -90 and <= 90 &&
@@ -75,36 +113,53 @@ public static class GpsGeographicClusterer
         foreach (var point in ordered)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            // As the photos are latitude-ordered, groups too far south will
-            // never be candidates again. This bounds the search to nearby
-            // geographic groups rather than all historical image positions.
-            active.RemoveAll(g => g.Latitude < point.Latitude - maxLatitudeDifference);
+            var key = Cell(point.Latitude, point.Longitude, chord);
             Group? nearest = null;
             var best = radiusKm;
-            foreach (var group in active)
+            // If the true great-circle distance is <= radius, each
+            // Cartesian component differs by <= chord, hence the group's
+            // centroid MUST be in one of these 27 neighboring cells.
+            for (var dx = -1; dx <= 1; dx++)
+            for (var dy = -1; dy <= 1; dy++)
+            for (var dz = -1; dz <= 1; dz++)
             {
-                if (Math.Abs(group.Latitude - point.Latitude) > maxLatitudeDifference)
-                    continue;
-                var km = DistanceKm(group.Latitude, group.Longitude,
-                    point.Latitude, point.Longitude);
-                if (km > best) continue;
-                best = km;
-                nearest = group;
+                var neighbor = (key.X + dx, key.Y + dy, key.Z + dz);
+                if (!buckets.TryGetValue(neighbor, out var candidates)) continue;
+                foreach (var group in candidates)
+                {
+                    var km = DistanceKm(group.Latitude, group.Longitude,
+                        point.Latitude, point.Longitude);
+                    if (km > best) continue;
+                    if (nearest is null || km < best ||
+                        (km == best && group.Id < nearest.Id))
+                    {
+                        nearest = group;
+                        best = km;
+                    }
+                }
             }
-
             if (nearest is null)
             {
                 nearest = new Group(point);
                 groups.Add(nearest);
-                active.Add(nearest);
+                nearest.Add(point);
+                Insert(Cell(nearest.Latitude, nearest.Longitude, chord), nearest);
             }
-            nearest.Add(point);
+            else
+            {
+                var oldKey = Cell(nearest.Latitude, nearest.Longitude, chord);
+                nearest.Add(point);
+                var newKey = Cell(nearest.Latitude, nearest.Longitude, chord);
+                if (oldKey != newKey)
+                {
+                    var oldBucket = buckets[oldKey];
+                    oldBucket.Remove(nearest);
+                    if (oldBucket.Count == 0) buckets.Remove(oldKey);
+                    Insert(newKey, nearest);
+                }
+            }
         }
 
-        var result = groups.Select(g => g.Snapshot()).ToArray();
-        // Every input identity belongs to one and only one cluster. A
-        // drawn count is a count of PHOTOS, never rounded GPS locations.
-        return result;
+        return groups.Select(g => g.Snapshot()).ToArray();
     }
 }
