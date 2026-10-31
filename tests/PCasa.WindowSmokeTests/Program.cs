@@ -832,14 +832,20 @@ internal static class Program
                     if (atStart) scroller.ScrollToTop();
                     else scroller.ScrollToBottom();
                     Flush(window);
+                    var activeAtEdge = (long?)folderBeforeScroll.GetValue(window);
+                    var incomingOtherFolder = activeAtEdge == 100L ? 200L : 100L;
                     scannerNotification.Invoke(window, new object[] {
                         atStart ? @"C:\synthetic\other-folder-top.jpg" :
-                            @"C:\synthetic\other-folder-bottom.jpg", 200L });
+                            @"C:\synthetic\other-folder-bottom.jpg", incomingOtherFolder });
                     Flush(window);
-                    if ((int)catalogPending.GetValue(window)! != 1 ||
-                        (bool)scanDirtyField.GetValue(window)!)
+                    var queued = (int)catalogPending.GetValue(window)!;
+                    var deferred = (bool)scanDirtyField.GetValue(window)!;
+                    if (queued != 1 || deferred)
                         throw new Exception(
-                            "Cross-folder scanner commit did not queue a live edge refresh.");
+                            $"Cross-folder scanner commit did not queue a live edge refresh: " +
+                            $"AtStart={atStart}; CurrentFolder={activeAtEdge}; " +
+                            $"IncomingFolder={incomingOtherFolder}; Queued={queued}; Deferred={deferred}; " +
+                            $"Offset={scroller.VerticalOffset}; Scrollable={scroller.ScrollableHeight}.");
                     ((DispatcherTimer?)catalogTimer.GetValue(window))?.Stop();
                     catalogPending.SetValue(window, 0);
                 }
