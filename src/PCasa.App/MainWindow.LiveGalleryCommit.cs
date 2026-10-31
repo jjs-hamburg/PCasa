@@ -34,16 +34,11 @@ public partial class MainWindow
             // At either live edge, however, EVERY committed folder belongs
             // to the continuous gallery, not just the currently focused one.
             if (DeferScanGalleryPublication()) return;
-            if (_activePhotoFolderId != photoFolderId)
-            {
-                // The existing coalesced catalog publisher refreshes the
-                // globally ordered projection across folder boundaries.
-                // No independent list, timer, or per-image full-index load.
-                ScheduleCatalogGalleryPublication();
-                return;
-            }
-            // The active folder has a cheaper, identity-preserving insertion
-            // through the same canonical thumbnail-index projection.
+            // The focused folder is NOT a filter on scanner publication.
+            // Every new committed photo uses the SAME indexed-image path:
+            // reading the whole catalog for non-active folders on each scan
+            // caused the gallery to remain static through long inventories.
+            // Do not build a second publisher or prefetch remote originals.
             _ = InsertIndexedGalleryImageAsync(canonicalPath, photoFolderId, tier);
         }), DispatcherPriority.Background);
     }
