@@ -568,6 +568,9 @@ public partial class MainWindow
         if (_sidebarMode != "GPS") return;
         var revision = ++_gpsQueryRevision;
         var selectedIds = _selectedImageIds.ToArray();
+        // A map-point filmstrip is a temporary view. A real gallery selection
+        // change replaces it with the new selection; it never owns selection.
+        _gpsFilmstripPointIds = null;
         // The previous selection's map and coordinates must not masquerade
         // as the newly selected 6,000 photos while catalog reads are queued.
         // Keep the scheduler as the only read owner; publish loading state
