@@ -16,23 +16,17 @@ class MapStub {
   constructor(){activeMap=this;this.handlers={};this.sources={};this.layers={};this.zoom=2;}
   on(name,a,b){(this.handlers[name]??=[]).push({layer:b?a:null,handler:b||a});}
   emit(name,event){for(const x of this.handlers[name]??[])if(!x.layer)x.handler(event);}
-  emitLayer(name,layer,event){
-    for(const x of this.handlers[name]??[])if(x.layer===layer)x.handler(event);
-  }
+  emitLayer(name,layer,event){for(const x of this.handlers[name]??[])
+    if(x.layer===layer)x.handler(event);}
   getContainer(){return host;}getCanvas(){return {style:{}};}
   addControl(){}
   addSource(id,options){this.sources[id]={options,data:options.data,
     setData(data){this.data=data;},
-    getClusterExpansionZoom(id){this.lastExpandedId=id;
-      // A synchronous thenable keeps this render-policy smoke test
-      // deterministic while exercising the MapLibre Promise API.
-      return {then(fn){fn(11);return {catch(){}};}};}
-  };}
+    getClusterExpansionZoom(){return Promise.resolve(11);}};}
   getSource(id){return this.sources[id];}
   addLayer(layer){this.layers[layer.id]=layer;}
   getLayer(id){return this.layers[id];}
-  queryRenderedFeatures({layers}={}){this.lastQueriedLayers=layers;
-    return this.renderedFeatures??[{properties:{id:'visible-photo'}}];}
+  queryRenderedFeatures(){return [];}
   project(location){return {x:512+location[0]*4,y:325-location[1]*4};}
   fitBounds(b){this.bounds=b.points;}
   easeTo(args){this.lastEase=args;}
@@ -50,6 +44,7 @@ class MarkerStub {
 }
 class Bounds{constructor(){this.points=[];}extend(p){this.points.push(p);}}
 const liveMarkers=()=>markers.filter(m=>m.attached&&!m.removed);
+const markerCount=()=>liveMarkers().reduce((n,m)=>n+(Number(m.element.textContent)||1),0);
 const window={devicePixelRatio:1,requestAnimationFrame:f=>f(),
   CefSharp:{PostMessage:json=>messages.push(JSON.parse(json))}};
 const maplibregl={Map:MapStub,Marker:MarkerStub,LngLatBounds:Bounds,NavigationControl:class{}};
@@ -57,184 +52,116 @@ window.maplibregl=maplibregl;
 vm.runInNewContext(script,{window,document,Map,Number,console,maplibregl});
 activeMap.emit('style.load');
 assert.ok(messages.some(m=>m.type==='ready'));
-assert.ok(activeMap.getSource('pcasa-selected'),'MapLibre owns the selected image source');
-assert.equal(activeMap.getLayer('pcasa-selected-points').type,'circle');
-assert.equal(activeMap.getLayer('pcasa-selected-count').type,'symbol');
-assert.equal(activeMap.getLayer('pcasa-selected-clusters').type,'circle');
-assert.equal(activeMap.getLayer('pcasa-selected-cluster-count').type,'symbol');
-const selectionSource=()=>activeMap.getSource('pcasa-selected');
-assert.equal(selectionSource().options.cluster,true,
-  'Selected GPS locations must use provider-neutral native clustering');
-assert.equal(selectionSource().options.clusterRadius,52,
-  'Geographic cluster radius is constant in screen pixels across zoom levels');
-assert.equal(selectionSource().options.clusterMaxZoom,17);
-assert.equal(JSON.stringify(selectionSource().options.clusterProperties.photo_count),
-  JSON.stringify(['+',['get','count']]),
-  'Cluster count must sum photos at locations, not number of different locations');
-assert.equal(activeMap.getLayer('pcasa-selected-points').filter[0],'!',
-  'An unclustered selected pin must not also draw cluster features');
-const selectedFeatures=()=>activeMap.getSource('pcasa-selected').data.features;
-const selectedPhotoCount=()=>selectedFeatures().reduce((sum,f)=>sum+f.properties.count,0);
+assert.ok(activeMap.getSource('pcasa-photos'),'Context source still exists');
+assert.equal(activeMap.getSource('pcasa-selected'),undefined,
+  'Selected photos must never use the formerly blank worker GeoJSON path');
 
-// Transfer is atomic: no partial continents before the last chunk. Same
-// actual coordinate is counted, not redistributed across arbitrary pixels.
+const push=(version,data,chunkSize=180)=>{
+  const chunks=Math.ceil(data.length/chunkSize);
+  window.pcasaBeginPoints(version,chunks);
+  window.pcasaCommitPoints(version);
+  for(let i=0;i<chunks;i++)
+    window.pcasaAppendPoints(version,i,data.slice(i*chunkSize,(i+1)*chunkSize));
+};
 const worldwide=Array.from({length:6000},(_,i)=>({
- id:i+1,name:'photo '+i,lat:i<3000?53.5:26.1,
- lon:i<3000?10:-80,selected:true
-}));
+  id:i+1,name:'photo '+i,lat:i<3000?53.5:26.1,
+  lon:i<3000?10:-80,selected:true}));
 window.pcasaBeginPoints(1,3);
 window.pcasaCommitPoints(1);
 window.pcasaAppendPoints(1,2,worldwide.slice(4000));
 window.pcasaAppendPoints(1,0,worldwide.slice(0,2000));
-assert.equal(selectedFeatures().length,0,'No partial worldwide view');
+assert.equal(liveMarkers().length,0,'No partially transferred selection may render');
 window.pcasaAppendPoints(1,1,worldwide.slice(2000,4000));
-assert.equal(activeMap.bounds.length,6000,'Fit bounds uses every selected coordinate');
-assert.equal(selectedFeatures().length,2,'Identical GPS coordinates share exactly one pin');
-assert.equal(selectedPhotoCount(),6000,'All 6,000 images counted');
-// Two originals at one location are kept at their REAL geographic position;
-// the native clusterProperties then counts all constituent photographs.
-assert.ok(selectionSource().options.clusterProperties.photo_count);
-assert.deepEqual(Array.from(selectedFeatures()).map(f=>f.properties.count),[3000,3000]);
+assert.equal(markerCount(),6000);
+assert.equal(liveMarkers().length,2,'Exact duplicates aggregate geographically');
+assert.equal(activeMap.bounds.length,6000,'Fit bounds based on original GPS');
 assert.ok(messages.some(m=>m.type==='gps-sync'&&m.received===6000&&m.selected===6000));
-const europe=selectedFeatures().find(f=>f.properties.lon===10);
-activeMap.emitLayer('click','pcasa-selected-points',{features:[europe]});
-const grouped=messages.find(m=>m.type==='point-group');
-assert.ok(grouped,'Clicking a counted pin opens the corresponding photos');
-assert.equal(grouped.id,1);
-assert.equal(grouped.south,53.5);assert.equal(grouped.north,53.5);
-assert.equal(grouped.west,10);assert.equal(grouped.east,10);
-assert.equal(activeMap.lastEase,undefined,'Click opens photos instead of silently zooming');
-// A selected geographical cluster expands in MapLibre regardless of provider.
-activeMap.emitLayer('click','pcasa-selected-clusters',{
-  features:[{properties:{cluster_id:42,photo_count:6000},
-    geometry:{coordinates:[-35,42]}}]
-});
-assert.equal(selectionSource().lastExpandedId,42);
-assert.equal(activeMap.lastEase.zoom,11);
-assert.deepEqual(Array.from(activeMap.lastEase.center),[-35,42]);
-activeMap.lastEase=undefined;
+// Click on a counted exact position preserves filmstrip group semantics.
+const eu=liveMarkers().find(m=>m.coordinates[0]===10);
+activeMap.emit('click',{point:activeMap.project(eu.coordinates)});
+const firstGroup=messages.find(m=>m.type==='point-group');
+assert.equal(firstGroup.id,1);
+assert.equal(firstGroup.south,53.5);
 
-// Small selections retain reliable individual MapLibre DOM markers.
+// The ONE marker path also renders a small selection.
 const small=[
- {id:1,lat:52,lon:10,selected:true},
- {id:2,lat:35,lon:-118,selected:true},
- {id:3,lat:-24,lon:133,selected:true}
-];
-window.pcasaBeginPoints(2,2);
-window.pcasaAppendPoints(2,1,small.slice(1));
-window.pcasaCommitPoints(2);
-window.pcasaAppendPoints(2,0,small.slice(0,1));
-assert.equal(liveMarkers().length,3,'Every small-selection location has a DOM marker');
-assert.equal(selectedFeatures().length,0,'Small selections use one marker implementation');
-activeMap.emit('click',{point:{x:512+10*4,y:325-52*4},lngLat:{lat:52,lng:10}});
-assert.ok(messages.some(m=>m.type==='select'&&m.id===1),'Map click opens exact photo');
+  {id:1,lat:52,lon:10,selected:true},
+  {id:2,lat:35,lon:-118,selected:true},
+  {id:3,lat:-24,lon:133,selected:true}];
+push(2,small);
+assert.equal(liveMarkers().length,3);
+assert.equal(markerCount(),3);
+activeMap.emit('click',{point:activeMap.project([10,52])});
+assert.ok(messages.some(m=>m.type==='select'&&m.id===1));
 activeMap.setStyle();activeMap.emit('style.load');
-assert.equal(liveMarkers().length,3,'Style changes preserve small markers');
-assert.ok(activeMap.getSource('pcasa-selected'),'MapLibre source is reinstalled after style reload');
+assert.equal(liveMarkers().length,3,'Provider style replacement keeps map markers');
 window.pcasaBeginPoints(3,1);window.pcasaBeginPoints(4,1);
 window.pcasaAppendPoints(3,0,worldwide);window.pcasaCommitPoints(3);
 window.pcasaCommitPoints(4);window.pcasaAppendPoints(4,0,small);
-assert.equal(liveMarkers().length,3,'Stale transfers cannot overwrite small selection');
+assert.equal(liveMarkers().length,3,'A stale transfer cannot overwrite newer selection');
 
-window.pcasaBeginPoints(5,1);
-window.pcasaAppendPoints(5,0,[{id:77,lat:53.5,lon:10,selected:true}]);
-window.pcasaCommitPoints(5);
-assert.equal(liveMarkers().length,1,'Single photo always has a DOM pin');
-assert.deepEqual(Array.from(liveMarkers()[0].coordinates),[10,53.5]);
-window.pcasaBeginPoints(6,1);
-window.pcasaAppendPoints(6,0,[{id:77,lat:26.1,lon:-80,selected:true}]);
-window.pcasaCommitPoints(6);
-assert.deepEqual(Array.from(liveMarkers()[0].coordinates),[-80,26.1],
- 'Corrected metadata repositions the SAME image marker');
+// Geographic proximity must be measured in km, not equal GPS strings and
+// NOT by moving near-by markers onto a fabricated lat/lon grid line.
+const tenerife=Array.from({length:17},(_,i)=>({
+  id:8000+i,selected:true,
+  lat:28.415+i*0.00023,lon:-16.568+i*0.00017}));
+activeMap.zoom=11; // ~0.55km clustering radius
+push(5,tenerife);
+assert.ok(liveMarkers().length<17,
+  'Real coordinates differing by tens of meters must form geographical clusters');
+assert.equal(markerCount(),17);
+const grouped=liveMarkers().find(m=>Number(m.element.textContent)>1);
+assert.ok(grouped,'Nearby photos are grouped even without identical GPS');
+assert.ok(grouped.coordinates[0] < -16.565 && grouped.coordinates[0] > -16.569,
+  'Cluster center is derived from actual GPS longitudes');
+activeMap.lastEase=undefined;
+activeMap.emit('click',{point:activeMap.project(grouped.coordinates)});
+assert.ok(activeMap.lastEase&&activeMap.lastEase.zoom>11,
+  'Clicking several distinct positions zooms into that geographic group');
+assert.equal(messages.filter(m=>m.type==='point-group').length,1,
+  'Near-but-different positions must NOT be treated as identical originals');
 
-// 6,100 DIFFERENT positions on three continents. Old tests covered only
-// two locations, so they could not detect missing geographic places.
-const distinct=Array.from({length:6100},(_,i)=>{
- const continent=Math.floor(i/2100);
- const local=i%2100;
- const base=[
-   {lat:30,lon:-120},{lat:42,lon:8},{lat:-39,lon:120}
- ][Math.min(continent,2)];
- return {id:10000+i,lat:base.lat+(local%100)*0.0123,
-   lon:base.lon+Math.floor(local/100)*0.0281,selected:true};
-});
-window.pcasaBeginPoints(7,1);
-window.pcasaAppendPoints(7,0,distinct);window.pcasaCommitPoints(7);
-assert.equal(liveMarkers().length,0,'Large selection releases the old DOM markers');
-assert.equal(selectedFeatures().length,6100,
- 'All 6100 DISTINCT GPS locations must enter the native geographic renderer');
-assert.equal(selectedPhotoCount(),6100);
-const longitudes=selectedFeatures().map(f=>f.geometry.coordinates[0]);
-assert.ok(longitudes.some(lon=>lon< -110)&&
-  longitudes.some(lon=>lon>0&&lon<25)&&longitudes.some(lon=>lon>110),
-  'North America, Europe, and Australia must all be represented');
-assert.deepEqual(Array.from(selectedFeatures()[0].geometry.coordinates),
- [distinct[0].lon,distinct[0].lat]);
+// Higher map zoom reduces the actual geographic radius and resolves the
+// same photos into the ORIGINAL underlying GPS positions, no pixel offsets.
+activeMap.zoom=20;
+activeMap.emit('moveend');
+assert.equal(liveMarkers().length,17,'High zoom resolves nearby real GPS positions');
+assert.equal(markerCount(),17);
+for(const photo of tenerife)
+  assert.ok(liveMarkers().some(m=>
+    Math.abs(m.coordinates[0]-photo.lon)<1e-9 &&
+    Math.abs(m.coordinates[1]-photo.lat)<1e-9));
 
-// Previously the 36px grid wrongly combined separate real places into
-// one artificial position, making straight rows on the map.
-const close=[
- ...Array.from({length:63},(_,i)=>({id:9000+i,lat:20,lon:-50,selected:true})),
- {id:9100,lat:20,lon:-1.5,selected:true},
- {id:9101,lat:20,lon:4,selected:true}
-];
-window.pcasaBeginPoints(8,1);
-window.pcasaAppendPoints(8,0,close);window.pcasaCommitPoints(8);
-assert.equal(selectedFeatures().length,3,
- 'Distinct locations must never merge based on pixel distance or grid cells');
-assert.deepEqual(Array.from(selectedFeatures()).map(f=>f.properties.count),[63,1,1]);
-assert.deepEqual(Array.from(selectedFeatures()).slice(1).map(f=>f.geometry.coordinates[0]),[-1.5,4]);
-// More than 7,000 selected photos over five continents, including identical
-// capture positions, must reach the clusterable source as authentic [lon,lat]
-// pairs. The worker does the grouping; JS must not manufacture grid lines.
-const world7000=Array.from({length:7200},(_,i)=>{
-  const j=i%1440,region=Math.floor(i/1440);
+// More than 7,000 selected real worldwide GPS locations must never create
+// a BLANK world map. There is no special >64-photo renderer any more.
+activeMap.zoom=2;
+const world7200=Array.from({length:7200},(_,i)=>{
+  const region=Math.floor(i/1440),j=i%1440;
   const base=[{lat:50,lon:10},{lat:38,lon:-120},{lat:-28,lon:135},
     {lat:-15,lon:-65},{lat:15,lon:100}][region];
   return {id:20000+i,lat:base.lat+(j%60)*0.031,
     lon:base.lon+Math.floor(j/60)*0.034,selected:true};
 });
-window.pcasaBeginPoints(9,40);
-window.pcasaCommitPoints(9);
-for(let i=0;i<40;i++)
-  window.pcasaAppendPoints(9,i,world7000.slice(i*180,(i+1)*180));
-assert.equal(selectedFeatures().length,7200);
-assert.equal(selectedPhotoCount(),7200);
+push(6,world7200);
+assert.ok(liveMarkers().length>0&&liveMarkers().length<7200,
+  'World map must have visible geographically clustered markers');
+assert.equal(markerCount(),7200,'Every selected photo is counted exactly once');
 assert.ok(messages.some(m=>m.type==='gps-sync'&&m.received===7200&&m.selected===7200));
-const coords7000=selectedFeatures().map(f=>f.geometry.coordinates);
-assert.ok(coords7000.some(p=>p[0]< -110));
-assert.ok(coords7000.some(p=>p[0]>130));
-assert.ok(coords7000.some(p=>p[0]>0&&p[0]<30));
-// The same PCasa layers MUST survive both vector-style and XYZ provider
-// switches without new catalog queries and without changing any GPS value.
-window.pcasaApplyProvider({format:'style',url:'https://example.test/style.json'});
+const longs=liveMarkers().map(m=>m.coordinates[0]);
+assert.ok(longs.some(l=>l<-110)&&longs.some(l=>l>130)&&
+  longs.some(l=>l>0&&l<30),
+  'North America, Australia and Europe all visible in world view');
+// The provider swap may NOT requery or re-cluster by a provider-specific API.
+const initial=liveMarkers().map(m=>[...m.coordinates,Number(m.element.textContent)||1]);
+window.pcasaApplyProvider({format:'style',url:'https://example.test/vector.json'});
 activeMap.emit('style.load');
-assert.equal(selectedFeatures().length,7200,'Vector provider switch retained ALL selected locations');
-assert.equal(activeMap.getLayer('pcasa-selected-clusters').type,'circle');
-assert.equal(selectionSource().options.cluster,true);
+assert.deepEqual(liveMarkers().map(m=>[...m.coordinates,Number(m.element.textContent)||1]),
+  initial,'Vector style switch keeps exactly the same GPS clusters');
 window.pcasaApplyProvider({format:'xyz',url:'https://example.test/{z}/{x}/{y}.png'});
 activeMap.emit('style.load');
-assert.equal(selectedFeatures().length,7200,'XYZ provider switch retained ALL selected locations');
-assert.equal(selectedPhotoCount(),7200);
-assert.equal(activeMap.getLayer('pcasa-selected-cluster-count').type,'symbol');
-// The old test only inspected raw GeoJSON. An actual empty rendered layer
-// must emit one diagnostic after a completed frame, not a flood per move.
-activeMap.renderedFeatures=[];
-activeMap.emit('idle');
-assert.ok(messages.some(m=>m.type==='gps-overlay-empty'&&
-  m.received===undefined&&m.selected===7200&&m.source===true),
-  'Blank large selected overlay must be reported independently of provider');
-const emptyReports=messages.filter(m=>m.type==='gps-overlay-empty').length;
-activeMap.emit('idle');
-assert.equal(messages.filter(m=>m.type==='gps-overlay-empty').length,emptyReports,
-  'No repeated empty-overlay diagnostics for the same transfer and style');
-activeMap.renderedFeatures=[{properties:{id:'visible-photo'}}];
-assert.equal(selectionSource().options.clusterRadius,52);
-assert.deepEqual(Array.from(selectedFeatures()[0].geometry.coordinates),
-  [world7000[0].lon,world7000[0].lat]);
-// Exact duplicate site counts remain stable even after provider reloads.
-window.pcasaBeginPoints(10,1);
-window.pcasaAppendPoints(10,0,close);window.pcasaCommitPoints(10);
-assert.equal(selectedFeatures().length,3);
-assert.equal(selectedPhotoCount(),65);
-console.log('GPS map PASS: 7200 worldwide selected photos, native scale-dependent provider-neutral clusters, original positions, weighted photo counts, click expansion and style reload');
+assert.deepEqual(liveMarkers().map(m=>[...m.coordinates,Number(m.element.textContent)||1]),
+  initial,'Raster XYZ style switch keeps exactly the same GPS clusters');
+assert.equal(markerCount(),7200);
+assert.equal(activeMap.getSource('pcasa-selected'),undefined,
+  'No independent map-provider-selected overlay may reappear');
+console.log('GPS map PASS: 7200 selected photos on five continents, real-km zoom clustering, original coordinates, stable counts, group clicks, provider-independent DOM markers');
