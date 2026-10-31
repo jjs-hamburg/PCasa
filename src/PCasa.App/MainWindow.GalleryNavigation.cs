@@ -78,6 +78,37 @@ public partial class MainWindow
         }
     }
 
+    // A settings change is a presentation-only operation, never a gallery
+    // navigation. Restore the PRE-DIALOG image identity after WPF finishes
+    // resizing/reflowing its rows, and preserve the original active folder.
+    // A subsequent explicit user navigation always takes precedence.
+    private void RestoreAppearanceGalleryAnchor(
+        (long ImageId, double RelativeY)? anchor, double oldOffset,
+        long navigationVersion, long? activeFolderId)
+    {
+        if (_explicitGalleryNavigationVersion != navigationVersion ||
+            Dispatcher.HasShutdownStarted) return;
+        var revision = ++_galleryLayoutRestoreRevision;
+        _restoringGalleryLayoutAnchor = true;
+        BrowseScrollViewer.UpdateLayout();
+        var target = anchor is { } image
+            ? BrowseSurface.GetImageAnchorOffset(image.ImageId, image.RelativeY)
+            : null;
+        BrowseScrollViewer.ScrollToVerticalOffset(
+            Math.Max(0, target ?? oldOffset));
+        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+            Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        _activePhotoFolderId = activeFolderId;
+        // A reflow can have published another pending anchor meanwhile.
+        // It is never allowed to overwrite the original appearance snapshot.
+        _pendingGalleryAnchor = null;
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (revision == _galleryLayoutRestoreRevision)
+                _restoringGalleryLayoutAnchor = false;
+        }, DispatcherPriority.ContextIdle);
+    }
+
     private void RestoreTagSearchNavigation(
         GallerySearchNavigationSession.Snapshot original)
     {
