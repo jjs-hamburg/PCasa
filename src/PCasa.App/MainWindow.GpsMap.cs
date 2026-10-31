@@ -407,8 +407,8 @@ public partial class MainWindow
                 SaveAppearance();
             }
             else if (data.Kind == "point-group" && data.Id > 0 &&
-                     data.South is double south && data.North is double north &&
-                     data.West is double west && data.East is double east &&
+                     data.South is double groupSouth && data.North is double groupNorth &&
+                     data.West is double groupWest && data.East is double groupEast &&
                      _gpsPoints.Any(x => x.Id == data.Id && x.Selected))
             {
                 // The canvas reports the exact geographic bounds of ALL
@@ -417,8 +417,9 @@ public partial class MainWindow
                 // stale visual position. There is no 1024-byte message limit
                 // on the number of matching photos.
                 var group = _gpsPoints
-                    .Where(p => p.Selected && p.Lat >= south && p.Lat <= north &&
-                        p.Lon >= west && p.Lon <= east)
+                    .Where(p => p.Selected &&
+                        p.Lat >= groupSouth && p.Lat <= groupNorth &&
+                        p.Lon >= groupWest && p.Lon <= groupEast)
                     .Select(p => p.Id).ToHashSet();
                 if (!group.Contains(data.Id)) return;
                 ShowGpsPointGroup(group, data.Id);
