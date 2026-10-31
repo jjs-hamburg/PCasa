@@ -1514,6 +1514,39 @@ internal static class Program
                         throw new Exception("Single-marker click failed to show its photo.");
                     Console.WriteLine(
                         "PASS: Map cluster clicks show photo IDs; singles open preview.");
+
+                    // The old no-selection code silently queried 5,000
+                    // unrelated photo locations. A folder change with no
+                    // gallery selection must synchronously EMPTY the map,
+                    // stale cluster projection and photo strip, without
+                    // entering the scheduler or waiting for a NAS scan.
+                    var idsField = viewerType.GetField("_selectedImageIds",
+                        reflectFlags)!;
+                    var originalSelection = ((HashSet<long>)idsField.GetValue(window)!)
+                        .ToArray();
+                    try
+                    {
+                        ((HashSet<long>)idsField.GetValue(window)!).Clear();
+                        var refreshGps = viewerType.GetMethod(
+                            "RefreshGpsMapAsync", reflectFlags)!;
+                        ((Task)refreshGps.Invoke(window, null)!).GetAwaiter()
+                            .GetResult();
+                        if (((System.Collections.IEnumerable)gpsPointsField
+                                .GetValue(window)!).Cast<object>().Any() ||
+                            ((System.Collections.IEnumerable)clusterField
+                                .GetValue(window)!).Cast<object>().Any() ||
+                            strip.Items.Count != 0 ||
+                            gpsCoords.Text != "Keine Fotos ausgewählt")
+                            throw new Exception(
+                                "Zero photo selection retained stale GPS points, clusters or filmstrip.");
+                        Console.WriteLine(
+                            "PASS: No-selection folder change immediately clears all GPS context.");
+                    }
+                    finally
+                    {
+                        ((HashSet<long>)idsField.GetValue(window)!)
+                            .UnionWith(originalSelection);
+                    }
                 }
                 finally
                 {
