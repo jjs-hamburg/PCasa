@@ -147,13 +147,24 @@ public partial class MainWindow
 
         _ = Dispatcher.BeginInvoke(() =>
         {
-            _backgroundScanSettings = BackgroundScanSettings.Load();
-            if (_backgroundScanSettings.Enabled)
+            var nextSettings = BackgroundScanSettings.Load();
+            var wasEnabled = _backgroundScanSettings?.Enabled == true;
+            _backgroundScanSettings = nextSettings;
+
+            // BackgroundScanSettings.Save() raises Changed even when an
+            // unrelated settings dialog saves the SAME Enabled=true value.
+            // Previously every such save cleared the known-root set and
+            // manufactured another complete RescanRoot of every catalogued
+            // folder. Only an actual enabled-state transition may do that.
+            if (wasEnabled == nextSettings.Enabled)
+                return;
+
+            if (nextSettings.Enabled)
             {
                 _backgroundKnownFolderIds.Clear();
                 _gpsSourceAuditedRoots.Clear();
-                // Re-enabled monitoring is an explicit change: reconcile
-                // what happened while the watchers were turned off.
+                // This is a REAL disabled->enabled transition: changes made
+                // while the watcher was absent require one reconciliation.
                 _backgroundFirstMonitorSnapshot = false;
             }
             else
