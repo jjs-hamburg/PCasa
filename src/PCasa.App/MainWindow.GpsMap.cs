@@ -280,6 +280,23 @@ public partial class MainWindow
                     root.TryGetProperty("id", out var id) &&
                     id.ValueKind == JsonValueKind.Number &&
                     id.TryGetInt64(out var parsed) ? parsed : 0);
+            case "point-group":
+            {
+                var south = Number("south");
+                var north = Number("north");
+                var west = Number("west");
+                var east = Number("east");
+                return root.TryGetProperty("id", out var anchor) &&
+                    anchor.TryGetInt64(out var imageId) &&
+                    south is >= -90 and <= 90 &&
+                    north is >= -90 and <= 90 &&
+                    west is >= -180 and <= 180 &&
+                    east is >= -180 and <= 180 &&
+                    south <= north && west <= east
+                    ? new GpsMapMessage("point-group", Id: imageId,
+                        South: south, North: north, West: west, East: east)
+                    : null;
+            }
             case "draft":
             {
                 var lat = Number("lat");
@@ -388,6 +405,23 @@ public partial class MainWindow
                 _appearance.GpsMapCenterLon = lon;
                 _appearance.GpsMapZoom = zoom;
                 SaveAppearance();
+            }
+            else if (data.Kind == "point-group" && data.Id > 0 &&
+                     data.South is double south && data.North is double north &&
+                     data.West is double west && data.East is double east &&
+                     _gpsPoints.Any(x => x.Id == data.Id && x.Selected))
+            {
+                // The canvas reports the exact geographic bounds of ALL
+                // images in the clicked screen-space cell. Resolve IDs using
+                // our immutable catalog projection, not a thumbnail index or
+                // stale visual position. There is no 1024-byte message limit
+                // on the number of matching photos.
+                var group = _gpsPoints
+                    .Where(p => p.Selected && p.Lat >= south && p.Lat <= north &&
+                        p.Lon >= west && p.Lon <= east)
+                    .Select(p => p.Id).ToHashSet();
+                if (!group.Contains(data.Id)) return;
+                ShowGpsPointGroup(group, data.Id);
             }
             else if (data.Kind == "select" && data.Id > 0 &&
                      _gpsPoints.Any(x => x.Id == data.Id))
@@ -726,8 +760,11 @@ public partial class MainWindow
         }
         // A bulk selection wants the selected photos, not an additional
         // 5,000 unrelated context images and their expensive catalog lookup.
-        // For an empty/single selection preserve folder context semantics.
-        if (ids.Length > 1) return result;
+        // ANY explicit selection owns its own GPS projection. The earlier
+        // single-photo path pulled in up to 5,000 unrelated folder positions,
+        // delaying the map and even displaying foreign clusters beside the
+        // selected photo. Folder context is for NO selection only.
+        if (ids.Length > 0) return result;
         var selectedWithGps = result.Count;
         if (folderId is long currentFolder)
             Read(" AND i.photo_folder_id = $folder", null, currentFolder,
