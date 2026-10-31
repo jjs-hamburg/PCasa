@@ -88,20 +88,14 @@ public sealed class SourceAvailabilityGate
             throw;
         }
 
-        bool changed;
         lock (state)
         {
-            changed = state.HasResult && state.Reachable != reachable;
             state.HasResult = true;
             state.Reachable = reachable;
             state.NextProbeUtc = _now() +
                 (reachable ? _onlineInterval : _offlineInterval);
             state.Probing = false;
         }
-        if (changed || !reachable)
-            PCasaDiagnostics.WriteMessage("Scheduler.SourceAvailability",
-                $"Root={root}; Reachable={reachable}; next check after " +
-                (reachable ? _onlineInterval : _offlineInterval));
         return reachable;
     }
 
