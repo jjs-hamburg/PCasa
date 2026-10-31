@@ -92,20 +92,27 @@ internal static class PCasaDiagnostics
         stream.Write(bytes.AsSpan(start));
     }
 
-    private static string Archive(int index)
-        => Path.Combine(Path.GetDirectoryName(LogPath)!,
-            $"pcasa-errors.{index}.log");
+    private static string Archive(int index) => Archive(LogPath, index);
 
-    private static void Rotate()
+    private static string Archive(string path, int index)
+        => Path.Combine(Path.GetDirectoryName(path)!,
+            $"{Path.GetFileNameWithoutExtension(path)}.{index}.log");
+
+    private static void Rotate(string path)
     {
-        if (File.Exists(Archive(2))) File.Delete(Archive(2));
-        if (File.Exists(Archive(1)))
-            File.Move(Archive(1), Archive(2));
-        if (File.Exists(LogPath))
-            File.Move(LogPath, Archive(1));
+        if (File.Exists(Archive(path, 2))) File.Delete(Archive(path, 2));
+        if (File.Exists(Archive(path, 1)))
+            File.Move(Archive(path, 1), Archive(path, 2));
+        if (File.Exists(path))
+            File.Move(path, Archive(path, 1));
     }
 
     private static void WriteEntry(string entry)
+        => WriteEntryToPath(LogPath, entry);
+
+    // Same actual writer path is used by production and the isolated
+    // regression test with a temporary sandbox file.
+    private static void WriteEntryToPath(string path, string entry)
     {
         var line = $"{DateTimeOffset.Now:O} {entry}\n";
         var bytes = Encoding.UTF8.GetBytes(line);
@@ -116,10 +123,10 @@ internal static class PCasaDiagnostics
                 "\n[Diagnostics] Entry truncated.\n";
             bytes = Encoding.UTF8.GetBytes(line);
         }
-        if (File.Exists(LogPath) &&
-            new FileInfo(LogPath).Length + bytes.Length > MaxFileBytes)
-            Rotate();
-        using var stream = new FileStream(LogPath, FileMode.Append, FileAccess.Write,
+        if (File.Exists(path) &&
+            new FileInfo(path).Length + bytes.Length > MaxFileBytes)
+            Rotate(path);
+        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write,
             FileShare.Read);
         stream.Write(bytes);
     }
