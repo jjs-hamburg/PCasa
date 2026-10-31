@@ -307,19 +307,28 @@ internal static class FolderAddFlow
                 "Existing thumbnails vanished while another folder's scan was blocked.");
             Console.WriteLine("PASS: Existing thumbnails stay accessible while a separate pending root is blocked.");
 
-            // Regression: a pending first import on one root MUST NOT prevent
-            // automatic discovery on a fully imported, independent root.
-            // This reproduces the real Pictures-pending / S:-completed case.
+            // A previously unseen file created while monitoring is disabled
+            // requires root reconciliation, but NOT ahead of an unfinished
+            // durable first import on another root. The old startup sweep
+            // scanned thousands of already indexed images first.
             var missedPhoto = Path.Combine(initialRoot, "previously-unseen.jpg");
             WriteJpeg(missedPhoto);
             new BackgroundScanSettings { Enabled = true }.Save();
             try
             {
+                var monitorFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var knownField = typeof(PCasa.App.MainWindow).GetField(
+                    "_backgroundKnownFolderIds", monitorFlags)!;
                 Until(window, () =>
-                        new ImageCatalogRepository(db).CountAll() == 3 &&
+                        knownField.GetValue(window) is HashSet<long> known &&
+                        known.Contains(roots.GetAll().Single(root =>
+                            SamePath(root.LocalPath, initialRoot)).Id) &&
                         roots.GetPendingInitialScans().Any(root =>
                             SamePath(root.LocalPath, afterRestart)),
-                    "A separate pending first import disabled the other root's automatic inventory.");
+                    "Monitor never attached to completed root.");
+                if (new ImageCatalogRepository(db).CountAll() != 2)
+                    throw new Exception(
+                        "Full root reconciliation ran before the durable first import.");
             }
             catch (TimeoutException ex)
             {
@@ -364,7 +373,7 @@ internal static class FolderAddFlow
                     " | scheduler=" + string.Join("; ", jobs), ex);
             }
             Console.WriteLine(
-                "PASS: Unindexed images on a completed root are discovered while another root's first import is blocked.");
+                "PASS: Startup root reconciliation is deferred while a durable first import is unfinished.");
 
             // Verify an actual NEW file notification, not just startup/root
             // reconciliation. Rename a complete JPEG into place to ensure
@@ -374,7 +383,7 @@ internal static class FolderAddFlow
             WriteJpeg(incomingTemp);
             File.Move(incomingTemp, incomingPhoto);
             Until(window, () =>
-                    new ImageCatalogRepository(db).CountAll() == 4 &&
+                    new ImageCatalogRepository(db).CountAll() == 3 &&
                     roots.GetPendingInitialScans().Any(root =>
                         SamePath(root.LocalPath, afterRestart)),
                 "Live file-system notification was blocked by a different pending first import.");
@@ -384,10 +393,13 @@ internal static class FolderAddFlow
             releaseRestartPhoto.Set();
             blockedRestart.GetAwaiter().GetResult();
             Until(window, () =>
-                new ImageCatalogRepository(db).CountAll() == 5 &&
+                new ImageCatalogRepository(db).CountAll() >= 4 &&
                 roots.GetPendingInitialScans().Count == 0,
-                "Restarted durable first import failed to resume after independent automatic scans.");
-            Console.WriteLine("PASS: Background image discovery and durable first-import resume coexist.");
+                "Restarted durable first import did not resume after independent file notifications.");
+            Until(window, () =>
+                new ImageCatalogRepository(db).CountAll() == 5,
+                "Deferred root reconciliation lost the file created while monitoring was disabled.");
+            Console.WriteLine("PASS: Live discovery runs before durable first-import completion; deferred root reconciliation catches offline changes afterwards.");
 
             // Explorer Ansicht is an in-place expansion of FoldersTree,
             // not a replacement control. Even hidden and unindexed folders
