@@ -152,7 +152,8 @@ public partial class MainWindow
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
             if (!_folderManagerOpen)
-                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false,
+                    fromScanner: true);
             StatusText.Text = result.Failed == 0
                 ? $"Ordner eingelesen: {folder.LocalPath} · {result.Updated:N0} aktualisiert"
                 : $"Ordner unvollständig: {folder.LocalPath} · {result.Failed:N0} Fehler";
