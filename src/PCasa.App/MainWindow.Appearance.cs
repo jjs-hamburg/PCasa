@@ -38,6 +38,11 @@ public partial class MainWindow
         public double LastScrollOffset { get; set; }
         public string? LastFolderCanonicalPath { get; set; }
         public double LastFolderRelativeOffset { get; set; }
+        // Immutable photo identity survives thumbnail-size and folder reflow.
+        public long? LastVisibleImageId { get; set; }
+        public double LastVisibleImageRelativeY { get; set; }
+        public long? LastFocusedImageId { get; set; }
+        public bool LastFocusedImageWasSoleSelection { get; set; }
         public string? SelectedTreePath { get; set; }
         public bool FolderExpansionsSaved { get; set; }
         public string[] ExpandedTreePaths { get; set; } = [];
@@ -158,6 +163,10 @@ public partial class MainWindow
             if (choice != MessageBoxResult.Yes) return;
             _tagDraft.Clear();
         }
+        // The user's gallery/tree focus belongs to the moment they close
+        // PCasa, NOT the later Closed event after asynchronous worker cleanup.
+        // A running import may still publish/reflow the gallery while waiting.
+        SaveGalleryPosition();
         _shutdownStarted = true;
 
         // In-flight catalog work or owned ExifTool sessions can need an
@@ -524,37 +533,86 @@ public partial class MainWindow
 
     private void SaveGalleryPosition()
     {
-        if (!_appearance.RestoreGalleryPosition) return;
-        var scrollOffset = BrowseScrollViewer.VerticalOffset;
-        _appearance.LastScrollOffset = scrollOffset;
-        if (BrowseSurface.GetFolderIdAtOffset(scrollOffset + 4) is long folderId &&
-            BrowseSurface.GetFolderOffset(folderId) is double folderTop)
+        // Tree focus is independent from scrolling (which must never select
+        // a different folder). Persist its current selection even when the
+        // optional gallery-position restoration is disabled.
+        if (FoldersTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag tag })
+            _appearance.SelectedTreePath = tag.FullPath;
+        if (_appearance.RestoreGalleryPosition)
         {
-            var folder = _photoFolders.FirstOrDefault(item => item.Id == folderId);
-            if (folder is not null)
+            var scrollOffset = BrowseScrollViewer.VerticalOffset;
+            _appearance.LastScrollOffset = scrollOffset;
+            if (CaptureGalleryAnchor() is { } anchor)
             {
-                _appearance.LastFolderCanonicalPath = folder.CanonicalPath;
-                _appearance.LastFolderRelativeOffset = Math.Max(0, scrollOffset - folderTop);
+                _appearance.LastVisibleImageId = anchor.ImageId;
+                _appearance.LastVisibleImageRelativeY = anchor.RelativeY;
             }
+            if (BrowseSurface.GetFolderIdAtOffset(scrollOffset + 4) is long folderId &&
+                BrowseSurface.GetFolderOffset(folderId) is double folderTop)
+            {
+                var folder = _photoFolders.FirstOrDefault(item => item.Id == folderId);
+                if (folder is not null)
+                {
+                    _appearance.LastFolderCanonicalPath = folder.CanonicalPath;
+                    _appearance.LastFolderRelativeOffset = Math.Max(0, scrollOffset - folderTop);
+                }
+            }
+            _appearance.LastFocusedImageId = _gallerySelection.FocusedId;
+            _appearance.LastFocusedImageWasSoleSelection =
+                _gallerySelection.FocusedId is long focused &&
+                _selectedImageIds.Count == 1 && _selectedImageIds.Contains(focused);
         }
         SaveAppearance();
     }
 
     private void RestoreGalleryPositionOnce()
     {
-        if (_galleryPositionRestored || !_appearance.RestoreGalleryPosition || _browseIndex.Count == 0)
+        if (_galleryPositionRestored || !_appearance.RestoreGalleryPosition ||
+            _browseIndex.Count == 0) return;
+        // Do not consume the one-time restore before the gallery has an
+        // actual measured scroll extent. Otherwise startup shows the top
+        // and no subsequent refresh is allowed to restore the user view.
+        BrowseScrollViewer.UpdateLayout();
+        if (BrowseScrollViewer.ScrollableHeight <= 0 &&
+            _appearance.LastScrollOffset > 0) return;
+        // Explicit user navigation during startup takes priority over a
+        // delayed automatic restore of yesterday's position.
+        if (_explicitGalleryNavigationVersion != 0)
+        {
+            _galleryPositionRestored = true;
             return;
-        _galleryPositionRestored = true;
+        }
         var target = _appearance.LastScrollOffset;
-        if (_appearance.LastFolderCanonicalPath is { Length: > 0 } path &&
+        if (_appearance.LastVisibleImageId is long imageId &&
+            BrowseSurface.GetImageAnchorOffset(
+                imageId, _appearance.LastVisibleImageRelativeY) is double imageTop)
+            target = imageTop;
+        else if (_appearance.LastFolderCanonicalPath is { Length: > 0 } path &&
             _photoFolders.FirstOrDefault(folder =>
                 string.Equals(folder.CanonicalPath, path, StringComparison.OrdinalIgnoreCase)) is { } folder &&
             BrowseSurface.GetFolderOffset(folder.Id) is double folderTop)
             target = folderTop + _appearance.LastFolderRelativeOffset;
+        // A transient startup/reflow anchor at image zero must not undo the
+        // persisted user's anchor a few lines later in the refresh pipeline.
+        _pendingGalleryAnchor = null;
+        _galleryPositionRestored = true;
         BrowseScrollViewer.ScrollToVerticalOffset(Math.Max(0, target));
-        if (string.IsNullOrEmpty(_appearance.SelectedTreePath) &&
-            BrowseSurface.GetFolderIdAtOffset(target + 4) is long restoredFolderId)
-            UpdateActiveFolderDisplay(restoredFolderId, updateTreeSelection: true);
+        if (BrowseSurface.GetFolderIdAtOffset(target + 4) is long restoredFolderId)
+        {
+            _activePhotoFolderId = restoredFolderId;
+            if (string.IsNullOrEmpty(_appearance.SelectedTreePath))
+                UpdateActiveFolderDisplay(restoredFolderId, updateTreeSelection: true);
+        }
+        if (_appearance.LastFocusedImageId is long focus &&
+            GallerySelection.Find(_displayedBrowseIndex, focus) >= 0)
+        {
+            _gallerySelection.SetFocus(focus);
+            if (_appearance.LastFocusedImageWasSoleSelection)
+            {
+                _selectedImageIds.Add(focus);
+                ApplyGallerySelection();
+            }
+        }
     }
 
     private void CloseSidebar_Click(object sender, RoutedEventArgs e)
