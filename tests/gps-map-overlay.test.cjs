@@ -117,4 +117,21 @@ assert.equal(liveMarkers().length,0,
  'Switching back to a large selection removes stale DOM pins');
 assert.equal(canvasDraw.filter(c=>c.r===16).length,2,
  'Large selection still uses grouped canvas');
-console.log('GPS map overlay PASS: worldwide canvas, DOM pins for single/small selection, metadata recenter, group click, style reload, stale chunks');
+// Regression: two real positions in the SAME old 36px square must never
+// collapse merely because their grid indices match. Their actual screen
+// distance (22px) exceeds the genuine near-neighbour radius (21px).
+const gridTest=[
+ ...Array.from({length:63},(_,i)=>({id:9000+i,lat:20,lon:-50,selected:true})),
+ {id:9100,lat:20,lon:-1.5,selected:true}, // x=506
+ {id:9101,lat:20,lon:4,selected:true}     // x=528
+];
+window.pcasaBeginPoints(8,1);
+window.pcasaAppendPoints(8,0,gridTest);window.pcasaCommitPoints(8);
+const actualSingles=canvasDraw.filter(c=>c.r===10);
+assert.equal(actualSingles.length,2,
+ 'Two real GPS positions 22px apart must not merge in one grid cell');
+assert.deepEqual(actualSingles.map(c=>c.x).sort((a,b)=>a-b),[506,528],
+ 'Pins must stay at their geographic projection, never at grid coordinates');
+assert.equal(canvasDraw.filter(c=>c.r===16).length,1,
+ 'Truly coincident GPS photos remain one counted group');
+console.log('GPS map overlay PASS: worldwide canvas, real-coordinate grouping without artificial grid, DOM single-photo pins, metadata recenter, style reload');
