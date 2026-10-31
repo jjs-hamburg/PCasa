@@ -573,7 +573,8 @@ public partial class MainWindow
         // A map-point filmstrip is a temporary view. Only a REAL change of
         // gallery selection replaces it. Background photo imports may
         // refresh the map repeatedly while the user explores one GPS point.
-        if (!_gpsFilmstripSelectionSnapshot.SetEquals(selectedIds))
+        var selectionChanged = !_gpsFilmstripSelectionSnapshot.SetEquals(selectedIds);
+        if (selectionChanged)
         {
             _gpsFilmstripSelectionSnapshot = selectedIds.ToHashSet();
             _gpsFilmstripPointIds = null;
@@ -588,12 +589,13 @@ public partial class MainWindow
             ? UiLanguage.Format("GPS für {0:N0} ausgewählte Fotos wird gelesen …", selectedIds.Length)
             : UiLanguage.T("GPS-Positionen werden geladen");
         ResetGpsEditorOnSelectionChange(selectedIds);
-        if (!_gpsGoogleWebsiteActive && _gpsBrowserReady &&
+        if (selectionChanged && !_gpsGoogleWebsiteActive && _gpsBrowserReady &&
             _gpsBrowser is { IsDisposed: false } map)
         {
-            // Invalidate an older map transfer as soon as selection changes.
-            // Never display a stale Italy marker while 6,229 photos are
-            // awaiting their new catalog query.
+            // Only a DIFFERENT gallery selection invalidates the old map.
+            // A background import can refresh identical selected IDs many
+            // times; clearing on every refresh left one/photo selections
+            // blank whenever the scheduler yielded or canceled the query.
             var loadingRevision = ++_gpsMapTransferRevision;
             map.ExecuteScriptAsync("window.pcasaBeginPoints(" +
                 loadingRevision + ",0);window.pcasaCommitPoints(" +
