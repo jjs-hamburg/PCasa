@@ -169,6 +169,15 @@ public partial class MainWindow
         // A running import may still publish/reflow the gallery while waiting.
         SaveGalleryPosition();
         _shutdownStarted = true;
+        // Stop producers immediately. BackgroundScan_WindowClosed runs only
+        // AFTER disposal and is too late to stop startup probes/inventories.
+        _backgroundMonitorClosing = true;
+        _backgroundDebounceTimer?.Stop();
+        _backgroundMonitorRefreshTimer?.Stop();
+        _cacheMaintenanceTimer?.Stop();
+        _backgroundLifetime?.Cancel();
+        _backgroundCurrentScanCancellation?.Cancel();
+        _cacheMaintenanceCancellation?.Cancel();
 
         // In-flight catalog work or owned ExifTool sessions can need an
         // uninterruptible file transaction or a slow NAS cancellation.
@@ -201,16 +210,57 @@ public partial class MainWindow
         {
             await Task.Run(async () =>
             {
-                // The scheduler's shutdown token cancels all work types,
-                // including source scans, without a competing stop mechanism.
-                // Wait for the existing durable package journal to checkpoint.
-                try { await _scheduler.DisposeAsync(); }
+                // The one scheduler cancels all jobs and journals completed
+                // durable steps. A non-cancellable NAS directory READ may still
+                // be blocked inside Windows for minutes, however. Never keep
+                // the application open just to wait for that read.
+                // Active manual mutations / native metadata writers DO require
+                // the normal full drain, to protect originals and package steps.
+                var criticalWorkActive = ExifToolKeywordWriter.HasLiveSessions ||
+                    _scheduler.Snapshot().Any(job =>
+                        job.Priority <= SchedulerPriority.UserAction &&
+                        job.State is SchedulerJobState.Running or
+                            SchedulerJobState.YieldRequested);
+                var disposal = _scheduler.DisposeAsync().AsTask();
+                try
+                {
+                    if (criticalWorkActive)
+                    {
+                        await disposal;
+                    }
+                    else
+                    {
+                        // Only background scans, probes, and cache/catalog reads
+                        // remain. Their SQLite writes are transactional; unfinished
+                        // scan steps resume from confirmed checkpoints next time.
+                        // Do not force-close a native manual original-file writer.
+                        var finished = await Task.WhenAny(disposal,
+                            Task.Delay(TimeSpan.FromSeconds(2)));
+                        if (ReferenceEquals(finished, disposal))
+                        {
+                            await disposal;
+                        }
+                        else
+                        {
+                            PCasaDiagnostics.WriteMessage("Shutdown.BackgroundRead",
+                                "Canceled background work did not exit within 2 s; " +
+                                "closing without waiting for blocked source reads.");
+                            // Observe eventual cleanup errors without making the
+                            // window wait on an OS call that ignores cancellation.
+                            _ = disposal.ContinueWith(task =>
+                            {
+                                if (task.Exception is not null)
+                                    PCasaDiagnostics.Write("Shutdown.LateWorker",
+                                        task.Exception);
+                            }, TaskContinuationOptions.OnlyOnFaulted);
+                        }
+                    }
+                }
                 finally
                 {
-                    // Native handles may only be reaped AFTER scheduler-owned
-                    // writes have reached their safe transaction boundary.
-                    // The existing scheduler has finished all in-flight
-                    // writes. Kill every PCasa-owned reader/writer child now.
+                    // Full drain for active source edits; otherwise no native
+                    // source writer is active and read-only ExifTool children
+                    // can be stopped even when an OS probe remains blocked.
                     ExifToolProcessRegistry.StopAll();
                     ExifToolKeywordWriter.StopAll();
                 }
