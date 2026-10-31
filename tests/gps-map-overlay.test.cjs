@@ -57,6 +57,15 @@ assert.equal(clusters.length,2,'Both distinct continents must visibly render');
 assert.ok(clusters[0].x!==clusters[1].x);
 assert.deepEqual(messages.filter(m=>m.label==='3000').length,2);
 assert.ok(messages.some(m=>m.type==='gps-sync'&&m.received===6000&&m.selected===6000));
+activeMap.emit('click',{point:{x:552,y:111},lngLat:{lat:53.5,lng:10}});
+const grouped=messages.find(m=>m.type==='point-group');
+assert.ok(grouped,'Clicking a many-photo marker opens that point, not just zoom');
+assert.equal(grouped.id,1);
+assert.equal(grouped.south,53.5);
+assert.equal(grouped.north,53.5);
+assert.equal(grouped.west,10);
+assert.equal(grouped.east,10);
+assert.equal(activeMap.lastEase,undefined,'Grouped photo marker must not silently zoom');
 const small=[
  {id:1,lat:52,lon:10,selected:true},
  {id:2,lat:35,lon:-118,selected:true},
@@ -76,4 +85,16 @@ window.pcasaBeginPoints(3,1);window.pcasaBeginPoints(4,1);
 window.pcasaAppendPoints(3,0,worldwide);window.pcasaCommitPoints(3);
 window.pcasaCommitPoints(4);window.pcasaAppendPoints(4,0,small);
 assert.equal(canvasDraw.filter(c=>c.r===10).length,3,'Stale transfer is ignored');
-console.log('GPS map overlay PASS: 6000 selected, worldwide clusters, small selection, stale chunks, style reload, click');
+// A single GPS photo must render and center immediately. Re-indexing that
+// SAME image ID at corrected coordinates must also move the camera.
+window.pcasaBeginPoints(5,1);
+window.pcasaAppendPoints(5,0,[{id:77,lat:53.5,lon:10,selected:true}]);
+window.pcasaCommitPoints(5);
+assert.equal(canvasDraw.filter(c=>c.r===10).length,1);
+assert.deepEqual(Array.from(activeMap.lastEase.center),[10,53.5]);
+window.pcasaBeginPoints(6,1);
+window.pcasaAppendPoints(6,0,[{id:77,lat:26.1,lon:-80,selected:true}]);
+window.pcasaCommitPoints(6);
+assert.deepEqual(Array.from(activeMap.lastEase.center),[-80,26.1],
+ 'Corrected coordinates with same photo ID must recenter the map');
+console.log('GPS map overlay PASS: 6000 worldwide, point-group photo routing, single-photo recenter, small selections, style reload, stale chunks');
