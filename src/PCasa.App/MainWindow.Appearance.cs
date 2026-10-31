@@ -402,7 +402,7 @@ public partial class MainWindow
         _ = Dispatcher.BeginInvoke(new Action(() =>
             RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
                 originalGalleryOffset, originalNavigationVersion, originalActiveFolderId)),
-            DispatcherPriority.Loaded);
+            System.Windows.Threading.DispatcherPriority.Loaded);
         if (Enum.TryParse<PhotoSequenceScope>(next.SequenceScope, out var sequence) &&
             Enum.IsDefined(sequence))
             ApplyPhotoSequenceScope(sequence);
