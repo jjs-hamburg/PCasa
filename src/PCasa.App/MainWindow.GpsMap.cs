@@ -537,38 +537,81 @@ public partial class MainWindow
         }
     }
 
-    private void SendGpsPointsToMap()
+    private async Task PublishGpsClustersAsync(bool fitSelection = false)
     {
         if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
-            _gpsBrowser is not { IsDisposed: false } browser) return;
-        // CEF ExecuteScriptAsync with a single multi-megabyte script can fail
-        // without applying anything, leaving only an OLD focused marker.
-        // Transfer all selected coordinates in bounded, ordered chunks.
-        // The renderer applies them atomically after the final chunk.
-        var revision = ++_gpsMapTransferRevision;
-        var chunks = _gpsPoints.Chunk(180).ToArray();
-        browser.ExecuteScriptAsync("window.pcasaBeginPoints(" + revision +
-            "," + chunks.Length + ")");
-        for (var i = 0; i < chunks.Length; i++)
+            _gpsBrowser is not { IsDisposed: false }) return;
+        var request = ++_gpsClusterRequestRevision;
+        var queryRevision = _gpsQueryRevision;
+        var snapshot = _gpsPoints.ToArray();
+        var zoom = _gpsCurrentMapZoom;
+        try
         {
-            var json = JsonSerializer.Serialize(chunks[i].Select(p => new
+            // Pure geographical projection in the EXISTING scheduler.
+            // No separate job system, map-provider API or original file IO.
+            var clustered = await _scheduler.RunAsync(
+                "gps:cluster:" + request,
+                SchedulerPriority.Interactive,
+                cancellation => GpsGeographicClusterer.Cluster(
+                    snapshot.Select(p => new GpsPhotoPosition(
+                        p.Id, p.Lat, p.Lon)).ToArray(), zoom, cancellation),
+                () => request == _gpsClusterRequestRevision &&
+                    queryRevision == _gpsQueryRevision &&
+                    _sidebarMode == "GPS",
+                workKind: SchedulerWorkKind.CatalogRead);
+
+            if (request != _gpsClusterRequestRevision ||
+                queryRevision != _gpsQueryRevision || _sidebarMode != "GPS" ||
+                _gpsGoogleWebsiteActive ||
+                _gpsBrowser is not { IsDisposed: false } browser)
+                return;
+
+            _gpsPresentedClusters = clustered;
+            var revision = ++_gpsMapTransferRevision;
+            var chunks = clustered.Chunk(150).ToArray();
+            var selected = snapshot.Count(p => p.Selected);
+            browser.ExecuteScriptAsync("window.pcasaBeginClusters(" +
+                revision + "," + chunks.Length + "," + snapshot.Length +
+                "," + selected + ")");
+            for (var i = 0; i < chunks.Length; i++)
             {
-                id = p.Id, name = p.Name, lat = p.Lat, lon = p.Lon, selected = p.Selected
-            }));
-            browser.ExecuteScriptAsync("window.pcasaAppendPoints(" +
-                revision + "," + i + "," + json + ")");
+                var json = JsonSerializer.Serialize(chunks[i].Select(g => new
+                {
+                    id = g.Id, lat = g.Latitude, lon = g.Longitude,
+                    count = g.Count, selected = selected > 0
+                }));
+                browser.ExecuteScriptAsync("window.pcasaAppendClusters(" +
+                    revision + "," + i + "," + json + ")");
+            }
+            browser.ExecuteScriptAsync("window.pcasaCommitClusters(" + revision + ")");
+            if (_gpsHighlightedImageId is long focusedId)
+                HighlightGpsPointOnMap(focusedId);
+
+            // Camera fit uses actual original geographic extrema, not
+            // averaged cluster centers. A zoom refresh never moves the map.
+            if (fitSelection && snapshot.Length > 0)
+            {
+                browser.ExecuteScriptAsync("window.pcasaFitGpsExtent(" +
+                    revision + "," +
+                    snapshot.Min(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
+                    snapshot.Min(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + "," +
+                    snapshot.Max(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
+                    snapshot.Max(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + ")");
+            }
         }
-        browser.ExecuteScriptAsync("window.pcasaCommitPoints(" + revision + ")");
-        if (_gpsHighlightedImageId is long selected)
-            HighlightGpsPointOnMap(selected);
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("GPS.ClusterProjection", ex); }
     }
 
     private void HighlightGpsPointOnMap(long imageId)
     {
         if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
             _gpsBrowser is not { IsDisposed: false } browser) return;
-        browser.ExecuteScriptAsync("window.pcasaHighlightPoint?.(" +
-            imageId.ToString(CultureInfo.InvariantCulture) + ")");
+        var cluster = _gpsPresentedClusters.FirstOrDefault(g =>
+            g.ImageIds.Contains(imageId));
+        if (cluster is null) return;
+        browser.ExecuteScriptAsync("window.pcasaHighlightCluster?.(" +
+            cluster.Id.ToString(CultureInfo.InvariantCulture) + ")");
     }
 
     // A filmstrip/map focus change is not a gallery selection change: do
