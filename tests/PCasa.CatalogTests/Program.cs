@@ -4943,6 +4943,47 @@ internal static class Program
             !File.ReadAllBytes(path).SequenceEqual(originalBytes))
             throw new Exception(
                 "Targeted EXIF repair failed to restore original GPS without rebuilding the thumbnail or changing the file.");
+
+        // A subtler corruption has a CORRECT SourceFile but foreign GPS
+        // columns. The stored native EXIF JSON must expose the mismatch;
+        // the targeted verifier then re-reads only this original.
+        using (var corruptColumns = conn.CreateCommand())
+        {
+            corruptColumns.CommandText = """
+                UPDATE image_exif SET gps_latitude=26.12,
+                    gps_longitude=-80.14 WHERE image_id=$id;
+                """;
+            corruptColumns.Parameters.AddWithValue("$id", before.Id);
+            corruptColumns.ExecuteNonQuery();
+        }
+        var wrongColumns = audit.ReadPage(root.Id, 0, 100);
+        if (wrongColumns.MismatchedPaths.Count != 1)
+            throw new Exception("Catalog audit accepted mismatched native GPS columns.");
+        result = scanner.ScanFile(root, path, forceExifRefresh: true);
+        repaired = Read(conn);
+        if (result.MetadataUpdated != 1 ||
+            Math.Abs((repaired.Lat ?? 0) - 53.5) > 0.001 ||
+            Math.Abs((repaired.Lon ?? 0) - 10.25) > 0.001 ||
+            audit.ReadPage(root.Id, 0, 100).MismatchedPaths.Count != 0 ||
+            !File.ReadAllBytes(path).SequenceEqual(originalBytes))
+            throw new Exception("Targeted GPS column repair damaged original or failed.");
+
+        // Unknown legacy provenance is NOT proof of wrong coordinates:
+        // quarantine it for investigation instead of overwriting native GPS.
+        using (var legacy = conn.CreateCommand())
+        {
+            legacy.CommandText = """
+                UPDATE image_exif SET
+                    exif_json=json_remove(exif_json,'$.SourceFile')
+                WHERE image_id=$id;
+                """;
+            legacy.Parameters.AddWithValue("$id", before.Id);
+            legacy.ExecuteNonQuery();
+        }
+        var unknown = audit.ReadPage(root.Id, 0, 100);
+        if (unknown.UnverifiedGpsRows != 1 || unknown.MismatchedPaths.Count != 0)
+            throw new Exception("Legacy GPS without provenance was automatically classified as corrupt.");
+        scanner.ScanFile(root, path, forceExifRefresh: true);
     }
 
     private static string RunExifTool(params string[] arguments)
