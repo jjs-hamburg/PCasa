@@ -99,32 +99,48 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if(!ctx)return;
    ctx.setTransform(ratio,0,0,ratio,0,0);
    ctx.clearRect(0,0,width,height);
-   const cells=new Map();
+   // Group only points that are truly close IN SCREEN SPACE. The earlier
+   // floor(x/36),floor(y/36) binning created artificial straight rows of
+   // orange pins and even grouped photos separated by 50px at cell corners.
+   // A nearest-neighbour spatial hash is linear for thousands of photos.
+   const radius=21, radiusSquared=radius*radius;
+   const buckets=new Map(), clusters=[];
+   const bucketKey=(x,y)=>Math.floor(x/radius)+','+Math.floor(y/radius);
    for(const photo of points) {
      if(!photo.selected)continue;
      const location=map.project([photo.lon,photo.lat]);
      if(!Number.isFinite(location.x)||!Number.isFinite(location.y)||
         location.x< -24||location.x>width+24||
         location.y< -24||location.y>height+24)continue;
-     const key=Math.floor(location.x/36)+','+Math.floor(location.y/36);
-     let cell=cells.get(key);
-     if(!cell){cell={x:0,y:0,lat:0,lon:0,count:0,id:photo.id,
-       south:photo.lat,north:photo.lat,west:photo.lon,east:photo.lon,
-       highlighted:false};cells.set(key,cell);}
-     cell.south=Math.min(cell.south,photo.lat);
-     cell.north=Math.max(cell.north,photo.lat);
-     cell.west=Math.min(cell.west,photo.lon);
-     cell.east=Math.max(cell.east,photo.lon);
-     if(String(photo.id)===String(highlightedId))cell.highlighted=true;
-     cell.x+=location.x;cell.y+=location.y;
-     cell.lat+=photo.lat;cell.lon+=photo.lon;cell.count++;
+     const bx=Math.floor(location.x/radius),by=Math.floor(location.y/radius);
+     let chosen=null, best=radiusSquared;
+     for(let yy=by-1;yy<=by+1;yy++)
+       for(let xx=bx-1;xx<=bx+1;xx++) {
+         for(const cell of buckets.get(xx+','+yy)||[]) {
+           const dx=cell.x-location.x,dy=cell.y-location.y;
+           const distance=dx*dx+dy*dy;
+           if(distance<best){chosen=cell;best=distance;}
+         }
+       }
+     if(!chosen) {
+       chosen={x:location.x,y:location.y,lat:photo.lat,lon:photo.lon,
+         count:0,id:photo.id,south:photo.lat,north:photo.lat,
+         west:photo.lon,east:photo.lon,highlighted:false};
+       clusters.push(chosen);
+       const key=bucketKey(chosen.x,chosen.y);
+       if(!buckets.has(key))buckets.set(key,[]);
+       buckets.get(key).push(chosen);
+     }
+     chosen.south=Math.min(chosen.south,photo.lat);
+     chosen.north=Math.max(chosen.north,photo.lat);
+     chosen.west=Math.min(chosen.west,photo.lon);
+     chosen.east=Math.max(chosen.east,photo.lon);
+     if(String(photo.id)===String(highlightedId))chosen.highlighted=true;
+     // Pin stays at a REAL photographic coordinate. Never snap or
+     // redistribute map markers to an arbitrary on-screen grid.
+     chosen.count++;
    }
-   visibleSelectedCells=[...cells.values()].map(cell=>({
-     x:cell.x/cell.count,y:cell.y/cell.count,
-     lat:cell.lat/cell.count,lon:cell.lon/cell.count,
-     count:cell.count,id:cell.id,highlighted:cell.highlighted,
-     south:cell.south,north:cell.north,west:cell.west,east:cell.east
-   }));
+   visibleSelectedCells=clusters;
    // The previous release replaced reliable MapLibre DOM pins with this
    // canvas for EVERY selection, including one picture. Use DOM pins for
    // small selections; keep the grouped canvas only for large selections.
