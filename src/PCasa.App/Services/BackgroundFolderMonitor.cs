@@ -16,7 +16,8 @@ public sealed record BackgroundFolderChange(
     long MonitoredFolderId,
     string Path,
     BackgroundFolderChangeKind Kind,
-    bool Recursive);
+    bool Recursive,
+    bool ForceExifRefresh = false);
 
 public sealed class BackgroundFolderMonitor : IDisposable
 {
