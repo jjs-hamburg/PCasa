@@ -106,6 +106,7 @@ public partial class MainWindow
         // An indexed image may have been fetched BEFORE scrolling began.
         // Guard the actual UI publication as well as the initial notification.
         if (DeferScanGalleryPublication()) return;
+        var followGalleryStart = GalleryAtLeadingLiveEdge();
         var followGalleryEnd = GalleryAtTrailingLiveEdge();
 
         // If a complete catalog refresh was concurrently reading SQLite,
@@ -187,10 +188,13 @@ public partial class MainWindow
         finally
         {
             RestorePendingGalleryAnchor();
-            if (followGalleryEnd)
+            if (followGalleryStart || followGalleryEnd)
             {
                 BrowseScrollViewer.UpdateLayout();
-                BrowseScrollViewer.ScrollToBottom();
+                if (followGalleryStart)
+                    BrowseScrollViewer.ScrollToTop();
+                else
+                    BrowseScrollViewer.ScrollToBottom();
                 BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
                     Math.Max(1, BrowseScrollViewer.ViewportHeight));
             }
