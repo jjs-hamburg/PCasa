@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
+using PCasa.App.Models;
 using PCasa.App.Services;
 
 namespace PCasa.App;
