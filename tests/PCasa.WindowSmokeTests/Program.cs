@@ -814,6 +814,37 @@ internal static class Program
                 if ((bool)scrollDefer.Invoke(window, null)!)
                     throw new Exception("End of gallery unexpectedly froze scanner publication.");
                 Console.WriteLine("PASS: Gallery first and last rows remain live during scans.");
+
+                // An image from ANOTHER catalog folder must still reach
+                // the gallery at either live edge. This was the real bug:
+                // OnCatalogImageCommitted was suppressed during scans,
+                // and OnCatalogImageIndexed ignored non-active folders.
+                // Assert the existing 750ms coalescer is notified, then
+                // cancel its synthetic event before it touches the runner
+                // database; this is a UI publication-policy test.
+                var catalogPending = scrollType.GetField(
+                    "_catalogPublicationPending", scrollFlags)!;
+                var catalogTimer = scrollType.GetField(
+                    "_catalogPublicationTimer", scrollFlags)!;
+                foreach (var atStart in new[] { true, false })
+                {
+                    catalogPending.SetValue(window, 0);
+                    if (atStart) scroller.ScrollToTop();
+                    else scroller.ScrollToBottom();
+                    Flush(window);
+                    scannerNotification.Invoke(window, new object[] {
+                        atStart ? @"C:\synthetic\other-folder-top.jpg" :
+                            @"C:\synthetic\other-folder-bottom.jpg", 200L });
+                    Flush(window);
+                    if ((int)catalogPending.GetValue(window)! != 1 ||
+                        (bool)scanDirtyField.GetValue(window)!)
+                        throw new Exception(
+                            "Cross-folder scanner commit did not queue a live edge refresh.");
+                    ((DispatcherTimer?)catalogTimer.GetValue(window))?.Stop();
+                    catalogPending.SetValue(window, 0);
+                }
+                Console.WriteLine(
+                    "PASS: New photos in other folders reach both gallery live edges.");
             }
             finally
             {
