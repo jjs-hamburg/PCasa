@@ -315,15 +315,18 @@ internal static class TagFlow
 
             // Regression: Appearance is presentation only. Toggling caption
             // visibility changes row geometry, but must NOT move the current
-            // image anchor, focused image, selection or selected folder.
+            // image anchor, focused image, selection or appearanceSelected folder.
             var appearanceItem = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Appearance dialog option missing.");
             var selector = (GallerySelection)typeof(PCasa.App.MainWindow)
                 .GetField("_gallerySelection",
                     System.Reflection.BindingFlags.NonPublic |
                     System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+            var appearanceSelected = (HashSet<long>)typeof(PCasa.App.MainWindow)
+                .GetField("_selectedImageIds", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
             var previousFocus = selector.FocusedId;
-            var previousChosen = selected.ToHashSet();
+            var previousChosen = appearanceSelected.ToHashSet();
             var preservedImage = surface.CaptureImageAnchor(scroller.VerticalOffset)
                 ?? throw new Exception("No visible image to anchor before Appearance.");
             var originalTreeFocus = tree.SelectedItem;
@@ -334,10 +337,10 @@ internal static class TagFlow
                 "_showFileNames", System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)!;
             var previousCaptions = (bool)captionFlag.GetValue(surface)!;
-            selected.Clear();
-            selected.Add(preservedImage.ImageId);
+            appearanceSelected.Clear();
+            appearanceSelected.Add(preservedImage.ImageId);
             selector.SetFocus(preservedImage.ImageId);
-            surface.SetSelection(selected);
+            surface.SetSelection(appearanceSelected);
             void ChangeAppearanceCaptions(bool enabled)
             {
                 Dispatcher.CurrentDispatcher.BeginInvoke(new Action(() =>
@@ -360,7 +363,7 @@ internal static class TagFlow
             {
                 ChangeAppearanceCaptions(!previousCaptions);
                 if ((bool)captionFlag.GetValue(surface)! == previousCaptions ||
-                    !selected.SetEquals(new long[]{preservedImage.ImageId}) ||
+                    !appearanceSelected.SetEquals(new long[]{preservedImage.ImageId}) ||
                     selector.FocusedId != preservedImage.ImageId ||
                     !ReferenceEquals(tree.SelectedItem, originalTreeFocus) ||
                     !Equals(originalFolderFocus,
@@ -378,11 +381,11 @@ internal static class TagFlow
             finally
             {
                 ChangeAppearanceCaptions(previousCaptions);
-                selected.Clear();
-                foreach (var chosen in previousChosen) selected.Add(chosen);
+                appearanceSelected.Clear();
+                foreach (var chosen in previousChosen) appearanceSelected.Add(chosen);
                 if (previousFocus is long focus) selector.SetFocus(focus);
                 else selector.Reset();
-                surface.SetSelection(selected);
+                surface.SetSelection(appearanceSelected);
             }
 
             // Search type is independent of scope. File-name matching uses
