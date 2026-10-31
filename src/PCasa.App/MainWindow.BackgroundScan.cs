@@ -862,6 +862,10 @@ public partial class MainWindow
                     // The outer finally requeues the original array on a
                     // manual interruption: keep its receipt up to date.
                     requests[nextRequestIndex] = request;
+                    if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
+                        PCasaDiagnostics.WriteMessage("Scan.RootStart",
+                            $"Folder={folder.LocalPath}; Generation={sourceState.Value.Generation}; " +
+                            $"ResumeInMemory={scanResume.ImageFilesSeen}; Kind={request.Kind}");
                     await _scheduler.EnqueueAsync(
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}",
                         // A startup root verification is idle work (P4),
