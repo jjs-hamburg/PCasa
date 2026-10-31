@@ -218,6 +218,7 @@ public partial class MainWindow
                 // the normal full drain, to protect originals and package steps.
                 var criticalWorkActive = ExifToolKeywordWriter.HasLiveSessions ||
                     _scheduler.Snapshot().Any(job =>
+                        job.WorkKind == SchedulerWorkKind.Catalog &&
                         job.Priority <= SchedulerPriority.UserAction &&
                         job.State is SchedulerJobState.Running or
                             SchedulerJobState.YieldRequested);
