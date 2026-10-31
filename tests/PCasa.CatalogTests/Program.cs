@@ -3763,10 +3763,12 @@ internal static class Program
         for (var cycle = 1; cycle <= 2; cycle++)
         {
             created[^1].SignalError();
+            created[^1].SignalError(); // same dead OS handle, duplicate callback
             if (changes.Count != cycle ||
                 changes[^1].Kind != BackgroundFolderChangeKind.RescanRoot ||
                 !changes[^1].Recursive)
-                throw new Exception("Watcher error failed to request full reconciliation.");
+                throw new Exception(
+                    "Watcher failure must cause exactly one full reconciliation per broken handle.");
             if (!monitor.Refresh(roots, enabled: true)[root.Id] ||
                 created.Count != cycle + 1)
                 throw new Exception($"Faulted watcher reused in recovery cycle {cycle}.");
