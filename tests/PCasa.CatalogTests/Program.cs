@@ -1252,7 +1252,7 @@ internal static class Program
         var paused = false;
         var progress = new InlineProgress<ScanProgress>(scan =>
         {
-            if (paused || scan.CurrentFile is null) return;
+            if (paused || scan.CurrentFile is null || !scan.PreviewCommitted) return;
             paused = true;
             interruption.Cancel();
         });
@@ -1296,7 +1296,7 @@ internal static class Program
         var interrupted = false;
         var callback = new InlineProgress<ScanProgress>(scan =>
         {
-            if (interrupted || scan.CurrentFile is null) return;
+            if (interrupted || scan.CurrentFile is null || !scan.PreviewCommitted) return;
             interrupted = true;
             cancellation.Cancel();
         });
