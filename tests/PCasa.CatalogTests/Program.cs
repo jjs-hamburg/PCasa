@@ -62,6 +62,7 @@ internal static class Program
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Durable first-import checkpoints survive restart without unsafe pruning", DurableInitialImportRestartSafe, failures);
         Run("Restart resumes within unfinished directory after last committed image", DurableFileCursorRestartSafe, failures);
+        Run("Unreadable photo is skipped; cursor advances and no automatic re-scan is scheduled", SkippedImageAdvancesDurableCursor, failures);
         Run("All ordinary scans resume inside a directory after a process restart",
             RegularScanRestartSafe, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
@@ -1000,6 +1001,66 @@ internal static class Program
         resumedScanner.Scan(root);
         if (new ImageCatalogRepository(db).CountAll() != 7)
             throw new Exception("Later full inventory did not reconcile deleted image.");
+    }
+
+    private static void SkippedImageAdvancesDurableCursor()
+    {
+        using var sandbox = new Sandbox();
+        var corruptDirectory = Path.Combine(sandbox.Images, "A-Broken");
+        var goodDirectory = Path.Combine(sandbox.Images, "B-Good");
+        Directory.CreateDirectory(corruptDirectory);
+        Directory.CreateDirectory(goodDirectory);
+        var corrupt = Path.Combine(corruptDirectory, "a-bad.jpg");
+        File.WriteAllText(corrupt, "intentionally not a JPEG");
+        WriteJpeg(Path.Combine(goodDirectory, "b-good.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        var repo = new FolderRepository(db);
+        var state = repo.GetSourceState(root.CanonicalPath)!.Value;
+        repo.CompleteInitialScan(root.Id, state.Generation,
+            repo.GetScanEpoch(root.CanonicalPath));
+        var key = $"manual:test:bad-photo:{root.Id}";
+        using var stop = new CancellationTokenSource();
+        var callback = new InlineProgress<ScanProgress>(p =>
+        {
+            if (p.DiscoveredPhotoFolderId is not null)
+                stop.Cancel(); // after committing the next valid photo
+        });
+        try
+        {
+            scanner.ScanDirectory(root, root.LocalPath, true, callback,
+                stop.Token, durableScanKey:key);
+            throw new Exception("Checkpoint test did not interrupt after valid image.");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+
+        var saved = repo.BeginOrResumeRegularScan(key, root.Id,
+            root.LocalPath, root.CanonicalPath, beginManualEpoch:false);
+        if (saved.Checked != 2 ||
+            !saved.Completed.Contains(corruptDirectory) ||
+            !saved.Cursors.TryGetValue(goodDirectory, out var last) ||
+            last != "b-good.jpg")
+            throw new Exception(
+                "One unreadable photo stopped the persistent cursor or blocked directory completion.");
+
+        // Restart the scanner with no in-memory enumerator. The skipped
+        // broken photo must not be re-read and a late successful image must
+        // not trigger wholesale re-indexing of the completed directory.
+        WriteJpeg(Path.Combine(goodDirectory, "c-new.jpg"));
+        db.Initialize();
+        var restarted = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
+        var finished = restarted.ScanDirectory(root, root.LocalPath,
+            recursive:true, durableScanKey:key);
+        if (finished.ImageFilesSeen != 3 || finished.Failed != 0 ||
+            new ImageCatalogRepository(db).CountAll() != 2)
+            throw new Exception("Restart retried skipped photo or lost confirmed good images.");
+        using var connection = db.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM scan_resume_jobs WHERE scan_key=$key;";
+        cmd.Parameters.AddWithValue("$key", key);
+        if (Convert.ToInt32(cmd.ExecuteScalar()) != 0)
+            throw new Exception("Completed scan left behind an automatic retry receipt.");
     }
 
     private static void RegularScanRestartSafe()
@@ -3763,15 +3824,13 @@ internal static class Program
         for (var cycle = 1; cycle <= 2; cycle++)
         {
             created[^1].SignalError();
-            created[^1].SignalError(); // same dead OS handle, duplicate callback
-            if (changes.Count != cycle ||
-                changes[^1].Kind != BackgroundFolderChangeKind.RescanRoot ||
-                !changes[^1].Recursive)
+            created[^1].SignalError(); // lost connection is not a scan request
+            if (changes.Count != 0)
                 throw new Exception(
-                    "Watcher failure must cause exactly one full reconciliation per broken handle.");
+                    "Faulted watcher must NOT request a complete inventory.");
             if (!monitor.Refresh(roots, enabled: true)[root.Id] ||
                 created.Count != cycle + 1)
-                throw new Exception($"Faulted watcher reused in recovery cycle {cycle}.");
+                throw new Exception($"Faulted watcher was not replaced in cycle {cycle}.");
             monitor.Refresh(roots, enabled: true);
             if (created.Count != cycle + 1)
                 throw new Exception("Healthy recovered watcher was unexpectedly replaced.");
