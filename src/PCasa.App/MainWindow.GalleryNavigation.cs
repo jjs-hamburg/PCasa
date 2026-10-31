@@ -16,14 +16,12 @@ public partial class MainWindow
     // a separate work queue.
     private long _explicitGalleryNavigationVersion;
 
-    // Scan publication is PRESENTATION only: the scanner and SQLite commit
-    // immediately. While the user navigates rapidly, keep the published
-    // gallery projection stable and coalesce all incoming scan notifications.
-    // This timer never schedules source IO or owns a second catalog index.
-    private DispatcherTimer? _scanGalleryScrollSettleTimer;
+    // The catalog can change indefinitely while the user is looking at
+    // the middle of the gallery. Never publish those changes just because
+    // scrolling stopped: that is exactly when the user needs a stable view.
+    // The already-published projection is the virtual view until the user
+    // deliberately navigates or follows a live list edge.
     private bool _scanGalleryPublicationDeferred;
-    private static readonly TimeSpan ScanGalleryScrollQuietPeriod =
-        TimeSpan.FromMilliseconds(500);
 
     private bool GalleryAtTrailingLiveEdge()
     {
@@ -31,48 +29,26 @@ public partial class MainWindow
         return height > 2 && height - BrowseScrollViewer.VerticalOffset <= 2;
     }
 
-    private bool GalleryAtLiveEdge()
-    {
-        var height = BrowseScrollViewer.ScrollableHeight;
-        var offset = BrowseScrollViewer.VerticalOffset;
-        return height <= 2 || offset <= 2 || height - offset <= 2;
-    }
+    private bool GalleryAtLeadingLiveEdge()
+        => BrowseScrollViewer.VerticalOffset <= 2;
 
-    private bool GalleryScrollIsActive()
-        => _scanGalleryScrollSettleTimer?.IsEnabled == true &&
-           !GalleryAtLiveEdge();
+    private bool GalleryAtLiveEdge()
+        => BrowseScrollViewer.ScrollableHeight <= 2 ||
+           GalleryAtLeadingLiveEdge() || GalleryAtTrailingLiveEdge();
 
     private void RegisterGalleryUserScroll()
     {
-        // An automatic anchor posted before this input cannot pull the user
-        // back afterwards. This is the established navigation revision.
+        // The user's scroll/navigation invalidates stale automatic anchors.
         MarkExplicitGalleryNavigation();
+        // Only a live edge (or explicit folder/search navigation) publishes
+        // the accumulated scanner changes. An idle timer must NEVER do so.
         if (GalleryAtLiveEdge())
-        {
-            _scanGalleryScrollSettleTimer?.Stop();
             PublishDeferredScanGallery();
-            return;
-        }
-        if (_scanGalleryScrollSettleTimer is null)
-        {
-            _scanGalleryScrollSettleTimer = new DispatcherTimer(
-                DispatcherPriority.Background)
-            {
-                Interval = ScanGalleryScrollQuietPeriod
-            };
-            _scanGalleryScrollSettleTimer.Tick += (_, _) =>
-            {
-                _scanGalleryScrollSettleTimer.Stop();
-                PublishDeferredScanGallery();
-            };
-        }
-        _scanGalleryScrollSettleTimer.Stop();
-        _scanGalleryScrollSettleTimer.Start();
     }
 
     private bool DeferScanGalleryPublication()
     {
-        if (!GalleryScrollIsActive()) return false;
+        if (GalleryAtLiveEdge()) return false;
         _scanGalleryPublicationDeferred = true;
         return true;
     }
@@ -83,9 +59,8 @@ public partial class MainWindow
             Dispatcher.HasShutdownStarted || _shutdownStarted)
             return;
         _scanGalleryPublicationDeferred = false;
-        // One latest catalog snapshot, not a replay of thousands of stale
-        // thumbnail insertions. User-triggered UI publications bypass this
-        // gate and keep their existing priority.
+        // The existing catalog refresh owns publication, sorting, filtering
+        // and page cache. No parallel UI list, no extra scheduler or replay.
         System.Threading.Interlocked.Exchange(ref _catalogPublicationPending, 0);
         _catalogPublicationTimer?.Stop();
         _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
