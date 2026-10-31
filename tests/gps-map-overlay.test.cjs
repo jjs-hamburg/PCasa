@@ -31,6 +31,8 @@ class MapStub {
   getSource(id){return this.sources[id];}
   addLayer(layer){this.layers[layer.id]=layer;}
   getLayer(id){return this.layers[id];}
+  queryRenderedFeatures({layers}={}){this.lastQueriedLayers=layers;
+    return this.renderedFeatures??[{properties:{id:'visible-photo'}}];}
   project(location){return {x:512+location[0]*4,y:325-location[1]*4};}
   fitBounds(b){this.bounds=b.points;}
   easeTo(args){this.lastEase=args;}
@@ -215,6 +217,18 @@ activeMap.emit('style.load');
 assert.equal(selectedFeatures().length,7200,'XYZ provider switch retained ALL selected locations');
 assert.equal(selectedPhotoCount(),7200);
 assert.equal(activeMap.getLayer('pcasa-selected-cluster-count').type,'symbol');
+// The old test only inspected raw GeoJSON. An actual empty rendered layer
+// must emit one diagnostic after a completed frame, not a flood per move.
+activeMap.renderedFeatures=[];
+activeMap.emit('idle');
+assert.ok(messages.some(m=>m.type==='gps-overlay-empty'&&
+  m.received===undefined&&m.selected===7200&&m.source===true),
+  'Blank large selected overlay must be reported independently of provider');
+const emptyReports=messages.filter(m=>m.type==='gps-overlay-empty').length;
+activeMap.emit('idle');
+assert.equal(messages.filter(m=>m.type==='gps-overlay-empty').length,emptyReports,
+  'No repeated empty-overlay diagnostics for the same transfer and style');
+activeMap.renderedFeatures=[{properties:{id:'visible-photo'}}];
 assert.equal(selectionSource().options.clusterRadius,52);
 assert.deepEqual(Array.from(selectedFeatures()[0].geometry.coordinates),
   [world7000[0].lon,world7000[0].lat]);
