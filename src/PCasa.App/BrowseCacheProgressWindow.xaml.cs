@@ -434,7 +434,12 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void ShowScanProgress(ScanProgress progress)
     {
-        PhaseText.Text = UiLanguage.T("Bilder werden eingelesen");
+        PhaseText.Text = progress.ReadingNew switch
+        {
+            true => UiLanguage.T("Bild einlesen"),
+            false => UiLanguage.T("Datei überprüfen"),
+            null => UiLanguage.T("Dateien überprüfen")
+        };
         Progress.IsIndeterminate = true;
         var processed = progress.Updated + progress.Unchanged + progress.Failed;
         CountText.Text = UiLanguage.Format("Neu: {0:N0} · geprüft: {1:N0}", progress.Added, processed) +
