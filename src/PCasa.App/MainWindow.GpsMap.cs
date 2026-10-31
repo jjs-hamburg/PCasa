@@ -684,6 +684,42 @@ public partial class MainWindow
                 : UiLanguage.T("GPS-Positionen werden geladen");
         }
         ResetGpsEditorOnSelectionChange(selectedIds);
+        // Zero gallery selection means ZERO photo markers, not a fallback
+        // query of the first 5,000 GPS rows across the entire catalog.
+        // Clear synchronously, even if a catalog query for the old selection
+        // is still in flight or the scheduler is busy scanning the NAS.
+        if (selectedIds.Length == 0)
+        {
+            var hadMapContent = _gpsPoints.Count > 0 ||
+                _gpsPresentedClusters.Count > 0 ||
+                _gpsFilmstripPointIds is not null;
+            _gpsClusterRequestRevision++;
+            _gpsPoints = [];
+            _gpsPresentedClusters = [];
+            _gpsFilmstripPointIds = null;
+            _gpsHighlightedImageId = null;
+            _gpsSelectionCount = 0;
+            _gpsCurrentCoordinates = null;
+            GpsCopyButton.IsEnabled = false;
+            GpsRemoveButton.IsEnabled = false;
+            GpsApplyMissingButton.IsEnabled = false;
+            GpsReplaceButton.IsEnabled = false;
+            GpsCoordinatesText.Text = UiLanguage.T("Keine Fotos ausgewählt");
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+            if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
+                CloseGpsFullscreenImage();
+            if (hadMapContent && !_gpsGoogleWebsiteActive && _gpsBrowserReady &&
+                _gpsBrowser is { IsDisposed: false } emptyMap)
+            {
+                var emptyRevision = ++_gpsMapTransferRevision;
+                emptyMap.ExecuteScriptAsync("window.pcasaBeginClusters(" +
+                    emptyRevision + ",0,0,0);window.pcasaCommitClusters(" +
+                    emptyRevision + ")");
+            }
+            UpdateGpsGoogleButton();
+            UpdateGpsFilmstrip();
+            return;
+        }
         if (selectionChanged && !_gpsGoogleWebsiteActive && _gpsBrowserReady &&
             _gpsBrowser is { IsDisposed: false } map)
         {
@@ -698,7 +734,6 @@ public partial class MainWindow
                 loadingRevision + ",0,0,0);window.pcasaCommitClusters(" +
                 loadingRevision + ")");
         }
-        var folderId = _activePhotoFolderId;
         try
         {
             var mismatchedSources = new List<(long RootId, string Path)>();
@@ -708,7 +743,7 @@ public partial class MainWindow
                 cancellation =>
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    return ReadGpsPoints(selectedIds, folderId, cancellation,
+                    return ReadGpsPoints(selectedIds, cancellation,
                         mismatchedSources);
                 },
                 () => revision == _gpsQueryRevision && _sidebarMode == "GPS",
@@ -805,17 +840,17 @@ public partial class MainWindow
         }
     }
 
-    private List<GpsPoint> ReadGpsPoints(long[] ids, long? folderId,
+    private List<GpsPoint> ReadGpsPoints(long[] ids,
         CancellationToken cancellation,
         List<(long RootId, string Path)>? mismatchedSources = null)
     {
-        const int maximumContext = 5000;
         var result = new List<GpsPoint>();
+        if (ids.Length == 0) return result;
         var selected = ids.ToHashSet();
         var seen = new HashSet<long>();
         using var connection = _database.OpenConnection();
 
-        void Read(string where, long[]? chunk, long? folder, int maximum,
+        void Read(string where, long[]? chunk, int maximum,
             int maximumNew)
         {
             if (maximum <= 0 || maximumNew <= 0) return;
@@ -829,7 +864,6 @@ public partial class MainWindow
                   AND x.gps_longitude BETWEEN -180 AND 180
                 """ + where + " ORDER BY i.id LIMIT $max";
             command.Parameters.AddWithValue("$max", maximum);
-            if (folder is long f) command.Parameters.AddWithValue("$folder", f);
             if (chunk is not null)
                 for (var i = 0; i < chunk.Length; i++)
                     command.Parameters.AddWithValue("$p" + i, chunk[i]);
@@ -865,21 +899,10 @@ public partial class MainWindow
         {
             cancellation.ThrowIfCancellationRequested();
             Read(" AND i.id IN (" + string.Join(",", chunk.Select(
-                (_, i) => "$p" + i)) + ")", chunk, null, chunk.Length, chunk.Length);
+                (_, i) => "$p" + i)) + ")", chunk, chunk.Length, chunk.Length);
         }
-        // A bulk selection wants the selected photos, not an additional
-        // 5,000 unrelated context images and their expensive catalog lookup.
-        // ANY explicit selection owns its own GPS projection. The earlier
-        // single-photo path pulled in up to 5,000 unrelated folder positions,
-        // delaying the map and even displaying foreign clusters beside the
-        // selected photo. Folder context is for NO selection only.
-        if (ids.Length > 0) return result;
-        var selectedWithGps = result.Count;
-        if (folderId is long currentFolder)
-            Read(" AND i.photo_folder_id = $folder", null, currentFolder,
-                maximumContext + selectedWithGps, maximumContext);
-        else if (ids.Length == 0)
-            Read("", null, null, maximumContext, maximumContext);
+        // Only explicitly selected image IDs can enter the GPS projection.
+        // Folder changes without a selection never query unrelated GPS rows.
         return result;
     }
 
