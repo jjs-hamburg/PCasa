@@ -32,6 +32,12 @@ public partial class MainWindow
 
     private void QueueGalleryAnchorRestore((long ImageId, double RelativeY)? anchor)
     {
+        // The first index publication starts with the gallery at image zero.
+        // That temporary startup anchor must not overwrite the saved user's
+        // position before RestoreGalleryPositionOnce has applied it.
+        if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition &&
+            _explicitGalleryNavigationVersion == 0)
+            return;
         _pendingGalleryAnchor ??= anchor;
         if (_pendingGalleryAnchor is not null)
             _restoringGalleryLayoutAnchor = true;
@@ -40,6 +46,9 @@ public partial class MainWindow
     private void BrowseSurface_LayoutReflowed(
         object? sender, (long ImageId, double RelativeY) anchor)
     {
+        if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition &&
+            _explicitGalleryNavigationVersion == 0)
+            return;
         _pendingGalleryAnchor ??= anchor;
         _restoringGalleryLayoutAnchor = true;
         RestoreAnchorAfterSidebarLayout();
