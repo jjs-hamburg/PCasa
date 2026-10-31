@@ -15,7 +15,7 @@ const document={
     return {
       style:{},addEventListener(){},
       get className(){return [...classes].join(' ');},
-      set className(value){classes.clear();for(const n of value.split(/\\s+/))if(n)classes.add(n);},
+      set className(value){classes.clear();for(const n of value.split(' '))if(n)classes.add(n);},
       classList:{
         add(...names){for(const n of names)classes.add(n);},
         remove(...names){for(const n of names)classes.delete(n);},
