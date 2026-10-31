@@ -25,6 +25,12 @@ public partial class MainWindow
     private static readonly TimeSpan ScanGalleryScrollQuietPeriod =
         TimeSpan.FromMilliseconds(500);
 
+    private bool GalleryAtTrailingLiveEdge()
+    {
+        var height = BrowseScrollViewer.ScrollableHeight;
+        return height > 2 && height - BrowseScrollViewer.VerticalOffset <= 2;
+    }
+
     private bool GalleryAtLiveEdge()
     {
         var height = BrowseScrollViewer.ScrollableHeight;
