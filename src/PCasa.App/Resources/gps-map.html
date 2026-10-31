@@ -176,7 +176,6 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    } catch(err) { post({type:'error',message:String(err)}); }
  };
  map.on('style.load',()=>{
-   styleGeneration++;
    installPhotos();
    if(!ready){ready=true;post({type:'ready'});}
    // Style switching preserves the current camera instead of zooming again.
