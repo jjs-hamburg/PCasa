@@ -1434,6 +1434,26 @@ internal static class Program
                 Flush(window);
             if (!startedShutdownWorker.Task.IsCompleted)
                 throw new Exception("Shutdown test worker never started.");
+            // A network directory query may ignore cancellation indefinitely.
+            // Only idle/background I/O is simulated: no native writer or P0.
+            // Closing the app must not wait for this unrelated kernel read.
+            var stalledStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseStalledRead = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var stalledRead = closingScheduler.EnqueueAsync(
+                "test:shutdown-stalled-read", SchedulerPriority.Background,
+                async token =>
+                {
+                    stalledStarted.TrySetResult();
+                    await releaseStalledRead.Task; // deliberately ignores token
+                }, workKind: SchedulerWorkKind.SourceProbe);
+            var stalledDeadline = DateTime.UtcNow.AddSeconds(8);
+            while (!stalledStarted.Task.IsCompleted && DateTime.UtcNow < stalledDeadline)
+                Flush(window);
+            if (!stalledStarted.Task.IsCompleted)
+                throw new Exception("Shutdown test source read never started.");
+            var shuttingDownAt = DateTime.UtcNow;
             window.Close();
             var progress = Application.Current.Windows
                 .OfType<PCasa.App.ShutdownProgressWindow>().SingleOrDefault();
@@ -1454,9 +1474,13 @@ internal static class Program
             if (window.IsVisible || !working.IsCompleted ||
                 Application.Current.Windows
                     .OfType<PCasa.App.ShutdownProgressWindow>().Any(w => w.IsVisible) ||
-                ExifToolKeywordWriter.HasLiveSessions)
-                throw new Exception("Shared scheduler/native cleanup did not finish on Close.");
-            Console.WriteLine("PASS: Asynchronous shutdown shows progress, cancels background work, closes once.");
+                ExifToolKeywordWriter.HasLiveSessions ||
+                (DateTime.UtcNow - shuttingDownAt) > TimeSpan.FromSeconds(8))
+                throw new Exception("Shutdown waited for a canceled but blocked background read.");
+            if (stalledRead.IsCompleted)
+                throw new Exception("Shutdown test failed to keep the OS source read blocked.");
+            releaseStalledRead.TrySetResult();
+            Console.WriteLine("PASS: Shutdown cancels normal scans and does not wait for stalled noncritical source reads.");
             window = null;
             Console.WriteLine("RESULT: Window smoke checks passed.");
             return 0;
