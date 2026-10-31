@@ -48,8 +48,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('styledata', collapseAttributionInitially);
  map.on('sourcedata', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
- const smallSelectionLimit=64;
- const smallSelectedMarkers=new Map();
+ const selectedMarkers=new Map();
+ let visibleSelectedGroups=[];
  let previousSelectedSignature = null;
  let transferRevision=-1,transferParts=[],transferExpected=0,
      transferActive=false,transferCommitRequested=false;
@@ -79,127 +79,151 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
        paint:{'circle-radius':8,'circle-color':'#df4550',
               'circle-stroke-width':2.3,'circle-stroke-color':'#fff'}});
    }
-   if (!map.getSource('pcasa-selected')) {
-     // Selected photos own ONE provider-neutral GeoJSON overlay. At wide
-     // map scales, native MapLibre clustering combines nearby geographic
-     // coordinates. Radius is in screen pixels, so zooming automatically
-     // reduces the corresponding real-world distance. The stored GPS and
-     // individual exact coordinates are never rounded or displaced.
-     //
-     // A feature can represent multiple photos at identical coordinates;
-     // clusterProperties sums PHOTO counts rather than distinct locations.
-     map.addSource('pcasa-selected',{type:'geojson',data:geojson([]),
-       cluster:true,clusterRadius:52,clusterMaxZoom:17,
-       clusterProperties:{photo_count:['+',['get','count']]}});
-     map.addLayer({id:'pcasa-selected-clusters',type:'circle',
-       source:'pcasa-selected',filter:['has','point_count'],
-       paint:{'circle-color':'#f0a030',
-         'circle-radius':['step',['get','photo_count'],19,20,23,100,29,1000,36],
-         'circle-stroke-width':3,'circle-stroke-color':'#111'}});
-     map.addLayer({id:'pcasa-selected-cluster-count',type:'symbol',
-       source:'pcasa-selected',filter:['has','point_count'],
-       layout:{'text-field':['to-string',['get','photo_count']],
-         'text-size':13,'text-allow-overlap':true},
-       paint:{'text-color':'#111'}});
-     map.addLayer({id:'pcasa-selected-points',type:'circle',
-       source:'pcasa-selected',filter:['!',['has','point_count']],
-       paint:{'circle-radius':['case',['>', ['get','count'],1],16,10],
-         'circle-color':'#f0a030','circle-stroke-width':3,
-         'circle-stroke-color':['case',['boolean',['get','highlighted'],false],'#fff','#111']}});
-     map.addLayer({id:'pcasa-selected-count',type:'symbol',source:'pcasa-selected',
-       filter:['all',['!',['has','point_count']],['>',['get','count'],1]],
-       layout:{'text-field':['to-string',['get','count']],'text-size':12,
-         'text-allow-overlap':true},
-       paint:{'text-color':'#111'}});
-   }
    updatePhotos();
  }
- // Selected features belong to exact geographic positions, NOT screen cells.
- // Duplicate coordinates retain their photo count; the GeoJSON worker alone
- // decides how separate places are clustered for the current map zoom.
+ // There is ONE selected-photo presentation path, regardless of selection
+ // size. Map providers supply only the basemap. PCasa builds real geographic
+ // groups before creating map markers: no pixel grids, collision displacement,
+ // WebGL source-worker dependence, or exact-match-only grouping.
+ // This also avoids the blank >7,000-photo GeoJSON overlay seen in Chromium.
+ const EARTH_KM=6371.0088,TO_RAD=Math.PI/180;
+ function distanceKm(a,b) {
+   const lat1=a.lat*TO_RAD,lat2=b.lat*TO_RAD;
+   const dlat=(b.lat-a.lat)*TO_RAD;
+   const dlon=(((b.lon-a.lon+540)%360)-180)*TO_RAD;
+   const h=Math.sin(dlat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dlon/2)**2;
+   return 2*EARTH_KM*Math.asin(Math.min(1,Math.sqrt(h)));
+ }
+ function groupingRadiusKm(zoom) {
+   // 280 km at zoom 2, 17 m at zoom 16, about 1 m at zoom 20.
+   // A fixed geographical distance at every zoom is NOT sensible: the
+   // range halves for each map zoom step independently of the tile provider.
+   return Math.max(0.001,280*Math.pow(2,2-Math.max(0,zoom)));
+ }
  function selectedLocations(selected) {
    const locations=new Map();
-   for(const photo of selected) {
-     const key=JSON.stringify([photo.lon,photo.lat]);
-     let entry=locations.get(key);
-     if(!entry) {
-       entry={id:photo.id,lat:photo.lat,lon:photo.lon,count:0,highlighted:false};
-       locations.set(key,entry);
-     }
-     entry.count++;
-     if(String(photo.id)===String(highlightedId))entry.highlighted=true;
+   for(const p of selected) {
+     if(!Number.isFinite(p.lat)||!Number.isFinite(p.lon))continue;
+     const key=JSON.stringify([p.lon,p.lat]);
+     let g=locations.get(key);
+     if(!g) {g={id:p.id,lat:p.lat,lon:p.lon,count:0,highlighted:false};
+       locations.set(key,g);}
+     g.count++;
+     if(String(p.id)===String(highlightedId))g.highlighted=true;
    }
    return [...locations.values()];
  }
- function selectedGeojson(selected) {
-   return {type:'FeatureCollection',features:selectedLocations(selected).map(p=>({
-     type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]},
-     properties:{id:String(p.id),lat:p.lat,lon:p.lon,
-       count:p.count,highlighted:p.highlighted}
-   }))};
+ function geographicGroups(locations,radiusKm) {
+   // Geographic latitude buckets are ONLY a search acceleration structure;
+   // they do not determine display positions or whether photos are grouped.
+   // Every membership decision uses a real great-circle distance in km.
+   const sorted=[...locations].sort((a,b)=>a.lat-b.lat||a.lon-b.lon||
+     Number(a.id)-Number(b.id));
+   const bandSize=Math.max(radiusKm/111.2,0.000005);
+   const bands=new Map(),groups=[];
+   for(const photo of sorted) {
+     const band=Math.floor((photo.lat+90)/bandSize);
+     let winner=null,nearest=radiusKm;
+     // Centers may move within one radius of their seed. Search adjacent
+     // latitude bands generously; no artificial longitude stripes.
+     for(let near=band-4;near<=band+4;near++) {
+       for(const g of bands.get(near)||[]) {
+         if(Math.abs(g.lat-photo.lat)*110.5>radiusKm)continue;
+         const km=distanceKm(g,photo);
+         if(km<=nearest){winner=g;nearest=km;}
+       }
+     }
+     if(!winner) {
+       const lonRadians=photo.lon*TO_RAD;
+       winner={id:photo.id,lat:photo.lat,lon:photo.lon,
+         originalLat:photo.lat,originalLon:photo.lon,count:0,
+         sumLat:0,sumSin:0,sumCos:0,highlighted:false,exact:true};
+       groups.push(winner);
+       if(!bands.has(band))bands.set(band,[]);
+       bands.get(band).push(winner);
+     }
+     winner.exact=winner.exact &&
+       photo.lat===winner.originalLat && photo.lon===winner.originalLon;
+     winner.count+=photo.count;
+     winner.sumLat+=photo.lat*photo.count;
+     winner.sumSin+=Math.sin(photo.lon*TO_RAD)*photo.count;
+     winner.sumCos+=Math.cos(photo.lon*TO_RAD)*photo.count;
+     winner.lat=winner.sumLat/winner.count;
+     winner.lon=Math.atan2(winner.sumSin,winner.sumCos)/TO_RAD;
+     winner.highlighted ||= photo.highlighted;
+   }
+   return groups;
  }
- function sendSelectedPoint(photo) {
-   const id=Number(photo.id),lat=Number(photo.lat),lon=Number(photo.lon);
-   const count=Number(photo.count);
-   if(!Number.isSafeInteger(id)||!Number.isFinite(lat)||!Number.isFinite(lon))return;
-   if(count>1)
-     post({type:'point-group',id,south:lat,north:lat,west:lon,east:lon});
-   else post({type:'select',id});
+ function inViewport(p) {
+   const b=map.getBounds?.();
+   if(!b)return true;
+   const south=b.getSouth(),north=b.getNorth(),west=b.getWest(),east=b.getEast();
+   const padLat=Math.max(0.005,(north-south)*0.08);
+   const padLon=Math.max(0.005,(east-west)*0.08);
+   if(p.lat<south-padLat||p.lat>north+padLat)return false;
+   return [p.lon,p.lon-360,p.lon+360].some(lon=>
+     lon>=west-padLon&&lon<=east+padLon);
  }
- function clickSmallSelectedMarker(event) {
+ function drawSelected() {
    const selected=points.filter(p=>p.selected);
-   if(selected.length===0||selected.length>smallSelectionLimit)return false;
-   let nearest=null,best=16*16;
-   for(const photo of selectedLocations(selected)) {
-     const screen=map.project([photo.lon,photo.lat]);
+   const locations=selectedLocations(selected);
+   const groups=geographicGroups(locations,groupingRadiusKm(map.getZoom()));
+   visibleSelectedGroups=groups.filter(inViewport);
+   const keep=new Set();
+   for(const group of visibleSelectedGroups) {
+     const key=String(group.id);keep.add(key);
+     let entry=selectedMarkers.get(key);
+     if(!entry) {
+       const el=document.createElement('div');
+       el.style.pointerEvents='none';
+       const marker=new maplibregl.Marker({element:el,anchor:'center'})
+         .setLngLat([group.lon,group.lat]).addTo(map);
+       entry={marker,el};selectedMarkers.set(key,entry);
+     } else entry.marker.setLngLat([group.lon,group.lat]);
+     const isGroup=group.count>1;
+     entry.el.className=isGroup?'pcasa-pin pcasa-pin-count':
+       group.highlighted?'pcasa-pin pcasa-pin-target':'pcasa-pin';
+     entry.el.textContent=isGroup?String(group.count):'';
+     entry.el.style.zIndex=group.highlighted?'6':'5';
+   }
+   for(const [key,entry] of selectedMarkers)
+     if(!keep.has(key)){entry.marker.remove();selectedMarkers.delete(key);}
+ }
+ function selectVisibleGroup(event) {
+   // The DOM pins have pointer-events disabled, leaving map clicks and
+   // placement controls on the original map canvas. Hit testing uses
+   // projected REAL geographic centers, never a placement-adjusted row.
+   let nearest=null,best=22*22;
+   for(const group of visibleSelectedGroups) {
+     const screen=map.project([group.lon,group.lat]);
      const dx=screen.x-event.point.x,dy=screen.y-event.point.y;
      const distance=dx*dx+dy*dy;
-     if(distance<=best){nearest=photo;best=distance;}
+     if(distance<best){nearest=group;best=distance;}
    }
    if(!nearest)return false;
-   sendSelectedPoint(nearest);
+   if(nearest.count>1&&!nearest.exact) {
+     map.easeTo({center:[nearest.lon,nearest.lat],
+       zoom:Math.min(23,Math.max(map.getZoom()+2,3)),duration:350});
+   } else if(nearest.count>1)
+     post({type:'point-group',id:Number(nearest.id),
+       south:nearest.originalLat,north:nearest.originalLat,
+       west:nearest.originalLon,east:nearest.originalLon});
+   else post({type:'select',id:Number(nearest.id)});
    return true;
  }
  function updatePhotos() {
    map.getSource('pcasa-photos')?.setData(geojson(points.filter(p=>!p.selected)));
    const selected=points.filter(p=>p.selected);
-   const large=selected.length>smallSelectionLimit;
-   // A single native GeoJSON layer renders EVERY distinct selected place.
-   // Small selections retain the proven MapLibre DOM marker path.
-   map.getSource('pcasa-selected')?.setData(
-     selectedGeojson(large?selected:[]));
-   syncSelectedFocus(selected);
- }
- function syncSelectedFocus(selected=points.filter(p=>p.selected)) {
    if(selected.length&&!selected.some(p=>String(p.id)===String(highlightedId)))
      highlightedId=String(selected[0].id);
    if(!selected.length)highlightedId=null;
-   const visible=selected.length<=smallSelectionLimit
-     ?selectedLocations(selected):[];
-   const keep=new Set();
-   for(const p of visible) {
-     const id=String(p.id);keep.add(id);
-     let entry=smallSelectedMarkers.get(id);
-     if(!entry) {
-       const el=document.createElement('div');
-       el.style.pointerEvents='none';
-       el.style.zIndex='5';
-       const marker=new maplibregl.Marker({element:el,anchor:'center'})
-         .setLngLat([p.lon,p.lat]).addTo(map);
-       entry={marker,el};smallSelectedMarkers.set(id,entry);
-     } else entry.marker.setLngLat([p.lon,p.lat]);
-     entry.el.className=(p.highlighted?'pcasa-pin pcasa-pin-target':'pcasa-pin')+
-       (p.count>1?' pcasa-pin-count':'');
-     entry.el.textContent=p.count>1?String(p.count):'';
-   }
-   for(const [id,entry] of smallSelectedMarkers)
-     if(!keep.has(id)){entry.marker.remove();smallSelectedMarkers.delete(id);}
+   drawSelected();
  }
- window.pcasaHighlightPoint = (id) => {
+ window.pcasaHighlightPoint = id => {
    if(!points.some(p=>String(p.id)===String(id)&&p.selected))return;
    highlightedId=String(id);
-   // Focus does not zoom or change the gallery selection.
-   updatePhotos();
+   // Changing the highlighted photo never pans/zooms or changes selection.
+   drawSelected();
  };
  function zoomSelection() {
    const selected = points.filter(p=>p.selected);
@@ -279,24 +303,15 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('idle',()=>{
    if(!ready||transferActive)return;
    const selectedCount=points.filter(p=>p.selected).length;
-   if(selectedCount<=smallSelectionLimit)return; // DOM pins are separate.
-   const key=transferRevision+':'+styleGeneration;
+   if(!selectedCount)return;
+   const key=transferRevision+':'+styleGeneration+':'+Math.round(map.getZoom()*4);
    if(lastOverlayCheck===key)return;
-   const layers=['pcasa-selected-clusters','pcasa-selected-points']
-     .filter(id=>!!map.getLayer(id));
-   // 'idle' means source/style placement finished. Query actual visible
-   // features, not only the GeoJSON data array; the old regression test
-   // could pass with 7,000 stored points and nothing drawn on screen.
-   let visible=0;
-   try {
-     if(layers.length===2)
-       visible=map.queryRenderedFeatures({layers}).length;
-   } catch(_) {return;}
    lastOverlayCheck=key;
-   if(!visible)
+   // The marker owner is DOM, so a GeoJSON source being loaded cannot
+   // silently make all photo markers disappear after a basemap change.
+   if(visibleSelectedGroups.length>0 && selectedMarkers.size===0)
      post({type:'gps-overlay-empty',version:transferRevision,
-       selected:selectedCount,source:!!map.getSource('pcasa-selected'),
-       layers:layers.length});
+       selected:selectedCount,source:true,layers:0});
  });
  map.on('error',event=>{const s=String(event.error?.message||'');if(s)post({type:'error',message:s.substring(0,250)});});
  map.on('click','pcasa-clusters',event=>{
@@ -313,28 +328,6 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if(Number.isSafeInteger(id)) post({type:'select',id});
  }
  map.on('click','pcasa-points',selectPhoto);
- map.on('click','pcasa-selected-clusters',event=>{
-   if(!event.features?.length)return;
-   const feature=event.features[0];
-   const clusterId=Number(feature.properties?.cluster_id);
-   if(!Number.isSafeInteger(clusterId))return;
-   const source=map.getSource('pcasa-selected');
-   // Use the renderer's own geographic cluster tree. No provider API,
-   // synthetic screen grid, manual coordinate adjustments or second index.
-   source?.getClusterExpansionZoom(clusterId).then(zoom=>{
-     if(Number.isFinite(zoom))
-       map.easeTo({center:feature.geometry.coordinates,zoom,duration:350});
-   }).catch(()=>{});
- });
- map.on('click','pcasa-selected-points',event=>{
-   if(!event.features?.length)return;
-   sendSelectedPoint(event.features[0].properties);
- });
-
- for(const layer of ['pcasa-points','pcasa-selected-points','pcasa-selected-clusters']) {
-   map.on('mouseenter',layer,()=>map.getCanvas().style.cursor='pointer');
-   map.on('mouseleave',layer,()=>map.getCanvas().style.cursor='');
- }
  map.on('mouseenter','pcasa-clusters',()=>map.getCanvas().style.cursor='pointer');
  map.on('mouseleave','pcasa-clusters',()=>map.getCanvas().style.cursor='');
  let draftMarker = null;
@@ -365,7 +358,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    map.getCanvas().style.cursor=placementEnabled ? 'crosshair' : '';
  };
  map.on('click',event=>{
-   if (clickSmallSelectedMarker(event)) return;
+   if (selectVisibleGroup(event)) return;
    if (!placementEnabled) return;
    const ids=['pcasa-points','pcasa-clusters']
      .filter(id=>!!map.getLayer(id));
@@ -384,10 +377,11 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      map.jumpTo({center:[lon,lat],zoom});
  };
  map.on('moveend',()=>{
+   drawSelected();
    const p=map.getCenter();
    post({type:'viewport',lat:p.lat,lon:p.lng,zoom:map.getZoom()});
  });
- window.pcasaResize = () => map.resize();
+ window.pcasaResize = () => {map.resize();drawSelected();};
  map.on('load',()=>{fallback.remove();});
 })();
 </script></body></html>
