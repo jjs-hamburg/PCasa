@@ -392,6 +392,7 @@ public partial class MainWindow
         var finished = false;
         var afterId = 0L;
         var mismatches = 0;
+        var unverifiedGps = 0;
         try
         {
             var audit = new GpsSourceIntegrityAudit(_database);
@@ -406,21 +407,23 @@ public partial class MainWindow
                     workKind: SchedulerWorkKind.CatalogRead);
                 if (page.Checked == 0) break;
                 afterId = page.LastImageId;
+                unverifiedGps += page.UnverifiedGpsRows;
                 foreach (var path in page.MismatchedPaths)
                 {
                     if (_backgroundMonitorClosing || lifetime.IsCancellationRequested)
                         throw new OperationCanceledException();
                     QueueBackgroundChange(new BackgroundFolderChange(
                         rootId, path, BackgroundFolderChangeKind.ScanFile,
-                        Recursive: false));
+                        Recursive: false, ForceExifRefresh: true));
                     mismatches++;
                 }
             }
             finished = true;
-            if (mismatches > 0)
+            if (mismatches > 0 || unverifiedGps > 0)
                 PCasaDiagnostics.WriteMessage("GPS.SourceIdentity.Audit",
-                    $"Root={rootId}; Mismatches={mismatches}; " +
-                    "Targeted original-file repairs queued.");
+                    $"Root={rootId}; ProvenMismatches={mismatches}; " +
+                    $"UnverifiedLegacyGps={unverifiedGps}; " +
+                    "Only proven mismatches queued for native EXIF repair.");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -535,6 +538,8 @@ public partial class MainWindow
                 Resume = retained,
                 ResumeGeneration = interruptedCursor is not null
                     ? cursorGeneration : existing.ResumeGeneration,
+                ForceExifRefresh = existing.ForceExifRefresh ||
+                    change.ForceExifRefresh,
                 // Never coalesce a later watcher event into an older partial
                 // scan without preserving the need for a final fresh pass.
                 NeedsFollowup = existing.NeedsFollowup ||
@@ -550,7 +555,8 @@ public partial class MainWindow
                 change.Kind,
                 change.Recursive,
                 interruptedCursor,
-                cursorGeneration);
+                cursorGeneration,
+                ForceExifRefresh: change.ForceExifRefresh);
         }
 
         if (change.Kind is not (BackgroundFolderChangeKind.RemovePath or BackgroundFolderChangeKind.RecoverCache))
@@ -886,7 +892,8 @@ public partial class MainWindow
                                 scanResume.Added, scanResume.Changed,
                                 scanResume.CacheRepaired));
                             scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
-                                ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token)
+                                ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token,
+                                    forceExifRefresh: request.ForceExifRefresh)
                                 : _folderScanner.ScanDirectory(
                                     folder, scanPath, request.Recursive,
                                     progress: scanProgress, token, scanResume,
@@ -1049,7 +1056,8 @@ public partial class MainWindow
                 foreach (var remaining in requests.Skip(nextRequestIndex))
                     QueueBackgroundChange(new BackgroundFolderChange(
                         remaining.MonitoredFolderId, remaining.Path,
-                        remaining.Kind, remaining.Recursive),
+                        remaining.Kind, remaining.Recursive,
+                        ForceExifRefresh: remaining.ForceExifRefresh),
                         remaining.Resume, remaining.ResumeGeneration);
 
                 // Scans already completed before preemption can leave durable
@@ -1170,5 +1178,6 @@ public partial class MainWindow
         bool Recursive,
         FolderScanner.ScanResumeState? Resume = null,
         long? ResumeGeneration = null,
-        bool NeedsFollowup = false);
+        bool NeedsFollowup = false,
+        bool ForceExifRefresh = false);
 }
