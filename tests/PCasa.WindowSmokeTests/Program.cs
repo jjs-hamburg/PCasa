@@ -1494,10 +1494,10 @@ internal static class Program
                             new long[] { 1003 }) });
                     clusterClick.Invoke(window, new object[] { 1003L, 77L });
                     Flush(window);
-                    var popup = (FrameworkElement?)window.FindName("GpsPhotoPopup")
+                    var gpsMarkerPopup = (FrameworkElement?)window.FindName("GpsPhotoPopup")
                         ?? throw new Exception("GPS popup missing.");
                     if (strip.Items.Count != 1 ||
-                        popup.Tag is not long popupId || popupId != 1003)
+                        gpsMarkerPopup.Tag is not long popupId || popupId != 1003)
                         throw new Exception("Single-marker click failed to show its photo.");
                     Console.WriteLine(
                         "PASS: Map cluster clicks show photo IDs; singles open preview.");
