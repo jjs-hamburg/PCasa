@@ -140,7 +140,7 @@ public sealed class BackgroundFolderMonitor : IDisposable
                 // The callback may run on another thread during Refresh().
                 // Do not mutate the watcher dictionary from this callback;
                 // only mark this particular watcher for replacement.
-                Volatile.Write(ref state.Faulted, 1);
+                if (Interlocked.Exchange(ref state.Faulted, 1) != 0) return;
                 if (e.GetException() is { } error)
                 {
                     PCasaDiagnostics.Write("FileSystemWatcher.Error", error);
