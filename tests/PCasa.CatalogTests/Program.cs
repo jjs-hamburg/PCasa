@@ -39,6 +39,8 @@ internal static class Program
             }
         }
         var failures = new List<string>();
+        Run("GPS clusters group nearby originals by kilometres, preserve every ID and work across ±180°",
+            GpsGeographicClustersPreserveIdentity, failures);
         Run("One UI translation catalog switches de/en and preserves user metadata", LanguageSwitchPreservesUserMetadata, failures);
         Run("Diagnostic log rotates to three one-megabyte files and trims old oversized logs", BoundedDiagnosticsRotateAndTrim, failures);
         Run("Scheduler prioritizes queued user work", SchedulerPriorityOrdering, failures);
@@ -6075,4 +6077,72 @@ internal static class Program
             if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
         }
     }
+    private static void GpsGeographicClustersPreserveIdentity()
+    {
+        var nearby = Enumerable.Range(0, 70).Select(i =>
+            new GpsPhotoPosition(1000 + i, 28.415 + i * 0.000003,
+                -16.568 + i * 0.000002)).ToArray();
+        var world = new List<GpsPhotoPosition>(nearby)
+        {
+            new(1, 53.5, 10),
+            new(2, 53.50001, 10.00001),
+            new(3, 26, -80),
+            new(4, -29, 135),
+            new(5, 10, 179.999),
+            new(6, 10, -179.999)
+        };
+        var wide = GpsGeographicClusterer.Cluster(world, 2);
+        if (wide.Sum(g => g.Count) != world.Count ||
+            wide.SelectMany(g => g.ImageIds).Order().Distinct().Count() != world.Count)
+            throw new Exception("Clusters lost or duplicated original photo IDs.");
+        if (!wide.Any(g => g.ImageIds.Contains(5) && g.ImageIds.Contains(6)))
+            throw new Exception("Geographic cluster failed across the antimeridian.");
+        if (!wide.Any(g => g.ImageIds.Contains(1) && g.ImageIds.Contains(2)))
+            throw new Exception("Nearby GPS locations were not clustered.");
+        var close = GpsGeographicClusterer.Cluster(world, 20);
+        if (close.Count <= wide.Count ||
+            close.Sum(g => g.Count) != world.Count)
+            throw new Exception("Higher map zoom must split clusters without losing photos.");
+        var reverse = GpsGeographicClusterer.Cluster(world.AsEnumerable().Reverse().ToArray(), 2);
+        if (!wide.Select(g => string.Join(",", g.ImageIds.Order())).Order()
+            .SequenceEqual(reverse.Select(g => string.Join(",", g.ImageIds.Order())).Order()))
+            throw new Exception("GPS clustering changed when the selected-image order changed.");
+        var inTenerife = wide.Single(g => g.ImageIds.Contains(1000));
+        if (inTenerife.Count < 70 ||
+            Math.Abs(inTenerife.Latitude - 28.415) > 0.02 ||
+            Math.Abs(inTenerife.Longitude + 16.568) > 0.02)
+            throw new Exception("Geographic center or cluster photo count is incorrect.");
+        var invalid = GpsGeographicClusterer.Cluster(
+            [new GpsPhotoPosition(1, 95, 0), new GpsPhotoPosition(2, 0, 181)], 2);
+        if (invalid.Count != 0)
+            throw new Exception("Invalid GPS coordinates must not create visible map markers.");
+        // A real-volume worldwide selection must remain responsive without
+        // depending on MapLibre's separate GeoJSON worker.
+        var many = Enumerable.Range(0, 7200).Select(i =>
+        {
+            var n = i % 1440;
+            return new GpsPhotoPosition(20000 + i,
+                (i / 1440) switch
+                {
+                    0 => 50 + n % 60 * 0.031,
+                    1 => 38 + n % 60 * 0.031,
+                    2 => -28 + n % 60 * 0.031,
+                    3 => -15 + n % 60 * 0.031,
+                    _ => 15 + n % 60 * 0.031
+                },
+                (i / 1440) switch
+                {
+                    0 => 10 + n / 60 * 0.034,
+                    1 => -120 + n / 60 * 0.034,
+                    2 => 135 + n / 60 * 0.034,
+                    3 => -65 + n / 60 * 0.034,
+                    _ => 100 + n / 60 * 0.034
+                });
+        }).ToArray();
+        var result = GpsGeographicClusterer.Cluster(many, 2);
+        if (result.Count < 5 || result.Count >= many.Length ||
+            result.Sum(g => g.Count) != 7200)
+            throw new Exception("World-scale grouping dropped photographs or failed.");
+    }
+
 }
