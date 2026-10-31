@@ -152,14 +152,16 @@ public sealed class FolderScanner
         string localFile,
         IProgress<ScanProgress>? progress = null,
         CancellationToken cancellationToken = default,
-        bool publishCatalogChange = true)
+        bool publishCatalogChange = true,
+        bool forceExifRefresh = false)
     {
         if (!IsSupportedImagePath(localFile) || !File.Exists(localFile))
             return new ScanResult(0, 0, 0, 0);
         return ScanDirectoryLocked(
             folder, Path.GetDirectoryName(localFile)!, false,
             progress, cancellationToken, localFile,
-            publishCatalogChange: publishCatalogChange);
+            publishCatalogChange: publishCatalogChange,
+            forceExifRefresh: forceExifRefresh);
     }
 
     private ScanResult ScanDirectoryLocked(
@@ -172,7 +174,8 @@ public sealed class FolderScanner
         ScanResumeState? resume = null,
         bool publishCatalogChange = true,
         bool durableInitialImport = false,
-        string? durableScanKey = null)
+        string? durableScanKey = null,
+        bool forceExifRefresh = false)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -472,7 +475,7 @@ public sealed class FolderScanner
                             scanSession.FlushPending();
                         }
                         // Enrich old catalogs without touching their thumbnails.
-                        if (!existing.HasCurrentExif)
+                        if (forceExifRefresh || !existing.HasCurrentExif)
                         {
                             scanSession.FlushPending();
                             var exif = exifReader.Read(localPath, cancellationToken);
