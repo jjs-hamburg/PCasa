@@ -277,13 +277,16 @@ public partial class MainWindow
                     : null;
             }
             case "cluster-click":
-                return root.TryGetProperty("version", out var v) &&
-                    v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var rev) &&
+            {
+                return root.TryGetProperty("version", out var clickVersion) &&
+                    clickVersion.ValueKind == JsonValueKind.Number &&
+                    clickVersion.TryGetInt64(out var rev) &&
                     root.TryGetProperty("id", out var cluster) &&
                     cluster.ValueKind == JsonValueKind.Number &&
                     cluster.TryGetInt64(out var clusterId)
                     ? new GpsMapMessage("cluster-click", Id: clusterId,
                         Version: rev) : null;
+            }
             case "gps-overlay-empty":
             {
                 return root.TryGetProperty("version", out var v) &&
