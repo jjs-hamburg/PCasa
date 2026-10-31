@@ -763,9 +763,8 @@ public partial class MainWindow
                         Recursive: false, ForceExifRefresh: true));
             }
             _gpsPoints = points;
-            // Foreground selection and folder context are intentionally
-            // independent. No stale point may survive a failed or canceled
-            // catalog read while pretending to belong to the new selection.
+            // Only current selected photo IDs can own the GPS projection.
+            // A canceled or obsolete read may never republish older markers.
             PCasaDiagnostics.WriteMessage("GPS.Map.Query",
                 $"Revision={revision}; Selected={selectedIds.Length}; " +
                 $"GeotaggedSelected={points.Count(p => p.Selected)}; " +
@@ -791,9 +790,7 @@ public partial class MainWindow
             _gpsCurrentCoordinates = focused is not null
                 ? (focused.Lat, focused.Lon)
                 : selectedGps.Length == 1
-                    ? (selectedGps[0].Lat, selectedGps[0].Lon)
-                    : selectedIds.Length == 0 && points.Count == 1
-                        ? (points[0].Lat, points[0].Lon) : null;
+                    ? (selectedGps[0].Lat, selectedGps[0].Lon) : null;
             GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
             GpsRemoveButton.IsEnabled = selectedIds.Length > 0;
             GpsApplyMissingButton.IsEnabled = selectedIds.Length > 0 &&
