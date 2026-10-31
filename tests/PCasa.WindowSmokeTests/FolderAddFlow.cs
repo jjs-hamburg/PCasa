@@ -705,47 +705,60 @@ internal static class FolderAddFlow
                 BindingFlags.NonPublic)!;
             var liveScroller = (ScrollViewer)window.FindName("BrowseScrollViewer");
             var liveSurface = (BrowseGallerySurface)window.FindName("BrowseSurface");
-            var liveFolder = Path.Combine(initialRoot, "AA-Live-Import");
-            Directory.CreateDirectory(liveFolder);
-            bool IsDisplayed(string path)
+            var activeFolderField = typeof(PCasa.App.MainWindow).GetField(
+                "_activePhotoFolderId", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var previousActiveFolder = activeFolderField.GetValue(window);
+            bool IsVisiblyRendered(string path)
             {
                 var id = new ImageCatalogRepository(db).GetImageId(path);
-                return id is long imageId &&
-                    liveIndexField.GetValue(window) is
-                        IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry> index &&
-                    index.Any(entry => entry.ImageId == imageId);
+                if (id is not long imageId ||
+                    liveIndexField.GetValue(window) is not
+                        IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry> index)
+                    return false;
+                var ordinal = -1;
+                for (var i = 0; i < index.Count; i++)
+                    if (index[i].ImageId == imageId) { ordinal = i; break; }
+                liveSurface.SetViewport(liveScroller.VerticalOffset,
+                    Math.Max(1, liveScroller.ViewportHeight));
+                var visible = liveSurface.GetVisibleIndexRange();
+                return ordinal >= 0 && visible is { } span &&
+                    ordinal >= span.First && ordinal <= span.Last;
             }
-            // New subfolder is different from the currently active folder.
-            // This is the path which previously ONLY queued a full refresh.
+            // A new photo is placed at the ACTUAL beginning, but the
+            // UI's previously focused tree folder is different. This
+            // recreates the cross-folder scanner path from the bug report.
             liveScroller.ScrollToTop();
-            var firstLive = Path.Combine(liveFolder, "000-live-begin.jpg");
+            activeFolderField.SetValue(window, (long?)later.Id);
+            var firstLive = Path.Combine(initialRoot, "000-live-begin.jpg");
             WriteJpeg(firstLive);
             var firstLiveScan = Task.Run(() => liveScanner.ScanFile(liveRoot, firstLive));
             Until(window, () => firstLiveScan.IsCompleted,
                 "Real beginning-edge scanner could not commit a JPEG.");
             firstLiveScan.GetAwaiter().GetResult();
-            Until(window, () => IsDisplayed(firstLive),
-                "Live scan committed a JPEG but the gallery start stayed static.");
+            Until(window, () => IsVisiblyRendered(firstLive),
+                "A real committed JPEG was absent from the visible TOP row.");
             if (liveScroller.VerticalOffset > 2)
                 throw new Exception("Live scan displaced the beginning-of-gallery scroll position.");
             Console.WriteLine("PASS: Real cross-folder JPG commit appears at top live edge.");
 
             // A second photo after the first real publication also has to
             // appear without a manual reload or navigation.
-            var secondLive = Path.Combine(liveFolder, "001-live-after.jpg");
+            var secondLive = Path.Combine(laterFolder, "zzz-live-end.jpg");
             WriteJpeg(secondLive);
             liveScroller.ScrollToBottom();
+            activeFolderField.SetValue(window, (long?)firstFolder.Id);
             var bottomScan = Task.Run(() => liveScanner.ScanFile(liveRoot, secondLive));
             Until(window, () => bottomScan.IsCompleted,
                 "Real end-edge scanner could not commit a JPEG.");
             bottomScan.GetAwaiter().GetResult();
-            Until(window, () => IsDisplayed(secondLive),
-                "Live scan committed a JPEG but the gallery end stayed static.");
+            Until(window, () => IsVisiblyRendered(secondLive),
+                "A real committed JPEG was absent from the visible LAST row.");
             if (liveScroller.ScrollableHeight > 2 &&
                 liveScroller.ScrollableHeight - liveScroller.VerticalOffset > 2)
                 throw new Exception("Live scan displaced the end-of-gallery scroll position.");
             Console.WriteLine("PASS: Real second JPG arrives at end live edge.");
             runningScanField.SetValue(window, previousRunningScan);
+            activeFolderField.SetValue(window, previousActiveFolder);
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF folder-add, import and restart checks passed.");
