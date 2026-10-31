@@ -248,6 +248,20 @@ public sealed class FolderScanner
                 : null;
         if (persistentScan && resume is not null)
             resume.InitialFileCursors = fileCursors;
+        if (persistentScan && specificFile is null)
+        {
+            // A restart log must identify the actual persisted checkpoint,
+            // not just the progress window's transient "checked" counter.
+            var last = fileCursors!.OrderBy(pair => pair.Key,
+                StringComparer.OrdinalIgnoreCase).LastOrDefault();
+            PCasaDiagnostics.WriteMessage("Scan.CursorLoaded",
+                $"Mode={(durableInitialImport ? "InitialImport" : "Regular")}; " +
+                $"Root={scanRoot}; Job={durableScanKey ?? "initial"}; " +
+                $"Epoch={scanEpoch}; Checked={imageFilesSeen}; " +
+                $"CompletedDirectories={completedDirectories!.Count}; " +
+                $"FileCursors={fileCursors.Count}; " +
+                $"LastDirectory={last.Key ?? "-"}; LastFile={last.Value ?? "-"}");
+        }
         // A partial directory seen-set after restart must never prune images
         // that were committed and skipped before this process started.
         var restartedPartialDirectories = persistentScan
