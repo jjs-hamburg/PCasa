@@ -48,7 +48,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('styledata', collapseAttributionInitially);
  map.on('sourcedata', collapseAttributionInitially);
  let points = [], ready = false, highlightedId = null;
- let previousSelectedIds = null;
+ let previousSelectedSignature = null;
  let transferRevision=-1,transferParts=[],transferExpected=0,
      transferActive=false,transferCommitRequested=false;
 
@@ -107,20 +107,29 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
         location.y< -24||location.y>height+24)continue;
      const key=Math.floor(location.x/36)+','+Math.floor(location.y/36);
      let cell=cells.get(key);
-     if(!cell){cell={x:0,y:0,lat:0,lon:0,count:0,id:photo.id};cells.set(key,cell);}
+     if(!cell){cell={x:0,y:0,lat:0,lon:0,count:0,id:photo.id,
+       south:photo.lat,north:photo.lat,west:photo.lon,east:photo.lon,
+       highlighted:false};cells.set(key,cell);}
+     cell.south=Math.min(cell.south,photo.lat);
+     cell.north=Math.max(cell.north,photo.lat);
+     cell.west=Math.min(cell.west,photo.lon);
+     cell.east=Math.max(cell.east,photo.lon);
+     if(String(photo.id)===String(highlightedId))cell.highlighted=true;
      cell.x+=location.x;cell.y+=location.y;
      cell.lat+=photo.lat;cell.lon+=photo.lon;cell.count++;
    }
    visibleSelectedCells=[...cells.values()].map(cell=>({
      x:cell.x/cell.count,y:cell.y/cell.count,
      lat:cell.lat/cell.count,lon:cell.lon/cell.count,
-     count:cell.count,id:cell.id
+     count:cell.count,id:cell.id,highlighted:cell.highlighted,
+     south:cell.south,north:cell.north,west:cell.west,east:cell.east
    }));
    for(const cell of visibleSelectedCells) {
      const radius=cell.count>1?16:10;
      ctx.beginPath();ctx.arc(cell.x,cell.y,radius,0,Math.PI*2);
      ctx.fillStyle='#f0a030';ctx.fill();
-     ctx.lineWidth=3;ctx.strokeStyle='#111';ctx.stroke();
+     ctx.lineWidth=cell.highlighted?4:3;
+     ctx.strokeStyle=cell.highlighted?'#fff':'#111';ctx.stroke();
      if(cell.count>1) {
        ctx.fillStyle='#111';ctx.textAlign='center';ctx.textBaseline='middle';
        ctx.font='bold 12px Segoe UI, sans-serif';
@@ -148,9 +157,12 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      if(distance<limit*limit&&distance<best){closest=cell;best=distance;}
    }
    if(!closest)return false;
-   if(closest.count>1&&map.getZoom()<15)
-     map.easeTo({center:[closest.lon,closest.lat],
-       zoom:Math.min(map.getZoom()+2,16),duration:300});
+   // Every click opens the photos represented by the hit cell. Never
+   // silently zoom a dense marker without showing which pictures it owns.
+   if(closest.count>1)
+     post({type:'point-group',id:Number(closest.id),
+       south:closest.south,north:closest.north,
+       west:closest.west,east:closest.east});
    else post({type:'select',id:Number(closest.id)});
    return true;
  }
@@ -179,7 +191,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
        const el=document.createElement('div');
        el.className='pcasa-pin pcasa-pin-target';
        el.title=focused.name||'Foto';
-       el.style.zIndex='99';
+       // Let clicks reach the grouped canvas hit test. Otherwise the
+       // focused DOM marker steals clicks from every photo at its location.
+       el.style.zIndex='4';el.style.pointerEvents='none';
        el.addEventListener('click',e=>{
          e.stopPropagation();post({type:'select',id:Number(key)});
        });
@@ -198,6 +212,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    // Highlight only: the user must retain the exact map extent while
    // comparing selected photos, even at identical GPS coordinates.
    syncSelectedMarkers();
+   scheduleSelectedOverlay();
  };
  function zoomSelection() {
    const selected = points.filter(p=>p.selected);
@@ -212,14 +227,17 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    points = Array.isArray(data) ? data.filter(p=>
      Number.isFinite(p.lat)&&Number.isFinite(p.lon) &&
      Math.abs(p.lat)<=90 && Math.abs(p.lon)<=180) : [];
-   const selectedIds = points.filter(p=>p.selected).map(p=>String(p.id)).sort().join(',');
-   const selectionChanged = selectedIds !== previousSelectedIds;
-   previousSelectedIds = selectedIds;
+   // Coordinate corrections without an ID change must also recenter the
+   // map. A stale camera used to hide an otherwise correctly loaded photo.
+   const selectedSignature = points.filter(p=>p.selected)
+     .map(p=>String(p.id)+':'+p.lat+':'+p.lon).sort().join(';');
+   const selectionChanged = selectedSignature !== previousSelectedSignature;
+   previousSelectedSignature = selectedSignature;
    if (ready) {
      updatePhotos();
-     // Only a changed selection establishes a new overview. Switching a
-     // focused filmstrip photo must preserve the user's map extent.
-     if (selectionChanged && selectedIds) zoomSelection();
+     // A focus change keeps the map camera; a new set of GPS positions
+     // establishes its own extent, even for exactly one selected image.
+     if (selectionChanged && selectedSignature) zoomSelection();
    }
  };
  // A single huge ExecuteScriptAsync payload previously left stale map data
