@@ -199,7 +199,11 @@ public partial class MainWindow
                 !_appearance.ShowGpsFilmstrip) return;
             foreach (var (item, bitmap) in images)
                 item.Bitmap = bitmap;
-            if (!_appearance.ShowGpsFilmstrip && GpsPhotoPopup.IsVisible &&
+            // The map-click photo popup and the filmstrip share the same
+            // asynchronous packed-thumbnail reader. A click can arrive
+            // before the bitmap is decoded; update its preview when ready,
+            // even though the filmstrip has been opened for that point.
+            if (GpsPhotoPopup.IsVisible &&
                 GpsPhotoPopup.Tag is long imageId)
             {
                 var popupItem = _gpsFilmstripEntries.FirstOrDefault(i => i.Id == imageId);
