@@ -1453,6 +1453,23 @@ internal static class Program
                 Flush(window);
             if (!stalledStarted.Task.IsCompleted)
                 throw new Exception("Shutdown test source read never started.");
+            var interactiveReadStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseInteractiveRead = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var stuckInteractiveRead = closingScheduler.EnqueueAsync(
+                "test:shutdown-stalled-catalog-read", SchedulerPriority.Interactive,
+                async token =>
+                {
+                    interactiveReadStarted.TrySetResult();
+                    await releaseInteractiveRead.Task; // simulates blocked SMB read
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            var interactiveDeadline = DateTime.UtcNow.AddSeconds(8);
+            while (!interactiveReadStarted.Task.IsCompleted &&
+                DateTime.UtcNow < interactiveDeadline)
+                Flush(window);
+            if (!interactiveReadStarted.Task.IsCompleted)
+                throw new Exception("Shutdown interactive read never started.");
             var shuttingDownAt = DateTime.UtcNow;
             window.Close();
             var progress = Application.Current.Windows
@@ -1477,9 +1494,10 @@ internal static class Program
                 ExifToolKeywordWriter.HasLiveSessions ||
                 (DateTime.UtcNow - shuttingDownAt) > TimeSpan.FromSeconds(8))
                 throw new Exception("Shutdown waited for a canceled but blocked background read.");
-            if (stalledRead.IsCompleted)
-                throw new Exception("Shutdown test failed to keep the OS source read blocked.");
+            if (stalledRead.IsCompleted || stuckInteractiveRead.IsCompleted)
+                throw new Exception("Shutdown test did not keep network reads blocked.");
             releaseStalledRead.TrySetResult();
+            releaseInteractiveRead.TrySetResult();
             Console.WriteLine("PASS: Shutdown cancels normal scans and does not wait for stalled noncritical source reads.");
             window = null;
             Console.WriteLine("RESULT: Window smoke checks passed.");
