@@ -13,6 +13,7 @@ public partial class MainWindow
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<long> _backgroundKnownFolderIds = new();
     private readonly HashSet<long> _backgroundDeferredInventoryRoots = new();
+    private readonly HashSet<long> _gpsSourceAuditedRoots = new();
     private bool _backgroundFirstMonitorSnapshot = true;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
 
@@ -150,6 +151,7 @@ public partial class MainWindow
             if (_backgroundScanSettings.Enabled)
             {
                 _backgroundKnownFolderIds.Clear();
+                _gpsSourceAuditedRoots.Clear();
                 // Re-enabled monitoring is an explicit change: reconcile
                 // what happened while the watchers were turned off.
                 _backgroundFirstMonitorSnapshot = false;
@@ -248,6 +250,7 @@ public partial class MainWindow
             var currentIds = folders.Select(folder => folder.Id).ToHashSet();
             _backgroundKnownFolderIds.RemoveWhere(id => !currentIds.Contains(id));
             _backgroundDeferredInventoryRoots.RemoveWhere(id => !currentIds.Contains(id));
+            _gpsSourceAuditedRoots.RemoveWhere(id => !currentIds.Contains(id));
 
             // Installing a watcher on startup does NOT prove the directory
             // changed. The old code manufactured a full RescanRoot on every
@@ -260,12 +263,19 @@ public partial class MainWindow
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
                 {
                     _backgroundKnownFolderIds.Remove(folder.Id);
+                    _gpsSourceAuditedRoots.Remove(folder.Id);
                     continue;
                 }
 
                 var firstKnown = _backgroundKnownFolderIds.Add(folder.Id);
                 if (pendingInitialIds.Contains(folder.Id))
                     continue; // The durable initial-import scanner owns this root.
+
+                // This is a catalog-only read. ONLY mismatched source
+                // identities enter the existing per-file scanner, never a
+                // new whole-folder scan or a second EXIF writer.
+                if (_gpsSourceAuditedRoots.Add(folder.Id))
+                    _ = AuditGpsSourceIdentityAsync(folder.Id);
 
                 var deferred = _backgroundDeferredInventoryRoots.Contains(folder.Id);
                 if (!firstKnown && !deferred)
@@ -355,6 +365,61 @@ public partial class MainWindow
         foreach (var child in item.Items.OfType<System.Windows.Controls.TreeViewItem>())
         {
             SetFolderTreeAvailability(child, inheritedOffline || unavailable);
+        }
+    }
+
+    // Validate previously stored EXIF-to-image identities once per available
+    // root and process launch. The catalog itself is the durable checkpoint:
+    // successfully repaired rows no longer appear as mismatches after restart.
+    // Scheduler P4 owns the read, and the existing scanner P3 owns rereading
+    // the corresponding ORIGINAL file. No directory walking or thumbnail
+    // rebuild is initiated for a valid catalog row.
+    private async Task AuditGpsSourceIdentityAsync(long rootId)
+    {
+        var finished = false;
+        var afterId = 0L;
+        var mismatches = 0;
+        try
+        {
+            var audit = new GpsSourceIntegrityAudit(_database);
+            while (_backgroundLifetime is { IsCancellationRequested: false } lifetime &&
+                   _backgroundScanSettings?.Enabled == true)
+            {
+                var page = await _scheduler.RunAsync(
+                    $"gps:source-audit:{rootId}:{afterId}",
+                    SchedulerPriority.Idle,
+                    token => audit.ReadPage(rootId, afterId, 1000, token),
+                    cancellationToken: lifetime.Token,
+                    workKind: SchedulerWorkKind.CatalogRead);
+                if (page.Checked == 0) break;
+                afterId = page.LastImageId;
+                foreach (var path in page.MismatchedPaths)
+                {
+                    if (_backgroundMonitorClosing || lifetime.IsCancellationRequested)
+                        throw new OperationCanceledException();
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        rootId, path, BackgroundFolderChangeKind.ScanFile,
+                        Recursive: false));
+                    mismatches++;
+                }
+            }
+            finished = true;
+            if (mismatches > 0)
+                PCasaDiagnostics.WriteMessage("GPS.SourceIdentity.Audit",
+                    $"Root={rootId}; Mismatches={mismatches}; " +
+                    "Targeted original-file repairs queued.");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("GPS.SourceIdentity.Audit", ex);
+        }
+        finally
+        {
+            // A canceled/failed read is retryable; no separate scheduler or
+            // orphaned journal owns the work. Successfully repaired rows are
+            // no longer candidates on the next pass.
+            if (!finished) _gpsSourceAuditedRoots.Remove(rootId);
         }
     }
 
