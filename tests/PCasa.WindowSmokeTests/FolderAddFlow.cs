@@ -713,12 +713,10 @@ internal static class FolderAddFlow
             liveScroller.ScrollToTop();
             var firstLive = Path.Combine(liveFolder, "000-live-begin.jpg");
             WriteJpeg(firstLive);
-            awaitableScan: {
-                var scanned = Task.Run(() => liveScanner.ScanFile(liveRoot, firstLive));
-                Until(window, () => scanned.IsCompleted,
-                    "Real beginning-edge scanner could not commit a JPEG.");
-                scanned.GetAwaiter().GetResult();
-            }
+            var firstLiveScan = Task.Run(() => liveScanner.ScanFile(liveRoot, firstLive));
+            Until(window, () => firstLiveScan.IsCompleted,
+                "Real beginning-edge scanner could not commit a JPEG.");
+            firstLiveScan.GetAwaiter().GetResult();
             Until(window, () => IsDisplayed(firstLive),
                 "Live scan committed a JPEG but the gallery start stayed static.");
             if (liveScroller.VerticalOffset > 2)
