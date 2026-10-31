@@ -717,23 +717,29 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.Instance)
                 ?? throw new Exception("GPS catalog projection not found.");
             var singlePhoto = ((System.Collections.IEnumerable)readGps.Invoke(
-                window, [new long[] { gpsA }, b.Id, CancellationToken.None, null])!)
+                window, [new long[] { gpsA }, CancellationToken.None, null])!)
                 .Cast<object>().ToArray();
             long GpsId(object point) =>
                 (long)point.GetType().GetProperty("Id")!.GetValue(point)!;
             if (singlePhoto.Length != 1 || GpsId(singlePhoto[0]) != gpsA ||
                 !(bool)singlePhoto[0].GetType().GetProperty("Selected")!.GetValue(singlePhoto[0])!)
                 throw new Exception("Single GPS photo was mixed with unrelated folder context.");
-            // Folder context is still available when the gallery has NO
-            // selection. Keep both fixtures for the later filmstrip focus test.
-            var contextPhotos = ((System.Collections.IEnumerable)readGps.Invoke(
-                window, [Array.Empty<long>(), b.Id, CancellationToken.None, null])!)
+            // A folder change with no photo selection must NOT show unrelated
+            // GPS positions, even when the current folder has GPS photos.
+            var emptySelection = ((System.Collections.IEnumerable)readGps.Invoke(
+                window, [Array.Empty<long>(), CancellationToken.None, null])!)
                 .Cast<object>().ToArray();
-            if (!contextPhotos.Any(p => GpsId(p) == gpsB))
-                throw new Exception("Empty-selection GPS folder context was lost.");
-            var projected = singlePhoto.Concat(contextPhotos.Where(p =>
-                GpsId(p) != gpsA)).ToArray();
-            Console.WriteLine("PASS: Single GPS selection returns only its own photo, while empty selection retains folder context.");
+            if (emptySelection.Length != 0)
+                throw new Exception("No-selection GPS projection loaded unrelated photos.");
+            // Independent explicit selections supply the later filmstrip focus
+            // fixtures without restoring the old no-selection context path.
+            var secondPhoto = ((System.Collections.IEnumerable)readGps.Invoke(
+                window, [new long[] { gpsB }, CancellationToken.None, null])!)
+                .Cast<object>().ToArray();
+            if (secondPhoto.Length != 1 || GpsId(secondPhoto[0]) != gpsB)
+                throw new Exception("Explicit second GPS photo could not be read.");
+            var projected = singlePhoto.Concat(secondPhoto).ToArray();
+            Console.WriteLine("PASS: Empty GPS selection has no markers; explicit selections use only their own photo IDs.");
 
             // GPS edits use the existing map and selected gallery images.
             // Search is a draft; only explicit buttons may write originals.
@@ -1458,7 +1464,7 @@ internal static class TagFlow
             // subsequent SINGLE click on a different thumbnail swaps photos.
             // Neither action may alter the catalog selection or map viewport.
             var multiProjection = ((System.Collections.IEnumerable)readGps.Invoke(
-                window, [new long[] { gpsA, gpsB }, b.Id, CancellationToken.None, null])!)
+                window, [new long[] { gpsA, gpsB }, CancellationToken.None, null])!)
                 .Cast<object>().ToArray();
             var multiArray = Array.CreateInstance(projectedType, multiProjection.Length);
             for (var i = 0; i < multiProjection.Length; i++)
@@ -2865,7 +2871,7 @@ internal static class TagFlow
                 if (loadIds.Length != selectedGpsCount)
                     throw new Exception("Large selected GPS test fixture was incomplete.");
                 var allGps = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window,[loadIds,a.Id,CancellationToken.None,null])!).Cast<object>().ToArray();
+                    window,[loadIds,CancellationToken.None,null])!).Cast<object>().ToArray();
                 var selectedAll = allGps.Where(item =>
                     (bool)item.GetType().GetProperty("Selected")!.GetValue(item)!)
                     .Select(item => (long)item.GetType().GetProperty("Id")!.GetValue(item)!)
@@ -2875,7 +2881,7 @@ internal static class TagFlow
                     throw new Exception(
                         "GPS map omitted selected positions above 5,000 or rejected stale EXIF fingerprints.");
                 var onlyOne = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window,[new long[]{loadIds[0]},a.Id,CancellationToken.None,null])!)
+                    window,[new long[]{loadIds[0]},CancellationToken.None,null])!)
                     .Cast<object>().ToArray();
                 if (onlyOne.Length != 1 ||
                     (long)onlyOne[0].GetType().GetProperty("Id")!.GetValue(onlyOne[0])! != loadIds[0])
@@ -3082,7 +3088,7 @@ internal static class TagFlow
                 if (worldwideIds.Length != 6100)
                     throw new Exception("Worldwide GPS fixture is incomplete.");
                 var worldwidePoints = ((System.Collections.IEnumerable)readGps.Invoke(
-                    window, [worldwideIds, null, CancellationToken.None, null])!)
+                    window, [worldwideIds, CancellationToken.None, null])!)
                     .Cast<object>().ToArray();
                 var locations = worldwidePoints.Select(p => (
                     Lat: (double)p.GetType().GetProperty("Lat")!.GetValue(p)!,
