@@ -32,6 +32,10 @@ public partial class MainWindow
 
     private void QueueGalleryAnchorRestore((long ImageId, double RelativeY)? anchor)
     {
+        // The hidden viewer must not let a scan replace its opening location
+        // with the current pixel row as new photos are inserted above it.
+        if (_viewerOpen && _viewerOpeningGalleryAnchor is { } viewerAnchor)
+            anchor = viewerAnchor;
         // The first index publication starts with the gallery at image zero.
         // That temporary startup anchor must not overwrite the saved user's
         // position before RestoreGalleryPositionOnce has applied it.
@@ -46,6 +50,8 @@ public partial class MainWindow
     private void BrowseSurface_LayoutReflowed(
         object? sender, (long ImageId, double RelativeY) anchor)
     {
+        if (_viewerOpen && _viewerOpeningGalleryAnchor is { } viewerAnchor)
+            anchor = viewerAnchor;
         if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition &&
             _explicitGalleryNavigationVersion == 0)
             return;
