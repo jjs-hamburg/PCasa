@@ -80,9 +80,14 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
        entry={marker,el};markerEntries.set(key,entry);
      } else entry.marker.setLngLat([item.lon,item.lat]);
      const many=item.count>1;
-     entry.el.className=many?'pcasa-pin pcasa-pin-count':
-       String(item.id)===highlightedClusterId?
-         'pcasa-pin pcasa-pin-target':'pcasa-pin';
+     // MapLibre owns the 'maplibregl-marker' class. Replacing className
+     // deletes its absolute-position CSS, stacking every pin vertically
+     // instead of placing it at the real geographic coordinate.
+     // Only toggle PCasa's presentation classes; never erase MapLibre's.
+     entry.el.classList.add('pcasa-pin');
+     entry.el.classList.toggle('pcasa-pin-count',many);
+     entry.el.classList.toggle('pcasa-pin-target',
+       !many&&String(item.id)===highlightedClusterId);
      entry.el.textContent=many?String(item.count):'';
      entry.el.style.zIndex=String(item.id)===highlightedClusterId?'6':'5';
    }
