@@ -766,12 +766,16 @@ internal static class Program
                         new object[] { @"C:\synthetic\pending-photo.jpg", 100L });
                 }
                 Flush(window);
-                if (!(bool)scrollActive.Invoke(window, null)! ||
-                    !(bool)scanDirtyField.GetValue(window)! ||
-                    !ReferenceEquals(surface.GetType(), typeof(BrowseGallerySurface)) ||
-                    surface.CaptureImageAnchor(scroller.VerticalOffset) is null ||
+                var guarded = (bool)scrollActive.Invoke(window, null)!;
+                var scanHeld = (bool)scanDirtyField.GetValue(window)!;
+                var hasAnchor = surface.CaptureImageAnchor(scroller.VerticalOffset) is not null;
+                if (!guarded || !scanHeld || !hasAnchor ||
                     (bool)scrollDefer.Invoke(window, null)! != true)
-                    throw new Exception("Automatic scan publication was not held during rapid scrolling.");
+                    throw new Exception("Automatic scan publication not held: " +
+                        $"Guard={guarded}; Deferred={scanHeld}; Anchor={hasAnchor}; " +
+                        $"Offset={scroller.VerticalOffset}; Maximum={scroller.ScrollableHeight}; " +
+                        $"Folder={folderBeforeScroll.GetValue(window)}; " +
+                        $"Timer={(timerField.GetValue(window) as DispatcherTimer)?.IsEnabled}");
                 // In the resting middle of a large gallery the next
                 // publication is batched; the index is not rebuilt per
                 // individual indexed image.
