@@ -166,7 +166,7 @@ public partial class MainWindow
                 result.Failed > 0 ? "Failed" : "Ready", recursive: true);
             RefreshFolderStatusVisuals();
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                warmViewport: true);
+                warmViewport: true, fromScanner: true);
             // Explorer must not rebuild its one existing TreeView, even after
             // a newly registered folder commits images to the catalog.
             if (_allFolderProjectionRootPath is null)
