@@ -1452,6 +1452,68 @@ internal static class Program
                     Flush(window);
                 }
 
+                // Provider-neutral map click must resolve real photo IDs in
+                // the existing WPF filmstrip, never just zoom without photos.
+                var clusterClick = viewerType.GetMethod(
+                    "ShowGpsClusterById", reflectFlags)!;
+                var clusterField = viewerType.GetField(
+                    "_gpsPresentedClusters", reflectFlags)!;
+                var catalogField = viewerType.GetField(
+                    "_browseIndex", reflectFlags)!;
+                var versionField = viewerType.GetField(
+                    "_gpsMapTransferRevision", reflectFlags)!;
+                var savedClusters = clusterField.GetValue(window);
+                var savedCatalog = catalogField.GetValue(window);
+                var savedVersion = versionField.GetValue(window);
+                var savedGpsMode = sidebarModeField.GetValue(window);
+                var strip = (ListBox?)window.FindName("GpsFilmstripList")
+                    ?? throw new Exception("GPS filmstrip missing.");
+                var stripToggle = (ToggleButton?)window.FindName("GpsFilmstripToggle")
+                    ?? throw new Exception("GPS filmstrip toggle missing.");
+                var savedToggle = stripToggle.IsChecked;
+                try
+                {
+                    sidebarModeField.SetValue(window, "GPS");
+                    catalogField.SetValue(window, synthetic);
+                    versionField.SetValue(window, 77L);
+                    clusterField.SetValue(window,
+                        new[] { new GpsPhotoCluster(1000, 28.415, -16.568,
+                            new long[] { 1000, 1001, 1002 }) });
+                    clusterClick.Invoke(window, new object[] { 1000L, 77L });
+                    Flush(window);
+                    if (strip.Items.Count != 3 ||
+                        !strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>()
+                            .Select(x => x.Id).Order()
+                            .SequenceEqual(new long[] { 1000, 1001, 1002 }))
+                        throw new Exception("Cluster click did not show its three photos.");
+                    clusterClick.Invoke(window, new object[] { 1000L, 76L });
+                    if (strip.Items.Count != 3)
+                        throw new Exception("Stale cluster click changed photo group.");
+                    clusterField.SetValue(window,
+                        new[] { new GpsPhotoCluster(1003, 28.416, -16.567,
+                            new long[] { 1003 }) });
+                    clusterClick.Invoke(window, new object[] { 1003L, 77L });
+                    Flush(window);
+                    var popup = (FrameworkElement?)window.FindName("GpsPhotoPopup")
+                        ?? throw new Exception("GPS popup missing.");
+                    if (strip.Items.Count != 1 ||
+                        popup.Tag is not long popupId || popupId != 1003)
+                        throw new Exception("Single-marker click failed to show its photo.");
+                    Console.WriteLine(
+                        "PASS: Map cluster clicks show photo IDs; singles open preview.");
+                }
+                finally
+                {
+                    clusterField.SetValue(window, savedClusters);
+                    catalogField.SetValue(window, savedCatalog);
+                    versionField.SetValue(window, savedVersion);
+                    if (stripToggle.IsChecked != savedToggle)
+                        stripToggle.IsChecked = savedToggle;
+                    sidebarModeField.SetValue(window, savedGpsMode);
+                    relayoutWorkspace.Invoke(window, null);
+                    Flush(window);
+                }
+
                 toggleFullscreen.Invoke(window, null);
                 Flush(window);
                 if (fullscreenField.GetValue(window) is not Window)
