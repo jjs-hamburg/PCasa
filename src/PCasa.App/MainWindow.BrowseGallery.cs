@@ -696,6 +696,7 @@ public partial class MainWindow
         // A user may have moved after the initial async catalog read began.
         // Anchor the CURRENT viewport, never the obsolete starting position.
         if (fromScanner) QueueGalleryAnchorRestore();
+        var followGalleryStart = fromScanner && GalleryAtLeadingLiveEdge();
         var followGalleryEnd = fromScanner && GalleryAtTrailingLiveEdge();
         PublishPhotoFolderSnapshot(nextFolders, imageCount);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
@@ -740,7 +741,9 @@ public partial class MainWindow
                 BrowseScrollViewer.UpdateLayout();
                 RestoreGalleryPositionOnce();
                 RestorePendingGalleryAnchor();
-                if (followGalleryEnd)
+                if (followGalleryStart)
+                    BrowseScrollViewer.ScrollToTop();
+                else if (followGalleryEnd)
                     BrowseScrollViewer.ScrollToBottom();
                 BrowseSurface.SetViewport(
                     BrowseScrollViewer.VerticalOffset,
