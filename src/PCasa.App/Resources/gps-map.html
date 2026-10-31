@@ -77,15 +77,34 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
               'circle-stroke-width':2.3,'circle-stroke-color':'#fff'}});
    }
    if (!map.getSource('pcasa-selected')) {
-     // MapLibre's real geographic projection owns selected features, even
-     // for 6,000+ images. No viewport clipping, grid or pixel clustering.
-     map.addSource('pcasa-selected',{type:'geojson',data:geojson([])});
-     map.addLayer({id:'pcasa-selected-points',type:'circle',source:'pcasa-selected',
+     // Selected photos own ONE provider-neutral GeoJSON overlay. At wide
+     // map scales, native MapLibre clustering combines nearby geographic
+     // coordinates. Radius is in screen pixels, so zooming automatically
+     // reduces the corresponding real-world distance. The stored GPS and
+     // individual exact coordinates are never rounded or displaced.
+     //
+     // A feature can represent multiple photos at identical coordinates;
+     // clusterProperties sums PHOTO counts rather than distinct locations.
+     map.addSource('pcasa-selected',{type:'geojson',data:geojson([]),
+       cluster:true,clusterRadius:52,clusterMaxZoom:17,
+       clusterProperties:{photo_count:['+',['get','count']]}});
+     map.addLayer({id:'pcasa-selected-clusters',type:'circle',
+       source:'pcasa-selected',filter:['has','point_count'],
+       paint:{'circle-color':'#f0a030',
+         'circle-radius':['step',['get','photo_count'],19,20,23,100,29,1000,36],
+         'circle-stroke-width':3,'circle-stroke-color':'#111'}});
+     map.addLayer({id:'pcasa-selected-cluster-count',type:'symbol',
+       source:'pcasa-selected',filter:['has','point_count'],
+       layout:{'text-field':['to-string',['get','photo_count']],
+         'text-size':13,'text-allow-overlap':true},
+       paint:{'text-color':'#111'}});
+     map.addLayer({id:'pcasa-selected-points',type:'circle',
+       source:'pcasa-selected',filter:['!',['has','point_count']],
        paint:{'circle-radius':['case',['>', ['get','count'],1],16,10],
          'circle-color':'#f0a030','circle-stroke-width':3,
          'circle-stroke-color':['case',['boolean',['get','highlighted'],false],'#fff','#111']}});
      map.addLayer({id:'pcasa-selected-count',type:'symbol',source:'pcasa-selected',
-       filter:['>', ['get','count'],1],
+       filter:['all',['!',['has','point_count']],['>',['get','count'],1]],
        layout:{'text-field':['to-string',['get','count']],'text-size':12,
          'text-allow-overlap':true},
        paint:{'text-color':'#111'}});
@@ -93,9 +112,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    updatePhotos();
  }
  // Selected features belong to exact geographic positions, NOT screen cells.
- // Exact duplicate GPS coordinates produce ONE counted map pin. Nearby
- // locations remain independent points at every zoom level, even when
- // they overlap visually until the user zooms in.
+ // Duplicate coordinates retain their photo count; the GeoJSON worker alone
+ // decides how separate places are clustered for the current map zoom.
  function selectedLocations(selected) {
    const locations=new Map();
    for(const photo of selected) {
@@ -269,12 +287,25 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    if(Number.isSafeInteger(id)) post({type:'select',id});
  }
  map.on('click','pcasa-points',selectPhoto);
+ map.on('click','pcasa-selected-clusters',event=>{
+   if(!event.features?.length)return;
+   const feature=event.features[0];
+   const clusterId=Number(feature.properties?.cluster_id);
+   if(!Number.isSafeInteger(clusterId))return;
+   const source=map.getSource('pcasa-selected');
+   // Use the renderer's own geographic cluster tree. No provider API,
+   // synthetic screen grid, manual coordinate adjustments or second index.
+   source?.getClusterExpansionZoom(clusterId).then(zoom=>{
+     if(Number.isFinite(zoom))
+       map.easeTo({center:feature.geometry.coordinates,zoom,duration:350});
+   }).catch(()=>{});
+ });
  map.on('click','pcasa-selected-points',event=>{
    if(!event.features?.length)return;
    sendSelectedPoint(event.features[0].properties);
  });
 
- for(const layer of ['pcasa-points','pcasa-selected-points']) {
+ for(const layer of ['pcasa-points','pcasa-selected-points','pcasa-selected-clusters']) {
    map.on('mouseenter',layer,()=>map.getCanvas().style.cursor='pointer');
    map.on('mouseleave',layer,()=>map.getCanvas().style.cursor='');
  }
