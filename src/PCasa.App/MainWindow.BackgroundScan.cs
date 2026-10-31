@@ -266,15 +266,17 @@ public partial class MainWindow
             // Installing a watcher on startup does NOT prove the directory
             // changed. The old code manufactured a full RescanRoot on every
             // process launch, ahead of unfinished first imports.
-            // A live watcher event, an offline->online transition or an
-            // explicit monitoring re-enable DOES justify reconciliation.
+            // Concrete watcher events or an explicit monitoring re-enable
+            // justify reconciliation. Offline/online transitions DO NOT.
             var firstSnapshot = _backgroundFirstMonitorSnapshot;
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
                 {
-                    _backgroundKnownFolderIds.Remove(folder.Id);
-                    _gpsSourceAuditedRoots.Remove(folder.Id);
+                    // A temporarily absent NAS is not a source change. Keep
+                    // its monitor identity across reconnect so the next
+                    // availability probe cannot manufacture RescanRoot.
+                    _backgroundKnownFolderIds.Add(folder.Id);
                     continue;
                 }
 
@@ -765,9 +767,8 @@ public partial class MainWindow
                 if (!_scheduler.SourceAvailability.CanAccess(scanPath,
                         _backgroundLifetime.Token) || IsPathKnownOffline(scanPath))
                 {
-                    // An OS directory iterator is not safe across a lost
-                    // network mount. The next source reconnection gets a
-                    // fresh inventory; initial imports have durable receipts.
+                    // A missing network mount is a normal dormant state.
+                    // Never manufacture a new inventory upon reconnection.
                     scanResume?.Dispose();
                     continue;
                 }
