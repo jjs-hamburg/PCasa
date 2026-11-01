@@ -198,6 +198,7 @@ internal static class Program
                     .Select(item => item.Header?.ToString())
                     .SequenceEqual(new[] { "File", "Folder", "Appearance", "Options" }))
                 throw new Exception("English translations were not applied live.");
+            AssertCaptionGaps("en");
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
                     ?.Content?.ToString() != "Gallery view")
                 throw new Exception("Open WPF search bar did not switch to English.");
@@ -440,27 +441,32 @@ internal static class Program
                 throw new Exception("Disabling bold filenames did not restore normal weight.");
             Console.WriteLine("PASS: Filename boldness toggles renderer and persists without another settings owner.");
 
-            // The actual WPF layout determines the distance between adjacent
-            // menu items. This detects changing margins or a wrong template.
-            var gaps = new List<double>();
-            for (var i = 1; i < items.Length; i++)
+            // Measure WHAT THE USER SEES: gap between actual header TEXT
+            // presenters, not between MenuItem outer rectangles. WPF's
+            // submenu-star column previously fooled the margin-only check.
+            Rect HeaderTextBounds(MenuItem item)
             {
-                var before = items[i - 1].TransformToAncestor(menu).TransformBounds(
-                    new Rect(new Point(0, 0), items[i - 1].RenderSize));
-                var next = items[i].TransformToAncestor(menu).TransformBounds(
-                    new Rect(new Point(0, 0), items[i].RenderSize));
-                gaps.Add(next.Left - before.Right);
+                item.ApplyTemplate();
+                var presenter = item.Template.FindName(
+                    "MenuHeaderPresenter", item) as ContentPresenter
+                    ?? throw new Exception("Top-level menu header presenter missing.");
+                return presenter.TransformToAncestor(menu).TransformBounds(
+                    new Rect(new Point(), presenter.RenderSize));
             }
-            if (window.ActualWidth >= 1450 &&
-                (gaps.Count != items.Length - 1 ||
-                 gaps.Any(gap => gap < 0 || gap > 80) ||
-                 gaps.Max() - gaps.Min() > 2))
-                throw new Exception("Inconsistent top-level menu spacing: " +
-                    string.Join(", ", gaps.Select(gap => gap.ToString("F1"))) +
-                    $"; window={window.ActualWidth:F0}, menu={menu.ActualWidth:F0}," +
-                    $" sort={((Button?)window.FindName("GallerySortSelectorButton"))?.ActualWidth:F0}");
-            Console.WriteLine("PASS: Menu label gaps are consistent: " +
-                string.Join(", ", gaps.Select(gap => gap.ToString("F1"))));
+            void AssertCaptionGaps(string language)
+            {
+                var positions = items.Select(HeaderTextBounds).ToArray();
+                var gaps = Enumerable.Range(1, positions.Length - 1)
+                    .Select(i => positions[i].Left - positions[i - 1].Right).ToArray();
+                if (positions[0].Left is < 17 or > 27 ||
+                    gaps.Any(gap => gap is < 20 or > 40) ||
+                    gaps.Max() - gaps.Min() > 1.5)
+                    throw new Exception($"Actual menu caption gaps ({language}) differ: " +
+                        string.Join(", ", gaps.Select(gap => gap.ToString("F1"))) +
+                        $"; left={positions[0].Left:F1}");
+            }
+            AssertCaptionGaps("de");
+            Console.WriteLine("PASS: Actual menu caption gaps, measured from visible text, are equal.");
 
             // A highlighted submenu row must occupy the entire dropdown
             // width, not just the length of its own caption.
@@ -542,13 +548,18 @@ internal static class Program
                 ?? throw new Exception("Compact property filter frame is missing.");
             var invertSelectionToggle = window.FindName("GalleryInvertSelectionToggle") as ToggleButton
                 ?? throw new Exception("Select-invert toggle must be left of the attribute filter.");
+            var invertFrame = window.FindName("GalleryInvertSelectionFrame") as Border
+                ?? throw new Exception("Invert selection needs the shared toolbar group frame.");
             if (invertSelectionToggle.IsChecked == true ||
-                invertSelectionToggle.Parent is not StackPanel toolbarPanel ||
-                toolbarPanel.Children.IndexOf(invertSelectionToggle) + 1 !=
+                !ReferenceEquals(invertSelectionToggle.Parent, invertFrame) ||
+                invertFrame.Parent is not StackPanel toolbarPanel ||
+                toolbarPanel.Children.IndexOf(invertFrame) + 1 !=
                     toolbarPanel.Children.IndexOf(attributeFrame) ||
                 invertSelectionToggle.ToolTip?.ToString() !=
-                    "Auswahl invertieren (aktueller Ordner)")
-                throw new Exception("Selection inversion toggle is not compactly positioned left of Filter.");
+                    "Auswahl invertieren (aktueller Ordner)" ||
+                Math.Abs(invertFrame.ActualHeight - attributeFrame.ActualHeight) > 0.5 ||
+                !Equals(invertFrame.BorderBrush, attributeFrame.BorderBrush))
+                throw new Exception("Selection inversion toggle lacks the same frame as Filter/Sort/Search.");
             var attributeLabel = window.FindName("GalleryAttributeFilterLabel") as TextBlock
                 ?? throw new Exception("Property filter must display its active state.");
             var attributeInvert = window.FindName("GalleryAttributeFilterInvertButton") as Button
@@ -666,7 +677,7 @@ internal static class Program
                 !ReferenceEquals(searchField.Parent, searchGroup.Children[^1]))
                 throw new Exception("Sort and search must retain their original separate group frames.");
             if (!searchRow.Children.Cast<UIElement>().SequenceEqual(
-                    new UIElement[] { invertSelectionToggle, attributeFrame, sortFrame, searchFrame }))
+                    new UIElement[] { invertFrame, attributeFrame, sortFrame, searchFrame }))
                 throw new Exception("Filter must be inserted before the unchanged sort/search order.");
             if (Math.Abs(sortFrame.ActualHeight - searchFrame.ActualHeight) > .5 ||
                 !Equals(sortFrame.BorderBrush, searchFrame.BorderBrush))
@@ -698,7 +709,7 @@ internal static class Program
                 Math.Abs(searchField.Padding.Left - 29) > .1)
                 throw new Exception("Search must have both original in-field and added leading magnifier.");
             if (Math.Abs(sortButton.Width - 145) > .1 ||
-                items.Any(item => Math.Abs(item.Margin.Right - 20) > .01) ||
+                items.Any(item => Math.Abs(item.Margin.Right - 12) > .01) ||
                 Math.Abs(whatLabel.FontSize - 12) > .1 ||
                 Math.Abs(whereLabel.FontSize - 12) > .1)
                 throw new Exception("Search field geometry, sort width or font is incorrect.");
@@ -725,7 +736,7 @@ internal static class Program
                     sortBounds.Top < menuBounds.Bottom - 1)
                     throw new Exception(
                         $"Main menu clipped or overlapped the search row at {window.ActualWidth:F0}px.");
-                if (menu.ActualWidth < 280)
+                if (menu.ActualWidth < 250)
                     throw new Exception("Resizing squeezed main menu captions away.");
                 if (searchScroll.ScrollableWidth < 1)
                 {

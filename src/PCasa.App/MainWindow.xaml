@@ -416,7 +416,7 @@
                 <Menu x:Name="MainMenu" Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
                       VerticalAlignment="Center"
-                      Padding="0">
+                      Padding="13,0,0,0">
                     <Menu.Resources>
                         <!-- Local menu template only: no application-wide style changes. -->
                         <Style TargetType="{x:Type MenuItem}">
@@ -463,7 +463,11 @@
                                             <Trigger Property="Role" Value="TopLevelHeader">
                                                 <Setter TargetName="ItemBackground" Property="MinWidth" Value="0"/>
                                                 <Setter TargetName="ItemBackground" Property="Padding" Value="0"/>
-                                                <Setter TargetName="MenuHeaderPresenter" Property="Margin" Value="0"/>
+                                                <Setter TargetName="MenuHeaderPresenter" Property="Margin" Value="8,0,8,0"/>
+                                                <!-- Auto, not star: otherwise the drop-down width
+                                                     leaks into the top header and creates variable
+                                                     text gaps despite identical margins. -->
+                                                <Setter TargetName="MenuLabelColumn" Property="Width" Value="Auto"/>
                                                 <Setter TargetName="MenuCheckColumn" Property="Width" Value="0"/>
                                                 <Setter TargetName="MenuArrowColumn" Property="Width" Value="0"/>
                                             </Trigger>
@@ -485,12 +489,14 @@
                             </Setter>
                         </Style>
                     </Menu.Resources>
-                    <!-- Equal fixed 20px gaps in both languages, independently
-                         of the text width. The menu itself stays in its own row. -->
-                    <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                    <!-- Real TEXT-to-TEXT separation: each top header is
+                         its intrinsic text width + 8px per side + 12px gap.
+                         The first caption starts 13+8=21px from the edge.
+                         Keep all four menu labels naturally sized in DE/EN. -->
+                    <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,12,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Beenden'}" Click="FileExit_Click"/>
                     </MenuItem>
-                    <MenuItem Header="{loc:Tr Key='Ordner'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                    <MenuItem Header="{loc:Tr Key='Ordner'}" Margin="0,0,12,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Ordner-Manager...'}"
                                   Click="BrowseFolderManager_Click" />
                         <Separator />
@@ -499,9 +505,9 @@
                                   Click="BrowseScanAll_Click" />
                     </MenuItem>
                     <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
-                              Margin="0,0,20,0" HorizontalAlignment="Left"
+                              Margin="0,0,12,0" HorizontalAlignment="Left"
                               Click="AppearanceSettings_Click"/>
-                    <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                    <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,12,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Sprache'}">
                             <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
@@ -531,10 +537,13 @@
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
-                    <!-- Invert selection of the currently selected folder.
-                         Retains Ctrl+I, represented by one blue-framed toggle. -->
+                    <!-- The inversion toggle has the SAME outer frame as
+                         Filter/Sort/Search. Only its inner button changes state. -->
+                    <Border x:Name="GalleryInvertSelectionFrame"
+                            Style="{StaticResource PcasaToolbarGroupFrameStyle}"
+                            Margin="2,0,3,0">
                     <primitives:ToggleButton x:Name="GalleryInvertSelectionToggle"
-                              Width="31" Height="27" Padding="2" Margin="2,0,5,0"
+                              Width="31" Height="27" Padding="2" Margin="0"
                               ToolTip="{loc:Tr Key='Auswahl invertieren (aktueller Ordner)'}"
                               Checked="GalleryInvertSelectionToggle_Changed"
                               Unchecked="GalleryInvertSelectionToggle_Changed">
@@ -547,6 +556,7 @@
                             </Canvas>
                         </Viewbox>
                     </primitives:ToggleButton>
+                    </Border>
                     <Border x:Name="GalleryAttributeFilterFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="2,0,3,0">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <!-- The funnel itself toggles inversion; its shape turns upside down. -->
