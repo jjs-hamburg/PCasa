@@ -40,6 +40,9 @@ public partial class MainWindow
     private HashSet<long> _gpsFilmstripSelectionSnapshot = [];
     private string? _gpsAppliedProviderId;
     private long _gpsQueryRevision;
+    // Catalog queries can restart without changing the current map data.
+    // Only actual selection/GPS-point changes invalidate cluster jobs.
+    private long _gpsPointRevision;
     private long _gpsMapTransferRevision;
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
     private IReadOnlyList<GpsPhotoCluster> _gpsPresentedClusters = [];
@@ -73,6 +76,7 @@ public partial class MainWindow
         Closed += (_, _) =>
         {
             _gpsQueryRevision++;
+            _gpsPointRevision++;
             _gpsClusterRequestRevision++;
             _gpsPendingFitQueryRevision = -1;
             _gpsFilmstripRevision++;
@@ -570,7 +574,7 @@ public partial class MainWindow
     {
         if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
             _gpsBrowser is not { IsDisposed: false } map) return;
-        var queryRevision = _gpsQueryRevision;
+        var pointRevision = _gpsPointRevision;
         var snapshot = _gpsPoints.ToArray();
         if (fitSelection && snapshot.Length > 0)
         {
@@ -579,10 +583,10 @@ public partial class MainWindow
             // At world scale this created the photographed black patches.
             // Fit first and wait for the exact reported zoom before the
             // existing scheduler computes/publishes its ONE cluster set.
-            _gpsPendingFitQueryRevision = queryRevision;
+            _gpsPendingFitQueryRevision = pointRevision;
             ++_gpsClusterRequestRevision;
             map.ExecuteScriptAsync("window.pcasaPrepareGpsExtent(" +
-                queryRevision + "," +
+                pointRevision + "," +
                 snapshot.Min(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
                 snapshot.Min(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + "," +
                 snapshot.Max(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
@@ -602,12 +606,12 @@ public partial class MainWindow
                     snapshot.Select(p => new GpsPhotoPosition(
                         p.Id, p.Lat, p.Lon)).ToArray(), zoom, cancellation),
                 () => request == _gpsClusterRequestRevision &&
-                    queryRevision == _gpsQueryRevision &&
+                    pointRevision == _gpsPointRevision &&
                     _sidebarMode == "GPS",
                 workKind: SchedulerWorkKind.CatalogRead);
 
             if (request != _gpsClusterRequestRevision ||
-                queryRevision != _gpsQueryRevision || _sidebarMode != "GPS" ||
+                pointRevision != _gpsPointRevision || _sidebarMode != "GPS" ||
                 _gpsGoogleWebsiteActive ||
                 _gpsBrowser is not { IsDisposed: false } browser)
                 return;
@@ -707,6 +711,7 @@ public partial class MainWindow
         var selectionChanged = !_gpsFilmstripSelectionSnapshot.SetEquals(selectedIds);
         if (selectionChanged)
         {
+            ++_gpsPointRevision;
             _gpsPendingFitQueryRevision = -1;
             _gpsFilmstripSelectionSnapshot = selectedIds.ToHashSet();
             _gpsFilmstripPointIds = null;
@@ -807,6 +812,7 @@ public partial class MainWindow
                         Recursive: false, ForceExifRefresh: true));
             }
             var pointsChanged = !_gpsPoints.SequenceEqual(points);
+            if (pointsChanged) ++_gpsPointRevision;
             _gpsPoints = points;
             // Only current selected photo IDs can own the GPS projection.
             // A canceled or obsolete read may never republish older markers.
