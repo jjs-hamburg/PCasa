@@ -30,7 +30,7 @@ public partial class MainWindow
     {
         if (ShowAllFilesystemFoldersButton is null) return;
         ShowAllFilesystemFoldersButton.Tag =
-            _allFolderProjectionRootPath is null ? null : "ActiveGold";
+            _allFolderProjectionRootPath is null ? null : "Active";
         ShowAllFilesystemFoldersButton.ToolTip =
             _allFolderProjectionRootPath is null
                 ? "Explorer Ansicht: Unterordner des ausgewählten Ordners anzeigen"

@@ -47,8 +47,10 @@ public partial class MainWindow
         GalleryAttributeRawMenu.IsChecked = filter == "Raw";
         GalleryAttributeFilterInvertButton.IsEnabled = filter != "None";
         GalleryAttributeFilterClearButton.IsEnabled = filter != "None";
+        // Rotate the 24x24 CANVAS around its own center. Rotating a Path
+        // with a second, absolute 12/12 center moved it outside the button.
         GalleryAttributeFilterFunnel.RenderTransform =
-            new RotateTransform(inverse && filter != "None" ? 180 : 0, 12, 12);
+            new RotateTransform(inverse && filter != "None" ? 180 : 0);
         GalleryAttributeFilterInvertButton.ToolTip = UiLanguage.T(
             inverse ? "Eigenschaftsfilter normal anzeigen" : "Eigenschaftsfilter umkehren");
     }
@@ -77,11 +79,65 @@ public partial class MainWindow
     private async void GalleryAttributeFilterClear_Click(object sender, RoutedEventArgs e)
         => await ChangeGalleryAttributeFilterAsync("None", false);
 
+    // Keeps the photo already in sight if it survives the property filter.
+    // Otherwise choose the closest still-visible image in the ORIGINAL
+    // gallery order; prefer the next image at an equal distance.
+    private static long? NearestPropertyFilterImage(
+        IReadOnlyList<BrowseThumbnailIndexEntry> original,
+        IReadOnlyList<BrowseThumbnailIndexEntry> visible,
+        long? sourceImageId, long? sourceFolderId)
+    {
+        if (visible.Count == 0) return null;
+        var visibleIds = visible.Select(x => x.ImageId).ToHashSet();
+        var startingIndex = -1;
+        if (sourceImageId is long imageId)
+        {
+            for (var i = 0; i < original.Count; i++)
+                if (original[i].ImageId == imageId)
+                {
+                    startingIndex = i;
+                    break;
+                }
+        }
+        if (startingIndex < 0 && sourceFolderId is long folderId)
+        {
+            for (var i = 0; i < original.Count; i++)
+                if (original[i].PhotoFolderId == folderId)
+                {
+                    startingIndex = i;
+                    break;
+                }
+        }
+        if (startingIndex < 0) return visible[0].ImageId;
+        for (var distance = 0; distance < original.Count; distance++)
+        {
+            var after = startingIndex + distance;
+            if (after < original.Count &&
+                visibleIds.Contains(original[after].ImageId))
+                return original[after].ImageId;
+            var before = startingIndex - distance;
+            if (before >= 0 && visibleIds.Contains(original[before].ImageId))
+                return original[before].ImageId;
+        }
+        return visible[0].ImageId;
+    }
+
+    private long _attributeFilterChangeVersion;
+
     private async Task ChangeGalleryAttributeFilterAsync(string next, bool inverted)
     {
         if (next is not ("None" or "Gps" or "Tags" or "Raw")) return;
         if (CurrentAttributeFilter == next &&
             _appearance.GalleryAttributeFilterInverted == inverted) return;
+
+        // Capture BEFORE replacing the projection. Never use ScrollToTop()
+        // for a property-filter change; the previous image's identity owns
+        // the focal point even if the user has not selected it.
+        var before = CaptureGalleryAnchor();
+        var originalFolder = BrowseSurface.GetFolderIdAtOffset(
+            BrowseScrollViewer.VerticalOffset + 4);
+        var originalOffset = BrowseScrollViewer.VerticalOffset;
+        var change = ++_attributeFilterChangeVersion;
         _appearance.GalleryAttributeFilter = next;
         _appearance.GalleryAttributeFilterInverted = inverted;
         SyncGalleryAttributeFilterUi();
@@ -96,7 +152,28 @@ public partial class MainWindow
                     warmViewport: false);
             }
             else
-                await ApplyTagFilterAsync(scrollToTop: true);
+                await ApplyTagFilterAsync(scrollToTop: false);
+
+            if (Dispatcher.HasShutdownStarted ||
+                change != _attributeFilterChangeVersion) return;
+
+            var targetImage = NearestPropertyFilterImage(
+                _browseIndex, _displayedBrowseIndex,
+                before?.ImageId, originalFolder);
+            double? target = targetImage is long id
+                ? BrowseSurface.GetImageAnchorOffset(
+                    id, before?.RelativeY ?? -36)
+                : null;
+            if (target is double top)
+            {
+                BrowseScrollViewer.ScrollToVerticalOffset(
+                    Math.Max(0, Math.Min(top, BrowseScrollViewer.ScrollableHeight)));
+                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            }
+            else if (_displayedBrowseIndex.Count > 0)
+                BrowseScrollViewer.ScrollToVerticalOffset(
+                    Math.Min(originalOffset, BrowseScrollViewer.ScrollableHeight));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

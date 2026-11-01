@@ -458,7 +458,43 @@ internal static class Program
                 Bounds(sortFrame).Right > Bounds(searchFrame).Left + 1 ||
                 attributeFrame.ActualHeight != sortFrame.ActualHeight)
                 throw new Exception("Property filter must be compact and directly before the unchanged sort/search group.");
-            Console.WriteLine("PASS: Compact property filter and six icon-only gallery navigation commands.");
+            if (window.FindName("GalleryRememberPositionToggle") is not ToggleButton remembered ||
+                window.FindName("GalleryReturnToRememberedButton") is not Button returnToRemembered ||
+                remembered.IsChecked == true || returnToRemembered.IsEnabled)
+                throw new Exception("Two position-bookmark buttons must start inactive.");
+            if (app.Resources["PcasaButtonDepthBrush"] is not LinearGradientBrush ||
+                app.Resources["PcasaButtonShadow"] is not System.Windows.Media.Effects.DropShadowEffect)
+                throw new Exception("Global 3D button surfaces are missing.");
+            var explorerButton = (Button)window.FindName("ShowAllFilesystemFoldersButton")!;
+            var explorerField = typeof(PCasa.App.MainWindow).GetField(
+                "_allFolderProjectionRootPath",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var explorerRefresh = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateAllFoldersButtonState",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var oldExplorerRoot = explorerField.GetValue(window);
+            try
+            {
+                explorerField.SetValue(window, @"C:\synthetic");
+                explorerRefresh.Invoke(window, null);
+                Flush(window);
+                var explorerOutline = explorerButton.Template.FindName("Outline", explorerButton) as Border;
+                if (!Equals(explorerButton.Tag, "Active") ||
+                    explorerOutline?.BorderBrush is not SolidColorBrush activeBrush ||
+                    activeBrush.Color != ((SolidColorBrush)app.Resources["PcasaAccentBrush"]).Color)
+                    throw new Exception("Active Explorer view must have the shared blue outline.");
+            }
+            finally
+            {
+                explorerField.SetValue(window, oldExplorerRoot);
+                explorerRefresh.Invoke(window, null);
+                Flush(window);
+            }
+            Console.WriteLine("PASS: Shared 3D surfaces and blue active-state frame, including Explorer view.");
+
+            Console.WriteLine("PASS: Compact property filter, six unchanged navigation icons and two bookmark buttons.");
 
             if (Descendants<TextBlock>(sortButton).Any(block =>
                     block.Text == "⌄" || block.Text == "▼"))
@@ -693,6 +729,31 @@ internal static class Program
                 throw new Exception("GPS, Tags and RAW filter predicates/inversion are incorrect.");
             Console.WriteLine("PASS: Photo property filtering and inversion use indexed GPS/tag/RAW flags.");
 
+            // A property toggle must preserve a matching current image and
+            // otherwise choose the nearest following/preceding match.
+            var nearest = typeof(PCasa.App.MainWindow).GetMethod(
+                "NearestPropertyFilterImage",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)!;
+            var originalPhotos = new[]
+            {
+                synthetic[0] with { HasGps = true },
+                synthetic[1] with { HasGps = false },
+                synthetic[2] with { HasGps = false },
+                synthetic[3] with { HasGps = true },
+                synthetic[4] with { HasGps = false }
+            };
+            long? Nearest(long id, params int[] visibleIndexes) =>
+                (long?)nearest.Invoke(null, new object?[] {
+                    originalPhotos, visibleIndexes.Select(i => originalPhotos[i]).ToArray(),
+                    (long?)id, (long?)100L });
+            if (Nearest(originalPhotos[3].ImageId, 0, 3) != originalPhotos[3].ImageId ||
+                Nearest(originalPhotos[2].ImageId, 0, 3) != originalPhotos[3].ImageId ||
+                Nearest(originalPhotos[4].ImageId, 0, 3) != originalPhotos[3].ImageId ||
+                Nearest(originalPhotos[2].ImageId, 0) != originalPhotos[0].ImageId)
+                throw new Exception("Property filter must preserve existing image or choose nearest.");
+            Console.WriteLine("PASS: Property-filter switching chooses nearest matching image instead of gallery start.");
+
             var groups = new[] {
                 new PhotoFolderSummary(100, 1, @"C:\\synthetic\\first",
                     @"C:\\synthetic\\first", "First", 240),
@@ -766,6 +827,32 @@ internal static class Program
                 ?? throw new Exception("Actual browse scroll viewer not found.");
             surface.SetData(synthetic, groups, pages);
             Flush(window);
+            // The bookmark is a toggle, not a new scheduler/navigation stack.
+            // It must restore a stable arbitrary picture-relative position
+            // without selecting a thumbnail.
+            scroller.ScrollToVerticalOffset(2800);
+            Flush(window);
+            var markedOffset = scroller.VerticalOffset;
+            remembered.IsChecked = true;
+            Flush(window);
+            if (!returnToRemembered.IsEnabled || remembered.IsChecked != true ||
+                remembered.Template.FindName("ToggleBorder", remembered) is not Border markBorder ||
+                markBorder.BorderBrush is not SolidColorBrush blueBorder ||
+                blueBorder.Color != ((SolidColorBrush)app.Resources["PcasaAccentBrush"]).Color)
+                throw new Exception("Marked position does not show blue toggle state.");
+            scroller.ScrollToTop();
+            Flush(window);
+            returnToRemembered.RaiseEvent(new RoutedEventArgs(
+                Button.ClickEvent, returnToRemembered));
+            Flush(window);
+            if (Math.Abs(scroller.VerticalOffset - markedOffset) > 3)
+                throw new Exception("Bookmark did not restore original image-relative position.");
+            remembered.IsChecked = false;
+            Flush(window);
+            if (returnToRemembered.IsEnabled)
+                throw new Exception("Clearing bookmark should disable return action.");
+            Console.WriteLine("PASS: Bookmark stores and restores position and clears its blue active state.");
+
             // Real WPF buttons must scroll within the gallery surface, not
             // mutate folder tree selection or move the viewer.
             void Navigate(string action)

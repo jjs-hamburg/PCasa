@@ -165,7 +165,7 @@
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Ring" Property="Stroke" Value="#DD3D3D"/>
+                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource PcasaAccentBrush}"/>
                                 <Setter TargetName="Ring" Property="StrokeThickness" Value="2"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -191,21 +191,29 @@
                         <Border x:Name="Outline" CornerRadius="4"
                                 BorderThickness="1"
                                 Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Margin="{TemplateBinding Padding}"/>
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                Effect="{StaticResource PcasaButtonShadow}">
+                            <Grid>
+                                <Border x:Name="FolderButtonDepth" IsHitTestVisible="False"
+                                        CornerRadius="3" Background="{StaticResource PcasaButtonDepthBrush}"/>
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Margin="{TemplateBinding Padding}"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="Tag" Value="Active">
-                                <Setter TargetName="Outline" Property="Background" Value="#554414"/>
-                                <Setter TargetName="Outline" Property="BorderBrush" Value="#FFD24C"/>
+                                <Setter TargetName="Outline" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
+                                <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource PcasaAccentBrush}"/>
                                 <Setter TargetName="Outline" Property="BorderThickness" Value="2"/>
                             </Trigger>
                             <Trigger Property="Tag" Value="ActiveGold">
-                                <Setter TargetName="Outline" Property="Background" Value="#554414"/>
-                                <Setter TargetName="Outline" Property="BorderBrush" Value="#FFD24C"/>
+                                <Setter TargetName="Outline" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
+                                <Setter TargetName="Outline" Property="BorderBrush" Value="{DynamicResource PcasaAccentBrush}"/>
                                 <Setter TargetName="Outline" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="FolderButtonDepth" Property="Opacity" Value="0"/>
                             </Trigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
@@ -268,7 +276,8 @@
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="ChoiceBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
-                                <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="#D75A5A"/>
+                                <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="{DynamicResource PcasaAccentBrush}"/>
+                                <Setter TargetName="ChoiceBorder" Property="BorderThickness" Value="2"/>
                                 <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
                                 <Setter TargetName="SelectedTick" Property="Visibility" Value="Visible"/>
                             </Trigger>
@@ -307,7 +316,8 @@
                                         Value="{DynamicResource PcasaHoverBrush}"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="InvertBorder" Property="BorderBrush" Value="#D75A5A"/>
+                                <Setter TargetName="InvertBorder" Property="BorderBrush" Value="{DynamicResource PcasaAccentBrush}"/>
+                                <Setter TargetName="InvertBorder" Property="BorderThickness" Value="2"/>
                                 <Setter TargetName="InvertBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
                                 <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
                                 <Setter TargetName="InvertCheck" Property="Visibility" Value="Visible"/>
@@ -378,8 +388,13 @@
                         <Border x:Name="SortSelectorBorder" CornerRadius="4" BorderThickness="1"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 Background="{TemplateBinding Background}"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                Padding="{TemplateBinding Padding}"
+                                Effect="{StaticResource PcasaButtonShadow}">
+                            <Grid>
+                                <Border x:Name="SortSelectorDepth" CornerRadius="3" IsHitTestVisible="False"
+                                        Background="{StaticResource PcasaButtonDepthBrush}"/>
+                                <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                            </Grid>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -540,12 +555,11 @@
                                     Style="{StaticResource PcasaSearchSortButtonStyle}"
                                     ToolTip="{loc:Tr Key='Eigenschaftsfilter umkehren'}"
                                     Click="GalleryAttributeFilterInvert_Click">
-                                <Viewbox Width="17" Height="17"><Canvas Width="24" Height="24">
-                                    <Path x:Name="GalleryAttributeFilterFunnel"
-                                          Data="M 3,4 L 21,4 L 14,12 L 14,20 L 10,18 L 10,12 Z"
+                                <Viewbox Width="17" Height="17"><Canvas x:Name="GalleryAttributeFilterFunnel"
+                                                  Width="24" Height="24" RenderTransformOrigin="0.5,0.5">
+                                    <Path Data="M 3,4 L 21,4 L 14,12 L 14,20 L 10,18 L 10,12 Z"
                                           Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"
-                                          StrokeLineJoin="Round" Fill="Transparent"
-                                          RenderTransformOrigin="0.5,0.5"/>
+                                          StrokeLineJoin="Round" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryAttributeFilterSelectorButton" Width="91" Height="27" Padding="6,0"
@@ -877,38 +891,69 @@
                         </Border.Style>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                                     VerticalAlignment="Center" Margin="0,1,9,1">
+                            <!-- These NEW symbols precede the SIX unchanged approved icons. -->
+                            <primitives:ToggleButton x:Name="GalleryRememberPositionToggle"
+                                     Width="30" Height="27" Padding="2" Margin="2,0,3,0"
+                                     ToolTip="{loc:Tr Key='Aktuelle Position merken'}"
+                                     Checked="GalleryRememberPosition_Changed"
+                                     Unchecked="GalleryRememberPosition_Changed">
+                                <Viewbox Width="20" Height="20" Stretch="Uniform">
+                                    <Canvas Width="24" Height="24">
+                                        <Path Data="M 8,3 L 18,9 M 8,3 L 6,10 L 4,13 L 13,19 L 15,14 L 21,11 L 18,9 M 12,16 L 5,23"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.1"
+                                              StrokeStartLineCap="Round" StrokeLineJoin="Round" Fill="Transparent"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </primitives:ToggleButton>
+                            <Button x:Name="GalleryReturnToRememberedButton"
+                                    Width="30" Height="27" Padding="2" Margin="2,0,7,0"
+                                    Style="{StaticResource PcasaStatusButtonStyle}"
+                                    ToolTip="{loc:Tr Key='Zur gemerkten Position springen'}"
+                                    IsEnabled="False" Click="GalleryReturnToRemembered_Click">
+                                <Viewbox Width="20" Height="20" Stretch="Uniform">
+                                    <Canvas Width="24" Height="24">
+                                        <Ellipse Canvas.Left="5" Canvas.Top="5" Width="14" Height="14"
+                                                 Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2" Fill="Transparent"/>
+                                        <Ellipse Canvas.Left="10" Canvas.Top="10" Width="4" Height="4"
+                                                 Fill="{DynamicResource PcasaTextBrush}"/>
+                                        <Path Data="M 12,1 V 7 M 12,17 V 23 M 1,12 H 7 M 17,12 H 23"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"
+                                              StrokeStartLineCap="Round"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
                             <Button x:Name="GalleryNavigateFolderStartButton" Width="30" Height="27" Margin="2,0"
-                                     Padding="2" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                     Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Ordneranfang'}" Tag="FolderStart"
                                      Click="GalleryNavigate_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 4,4 H 20 V 20 H 4 Z M 9,6 V 18 M 17,9 L 12,12 L 17,15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateFolderEndButton" Width="30" Height="27" Margin="2,0"
-                                     Padding="2" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                     Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Ordnerende'}" Tag="FolderEnd"
                                      Click="GalleryNavigate_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 4,4 H 20 V 20 H 4 Z M 15,6 V 18 M 7,9 L 12,12 L 7,15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigatePreviousFolderButton" Width="30" Height="27" Margin="2,0"
-                                     Padding="2" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                     Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Einen Ordner höher'}" Tag="PreviousFolder"
                                      Click="GalleryNavigate_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,7 H 10 L 12,9 H 22 V 21 H 2 Z M 12,18 V 10 M 8,14 L 12,10 L 16,14" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateNextFolderButton" Width="30" Height="27" Margin="2,0"
-                                     Padding="2" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                     Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Einen Ordner tiefer'}" Tag="NextFolder"
                                      Click="GalleryNavigate_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,7 H 10 L 12,9 H 22 V 21 H 2 Z M 12,10 V 18 M 8,14 L 12,18 L 16,14" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateGalleryStartButton" Width="30" Height="27" Margin="2,0"
-                                     Padding="2" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                     Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Galerieanfang'}" Tag="GalleryStart"
                                      Click="GalleryNavigate_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 5,11 L 12,4 L 19,11 M 5,17 L 12,10 L 19,17 M 4,21 H 20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2" StrokeLineJoin="Round" StrokeStartLineCap="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateGalleryEndButton" Width="30" Height="27" Margin="2,0"
-                                     Padding="2" Style="{StaticResource PcasaSearchSortButtonStyle}"
+                                     Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Galerieende'}" Tag="GalleryEnd"
                                      Click="GalleryNavigate_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 5,5 L 12,12 L 19,5 M 5,11 L 12,18 L 19,11 M 4,21 H 20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2" StrokeLineJoin="Round" StrokeStartLineCap="Round" Fill="Transparent"/></Canvas></Viewbox>

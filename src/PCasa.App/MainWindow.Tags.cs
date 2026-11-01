@@ -16,7 +16,6 @@ public partial class MainWindow
     private int _tagSearchVersion;
     private string _lastAppliedTagQuery = string.Empty;
     private bool _lastAppliedGpsAreaFilter;
-    private bool _lastAppliedAttributeFilter;
     private bool _searchWithinTree;
     private bool _searchCurrentFolderOnly;
     private bool _searchFileNames;
@@ -198,10 +197,10 @@ public partial class MainWindow
 
         // Store the normal-gallery anchor once, before entering search mode.
         // Do not overwrite it as the user changes or scrolls search results.
-        var wasFiltered = _lastAppliedTagQuery.Length > 0 ||
-            _lastAppliedGpsAreaFilter || _lastAppliedAttributeFilter;
-        var nowFiltered = query.Length > 0 || _gpsAreaFilterIds is not null ||
-            AttributeFilterActive;
+        // Property toggles are in-place view refinements, NOT a search session
+        // that restores an old position when cleared.
+        var wasFiltered = _lastAppliedTagQuery.Length > 0 || _lastAppliedGpsAreaFilter;
+        var nowFiltered = query.Length > 0 || _gpsAreaFilterIds is not null;
         var enteringSearch = !wasFiltered && nowFiltered;
         var leavingSearch = wasFiltered && !nowFiltered;
         if (enteringSearch)
@@ -303,7 +302,6 @@ public partial class MainWindow
             ? manual.ProgressStatusText : searchStatus;
         _lastAppliedTagQuery = query;
         _lastAppliedGpsAreaFilter = _gpsAreaFilterIds is not null;
-        _lastAppliedAttributeFilter = AttributeFilterActive;
         BrowseScrollViewer.UpdateLayout();
         if (leavingSearch)
         {

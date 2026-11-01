@@ -33,6 +33,7 @@
   "Absteigend": "Descending",
   "Aktualisieren": "Refresh",
   "Aktualisierung steht aus": "Update pending",
+  "Aktuelle Position merken": "Remember current position",
   "Aktuellen Ordner einlesen / aktualisieren": "Scan / refresh current folder",
   "Aktueller Ordner": "Current folder",
   "Alle": "All",
@@ -160,6 +161,7 @@
   "Galerieposition beim Start wiederherstellen": "Restore gallery position on startup",
   "Galerietextur auswählen": "Select gallery texture",
   "Gefundenen Ort auswählen": "Select a place",
+  "Gemerkte Position löschen": "Clear remembered position",
   "Gesamtfortschritt aller Tag-Pakete dieser Arbeitsserie": "Overall progress of all Tag packages in this work series",
   "Gesamtscan abgebrochen · abgeschlossene Ordner bleiben katalogisiert": "Full scan canceled · completed folders remain indexed",
   "Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.": "Searching the local Tag index. On first use, Tags may still be indexed in the background.",
@@ -312,6 +314,7 @@
   "PCasa – Vorschaudaten": "PCasa – Preview data",
   "Pfad: {0}\n\nBilder (einschließlich Unterordner): {1:N0}\nBildordner: {2:N0}\nStatus: {3}": "Path: {0}\n\nImages (including subfolders): {1:N0}\nPhoto folders: {2:N0}\nStatus: {3}",
   "Position bereit – GPS übernehmen oder ändern.": "Position ready – assign or replace GPS.",
+  "Position nicht mehr in der aktuellen Galerie sichtbar": "Remembered position is not visible in this gallery",
   "Position wählen": "Pick location",
   "Quellenangabe": "Attribution",
   "Schließen": "Close",
@@ -405,5 +408,6 @@
   "Zum Einfügen einen Zielordner im Ordnerbaum auswählen": "Choose a destination folder in the folder tree to paste",
   "Zum Invertieren einen Bildordner auswählen.": "Select an image folder before inverting the selection.",
   "Zur Fotokarte": "Back to photo map",
+  "Zur gemerkten Position springen": "Jump to remembered position",
   "Zwei ausgewählte Bilder vergleichen": "Compare two selected images"
 }
