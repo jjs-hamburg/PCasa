@@ -467,7 +467,7 @@ internal static class Program
                         string.Join("; ", items.Select((item, i) => {
                             item.ApplyTemplate();
                             var cp = (ContentPresenter)item.Template.FindName("MenuHeaderPresenter", item)!;
-                            var g = (Grid)item.Template.FindName("MenuHeaderPresenter", item)!.Parent;
+                            var g = (Grid)cp.Parent;
                             return $"[{item.Header}:itemW={item.Width:F1}/actual={item.ActualWidth:F1}/captionW={positions[i].Width:F1}/captionX={positions[i].Left:F1}/gridW={g.ActualWidth:F1}]";
                         })));
             }
