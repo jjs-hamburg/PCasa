@@ -789,6 +789,13 @@ internal static class FolderAddFlow
                 throw new Exception("Live scan moved the visible start boundary of its own folder.");
             Console.WriteLine("PASS: Real scan publishes new JPG at non-global folder start.");
 
+            // Finish the previous scan's queued WPF layout/anchor restoration
+            // before taking an independent baseline for a foreign-folder scan.
+            Until(window, () => liveSurface.GetLiveFolderEdge(
+                    liveScroller.VerticalOffset, liveScroller.ViewportHeight, later.Id)
+                    is { AtStart: true },
+                "First live JPEG did not leave its folder start visible.");
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
             // A committed photo in a DIFFERENT folder must not make this
             // folder move, even if the foreign photo sorts before/after it.
             var foreignPhoto = Path.Combine(afterRestart, "000-foreign-no-jump.jpg");
@@ -808,7 +815,12 @@ internal static class FolderAddFlow
                     != stableAnchor ||
                 Math.Abs(liveScroller.VerticalOffset -
                     liveSurface.GetFolderOffset(later.Id)!.Value) > 3)
-                throw new Exception("Foreign-folder scan moved the current gallery focus.");
+                throw new Exception(
+                    $"Foreign-folder scan moved the current gallery focus: " +
+                    $"Before={stableAnchor}, After={liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)}, " +
+                    $"Offset={liveScroller.VerticalOffset:F2}, Expected={liveSurface.GetFolderOffset(later.Id)!.Value - 60:F2}, " +
+                    $"Deferred={typeof(PCasa.App.MainWindow).GetField(\"_scanGalleryPublicationDeferred\", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)}, " +
+                    $"ForeignEdge={liveSurface.GetLiveFolderEdge(liveScroller.VerticalOffset,liveScroller.ViewportHeight,new ImageCatalogRepository(db).GetPhotoFolders().Single(f => SamePath(f.LocalPath,afterRestart)).Id)}");
             Console.WriteLine("PASS: Foreign-folder scan preserves the current folder anchor.");
 
             // Grow the middle folder beyond a viewport to test the REAL
