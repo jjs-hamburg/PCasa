@@ -26,6 +26,8 @@ public partial class MainWindow
         // configuration and no separate sorting persistence mechanism.
         public string GallerySortBy { get; set; } = "Name";
         public bool GallerySortDescending { get; set; }
+        public string GalleryAttributeFilter { get; set; } = "None";
+        public bool GalleryAttributeFilterInverted { get; set; }
         // New profiles show confirmed checks by default. An existing saved
         // explicit Problems/None selection is always respected.
         public string FolderStatusMode { get; set; } = "Always";
@@ -126,6 +128,7 @@ public partial class MainWindow
         ApplyAppearance();
         ApplyTooltipSetting();
         SyncGallerySortMenu();
+        SyncGalleryAttributeFilterUi();
         UiLanguage.Current.PropertyChanged += AppearanceUiLanguageChanged;
         RestoreWindowPlacement();
         InitializeWorkspaceLayout();
@@ -389,12 +392,14 @@ public partial class MainWindow
         if (Dispatcher.CheckAccess())
         {
             SyncGallerySortMenu();
+            SyncGalleryAttributeFilterUi();
             RefreshTagDraftControls();
         }
         else
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 SyncGallerySortMenu();
+                SyncGalleryAttributeFilterUi();
                 RefreshTagDraftControls();
             }));
     }

@@ -380,6 +380,12 @@ public sealed class BrowseGallerySurface : FrameworkElement
         return null;
     }
 
+    public List<long> GetVisibleFolderIds()
+    {
+        EnsureLayout();
+        return _sections.Select(section => section.Folder.Id).ToList();
+    }
+
     public double? GetFolderBottomOffset(long photoFolderId)
     {
         EnsureLayout();

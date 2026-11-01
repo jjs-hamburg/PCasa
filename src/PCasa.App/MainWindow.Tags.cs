@@ -16,6 +16,7 @@ public partial class MainWindow
     private int _tagSearchVersion;
     private string _lastAppliedTagQuery = string.Empty;
     private bool _lastAppliedGpsAreaFilter;
+    private bool _lastAppliedAttributeFilter;
     private bool _searchWithinTree;
     private bool _searchCurrentFolderOnly;
     private bool _searchFileNames;
@@ -197,8 +198,10 @@ public partial class MainWindow
 
         // Store the normal-gallery anchor once, before entering search mode.
         // Do not overwrite it as the user changes or scrolls search results.
-        var wasFiltered = _lastAppliedTagQuery.Length > 0 || _lastAppliedGpsAreaFilter;
-        var nowFiltered = query.Length > 0 || _gpsAreaFilterIds is not null;
+        var wasFiltered = _lastAppliedTagQuery.Length > 0 ||
+            _lastAppliedGpsAreaFilter || _lastAppliedAttributeFilter;
+        var nowFiltered = query.Length > 0 || _gpsAreaFilterIds is not null ||
+            AttributeFilterActive;
         var enteringSearch = !wasFiltered && nowFiltered;
         var leavingSearch = wasFiltered && !nowFiltered;
         if (enteringSearch)
@@ -229,6 +232,14 @@ public partial class MainWindow
             else
                 scope = Array.Empty<BrowseThumbnailIndexEntry>();
         }
+
+        // The compact property selector is an additional AND criterion
+        // of this ONE gallery projection; its inversion complements only
+        // that property, not the independent WAS/WO/NOT search.
+        if (AttributeFilterActive)
+            scope = scope.Where(image => AttributeFilterMatches(
+                image, CurrentAttributeFilter,
+                _appearance.GalleryAttributeFilterInverted)).ToArray();
 
         // GPS bounds are one criterion of the existing gallery filter,
         // not an independent list, renderer or thumbnail ownership.
@@ -271,8 +282,9 @@ public partial class MainWindow
         UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
         BrowseSurface.SetSelection(_selectedImageIds);
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        EmptyPanelHeading.Text = query.Length == 0
+        EmptyPanelHeading.Text = query.Length == 0 && !AttributeFilterActive
             ? UiLanguage.T("Noch keine Bilder im Katalog") :
+                query.Length == 0 ? UiLanguage.T("Keine Bilder mit diesen Eigenschaften gefunden") :
                 _invertFilterResults ? UiLanguage.T("Keine übrigen Bilder gefunden") :
                 _searchFileNames ? UiLanguage.T("Keine passenden Dateinamen gefunden") : UiLanguage.T("Keine passenden Tags gefunden");
         EmptyPanelDescription.Text = query.Length == 0
@@ -281,6 +293,7 @@ public partial class MainWindow
                 : UiLanguage.T("Gesucht wird im lokalen Tag-Index. Bei der ersten Nutzung werden Tags noch im Hintergrund erfasst.");
         var searchStatus = query.Length > 0
             ? UiLanguage.Format("{0:N0} Bilder {1} {2}: {3}", desired.Count, _invertFilterResults ? UiLanguage.T("ohne") : UiLanguage.T("mit"), _searchFileNames ? UiLanguage.T("Dateiname") : UiLanguage.T("Tags"), query)
+            : AttributeFilterActive ? UiLanguage.Format("{0:N0} Bilder", desired.Count)
             : UiLanguage.Format("{0:N0} Bilder", _lastCatalogImageCount);
         // A search refresh is still allowed while Tag files are being
         // written. The manual progress presenter owns the status bar for the
@@ -290,13 +303,14 @@ public partial class MainWindow
             ? manual.ProgressStatusText : searchStatus;
         _lastAppliedTagQuery = query;
         _lastAppliedGpsAreaFilter = _gpsAreaFilterIds is not null;
+        _lastAppliedAttributeFilter = AttributeFilterActive;
         BrowseScrollViewer.UpdateLayout();
         if (leavingSearch)
         {
             if (_tagSearchNavigation.End() is { } original)
                 RestoreTagSearchNavigation(original);
         }
-        else if (scrollToTop && query.Length > 0)
+        else if (scrollToTop && nowFiltered)
             BrowseScrollViewer.ScrollToTop();
         BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
             Math.Max(1, BrowseScrollViewer.ViewportHeight));

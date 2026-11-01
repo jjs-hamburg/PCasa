@@ -427,10 +427,38 @@ internal static class Program
                 ?? throw new Exception("Search frame missing.");
             var direction = window.FindName("GallerySortDirectionButton") as Button
                 ?? throw new Exception("Sort arrow missing.");
+            var attributeFrame = window.FindName("GalleryAttributeFilterFrame") as Border
+                ?? throw new Exception("Compact property filter frame is missing.");
+            var attributeLabel = window.FindName("GalleryAttributeFilterLabel") as TextBlock
+                ?? throw new Exception("Property filter must display its active state.");
+            var attributeInvert = window.FindName("GalleryAttributeFilterInvertButton") as Button
+                ?? throw new Exception("Click-to-invert funnel is missing.");
+            var attributeClear = window.FindName("GalleryAttributeFilterClearButton") as Button
+                ?? throw new Exception("Separate red circled clear button is missing.");
+            var attributeSelector = window.FindName("GalleryAttributeFilterSelectorButton") as Button
+                ?? throw new Exception("Property filter selection is missing.");
+            if (attributeSelector.ContextMenu?.Items.Count != 3 ||
+                attributeInvert.IsEnabled || attributeClear.IsEnabled ||
+                attributeLabel.Text != "Filter")
+                throw new Exception("Property filter initial state and three menu choices are incorrect.");
+            var navigationBar = window.FindName("GalleryNavigationBar") as Border
+                ?? throw new Exception("Navigation bar must be outside the scrollable gallery.");
+            var navigationNames = new[] { "FolderStart", "FolderEnd",
+                "PreviousFolder", "NextFolder", "GalleryStart", "GalleryEnd" };
+            if (navigationBar.Height > 34 || Grid.GetRow(navigationBar) != 0 ||
+                navigationNames.Any(action =>
+                    window.FindName("GalleryNavigate" + action + "Button") is not Button))
+                throw new Exception("Compact gallery navigation bar is missing one of six commands.");
 
             Rect Bounds(FrameworkElement element) =>
                 element.TransformToAncestor(window).TransformBounds(
                     new Rect(new Point(), element.RenderSize));
+
+            if (Bounds(attributeFrame).Right > Bounds(sortFrame).Left + 1 ||
+                Bounds(sortFrame).Right > Bounds(searchFrame).Left + 1 ||
+                attributeFrame.ActualHeight != sortFrame.ActualHeight)
+                throw new Exception("Property filter must be compact and directly before the unchanged sort/search group.");
+            Console.WriteLine("PASS: Compact property filter and six icon-only gallery navigation commands.");
 
             if (Descendants<TextBlock>(sortButton).Any(block =>
                     block.Text == "⌄" || block.Text == "▼"))
@@ -647,6 +675,24 @@ internal static class Program
                 .Select(i => new BrowseThumbnailIndexEntry(1000 + i,
                     i < 240 ? 100 : 200, 192, "no-image.pack", 0, 1, 180, 120))
                 .ToArray();
+            // Test GPS/tag/RAW predicates directly against the already
+            // materialized browse-index flags: no NAS or SQLite rescanning.
+            var matcher = typeof(PCasa.App.MainWindow).GetMethod(
+                "AttributeFilterMatches",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var propertyPhoto = synthetic[0] with {
+                HasGps = true, HasTags = false, IsRaw = true
+            };
+            bool Matching(string kind, bool inverse) =>
+                (bool)matcher.Invoke(null, new object[] { propertyPhoto, kind, inverse })!;
+            if (!Matching("Gps", false) || Matching("Gps", true) ||
+                Matching("Tags", false) || !Matching("Tags", true) ||
+                !Matching("Raw", false) || Matching("Raw", true) ||
+                !Matching("None", false))
+                throw new Exception("GPS, Tags and RAW filter predicates/inversion are incorrect.");
+            Console.WriteLine("PASS: Photo property filtering and inversion use indexed GPS/tag/RAW flags.");
+
             var groups = new[] {
                 new PhotoFolderSummary(100, 1, @"C:\\synthetic\\first",
                     @"C:\\synthetic\\first", "First", 240),
@@ -720,6 +766,35 @@ internal static class Program
                 ?? throw new Exception("Actual browse scroll viewer not found.");
             surface.SetData(synthetic, groups, pages);
             Flush(window);
+            // Real WPF buttons must scroll within the gallery surface, not
+            // mutate folder tree selection or move the viewer.
+            void Navigate(string action)
+            {
+                var button = (Button)window.FindName(
+                    "GalleryNavigate" + action + "Button")!;
+                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+                Flush(window);
+            }
+            Navigate("GalleryEnd");
+            if (scroller.VerticalOffset < 100)
+                throw new Exception("Gallery end button did not navigate.");
+            Navigate("PreviousFolder");
+            if (Math.Abs(scroller.VerticalOffset - surface.GetFolderOffset(100)!.Value) > 3)
+                throw new Exception("Previous folder button did not navigate to folder start.");
+            Navigate("NextFolder");
+            if (Math.Abs(scroller.VerticalOffset - surface.GetFolderOffset(200)!.Value) > 3)
+                throw new Exception("Next folder button did not navigate to folder start.");
+            Navigate("FolderEnd");
+            if (Math.Abs(scroller.VerticalOffset - surface.GetFolderTrailingOffset(
+                    200, scroller.ViewportHeight)!.Value) > 3)
+                throw new Exception("Folder end button did not land on last thumbnail rows.");
+            Navigate("FolderStart");
+            if (Math.Abs(scroller.VerticalOffset - surface.GetFolderOffset(200)!.Value) > 3)
+                throw new Exception("Folder start button did not land on the folder header.");
+            Navigate("GalleryStart");
+            if (scroller.VerticalOffset > 3)
+                throw new Exception("Gallery start button did not land at global beginning.");
+            Console.WriteLine("PASS: Six icon navigation commands retain exact gallery/folder destinations.");
             scroller.ScrollToVerticalOffset(2800);
             Flush(window);
             surface.SetViewport(scroller.VerticalOffset,
