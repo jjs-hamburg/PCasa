@@ -413,7 +413,7 @@
             </Grid.RowDefinitions>
             <Border Grid.Row="0" MinHeight="42"
                     Background="{DynamicResource PcasaTopBrush}">
-                <Menu x:Name="MainMenu" Loaded="MainMenu_Loaded" Background="Transparent"
+                <Menu x:Name="MainMenu" Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
                       VerticalAlignment="Center"
                       Padding="13,0,0,0">
@@ -467,6 +467,17 @@
                                                 <!-- Auto, not star: otherwise the drop-down width
                                                      leaks into the top header and creates variable
                                                      text gaps despite identical margins. -->
+                                                <Setter TargetName="MenuLabelColumn" Property="Width" Value="Auto"/>
+                                                <Setter TargetName="MenuCheckColumn" Property="Width" Value="0"/>
+                                                <Setter TargetName="MenuArrowColumn" Property="Width" Value="0"/>
+                                            </Trigger>
+                                            <!-- A direct action such as Appearance has Role=TopLevelItem,
+                                                 unlike dropdown headers (TopLevelHeader). BOTH must
+                                                 have ZERO icon/arrow columns and the same text margin. -->
+                                            <Trigger Property="Role" Value="TopLevelItem">
+                                                <Setter TargetName="ItemBackground" Property="MinWidth" Value="0"/>
+                                                <Setter TargetName="ItemBackground" Property="Padding" Value="0"/>
+                                                <Setter TargetName="MenuHeaderPresenter" Property="Margin" Value="8,0,8,0"/>
                                                 <Setter TargetName="MenuLabelColumn" Property="Width" Value="Auto"/>
                                                 <Setter TargetName="MenuCheckColumn" Property="Width" Value="0"/>
                                                 <Setter TargetName="MenuArrowColumn" Property="Width" Value="0"/>
