@@ -873,9 +873,8 @@ internal static class FolderAddFlow
                 BindingFlags.Instance | BindingFlags.NonPublic)!;
             updateVisibility.Invoke(window, [true]);
             upperRoot.IsExpanded = false;
-            Until(window, () => !liveSurface.GetVisibleIndexRanges().Any(
-                    range => range.First < 0),
-                "Visibility reflow did not settle.");
+            Until(window, () => liveSurface.GetFolderOffset(later.Id) is null,
+                "Collapsing upper folders did not hide the affected gallery section.");
             upperRoot.IsExpanded = true;
             Until(window, () => liveSurface.CaptureImageAnchor(
                     liveScroller.VerticalOffset) == viewAnchor,

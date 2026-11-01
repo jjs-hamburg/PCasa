@@ -697,8 +697,9 @@ public partial class MainWindow
         // Anchor the CURRENT viewport, never the obsolete starting position.
         if (fromScanner) QueueGalleryAnchorRestore();
         var liveFolder = fromScanner ? CurrentGalleryLiveEdge() : null;
-        var followFolder = liveFolder is { } liveEdge &&
-            (liveEdge.AtStart || liveEdge.AtEnd) ? liveEdge : null;
+        (long FolderId, bool AtStart, bool AtEnd)? followFolder =
+            liveFolder is { } liveEdge && (liveEdge.AtStart || liveEdge.AtEnd)
+                ? liveEdge : null;
         var navigationVersion = _explicitGalleryNavigationVersion;
         PublishPhotoFolderSnapshot(nextFolders, imageCount);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
