@@ -899,12 +899,25 @@ internal static class FolderAddFlow
             upperRoot.IsExpanded = false;
             Until(window, () => liveSurface.GetFolderOffset(later.Id) is null,
                 "Collapsing upper folders did not hide the affected gallery section.");
-            Until(window, () =>
-                liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) == viewAnchor &&
-                liveSurface.GetLiveFolderEdge(
-                    liveScroller.VerticalOffset, liveScroller.ViewportHeight,
-                    lastFolder.Id) is { AtStart: true },
-                "Hiding upper folders moved the current folder START into its interior.");
+            try
+            {
+                Until(window, () =>
+                    liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) == viewAnchor &&
+                    liveSurface.GetLiveFolderEdge(
+                        liveScroller.VerticalOffset, liveScroller.ViewportHeight,
+                        lastFolder.Id) is { AtStart: true },
+                    "Hiding upper folders moved the current folder START into its interior.");
+            }
+            catch (TimeoutException ex)
+            {
+                throw new Exception(
+                    $"Visibility diagnostic: Before={viewAnchor}, " +
+                    $"After={liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)}, " +
+                    $"Offset={liveScroller.VerticalOffset:F2}, FolderTop={liveSurface.GetFolderOffset(lastFolder.Id):F2}, " +
+                    $"WasTop={lastStart:F2}, Active={activeFolderField.GetValue(window)}, " +
+                    $"Edge={liveSurface.GetLiveFolderEdge(liveScroller.VerticalOffset,liveScroller.ViewportHeight,lastFolder.Id)}",
+                    ex);
+            }
             upperRoot.IsExpanded = true;
             Until(window, () => liveSurface.CaptureImageAnchor(
                     liveScroller.VerticalOffset) == viewAnchor,
