@@ -481,7 +481,7 @@ internal static class Program
                 explorerRefresh.Invoke(window, null);
                 Flush(window);
                 var explorerOutline = explorerButton.Template.FindName("Outline", explorerButton) as Border;
-                if (!Equals(explorerButton.Tag, "Active") ||
+                if (!Equals(explorerButton.Tag, "ActiveGold") ||
                     explorerOutline?.BorderBrush is not SolidColorBrush activeBrush ||
                     activeBrush.Color != ((SolidColorBrush)app.Resources["PcasaAccentBrush"]).Color)
                     throw new Exception("Active Explorer view must have the shared blue outline.");
