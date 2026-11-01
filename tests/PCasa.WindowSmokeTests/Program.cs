@@ -492,10 +492,10 @@ internal static class Program
                 !ReferenceEquals(galleryToggle.Parent, searchGroup) ||
                 !ReferenceEquals(notToggle.Parent, searchGroup) ||
                 !ReferenceEquals(searchField.Parent, searchGroup.Children[^1]))
-                throw new Exception("Sort and complete search must have only two shared group frames.");
+                throw new Exception("Sort and search must retain their original separate group frames.");
             if (!searchRow.Children.Cast<UIElement>().SequenceEqual(
-                    new UIElement[] { sortFrame, searchFrame }))
-                throw new Exception("Sort and search changed their established one-row order.");
+                    new UIElement[] { attributeFrame, sortFrame, searchFrame }))
+                throw new Exception("Filter must be inserted before the unchanged sort/search order.");
             if (Math.Abs(sortFrame.ActualHeight - searchFrame.ActualHeight) > .5 ||
                 !Equals(sortFrame.BorderBrush, searchFrame.BorderBrush))
                 throw new Exception("Group frames differ in height or border brightness.");
