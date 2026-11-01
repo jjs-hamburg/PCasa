@@ -1156,7 +1156,27 @@
  <Button x:Name="CloseSidebarButton" Width="35" Height="42" Padding="0" Style="{StaticResource PcasaStatusButtonStyle}" ToolTip="{loc:Tr Key='Seitenleiste schließen'}" Click="CloseSidebar_Click"><ContentControl Template="{StaticResource PcasaCloseGlyphTemplate}" Width="22" Height="22"/></Button>
  </StackPanel></Grid>
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
+                        <StackPanel>
+                            <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
+                            <Button x:Name="InfoCopyGpsButton" Visibility="Collapsed"
+                                    HorizontalAlignment="Left" Margin="0,7,0,0"
+                                    Padding="7,3" Click="InfoCopyGps_Click"
+                                    ToolTip="{loc:Tr Key='GPS-Koordinaten kopieren'}">
+                                <StackPanel Orientation="Horizontal">
+                                    <Viewbox Width="16" Height="16" Margin="0,0,5,0">
+                                        <Canvas Width="24" Height="24">
+                                            <Path Data="M5,3 H15 L20,8 V21 H5 Z M15,3 V8 H20"
+                                                  Stroke="{DynamicResource PcasaTextBrush}"
+                                                  Fill="Transparent" StrokeThickness="1.7"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                  StrokeLineJoin="Round"/>
+                                        </Canvas>
+                                    </Viewbox>
+                                    <TextBlock Text="{loc:Tr Key='GPS kopieren'}" FontSize="12"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
                     </ScrollViewer>
                     <Grid x:Name="GpsMapPanel" Grid.Row="1" Visibility="Collapsed">
                         <Grid.RowDefinitions>

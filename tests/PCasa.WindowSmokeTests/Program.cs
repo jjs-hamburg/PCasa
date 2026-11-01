@@ -1404,6 +1404,33 @@ internal static class Program
                         " jumped to unrelated thumbnails.");
             }
             Console.WriteLine("PASS: Tag/Info/GPS sidebar modes preserve actual gallery image.");
+            var infoGpsCopy = window.FindName("InfoCopyGpsButton") as Button
+                ?? throw new Exception("Image Info GPS copy button missing.");
+            if (infoGpsCopy.Visibility != Visibility.Collapsed)
+                throw new Exception("GPS copy offered without resolved Info coordinates.");
+            var googleButton = window.FindName("GpsGoogleButton") as Button
+                ?? throw new Exception("Google Maps button missing.");
+            if (googleButton.Content is not StackPanel ||
+                !((StackPanel)googleButton.Content).Children.OfType<TextBlock>()
+                    .Any(text => text.Name == "GpsGoogleButtonCaption"))
+                throw new Exception("Google Maps button icon/caption were replaced.");
+            var formatGps = typeof(PCasa.App.MainWindow).GetMethod(
+                "FormatGpsCoordinates", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+                ?? throw new Exception("Shared GPS formatter missing.");
+            var formattedGps = formatGps.Invoke(null, new object[] { 53.502345d, 10.123456d });
+            if (!Equals(formattedGps, "53.502345, 10.123456"))
+                throw new Exception("Info and map must copy the same invariant GPS coordinates.");
+            var mapsUrl = typeof(PCasa.App.MainWindow).GetMethod(
+                "BuildGoogleMapsWebsiteUrl", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+                ?? throw new Exception("Google Maps coordinate URL builder missing.");
+            var googleUrl = mapsUrl.Invoke(null, new object[] { 53.502345d, 10.123456d }) as string;
+            if (googleUrl is null || !googleUrl.StartsWith(
+                    "https://www.google.com/maps/search/?api=1&query=", StringComparison.Ordinal) ||
+                !Uri.UnescapeDataString(googleUrl).Contains("53.502345,10.123456"))
+                throw new Exception("Google Maps URL does not address the current GPS point.");
+            Console.WriteLine("PASS: Info GPS-copy control, shared coordinate format and external Maps URL.");
             // GPS rows never wrap or get locked to the old sidebar width.
             var gpsControls = window.FindName("GpsControlsPanel") as Grid
                 ?? throw new Exception("GPS controls must use a fixed-row grid.");

@@ -196,7 +196,7 @@ public sealed class AppearanceSettingsWindow : Window
             ("⊘", "Nicht erreichbar", false),
             ("!", "Fehler", false),
             ("?", "Unbekannt", false),
-            ("●", "Offene Tag-Aufträge", true)
+            ("●", "Offene Schreibvorgänge", true)
         })
         {
             var item = new StackPanel

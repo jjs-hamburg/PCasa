@@ -1137,11 +1137,13 @@ public partial class MainWindow
         GpsProviderEditor.Visibility = Visibility.Collapsed;
     }
 
+    private static string FormatGpsCoordinates(double lat, double lon) =>
+        string.Create(CultureInfo.InvariantCulture, $"{lat:F6}, {lon:F6}");
+
     private void GpsCopy_Click(object sender, RoutedEventArgs e)
     {
         if (_gpsCurrentCoordinates is not { } p) return;
-        Clipboard.SetText(string.Create(CultureInfo.InvariantCulture,
-            $"{p.Lat:F6}, {p.Lon:F6}"));
+        Clipboard.SetText(FormatGpsCoordinates(p.Lat, p.Lon));
     }
 
     private static string BuildGoogleMapsWebsiteUrl(double latitude, double longitude)
@@ -1162,20 +1164,22 @@ public partial class MainWindow
 
     private void GpsGoogle_Click(object sender, RoutedEventArgs e)
     {
-        if (_gpsGoogleWebsiteActive)
+        if (_gpsCurrentCoordinates is not { } gps) return;
+        try
         {
-            ExitGoogleMapsWebsite();
-            return;
+            // ShellExecute opens the Windows default EXTERNAL browser.
+            // Never replace the PCasa map or disturb the gallery selection.
+            Process.Start(new ProcessStartInfo(
+                BuildGoogleMapsWebsiteUrl(gps.Lat, gps.Lon))
+            {
+                UseShellExecute = true
+            });
         }
-        if (_gpsCurrentCoordinates is null || _gpsSelectionCount > 1) return;
-        _gpsGoogleWebsiteActive = true;
-        _gpsBrowserReady = false;
-        _gpsGoogleLoadedUrl = null;
-        GpsPhotoPopup.Visibility = Visibility.Collapsed;
-        CloseGpsFullscreenImage();
-        UpdateGpsGoogleButton();
-        ActivateGpsMap();
-        NavigateGoogleMapsToSelection();
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("GPS.GoogleMapsExternal", ex);
+            StatusText.Text = UiLanguage.T("Google Maps konnte nicht geöffnet werden");
+        }
     }
 
     private void NavigateGoogleMapsToSelection()
@@ -1222,12 +1226,10 @@ public partial class MainWindow
 
     private void UpdateGpsGoogleButton()
     {
-        GpsGoogleButton.Content = UiLanguage.T(_gpsGoogleWebsiteActive
-            ? "Zur Fotokarte" : "Google Maps");
-        GpsGoogleButton.IsEnabled = _gpsGoogleWebsiteActive ||
-            (_gpsCurrentCoordinates is not null && _gpsSelectionCount <= 1);
-        GpsGoogleButton.ToolTip = UiLanguage.T(_gpsSelectionCount > 1
-            ? "Mehrfachauswahl in PCasa-Fotokarte"
-            : "Google Maps ohne Fotomarkierung");
+        // Keep the existing icon + localized caption from XAML intact.
+        // A multiple selection may open the currently focused photo only.
+        GpsGoogleButton.IsEnabled = _gpsCurrentCoordinates is not null;
+        GpsGoogleButton.ToolTip = UiLanguage.T(
+            "Google Maps im Standardbrowser öffnen");
     }
 }

@@ -703,11 +703,26 @@ public partial class MainWindow
         await UpdateSidebarContentAsync();
     }
 
+    // Snapshot from the SAME SQLite read that renders the Info panel.
+    // No separate metadata request and no coordinate-to-thumbnail guessing.
+    private sealed record SidebarInfoResult(string Text,
+        double? Latitude = null, double? Longitude = null);
+    private (double Lat, double Lon)? _infoCopyGpsCoordinates;
+
+    private void InfoCopyGps_Click(object sender, RoutedEventArgs e)
+    {
+        if (_sidebarMode != "Info" || _infoCopyGpsCoordinates is not { } gps)
+            return;
+        Clipboard.SetText(FormatGpsCoordinates(gps.Lat, gps.Lon));
+    }
+
     private async Task UpdateSidebarContentAsync()
     {
         if (_sidebarMode is null) return;
         var mode = _sidebarMode;
         var request = _sidebarInfoRequests.Begin(mode, _selectedImageIds);
+        _infoCopyGpsCoordinates = null;
+        InfoCopyGpsButton.Visibility = Visibility.Collapsed;
         if (mode == "Tags")
         {
             await RefreshTagSidebarAsync();
@@ -733,7 +748,16 @@ public partial class MainWindow
                 () => _sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds),
                 workKind: SchedulerWorkKind.CatalogRead);
             if (_sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds))
-                SidePanelText.Text = content;
+            {
+                SidePanelText.Text = content.Text;
+                if (mode == "Info" &&
+                    content.Latitude is double lat &&
+                    content.Longitude is double lon)
+                {
+                    _infoCopyGpsCoordinates = (lat, lon);
+                    InfoCopyGpsButton.Visibility = Visibility.Visible;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -743,13 +767,14 @@ public partial class MainWindow
         }
     }
 
-    private string ReadImageInfo(long id, string mode)
+    private SidebarInfoResult ReadImageInfo(long id, string mode)
     {
         if (mode == "Tags")
         {
             var keywords = new PCasa.App.Data.ImageTagRepository(_database).GetKeywords(id);
-            return keywords is null ? "Tags werden noch indiziert." :
-                keywords.Length == 0 ? "Keine Tags in den Bildmetadaten." : keywords;
+            return new SidebarInfoResult(keywords is null
+                ? "Tags werden noch indiziert."
+                : keywords.Length == 0 ? "Keine Tags in den Bildmetadaten." : keywords);
         }
 
         // Read the SAME catalog imported by FolderScanner, never reopen
@@ -770,19 +795,22 @@ public partial class MainWindow
             """;
         command.Parameters.AddWithValue("$id", id);
         using var row = command.ExecuteReader();
-        if (!row.Read()) return "Bild ist nicht mehr im Katalog.";
+        if (!row.Read()) return new SidebarInfoResult("Bild ist nicht mehr im Katalog.");
         string? StringAt(int col) => row.IsDBNull(col) ? null : row.GetString(col);
         double? NumberAt(int col) => row.IsDBNull(col) ? null : row.GetDouble(col);
 
         var lat = NumberAt(9);
         var lon = NumberAt(10);
+        var gpsValid = lat is double latitude && lon is double longitude &&
+            double.IsFinite(latitude) && double.IsFinite(longitude) &&
+            latitude is >= -90 and <= 90 && longitude is >= -180 and <= 180;
         if (mode == "GPS")
-            return lat is double latitude && lon is double longitude
-                ? $"Breitengrad: {latitude:F6}°\nLängengrad: {longitude:F6}°" +
+            return new SidebarInfoResult(gpsValid
+                ? $"Breitengrad: {lat:F6}°\nLängengrad: {lon:F6}°" +
                   (NumberAt(11) is double alt ? $"\nHöhe: {alt:F1} m" : "")
                 : StringAt(6) is null && StringAt(7) is null && StringAt(8) is null
                     ? "Keine GPS-Daten im Katalog (ggf. Metadaten noch einlesen)."
-                    : "Keine GPS-Koordinaten in den Bildmetadaten.";
+                    : "Keine GPS-Koordinaten in den Bildmetadaten.");
 
         var path = row.GetString(1);
         var modified = new DateTime(row.GetInt64(5), DateTimeKind.Utc).ToLocalTime();
@@ -793,14 +821,16 @@ public partial class MainWindow
             : string.Join("\n  • ", infoKeywords.Split(
                 ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries |
                     StringSplitOptions.TrimEntries));
-        return $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
+        var text = $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
                $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
                $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
                $"\nAufnahme: {StringAt(8) ?? "–"}" +
                $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
-               $"\nGPS: {(lat.HasValue && lon.HasValue ? "vorhanden" : "–")}" +
+               $"\nGPS: {(gpsValid ? FormatGpsCoordinates(lat!.Value, lon!.Value) : "–")}" +
                $"\nTags: {(tagLines == "–" ? "–" : "\n  • " + tagLines)}" +
                $"\nLetzte Änderung: {modified:g}";
+        return new SidebarInfoResult(text, gpsValid ? lat : null,
+            gpsValid ? lon : null);
     }
 
 }
