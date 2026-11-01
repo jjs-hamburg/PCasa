@@ -1922,11 +1922,11 @@ internal static class Program
                     var gpsHtml = gpsHtmlReader.ReadToEnd();
                     var prepare = gpsHtml.IndexOf("window.pcasaPrepareGpsExtent",
                         StringComparison.Ordinal);
-                    var fit = gpsHtml.IndexOf("map.fitBounds(", prepare,
+                    var fitCallOffset = gpsHtml.IndexOf("map.fitBounds(", prepare,
                         StringComparison.Ordinal);
                     var ack = gpsHtml.IndexOf("type:'gps-fit-ready'", prepare,
                         StringComparison.Ordinal);
-                    if (prepare < 0 || fit < prepare || ack < fit ||
+                    if (prepare < 0 || fitCallOffset < prepare || ack < fitCallOffset ||
                         gpsHtml.Contains("window.pcasaFitGpsExtent=", StringComparison.Ordinal))
                         throw new Exception("Map draws clusters before fitting selection viewport.");
                 }
