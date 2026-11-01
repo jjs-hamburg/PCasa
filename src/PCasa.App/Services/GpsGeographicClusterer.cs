@@ -15,6 +15,12 @@ public static class GpsGeographicClusterer
 {
     private const double EarthRadiusKm = 6371.0088;
     private const double Radians = Math.PI / 180d;
+    // MapLibre renders its DOM markers in Web Mercator screen pixels (512
+    // world pixels at zoom 0). The 27px badge, outline and shadow require
+    // at least this center-to-center separation to avoid black patches.
+    // Do not infer marker spacing from kilometers at a given latitude.
+    public const double MinimumMarkerSpacingPixels = 48d;
+    private const double MaxMercatorLatitude = 85.0511287798066;
 
     public static double RadiusKm(double zoom) =>
         Math.Max(0.001, 280d * Math.Pow(2d, 2d - Math.Clamp(zoom, 0, 23)));
@@ -54,7 +60,7 @@ public static class GpsGeographicClusterer
 
     private sealed class Group(GpsPhotoPosition first)
     {
-        public long Id { get; } = first.ImageId;
+        public long Id { get; private set; } = first.ImageId;
         public List<long> ImageIds { get; } = [];
         public double Latitude { get; private set; }
         public double Longitude { get; private set; }
@@ -77,8 +83,131 @@ public static class GpsGeographicClusterer
             }
         }
 
+        public void Merge(Group other)
+        {
+            // All memberships remain real image IDs. A merging group
+            // contributes its entire spherical vector, never an estimated
+            // number of points at a synthetic position.
+            ImageIds.AddRange(other.ImageIds);
+            Id = Math.Min(Id, other.Id);
+            _x += other._x;
+            _y += other._y;
+            _z += other._z;
+            Latitude = Math.Atan2(_z, Math.Sqrt(_x * _x + _y * _y)) / Radians;
+            Longitude = Math.Atan2(_y, _x) / Radians;
+        }
+
         public GpsPhotoCluster Snapshot() =>
             new(Id, Latitude, Longitude, ImageIds.ToArray());
+    }
+
+    private static (double X, double Y) ScreenPoint(
+        double latitude, double longitude, double worldPixels)
+    {
+        // Exactly the projection used by MapLibre. Clamp ONLY the projected
+        // latitude, never the original GPS coordinate stored in a photo.
+        var phi = Math.Clamp(latitude, -MaxMercatorLatitude,
+            MaxMercatorLatitude) * Radians;
+        var sine = Math.Sin(phi);
+        return (((longitude + 180d) / 360d) * worldPixels,
+            (0.5d - Math.Log((1d + sine) / (1d - sine)) /
+                (4d * Math.PI)) * worldPixels);
+    }
+
+    private static List<Group> SeparateVisibleMarkers(
+        List<Group> input, double zoom, CancellationToken cancellationToken)
+    {
+        var worldPixels = 512d * Math.Pow(2d, Math.Clamp(zoom, 0, 23));
+        var columns = (long)Math.Ceiling(worldPixels / MinimumMarkerSpacingPixels);
+        var spacingSquared = MinimumMarkerSpacingPixels * MinimumMarkerSpacingPixels;
+
+        (long X, long Y) Cell(Group group)
+        {
+            var (x, y) = ScreenPoint(group.Latitude, group.Longitude, worldPixels);
+            var col = ((long)Math.Floor(x / MinimumMarkerSpacingPixels) %
+                columns + columns) % columns;
+            return (col, (long)Math.Floor(y / MinimumMarkerSpacingPixels));
+        }
+
+        double DistanceSquared(Group a, Group b)
+        {
+            var p = ScreenPoint(a.Latitude, a.Longitude, worldPixels);
+            var q = ScreenPoint(b.Latitude, b.Longitude, worldPixels);
+            var dx = Math.Abs(p.X - q.X);
+            dx = Math.Min(dx, worldPixels - dx); // International Date Line
+            var dy = p.Y - q.Y;
+            return dx * dx + dy * dy;
+        }
+
+        var groups = input;
+        bool changed;
+        do
+        {
+            changed = false;
+            var survivors = new List<Group>(groups.Count);
+            var buckets = new Dictionary<(long X, long Y), HashSet<Group>>();
+            var locations = new Dictionary<Group, (long X, long Y)>();
+
+            void Add(Group group)
+            {
+                var key = Cell(group);
+                if (!buckets.TryGetValue(key, out var bucket))
+                {
+                    bucket = [];
+                    buckets.Add(key, bucket);
+                }
+                bucket.Add(group);
+                locations[group] = key;
+            }
+
+            foreach (var group in groups.OrderBy(g => g.Latitude)
+                         .ThenBy(g => g.Longitude).ThenBy(g => g.Id))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var key = Cell(group);
+                Group? closest = null;
+                var best = spacingSquared;
+                for (var dx = -1; dx <= 1; dx++)
+                for (var dy = -1; dy <= 1; dy++)
+                {
+                    var x = ((key.X + dx) % columns + columns) % columns;
+                    if (!buckets.TryGetValue((x, key.Y + dy),
+                            out var bucket)) continue;
+                    foreach (var candidate in bucket)
+                    {
+                        var distance = DistanceSquared(group, candidate);
+                        if (distance >= spacingSquared) continue;
+                        if (closest is null || distance < best ||
+                            (distance == best && candidate.Id < closest.Id))
+                        {
+                            closest = candidate;
+                            best = distance;
+                        }
+                    }
+                }
+
+                if (closest is null)
+                {
+                    survivors.Add(group);
+                    Add(group);
+                    continue;
+                }
+
+                // A centroid can move into another marker after merging.
+                // Re-index it and repeat complete passes until no pair of
+                // visible marker centers overlaps, including at world zoom.
+                var previous = locations[closest];
+                var previousBucket = buckets[previous];
+                previousBucket.Remove(closest);
+                if (previousBucket.Count == 0) buckets.Remove(previous);
+                closest.Merge(group);
+                Add(closest);
+                changed = true;
+            }
+            groups = survivors;
+        } while (changed);
+
+        return groups;
     }
 
     public static IReadOnlyList<GpsPhotoCluster> Cluster(
@@ -160,6 +289,10 @@ public static class GpsGeographicClusterer
             }
         }
 
-        return groups.Select(g => g.Snapshot()).ToArray();
+        // The geographic-radius pass preserves precise identities and
+        // locality. A final projection-space pass enforces real marker
+        // dimensions on the FIRST frame, not only after user zoom gestures.
+        return SeparateVisibleMarkers(groups, zoom, cancellationToken)
+            .Select(g => g.Snapshot()).ToArray();
     }
 }

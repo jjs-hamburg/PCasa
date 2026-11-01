@@ -1955,8 +1955,50 @@ internal static class Program
                     atWorldZoom.SelectMany(g => g.ImageIds).Distinct().Count()
                         != worldwide.Length)
                     throw new Exception("World-scale cluster radius or image identities are wrong.");
+                // The map badge measures 27 px plus outline and shadow.
+                // Every cluster center must therefore have at least the
+                // required screen-space spacing, including at high latitudes
+                // and across the International Date Line.
+                static (double X, double Y) Mercator(GpsPhotoCluster g, double zoom)
+                {
+                    var scale = 512d * Math.Pow(2d, zoom);
+                    var lat = Math.Clamp(g.Latitude, -85.0511287798066,
+                        85.0511287798066) * Math.PI / 180d;
+                    var sine = Math.Sin(lat);
+                    return ((g.Longitude + 180d) / 360d * scale,
+                        (0.5d - Math.Log((1 + sine) / (1 - sine)) /
+                            (4d * Math.PI)) * scale);
+                }
+
+                var pixelWorld = 512d * Math.Pow(2d, 1.1d);
+                for (var i = 0; i < atWorldZoom.Count; i++)
+                for (var j = i + 1; j < atWorldZoom.Count; j++)
+                {
+                    var a = Mercator(atWorldZoom[i], 1.1);
+                    var b = Mercator(atWorldZoom[j], 1.1);
+                    var horizontal = Math.Abs(a.X - b.X);
+                    horizontal = Math.Min(horizontal, pixelWorld - horizontal);
+                    var vertical = a.Y - b.Y;
+                    if (Math.Sqrt(horizontal * horizontal + vertical * vertical) <
+                        GpsGeographicClusterer.MinimumMarkerSpacingPixels - .01)
+                        throw new Exception("World-scale GPS markers overlap on the initial frame.");
+                }
+                var dateLinePhotos = new[] {
+                    new GpsPhotoPosition(800001, 35.1, 179.995),
+                    new GpsPhotoPosition(800002, 35.1, -179.995),
+                    new GpsPhotoPosition(800003, 35.1, 20)
+                };
+                var dateLineClusters = GpsGeographicClusterer.Cluster(
+                    dateLinePhotos, 5);
+                if (dateLineClusters.Count != 2 ||
+                    !dateLineClusters.Any(g => g.ImageIds.Count == 2 &&
+                        g.ImageIds.Contains(800001) && g.ImageIds.Contains(800002)) ||
+                    !dateLineClusters.Any(g => g.ImageIds.Count == 1 &&
+                        g.ImageIds[0] == 800003 && g.Latitude == 35.1 &&
+                        g.Longitude == 20))
+                    throw new Exception("GPS dateline merge or singleton original coordinates broken.");
                 Console.WriteLine(
-                    "PASS: GPS initial extent camera-fit handshake and 16,000-photo low-zoom projection.");
+                    "PASS: GPS first-frame 16,000-photo cluster spacing, photo membership and dateline.");
 
                 // Provider-neutral map click must resolve real photo IDs in
                 // the existing WPF filmstrip, never just zoom without photos.
