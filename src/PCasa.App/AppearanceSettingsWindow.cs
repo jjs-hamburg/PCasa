@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -22,7 +23,6 @@ public sealed class AppearanceSettingsWindow : Window
     private readonly Dictionary<string, Border> _textureFrames = new(StringComparer.OrdinalIgnoreCase);
     private readonly StackPanel _textureItems = new() { Orientation = Orientation.Horizontal };
     private readonly ScrollViewer _textureStrip = new();
-    private readonly Action<Window> _showLegend;
     private string? _texture;
 
     public AppearanceDialogValues Values { get; private set; }
@@ -36,11 +36,10 @@ public sealed class AppearanceSettingsWindow : Window
     public Button ConfirmButton { get; } = new();
     public Button CancelButton { get; } = new();
 
-    public AppearanceSettingsWindow(AppearanceDialogValues values, Action<Window> showLegend)
+    public AppearanceSettingsWindow(AppearanceDialogValues values)
     {
         Values = values;
         _texture = values.Texture;
-        _showLegend = showLegend;
         Title = "PCasa – " + UiLanguage.T("Darstellung");
         Width = 1000;
         // Shrink-wrap the options instead of leaving a large fixed-height
@@ -174,24 +173,58 @@ public sealed class AppearanceSettingsWindow : Window
         Radio(statusRow, "status", "Problems", "Nur Aktivität und Probleme", values.FolderStatus);
         Radio(statusRow, "status", "None", "Nie anzeigen", values.FolderStatus);
         folder.Children.Add(statusRow);
-        // Small inline legend link INSIDE the status section; no 3D button.
-        var legend = new TextBlock
+        // Permanent compact legend. The same status semantics as the
+        // folder tree; distinguish statuses by GLYPH, not by color alone.
+        // Two columns keep it legible without growing the dialog width.
+        var statusLegend = new StackPanel
+        {
+            Margin = new Thickness(1, 5, 0, 0)
+        };
+        statusLegend.Children.Add(new TextBlock
         {
             Text = UiLanguage.T("Legende"),
             FontSize = 11,
-            TextDecorations = TextDecorations.Underline,
-            Cursor = Cursors.Hand,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 1, 2, 0),
-            ToolTip = UiLanguage.T("Ordnerstatus-Legende")
-        };
-        legend.SetResourceReference(TextBlock.ForegroundProperty, "PcasaAccentBrush");
-        legend.MouseLeftButtonUp += (_, e) =>
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 2)
+        });
+        var legendGrid = new UniformGrid { Columns = 2 };
+        foreach (var (symbol, description, pending) in new[]
         {
-            _showLegend(this);
-            e.Handled = true;
-        };
-        folder.Children.Add(legend);
+            ("✓", "Abgeschlossen", false),
+            ("↻", "Wird aktualisiert", false),
+            ("◷", "Ausstehend", false),
+            ("⊘", "Nicht erreichbar", false),
+            ("!", "Fehler", false),
+            ("?", "Unbekannt", false),
+            ("●", "Offene Tag-Aufträge", true)
+        })
+        {
+            var item = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Height = 19,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var glyph = new TextBlock
+            {
+                Text = symbol, Width = 19, FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            if (pending)
+                glyph.SetResourceReference(TextBlock.ForegroundProperty,
+                    "PcasaDeleteIconBrush");
+            item.Children.Add(glyph);
+            item.Children.Add(new TextBlock
+            {
+                Text = UiLanguage.T(description),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            legendGrid.Children.Add(item);
+        }
+        statusLegend.Children.Add(legendGrid);
+        folder.Children.Add(statusLegend);
 
         var footer = new DockPanel { Margin = new Thickness(1, 9, 1, 0), LastChildFill = false };
         Grid.SetRow(footer, 2);

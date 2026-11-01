@@ -8,25 +8,6 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
-    private void ShowFolderStatusLegend(System.Windows.Window owner)
-    {
-        System.Windows.MessageBox.Show(
-            owner,
-            UiLanguage.T("✓  Bekanntes Material vollständig verarbeitet") + "\n" +
-            UiLanguage.T("↻  Aktualisierung läuft") + "\n" +
-            UiLanguage.T("◷  Aktualisierung steht aus") + "\n" +
-            UiLanguage.T("⊘  Ordner vorübergehend nicht erreichbar") + "\n" +
-            UiLanguage.T("!  Fehler bei der Aktualisierung") + "\n" +
-            UiLanguage.T("?  Prüfstatus noch unbekannt") + "\n\n" +
-            UiLanguage.T("Die Formen unterscheiden die Zustände unabhängig von den Farben. " +
-                "Ein Häkchen erscheint nur nach bestätigtem abgeschlossenem Scan.") + "\n" +
-            UiLanguage.T("Im Modus 'Nur Aktivität und Probleme' sind Häkchen ausgeblendet.") + "\n" +
-            UiLanguage.T("Der rote Punkt zeigt unabhängig davon noch offene Tag-Schreibvorgänge."),
-            UiLanguage.T("PCasa – Ordnerstatus"),
-            System.Windows.MessageBoxButton.OK,
-            System.Windows.MessageBoxImage.Information);
-    }
-
     private readonly FolderScanStatusTracker _folderScanStatuses = new();
 
     private FolderTreeTag CreateFolderTreeTag(string path, long? photoFolderId)

@@ -425,7 +425,7 @@ public partial class MainWindow
             _viewerSettings.SequenceScope.ToString(),
             _appearance.ThumbnailFilenameFontSize is 10 or 12 or 14
                 ? _appearance.ThumbnailFilenameFontSize : 10);
-        var dialog = new AppearanceSettingsWindow(current, ShowFolderStatusLegend)
+        var dialog = new AppearanceSettingsWindow(current)
         {
             Owner = this
         };

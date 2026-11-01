@@ -114,11 +114,14 @@ internal static class Program
                     r.GroupName == "Appearance_caption").Select(r => r.Tag?.ToString())
                     .SequenceEqual(new[] { "10", "12", "14" }))
                     throw new Exception("Caption font-size choices were lost or reordered.");
-                if (Descendants<Button>(contentIn(status)).Any(b =>
-                        Equals(b.Content, "Ordnerstatus-Legende")) ||
+                var statusSymbols = Descendants<TextBlock>(contentIn(status))
+                    .Where(b => b.Text is "✓" or "↻" or "◷" or "⊘" or "!" or "?" or "●")
+                    .Select(b => b.Text).ToArray();
+                if (Descendants<Button>(contentIn(status)).Any() ||
                     !Descendants<TextBlock>(contentIn(status)).Any(b =>
-                        b.Text == "Legende" && b.TextDecorations.Count > 0))
-                    throw new Exception("Folder status legend must be a compact inline text link.");
+                        b.Text == "Legende") ||
+                    !statusSymbols.SequenceEqual(new[] { "✓", "↻", "◷", "⊘", "!", "?", "●" }))
+                    throw new Exception("Folder status must display all seven legend symbols permanently, without a button.");
 
                 Rect BoundsIn(FrameworkElement e) =>
                     e.TransformToAncestor(dlg).TransformBounds(new Rect(
@@ -133,7 +136,7 @@ internal static class Program
                 // The radio/check values are still owned by the existing
                 // detached snapshot; this is presentation-only.
             }, false);
-            Console.WriteLine("PASS: Compact appearance layout, filename card, theme order and inline legend.");
+            Console.WriteLine("PASS: Compact appearance layout, filename card, theme order and permanent symbol legend.");
             ConfigureAppearance(dlg => dlg.TooltipsCheck.IsChecked = false, false);
             // Options belongs to the main-menu level, rather than being
             // nested under the legacy Options dropdown.
@@ -642,8 +645,18 @@ internal static class Program
                     Math.Abs(((control as Control)?.FontSize ?? 12) - 12) > .1)
                     throw new Exception("All toolbar controls must be 27px high at 12pt: " + control.Name);
             }
+            var searchMagnifier = window.FindName("SearchMagnifierFrame") as Border
+                ?? throw new Exception("Magnifier must be outside and immediately before the search field.");
+            if (searchMagnifier.Child is not Grid magnifierContent ||
+                !Descendants<ContentControl>(magnifierContent).Any() ||
+                !ReferenceEquals(searchMagnifier.Parent, (searchField.Parent as Grid)?.Parent) ||
+                ((StackPanel)searchMagnifier.Parent).Children.IndexOf(searchMagnifier) + 1 !=
+                    ((StackPanel)searchMagnifier.Parent).Children.IndexOf((Grid)searchField.Parent))
+                throw new Exception("Search magnifier must precede the search input in the same compact row.");
             if (Math.Abs(sortButton.Width - 145) > .1 ||
-                Math.Abs(searchField.ActualWidth - 180) > 1 ||
+                Math.Abs(searchField.Parent is Grid sg ? sg.ActualWidth - 149 : 1000) > 1 ||
+                Math.Abs(searchMagnifier.ActualWidth + searchMagnifier.Margin.Right +
+                    ((Grid)searchField.Parent).ActualWidth - 180) > 1 ||
                 items.Any(item => Math.Abs(item.Margin.Right - 20) > .01) ||
                 Math.Abs(whatLabel.FontSize - 12) > .1 ||
                 Math.Abs(whereLabel.FontSize - 12) > .1)
@@ -1657,6 +1670,14 @@ internal static class Program
                 ?? throw new Exception("Viewer scroller missing.");
             var viewerImage = (Image?)window.FindName("PhotoViewerImage")
                 ?? throw new Exception("Viewer image missing.");
+            var viewerPanelGrid = (Grid)panel;
+            var comparisonPanel = (Grid?)window.FindName("ComparisonPanel")
+                ?? throw new Exception("Comparison panel missing.");
+            var galleryViewerBackground = ((ScrollViewer)window.FindName("BrowseScrollViewer")!).Background;
+            if (!ReferenceEquals(viewerPanelGrid.Background, galleryViewerBackground) ||
+                !ReferenceEquals(comparisonPanel.Background, galleryViewerBackground))
+                throw new Exception("Viewer and comparison empty areas must use the real gallery background.");
+            Console.WriteLine("PASS: Viewer and comparison use gallery background without fixed black bars.");
             try
             {
                 viewerOpenField.SetValue(window, true);
