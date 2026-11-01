@@ -372,6 +372,7 @@ public partial class MainWindow
             !UiLanguage.IsSupported(code)) return;
         _appearance.Language = code;
         UiLanguage.Current.Select(code);
+        QueueMainMenuCaptionSizing();
         SyncLanguageMenu();
         SaveAppearance();
     }

@@ -413,7 +413,7 @@
             </Grid.RowDefinitions>
             <Border Grid.Row="0" MinHeight="42"
                     Background="{DynamicResource PcasaTopBrush}">
-                <Menu x:Name="MainMenu" Background="Transparent"
+                <Menu x:Name="MainMenu" Loaded="MainMenu_Loaded" Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
                       VerticalAlignment="Center"
                       Padding="13,0,0,0">
