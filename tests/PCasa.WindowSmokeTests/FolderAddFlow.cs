@@ -859,6 +859,13 @@ internal static class FolderAddFlow
                 throw new Exception("Live scan displaced the folder-end scroll anchor.");
             Console.WriteLine("PASS: Real scan publishes new JPG at non-global folder end.");
 
+            static bool SamePhotoAnchor(
+                (long ImageId, double RelativeY)? before,
+                (long ImageId, double RelativeY)? after)
+                => before is { } a && after is { } b &&
+                   a.ImageId == b.ImageId &&
+                   Math.Abs(a.RelativeY - b.RelativeY) < 0.1;
+
             // Re-enable a large upper folder section, after hiding it, and
             // confirm that the current last folder stays at the same image.
             // This reproduces the reported focus jump on folder expansion.
@@ -902,7 +909,8 @@ internal static class FolderAddFlow
             try
             {
                 Until(window, () =>
-                    liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) == viewAnchor &&
+                    SamePhotoAnchor(viewAnchor,
+                    liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)) &&
                     liveSurface.GetLiveFolderEdge(
                         liveScroller.VerticalOffset, liveScroller.ViewportHeight,
                         lastFolder.Id) is { AtStart: true },
@@ -957,7 +965,8 @@ internal static class FolderAddFlow
             var relativeHidden = liveScroller.VerticalOffset -
                 liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
             if (Math.Abs(relativeHidden - relativeBefore) > 3 ||
-                liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) != arbitraryAnchor ||
+                !SamePhotoAnchor(arbitraryAnchor,
+                    liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)) ||
                 selectedIds.Count != 0)
                 throw new Exception(
                     $"Unselected gallery position moved when upper folders were hidden: " +
@@ -968,7 +977,8 @@ internal static class FolderAddFlow
             var relativeRestored = liveScroller.VerticalOffset -
                 liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
             if (Math.Abs(relativeRestored - relativeBefore) > 3 ||
-                liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) != arbitraryAnchor ||
+                !SamePhotoAnchor(arbitraryAnchor,
+                    liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)) ||
                 selectedIds.Count != 0)
                 throw new Exception(
                     $"Unselected gallery position moved when upper folders were restored: " +

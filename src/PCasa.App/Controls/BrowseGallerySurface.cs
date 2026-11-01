@@ -413,7 +413,9 @@ public sealed class BrowseGallerySurface : FrameworkElement
             if (preferredFolderId == section.Folder.Id)
                 preferred = section;
         }
-        var candidate = preferred ?? atTop ?? intersecting;
+        // Prefer the folder actually under the viewport top. Use the
+        // focused one only when the top folder is being hidden.
+        var candidate = atTop ?? preferred ?? intersecting;
         return candidate is null ? null :
             (candidate.Folder.Id, top - candidate.Top);
     }
