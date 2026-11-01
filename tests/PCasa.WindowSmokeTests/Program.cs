@@ -805,6 +805,11 @@ internal static class Program
                 // previous folder still visible above it. Its section is
                 // not the global ScrollViewer beginning.
                 var secondStart = surface.GetFolderOffset(200)!.Value;
+                // The previous synthetic scroll test deliberately left a
+                // deferred full refresh. Clear it before navigating, or the
+                // test harness would replace its own synthetic index with
+                // the (empty) real test catalog on reaching this live edge.
+                scanDirtyField.SetValue(window, false);
                 scroller.ScrollToVerticalOffset(secondStart - 60);
                 Flush(window);
                 if (scroller.VerticalOffset <= 2 ||
@@ -812,7 +817,12 @@ internal static class Program
                         scroller.VerticalOffset, scroller.ViewportHeight, 200)
                         is not { AtStart: true } ||
                     (bool)scrollDefer.Invoke(window, new object?[] { 200L })!)
-                    throw new Exception("Visible non-global folder start was not live.");
+                    throw new Exception(
+                        $"Visible non-global folder start was not live: " +
+                        $"Start={secondStart:F1}, Offset={scroller.VerticalOffset:F1}, " +
+                        $"Viewport={scroller.ViewportHeight:F1}, " +
+                        $"Edge={surface.GetLiveFolderEdge(scroller.VerticalOffset, scroller.ViewportHeight, 200)}, " +
+                        $"Deferred={scanDirtyField.GetValue(window)}");
 
                 // No first/last row is visible deep inside the large first
                 // folder. Null here means INTERIOR, not an empty gallery.
