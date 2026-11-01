@@ -387,6 +387,37 @@ public sealed class BrowseGallerySurface : FrameworkElement
             section.Folder.Id == photoFolderId)?.Bottom;
     }
 
+    // Folder visibility changes preserve the viewport's LOCAL coordinate
+    // inside a surviving folder. Unlike an image anchor this also works in
+    // headers, between thumbnail rows, and with no image selected.
+    // Ignore folders about to be hidden BEFORE their layout disappears.
+    public (long FolderId, double RelativeTop)? CaptureVisibilityPosition(
+        double viewportTop, double viewportHeight,
+        IReadOnlySet<long> newHiddenFolderIds, long? preferredFolderId = null)
+    {
+        EnsureLayout();
+        var top = Math.Max(0, viewportTop);
+        var bottom = top + Math.Max(1, viewportHeight);
+        SectionLayout? intersecting = null;
+        SectionLayout? atTop = null;
+        SectionLayout? preferred = null;
+        foreach (var section in _sections)
+        {
+            if (newHiddenFolderIds.Contains(section.Folder.Id))
+                continue;
+            if (section.Bottom < top || section.Top > bottom)
+                continue;
+            intersecting ??= section;
+            if (section.Top <= top && top < section.Bottom)
+                atTop = section;
+            if (preferredFolderId == section.Folder.Id)
+                preferred = section;
+        }
+        var candidate = preferred ?? atTop ?? intersecting;
+        return candidate is null ? null :
+            (candidate.Folder.Id, top - candidate.Top);
+    }
+
     public double? GetFolderTrailingOffset(long photoFolderId, double viewportHeight)
     {
         EnsureLayout();

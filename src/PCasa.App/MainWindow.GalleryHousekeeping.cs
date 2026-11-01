@@ -214,49 +214,42 @@ public partial class MainWindow
 
     private void UpdateGalleryFolderVisibility(bool preserveGalleryAnchor = true)
     {
-        // Capture the user's exact image and optional folder-start boundary
-        // BEFORE removing sections above it. A shrinking ScrollViewer clamps
-        // the old pixel offset, which is NOT a user navigation.
-        var anchor = preserveGalleryAnchor && _browseInitialized
-            ? CaptureGalleryAnchor() : null;
-        var visibleFolder = BrowseSurface.GetFolderIdAtOffset(
-            BrowseScrollViewer.VerticalOffset + 1);
-        var firstRow = preserveGalleryAnchor && visibleFolder is long folderId
-            ? CurrentGalleryLiveEdge(folderId) : null;
-        var startBoundary = firstRow is { AtStart: true } ? firstRow : null;
-        var navigationVersion = _explicitGalleryNavigationVersion;
-
         IReadOnlySet<long> hidden =
             !string.IsNullOrWhiteSpace(TagSearchBox?.Text)
                 ? new HashSet<long>()
                 : GetGalleryHiddenFolderIds();
 
-        if (!BrowseSurface.SetHiddenFolders(hidden) || anchor is not { } image)
+        // Save the *folder-relative viewport pixel*, independent of image
+        // selection, before the old layout is invalidated. This captures
+        // arbitrary rows, headers and gaps, not just a live folder edge.
+        var position = preserveGalleryAnchor && _browseInitialized
+            ? BrowseSurface.CaptureVisibilityPosition(
+                BrowseScrollViewer.VerticalOffset,
+                Math.Max(1, BrowseScrollViewer.ViewportHeight),
+                hidden, _activePhotoFolderId)
+            : null;
+        if (!BrowseSurface.SetHiddenFolders(hidden))
+            return;
+        if (position is not { } original)
             return;
 
-        // The current visibility operation replaces any earlier pending scan
-        // anchor; otherwise a stale image can win the later WPF reflow.
-        _pendingGalleryAnchor = image;
+        // One synchronous geometry update and position restoration. Do not
+        // queue a second Loaded-priority image restore: it can scroll into
+        // another folder after the first frame has already been painted.
+        var revision = ++_galleryLayoutRestoreRevision;
+        _pendingGalleryAnchor = null;
         _restoringGalleryLayoutAnchor = true;
         BrowseScrollViewer.UpdateLayout();
-        RestorePendingGalleryAnchor();
-        if (startBoundary is { } start)
-            FollowGalleryFolderEdge(start.FolderId, true, start.StartScreenY);
-
-        // WPF can post a second extent correction after layout. Restore once
-        // more using the SAME pre-change identity, unless the user has
-        // deliberately navigated in the meantime.
-        _ = Dispatcher.BeginInvoke(new Action(() =>
+        if (BrowseSurface.GetFolderOffset(original.FolderId) is double newStart)
+            BrowseScrollViewer.ScrollToVerticalOffset(
+                Math.Max(0, newStart + original.RelativeTop));
+        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+            Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        _ = Dispatcher.BeginInvoke(() =>
         {
-            if (Dispatcher.HasShutdownStarted ||
-                navigationVersion != _explicitGalleryNavigationVersion)
-                return;
-            _pendingGalleryAnchor = image;
-            RestorePendingGalleryAnchor();
-            if (startBoundary is { } boundary)
-                FollowGalleryFolderEdge(boundary.FolderId, true,
-                    boundary.StartScreenY);
-        }), DispatcherPriority.Loaded);
+            if (revision == _galleryLayoutRestoreRevision)
+                _restoringGalleryLayoutAnchor = false;
+        }, DispatcherPriority.ContextIdle);
     }
 
     private static void GatherCollapsedPaths(TreeViewItem item, List<string> paths)

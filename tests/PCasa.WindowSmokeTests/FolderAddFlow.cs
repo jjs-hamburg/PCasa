@@ -913,6 +913,55 @@ internal static class FolderAddFlow
                 focusedFolder != lastFolder.Id)
                 throw new Exception("Re-expanding upper folders changed the active folder.");
             Console.WriteLine("PASS: Hiding/revealing folders above the viewport preserves photo and folder focus.");
+
+            // Regression from the real library: with NO selected picture,
+            // hiding folders above an arbitrary position inside a very large
+            // folder must retain the same folder-relative pixel coordinate.
+            // The previous image-only/edge-only restore could jump to the
+            // middle of the folder as the global ScrollViewer extent shrank.
+            var selectionField = typeof(PCasa.App.MainWindow).GetField(
+                "_selectedImageIds", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var selectedIds = (HashSet<long>)selectionField.GetValue(window)!;
+            selectedIds.Clear();
+            liveSurface.SetSelection(selectedIds);
+            var folderHeight = liveSurface.GetFolderBottomOffset(lastFolder.Id)!.Value -
+                liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
+            var insideOffset = Math.Min(135d,
+                Math.Max(38d, folderHeight - liveScroller.ViewportHeight - 24d));
+            liveScroller.ScrollToVerticalOffset(
+                liveSurface.GetFolderOffset(lastFolder.Id)!.Value + insideOffset);
+            Until(window, () =>
+                liveScroller.VerticalOffset >=
+                liveSurface.GetFolderOffset(lastFolder.Id)!.Value + 30,
+                "Cannot position an unselected arbitrary interior photo row.");
+            var relativeBefore = liveScroller.VerticalOffset -
+                liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
+            var arbitraryAnchor = liveSurface.CaptureImageAnchor(
+                liveScroller.VerticalOffset);
+            upperRoot.IsExpanded = false;
+            Until(window, () => liveSurface.GetFolderOffset(later.Id) is null,
+                "Collapsing upper folders did not remove their photo section.");
+            var relativeHidden = liveScroller.VerticalOffset -
+                liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
+            if (Math.Abs(relativeHidden - relativeBefore) > 3 ||
+                liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) != arbitraryAnchor ||
+                selectedIds.Count != 0)
+                throw new Exception(
+                    $"Unselected gallery position moved when upper folders were hidden: " +
+                    $"Before={relativeBefore:F2}, After={relativeHidden:F2}");
+            upperRoot.IsExpanded = true;
+            Until(window, () => liveSurface.GetFolderOffset(later.Id) is not null,
+                "Expanding upper folders did not restore their photo section.");
+            var relativeRestored = liveScroller.VerticalOffset -
+                liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
+            if (Math.Abs(relativeRestored - relativeBefore) > 3 ||
+                liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) != arbitraryAnchor ||
+                selectedIds.Count != 0)
+                throw new Exception(
+                    $"Unselected gallery position moved when upper folders were restored: " +
+                    $"Before={relativeBefore:F2}, After={relativeRestored:F2}");
+            Console.WriteLine(
+                "PASS: Unselected arbitrary interior position survives hiding and restoring upper folders.");
             settings.GetType().GetProperty("HideCollapsedFolders")!
                 .SetValue(settings, false);
             updateVisibility.Invoke(window, [true]);
