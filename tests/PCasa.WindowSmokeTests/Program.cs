@@ -1898,7 +1898,10 @@ internal static class Program
                 // at its old zoom, overpainting Europe with black marker
                 // borders until a manual zoom forced a fresh projection.
                 var parseGpsMessage = viewerType.GetMethod(
-                    "ParseGpsJavascriptMessage", reflectFlags)!;
+                    "ParseGpsJavascriptMessage",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Static)
+                    ?? throw new Exception("Static GPS bridge parser missing.");
                 const string fitAckJson =
                     "{\"type\":\"gps-fit-ready\",\"version\":47,\"zoom\":1.25}";
                 var fitAck = parseGpsMessage.Invoke(null, new object[] { fitAckJson })
