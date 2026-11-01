@@ -754,7 +754,7 @@
                             <Button x:Name="FolderExpandAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Alle Ordner aufklappen'}" Click="FolderExpandAll_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
-                                    <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round" />
+                                    <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" />
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                 </Canvas></Viewbox>
@@ -762,7 +762,7 @@
                             <Button x:Name="FolderCollapseAllButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Alle Ordner zuklappen'}" Click="FolderCollapseAll_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Rectangle Canvas.Left="7" Canvas.Top="1" Width="9" Height="6" RadiusX="1.1" RadiusY="1.1" Fill="#36ADFF"/>
-                                    <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="#F0F0F0" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
+                                    <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                     <ContentControl Canvas.Left="12.2" Canvas.Top="10"
@@ -773,7 +773,7 @@
                             <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Expand / Compress'}" Click="FolderTreeToggle_Click">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
                                     <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
-                                    <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="#F0F0F0" StrokeThickness="1.9" Fill="Transparent"/>
+                                    <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9" Fill="Transparent"/>
                                     <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>

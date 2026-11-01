@@ -43,9 +43,12 @@ public sealed class AppearanceSettingsWindow : Window
         _showLegend = showLegend;
         Title = "PCasa – " + UiLanguage.T("Darstellung");
         Width = 1000;
-        Height = 656;
+        // Shrink-wrap the options instead of leaving a large fixed-height
+        // blank strip before the footer. On small screens the existing
+        // ScrollViewer takes over.
+        SizeToContent = SizeToContent.Height;
+        MaxHeight = Math.Max(430, SystemParameters.WorkArea.Height - 70);
         MinWidth = 830;
-        MinHeight = 550;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
         SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
@@ -73,12 +76,25 @@ public sealed class AppearanceSettingsWindow : Window
         var groups = new Grid();
         groups.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.23, GridUnitType.Star) });
         groups.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        groups.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        groups.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        groups.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        // Independent vertical columns avoid the unused vertical bands caused
+        // by aligning unlike-sized cards into three shared grid rows.
+        var left = new StackPanel();
+        var right = new StackPanel();
+        Grid.SetColumn(left, 0);
+        Grid.SetColumn(right, 1);
+        groups.Children.Add(left);
+        groups.Children.Add(right);
         outerScroll.Content = groups;
 
-        var background = Section(groups, 0, 0, "Galeriehintergrund");
+        // The approved order: Design ABOVE gallery background.
+        var theme = Section(left, "Design");
+        var themeRow = new StackPanel { Orientation = Orientation.Horizontal };
+        Radio(themeRow, "theme", "Light", "Hell", values.Theme);
+        Radio(themeRow, "theme", "Dark", "Dunkel", values.Theme);
+        Radio(themeRow, "theme", "System", "System", values.Theme);
+        theme.Children.Add(themeRow);
+
+        var background = Section(left, "Galeriehintergrund");
         foreach (var option in new[]
         {
             ("Auto", "Standard (zum Design)"),
@@ -124,50 +140,57 @@ public sealed class AppearanceSettingsWindow : Window
         background.Children.Add(stripRow);
         PopulateTextures();
 
-        var options = Section(groups, 0, 1, "Galerieoptionen");
+        // One filename card owns all three choices, including the font sizes.
+        var names = Section(left, "Dateinamen");
+        AddCheck(names, FileNamesCheck, "Dateinamen unter Thumbnails", values.FileNames);
+        AddCheck(names, BoldFileNamesCheck, "Dateinamen fett", values.BoldFileNames);
+        names.Children.Add(new TextBlock
+        {
+            Text = UiLanguage.T("Schriftgröße"), FontSize = 11,
+            Margin = new Thickness(0, 5, 0, 2)
+        });
+        var captionRow = new StackPanel { Orientation = Orientation.Horizontal };
+        Radio(captionRow, "caption", "10", "Standard (10)", values.CaptionSize.ToString());
+        Radio(captionRow, "caption", "12", "Größer (12)", values.CaptionSize.ToString());
+        Radio(captionRow, "caption", "14", "Sehr groß (14)", values.CaptionSize.ToString());
+        names.Children.Add(captionRow);
+
+        var options = Section(right, "Galerieoptionen");
         AddCheck(options, RestorePositionCheck, "Galerieposition beim Start wiederherstellen", values.RestorePosition);
         AddCheck(options, HideCollapsedCheck, "Eingeklappte Ordner in Galerie ausblenden", values.HideCollapsed);
-        AddCheck(options, FileNamesCheck, "Dateinamen unter Thumbnails", values.FileNames);
-        AddCheck(options, BoldFileNamesCheck, "Dateinamen fett", values.BoldFileNames);
         AddCheck(options, ShadowsCheck, "Thumbnail-Schatten", values.Shadows);
         AddCheck(options, IconsCheck, "GPS-, Tag- und RAW-Symbole", values.Icons);
         AddCheck(options, TooltipsCheck, "Tooltips", values.Tooltips);
 
-        var caption = Section(groups, 1, 0, "Schriftgröße der Bildunterschriften");
-        var captionRow = new StackPanel { Orientation = Orientation.Horizontal };
-        Radio(captionRow, "caption", "10", "Bisher (10)", values.CaptionSize.ToString());
-        Radio(captionRow, "caption", "12", "Größer (12)", values.CaptionSize.ToString());
-        Radio(captionRow, "caption", "14", "Sehr groß (14)", values.CaptionSize.ToString());
-        caption.Children.Add(captionRow);
-
-        var sequence = Section(groups, 1, 1, "Bildfolge (Betrachter / Slideshow)");
+        var sequence = Section(right, "Bildfolge (Betrachter / Slideshow)");
         var seqRow = new StackPanel { Orientation = Orientation.Horizontal };
         Radio(seqRow, "sequence", "CurrentFolder", "Aktueller Ordner", values.SequenceScope);
         Radio(seqRow, "sequence", "Gallery", "Galerieansicht", values.SequenceScope);
         sequence.Children.Add(seqRow);
 
-        // Retain the existing theme and folder-status functionality rather
-        // than silently removing appearance settings from PCasa.
-        var theme = Section(groups, 2, 0, "Design");
-        var themeRow = new StackPanel { Orientation = Orientation.Horizontal };
-        Radio(themeRow, "theme", "Light", "Hell", values.Theme);
-        Radio(themeRow, "theme", "Dark", "Dunkel", values.Theme);
-        Radio(themeRow, "theme", "System", "System", values.Theme);
-        theme.Children.Add(themeRow);
-
-        var folder = Section(groups, 2, 1, "Ordnerstatus");
+        var folder = Section(right, "Ordnerstatus");
         var statusRow = new WrapPanel { Orientation = Orientation.Horizontal };
         Radio(statusRow, "status", "Always", "Immer anzeigen", values.FolderStatus);
         Radio(statusRow, "status", "Problems", "Nur Aktivität und Probleme", values.FolderStatus);
         Radio(statusRow, "status", "None", "Nie anzeigen", values.FolderStatus);
         folder.Children.Add(statusRow);
-        var legend = new Button
+        // Small inline legend link INSIDE the status section; no 3D button.
+        var legend = new TextBlock
         {
-            Content = UiLanguage.T("Ordnerstatus-Legende"), MinHeight = 25,
-            Padding = new Thickness(7, 3, 7, 3), Margin = new Thickness(0, 4, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left
+            Text = UiLanguage.T("Legende"),
+            FontSize = 11,
+            TextDecorations = TextDecorations.Underline,
+            Cursor = Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 1, 2, 0),
+            ToolTip = UiLanguage.T("Ordnerstatus-Legende")
         };
-        legend.Click += (_, _) => _showLegend(this);
+        legend.SetResourceReference(TextBlock.ForegroundProperty, "PcasaAccentBrush");
+        legend.MouseLeftButtonUp += (_, e) =>
+        {
+            _showLegend(this);
+            e.Handled = true;
+        };
         folder.Children.Add(legend);
 
         var footer = new DockPanel { Margin = new Thickness(1, 9, 1, 0), LastChildFill = false };
@@ -200,7 +223,7 @@ public sealed class AppearanceSettingsWindow : Window
         footer.Children.Add(ConfirmButton);
     }
 
-    private static StackPanel Section(Grid grid, int row, int column, string label)
+    private static StackPanel Section(Panel parent, string label)
     {
         var outer = new StackPanel { Margin = new Thickness(10, 7, 10, 8) };
         outer.Children.Add(new TextBlock
@@ -219,9 +242,7 @@ public sealed class AppearanceSettingsWindow : Window
         };
         frame.SetResourceReference(Border.BorderBrushProperty, "PcasaDividerBrush");
         frame.SetResourceReference(Border.BackgroundProperty, "PcasaPanelAltBrush");
-        Grid.SetRow(frame, row);
-        Grid.SetColumn(frame, column);
-        grid.Children.Add(frame);
+        parent.Children.Add(frame);
         return inner;
     }
 

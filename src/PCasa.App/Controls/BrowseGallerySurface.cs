@@ -766,11 +766,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 var cellX = ImageColumnLeft(section, column);
                 var cellY = section.ImagesTop + section.RowOffsets[row];
                 var box = new Rect(cellX, cellY, _thumbnailWidth, section.RowImageHeights[row]);
+                // The row determines the maximum thumbnail height, but each
+                // individual caption follows its OWN photo lower edge.
+                // Metadata supplies stable geometry before thumbnails load.
+                var imageRect = FitInto(box, entry.PixelWidth, entry.PixelHeight);
                 if (_pageCache is not null &&
                     _pageCache.TryGet(imageIndex, out var bitmap) &&
                     bitmap is not null)
                 {
-                    var imageRect = FitInto(box, bitmap.PixelWidth, bitmap.PixelHeight);
+                    imageRect = FitInto(box, bitmap.PixelWidth, bitmap.PixelHeight);
 
                     if (_showShadows)
                     {
@@ -797,15 +801,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
                         CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                         _boldFileNames ? BoldFilenameTypeface : RegularFilenameTypeface, _filenameFontSize, _mutedBrush, pixelsPerDip)
                     {
-                        // Portraits and landscapes share the full column
-                        // width and the same reserved caption row.
+                        // Text width stays column-aligned, but the baseline
+                        // belongs to the individual image, as in Picasa.
                         MaxTextWidth = Math.Max(1, _thumbnailWidth),
                         MaxTextHeight = FileLabelHeight,
                         Trimming = TextTrimming.CharacterEllipsis
                     };
                     drawingContext.DrawText(caption,
                         new Point(cellX + (_thumbnailWidth - caption.Width) / 2,
-                                  box.Bottom + 4));
+                                  CaptionTop(imageRect)));
                 }
             }
         }
@@ -840,8 +844,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var left = Math.Clamp(
             ImageColumnLeft(section, column) + (_thumbnailWidth - width) / 2,
             8, Math.Max(8, ActualWidth - width - 8));
-        var captionY = section.ImagesTop + section.RowOffsets[row] +
-            section.RowImageHeights[row] + 3;
+        var imageBox = new Rect(
+            ImageColumnLeft(section, column),
+            section.ImagesTop + section.RowOffsets[row],
+            _thumbnailWidth, section.RowImageHeights[row]);
+        var imageRect = FitInto(imageBox, entry.PixelWidth, entry.PixelHeight);
+        if (_pageCache is not null && _pageCache.TryGet(index, out var cached) &&
+            cached is not null)
+            imageRect = FitInto(imageBox, cached.PixelWidth, cached.PixelHeight);
+        var captionY = CaptionTop(imageRect) - 1;
         var height = full.Height + 8;
         var viewportStart = Math.Max(0, _viewportTop + 2);
         var top = Math.Clamp(captionY, viewportStart,
@@ -1186,6 +1197,11 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
         _ = Dispatcher.BeginInvoke(InvalidateVisual);
     }
+
+    // Shared by the caption and its full-name hover overlay.
+    // Position is relative to the photographed image, never the tallest
+    // different photo in that row.
+    private static double CaptionTop(Rect imageRect) => imageRect.Bottom + 4;
 
     private static Rect FitInto(Rect box, int pixelWidth, int pixelHeight)
     {

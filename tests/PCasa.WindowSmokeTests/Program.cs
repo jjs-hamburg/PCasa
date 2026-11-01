@@ -89,6 +89,51 @@ internal static class Program
                     Descendants<RadioButton>(dlg).Single(button =>
                         button.GroupName == "Appearance_" + group &&
                         Equals(button.Tag, choice)).IsChecked = true);
+            ConfigureAppearance(dlg =>
+            {
+                var cards = Descendants<Border>(dlg).Where(b =>
+                    b.Child is StackPanel group &&
+                    group.Children.Count >= 2 &&
+                    group.Children[0] is TextBlock title &&
+                    title.FontWeight == FontWeights.SemiBold)
+                    .ToDictionary(b => ((TextBlock)((StackPanel)b.Child).Children[0]).Text);
+                if (!cards.TryGetValue("Design", out var design) ||
+                    !cards.TryGetValue("Galeriehintergrund", out var background) ||
+                    !cards.TryGetValue("Dateinamen", out var names) ||
+                    !cards.TryGetValue("Galerieoptionen", out var options) ||
+                    !cards.TryGetValue("Ordnerstatus", out var status))
+                    throw new Exception("Reorganized appearance groups are missing.");
+                var contentIn = (Border b) => (StackPanel)((StackPanel)b.Child).Children[1];
+                if (!Descendants<CheckBox>(contentIn(names)).Contains(dlg.FileNamesCheck) ||
+                    !Descendants<CheckBox>(contentIn(names)).Contains(dlg.BoldFileNamesCheck) ||
+                    Descendants<CheckBox>(contentIn(options)).Contains(dlg.FileNamesCheck) ||
+                    !Descendants<RadioButton>(contentIn(names)).Any(r =>
+                        Equals(r.Tag, "10") && Equals(r.Content, "Standard (10)")))
+                    throw new Exception("Filename checkboxes and three sizes need a separate card with Standard.");
+                if (!Descendants<RadioButton>(contentIn(names)).Where(r =>
+                    r.GroupName == "Appearance_caption").Select(r => r.Tag?.ToString())
+                    .SequenceEqual(new[] { "10", "12", "14" }))
+                    throw new Exception("Caption font-size choices were lost or reordered.");
+                if (Descendants<Button>(contentIn(status)).Any(b =>
+                        Equals(b.Content, "Ordnerstatus-Legende")) ||
+                    !Descendants<TextBlock>(contentIn(status)).Any(b =>
+                        b.Text == "Legende" && b.TextDecorations.Count > 0))
+                    throw new Exception("Folder status legend must be a compact inline text link.");
+
+                Rect BoundsIn(FrameworkElement e) =>
+                    e.TransformToAncestor(dlg).TransformBounds(new Rect(
+                        new Point(), e.RenderSize));
+                var d = BoundsIn(design); var bg = BoundsIn(background);
+                if (d.Bottom > bg.Top + 1 || d.Left != bg.Left)
+                    throw new Exception("Design must be directly above gallery background.");
+                var sectionBottom = cards.Values.Max(card => BoundsIn(card).Bottom);
+                var footerTop = BoundsIn(dlg.CancelButton).Top;
+                if (footerTop - sectionBottom > 45 || dlg.SizeToContent != SizeToContent.Height)
+                    throw new Exception("Appearance dialog retained a large blank band before its footer.");
+                // The radio/check values are still owned by the existing
+                // detached snapshot; this is presentation-only.
+            }, false);
+            Console.WriteLine("PASS: Compact appearance layout, filename card, theme order and inline legend.");
             ConfigureAppearance(dlg => dlg.TooltipsCheck.IsChecked = false, false);
             // Options belongs to the main-menu level, rather than being
             // nested under the legacy Options dropdown.
@@ -334,6 +379,25 @@ internal static class Program
                 darkNotText.Color.R < 220)
                 throw new Exception("Dark theme selected labels lost light text.");
             notForColors.IsChecked = false;
+            // Filename captions are placed by the ACTUAL image rect,
+            // not the row's tallest thumbnail. Portrait and panorama in
+            // the same row must therefore have different caption baselines.
+            var fit = typeof(BrowseGallerySurface).GetMethod(
+                "FitInto", System.Reflection.BindingFlags.Static |
+                           System.Reflection.BindingFlags.NonPublic)!;
+            var captionTopMethod = typeof(BrowseGallerySurface).GetMethod(
+                "CaptionTop", System.Reflection.BindingFlags.Static |
+                              System.Reflection.BindingFlags.NonPublic)!;
+            var slot = new Rect(0, 0, 200, 180);
+            var panorama = (Rect)fit.Invoke(null, new object[] { slot, 800, 200 })!;
+            var portrait = (Rect)fit.Invoke(null, new object[] { slot, 200, 800 })!;
+            double CaptionTopFor(Rect box) =>
+                (double)captionTopMethod.Invoke(null, new object[] { box })!;
+            if (Math.Abs(CaptionTopFor(panorama) - panorama.Bottom - 4) > 0.1 ||
+                Math.Abs(CaptionTopFor(portrait) - portrait.Bottom - 4) > 0.1 ||
+                Math.Abs(CaptionTopFor(panorama) - CaptionTopFor(portrait)) < 30)
+                throw new Exception("Filename captions still align on the row baseline.");
+            Console.WriteLine("PASS: Thumbnail captions have an image-relative four-pixel gap.");
             Console.WriteLine("PASS: WAS/WO/NOT active colors match both themes and remain readable.");
 
             // Real menu action must update the one gallery renderer and persist.
@@ -406,6 +470,20 @@ internal static class Program
                 throw new Exception("Gallery search toggle has incorrect text.");
             if (!Equals(notToggle.Content, "NOT"))
                 throw new Exception("Search inversion toggle is not labelled NOT.");
+            foreach (var buttonName in new[]
+            {
+                "FolderExpandAllButton", "FolderCollapseAllButton",
+                "FolderTreeToggleButton"
+            })
+            {
+                var treeButton = (Button)window.FindName(buttonName)!;
+                var textStrokePaths = Descendants<System.Windows.Shapes.Path>(treeButton)
+                    .Where(path => path.Stroke is SolidColorBrush brush &&
+                        brush.Color == ((SolidColorBrush)app.Resources["PcasaTextBrush"]).Color);
+                if (!textStrokePaths.Any())
+                    throw new Exception("Light folder expand icons contain invisible white strokes: " + buttonName);
+            }
+            Console.WriteLine("PASS: Folder expand/collapse symbols use theme-aware strokes.");
             Console.WriteLine("PASS: Sort selector lives only in the search toolbar beside NOT.");
 
             // Main menu and search occupy two PERMANENT rows. The user's
