@@ -41,9 +41,17 @@ class MapStub {
   getLayer(id){return this.layers[id];}
   queryRenderedFeatures(){return [];}
   project(x){return {x:512+x[0]*4,y:325-x[1]*4};}
-  fitBounds(points){this.bounds=points;}
+  fitBounds(points){
+    this.bounds=points;
+    this.zoom=0.85; // Real fit is more zoomed out than the old initial zoom=2.
+    this.emit('moveend');
+  }
   easeTo(value){this.lastEase=value;}
-  jumpTo(value){this.lastJump=value;}
+  jumpTo(value){
+    this.lastJump=value;
+    if(Number.isFinite(value.zoom))this.zoom=value.zoom;
+    this.emit('moveend');
+  }
   getZoom(){return this.zoom;}
   resize(){}
   getCenter(){return {lat:0,lng:0};}
@@ -118,6 +126,23 @@ const worldwide=[
   {id:104,lat:-14,lon:-65,count:1700,selected:true},
   {id:105,lat:17,lon:100,count:1300,selected:true}
 ];
+// A new selection requests the final camera FIRST and receives its exact
+// zoom. There is no more initial projection at the stale default zoom=2.
+const beforeFitMarkers=live().length;
+window.pcasaPrepareGpsExtent(3,-29,-120,49,134);
+assert.ok(activeMap.bounds,'Camera must fit the original photo extent before publication');
+assert.equal(activeMap.getZoom(),0.85);
+assert.ok(messages.some(x=>x.type==='gps-fit-ready' &&
+  x.version===3 && x.zoom===0.85),
+  'Camera-fit acknowledgment must deliver actual world viewport zoom');
+assert.equal(live().length,beforeFitMarkers,
+  'Camera adjustment must not publish any unclustered intermediate markers');
+const fittedBounds=JSON.stringify(activeMap.bounds);
+window.pcasaPrepareGpsExtent(2,0,0,0,0);
+assert.equal(JSON.stringify(activeMap.bounds),fittedBounds,
+  'Stale selection camera-fit request must not recenter a newer map');
+assert.equal(activeMap.lastJump,undefined,
+  'Stale one-position fit must not reset the camera');
 send(3,worldwide,7200,7200,2);
 assert.equal(live().length,5,'World-scale map draws ALL PCasa geographic clusters');
 assert.ok(live().every(m=>m.element.classList.contains('maplibregl-marker')),
@@ -126,10 +151,6 @@ assert.equal(sum(),7200,'All 7200 GPS photos appear in the global cluster counts
 assert.ok(live().some(x=>x.coordinates[0]< -110)&&
   live().some(x=>x.coordinates[0]>130)&&live().some(x=>x.coordinates[0]>0),
   'Locations in three continents survive the transfer');
-window.pcasaFitGpsExtent(3,-29,-120,49,134);
-assert.ok(activeMap.bounds,'Selection fits the actual photo extent');
-window.pcasaFitGpsExtent(2,0,0,0,0);
-assert.equal(activeMap.lastEase,undefined,'Old transfer cannot recenter the map');
 
 const old=live().map(x=>JSON.stringify([...x.coordinates,x.element.textContent]));
 window.pcasaApplyProvider({format:'style',url:'https://example.test/style.json'});
@@ -171,4 +192,4 @@ assert.equal(live().length,0,
   'Changing map provider or zoom must not resurrect old no-selection markers');
 send(9,single,1,1);
 assert.equal(live().length,1,'A new explicit selection restores only its photo');
-console.log('GPS map PASS: 7200 photos, provider-independent cluster markers, click identity, single-photo popup protocol, counted atomic transfers and style switches');
+console.log('GPS map PASS: first fit then cluster at actual camera zoom, stale-fit protection, 7200-photo identity, atomic transfers, clicks and styles');

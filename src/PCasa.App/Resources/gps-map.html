@@ -166,13 +166,15 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  // marker borders until the user manually zoomed in and out.
  // The version belongs to the current WPF selection/query, not to a
  // marker transfer that has not yet begun.
+ let latestFitQueryVersion=-1;
  window.pcasaPrepareGpsExtent=(version,south,west,north,east)=>{
-   if(!Number.isSafeInteger(version)||version<0||
+   if(!Number.isSafeInteger(version)||version<latestFitQueryVersion||version<0||
       !Number.isFinite(south)||!Number.isFinite(west)||
       !Number.isFinite(north)||!Number.isFinite(east)||
       south>north||west>east||
       Math.abs(south)>90||Math.abs(north)>90||
       Math.abs(west)>180||Math.abs(east)>180)return;
+   latestFitQueryVersion=version;
    try {
      map.resize();
      if(south===north&&west===east)
