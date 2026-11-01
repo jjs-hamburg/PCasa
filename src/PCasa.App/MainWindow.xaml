@@ -242,9 +242,8 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!-- Search has two EXCLUSIVE groups plus one independent persistent
-             inversion toggle. Checked state has both a tick and a border:
-             active selection is not communicated through color alone. -->
+        <!-- Exclusive search groups and NOT use the same blue active frame.
+             The redundant check marks are intentionally omitted. -->
         <Style x:Key="PcasaSearchChoiceStyle" TargetType="RadioButton">
             <Setter Property="Height" Value="27"/>
             <Setter Property="FontSize" Value="12"/>
@@ -260,14 +259,8 @@
                         <Border x:Name="ChoiceBorder" CornerRadius="4" BorderThickness="1"
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}">
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                        VerticalAlignment="Center" Margin="{TemplateBinding Padding}">
-                                <ContentPresenter VerticalAlignment="Center"/>
-                                <TextBlock x:Name="SelectedTick" Text="✓" FontSize="10"
-                                           FontWeight="SemiBold" Margin="5,0,0,0"
-                                           Foreground="{TemplateBinding Foreground}"
-                                           Visibility="Collapsed"/>
-                            </StackPanel>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -279,7 +272,6 @@
                                 <Setter TargetName="ChoiceBorder" Property="BorderBrush" Value="{DynamicResource PcasaAccentBrush}"/>
                                 <Setter TargetName="ChoiceBorder" Property="BorderThickness" Value="2"/>
                                 <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
-                                <Setter TargetName="SelectedTick" Property="Visibility" Value="Visible"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Opacity" Value="0.5"/>
@@ -302,13 +294,8 @@
                         <Border x:Name="InvertBorder" CornerRadius="4" BorderThickness="1"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 Background="{TemplateBinding Background}">
-                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
-                                        HorizontalAlignment="Center" Margin="{TemplateBinding Padding}">
-                                <ContentPresenter VerticalAlignment="Center"/>
-                                <TextBlock x:Name="InvertCheck" Text="✓" FontSize="11"
-                                           Margin="5,0,0,0" Visibility="Collapsed"
-                                           Foreground="{TemplateBinding Foreground}"/>
-                            </StackPanel>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
@@ -320,7 +307,6 @@
                                 <Setter TargetName="InvertBorder" Property="BorderThickness" Value="2"/>
                                 <Setter TargetName="InvertBorder" Property="Background" Value="{DynamicResource PcasaSearchActiveBrush}"/>
                                 <Setter Property="Foreground" Value="{DynamicResource PcasaSearchActiveTextBrush}"/>
-                                <Setter TargetName="InvertCheck" Property="Visibility" Value="Visible"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -899,14 +885,15 @@
                                      Unchecked="GalleryRememberPosition_Changed">
                                 <Viewbox Width="20" Height="20" Stretch="Uniform">
                                     <Canvas Width="24" Height="24">
-                                        <Path Data="M 8,3 L 18,9 M 8,3 L 6,10 L 4,13 L 13,19 L 15,14 L 21,11 L 18,9 M 12,16 L 5,23"
+                                        <!-- Recognizable tilted pushpin: head, two tapered shoulders, pointed needle. -->
+                                        <Path Data="M 15,2 L 22,9 L 18,10 L 15,13 L 17,16 L 14,19 L 5,10 L 8,7 L 11,9 L 14,6 Z M 10,15 L 3,22"
                                               Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.1"
                                               StrokeStartLineCap="Round" StrokeLineJoin="Round" Fill="Transparent"/>
                                     </Canvas>
                                 </Viewbox>
                             </primitives:ToggleButton>
                             <Button x:Name="GalleryReturnToRememberedButton"
-                                    Width="30" Height="27" Padding="2" Margin="2,0,7,0"
+                                    Width="30" Height="27" Padding="2" Margin="2,0,2,0"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
                                     ToolTip="{loc:Tr Key='Zur gemerkten Position springen'}"
                                     IsEnabled="False" Click="GalleryReturnToRemembered_Click">
@@ -919,6 +906,20 @@
                                         <Path Data="M 12,1 V 7 M 12,17 V 23 M 1,12 H 7 M 17,12 H 23"
                                               Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"
                                               StrokeStartLineCap="Round"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Button>
+                            <Button x:Name="GalleryReturnToDepartureButton"
+                                    Width="30" Height="27" Padding="2" Margin="2,0,7,0"
+                                    Style="{StaticResource PcasaStatusButtonStyle}"
+                                    ToolTip="{loc:Tr Key='Zur vorherigen Position zurück'}"
+                                    IsEnabled="False" Click="GalleryReturnToDeparture_Click">
+                                <Viewbox Width="20" Height="20" Stretch="Uniform">
+                                    <Canvas Width="24" Height="24">
+                                        <!-- Single U-turn arrow, deliberately distinct from the target symbol. -->
+                                        <Path Data="M 9,6 L 3,12 L 9,18 M 3,12 H 15 Q 21,12 21,18 V 21"
+                                              Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2"
+                                              StrokeStartLineCap="Round" StrokeLineJoin="Round" Fill="Transparent"/>
                                     </Canvas>
                                 </Viewbox>
                             </Button>
@@ -938,13 +939,13 @@
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Einen Ordner höher'}" Tag="PreviousFolder"
                                      Click="GalleryNavigate_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,7 H 10 L 12,9 H 22 V 21 H 2 Z M 12,18 V 10 M 8,14 L 12,10 L 16,14" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,3 H 9 L 12,6 H 22 V 22 H 2 Z M 12,20 V 8 M 7,13 L 12,8 L 17,13" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateNextFolderButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Einen Ordner tiefer'}" Tag="NextFolder"
                                      Click="GalleryNavigate_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,7 H 10 L 12,9 H 22 V 21 H 2 Z M 12,10 V 18 M 8,14 L 12,18 L 16,14" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,3 H 9 L 12,6 H 22 V 22 H 2 Z M 12,8 V 20 M 7,15 L 12,20 L 17,15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateGalleryStartButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"

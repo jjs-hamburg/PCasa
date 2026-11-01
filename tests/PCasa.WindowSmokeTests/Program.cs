@@ -460,8 +460,24 @@ internal static class Program
                 throw new Exception("Property filter must be compact and directly before the unchanged sort/search group.");
             if (window.FindName("GalleryRememberPositionToggle") is not ToggleButton remembered ||
                 window.FindName("GalleryReturnToRememberedButton") is not Button returnToRemembered ||
-                remembered.IsChecked == true || returnToRemembered.IsEnabled)
-                throw new Exception("Two position-bookmark buttons must start inactive.");
+                window.FindName("GalleryReturnToDepartureButton") is not Button returnToDeparture ||
+                remembered.IsChecked == true || returnToRemembered.IsEnabled ||
+                returnToDeparture.IsEnabled)
+                throw new Exception("Three position buttons must start with inactive bookmark/return states.");
+            if (what.Template.FindName("SelectedTick", what) is not null ||
+                where.Template.FindName("SelectedTick", where) is not null ||
+                notToggle.Template.FindName("InvertCheck", notToggle) is not null)
+                throw new Exception("Active WAS/WO/NOT are blue-framed and must not show redundant ticks.");
+            foreach (var action in new[] { "PreviousFolder", "NextFolder" })
+            {
+                var button = (Button)window.FindName(
+                    "GalleryNavigate" + action + "Button")!;
+                var icon = Descendants<System.Windows.Shapes.Path>(button).FirstOrDefault()
+                    ?? throw new Exception("Missing folder navigation icon.");
+                if (icon.Data.Bounds.Height < 18 ||
+                    icon.Data.Bounds.Height > 22)
+                    throw new Exception("Folder navigation icons must match the other navigation icon heights.");
+            }
             if (app.Resources["PcasaButtonDepthBrush"] is not LinearGradientBrush ||
                 app.Resources["PcasaButtonShadow"] is not System.Windows.Media.Effects.DropShadowEffect)
                 throw new Exception("Global 3D button surfaces are missing.");
@@ -842,16 +858,46 @@ internal static class Program
                 throw new Exception("Marked position does not show blue toggle state.");
             scroller.ScrollToTop();
             Flush(window);
+            if (returnToDeparture.IsEnabled)
+                throw new Exception("Back to departure must be disabled before jumping to bookmark.");
+            var departureOffset = scroller.VerticalOffset;
             returnToRemembered.RaiseEvent(new RoutedEventArgs(
                 Button.ClickEvent, returnToRemembered));
             Flush(window);
-            if (Math.Abs(scroller.VerticalOffset - markedOffset) > 3)
-                throw new Exception("Bookmark did not restore original image-relative position.");
+            if (Math.Abs(scroller.VerticalOffset - markedOffset) > 3 ||
+                !returnToDeparture.IsEnabled)
+                throw new Exception("Bookmark jump failed or did not enable return to departure.");
+            returnToDeparture.RaiseEvent(new RoutedEventArgs(
+                Button.ClickEvent, returnToDeparture));
+            Flush(window);
+            if (Math.Abs(scroller.VerticalOffset - departureOffset) > 3 ||
+                returnToDeparture.IsEnabled || !returnToRemembered.IsEnabled ||
+                remembered.IsChecked != true)
+                throw new Exception("Returning to departure failed to restore the origin or consumed bookmark.");
+
+            // A repeated jump must take the NEW departure, not use the old
+            // one or open an unbounded navigation stack.
+            scroller.ScrollToVerticalOffset(1530);
+            Flush(window);
+            var secondOrigin = scroller.VerticalOffset;
+            returnToRemembered.RaiseEvent(new RoutedEventArgs(
+                Button.ClickEvent, returnToRemembered));
+            Flush(window);
+            if (!returnToDeparture.IsEnabled ||
+                Math.Abs(scroller.VerticalOffset - markedOffset) > 3)
+                throw new Exception("Second bookmark jump did not capture a new departure.");
+            returnToDeparture.RaiseEvent(new RoutedEventArgs(
+                Button.ClickEvent, returnToDeparture));
+            Flush(window);
+            if (Math.Abs(scroller.VerticalOffset - secondOrigin) > 3 ||
+                returnToDeparture.IsEnabled)
+                throw new Exception("Return used stale departure instead of second origin.");
+
             remembered.IsChecked = false;
             Flush(window);
-            if (returnToRemembered.IsEnabled)
-                throw new Exception("Clearing bookmark should disable return action.");
-            Console.WriteLine("PASS: Bookmark stores and restores position and clears its blue active state.");
+            if (returnToRemembered.IsEnabled || returnToDeparture.IsEnabled)
+                throw new Exception("Clearing bookmark should disable both return actions.");
+            Console.WriteLine("PASS: Bookmark jump and single-use return correctly restore both origin positions.");
 
             // Real WPF buttons must scroll within the gallery surface, not
             // mutate folder tree selection or move the viewer.
