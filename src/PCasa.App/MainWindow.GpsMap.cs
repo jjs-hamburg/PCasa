@@ -1164,7 +1164,9 @@ public partial class MainWindow
 
     private void GpsGoogle_Click(object sender, RoutedEventArgs e)
     {
-        if (_gpsCurrentCoordinates is not { } gps) return;
+        // One Google Maps URL identifies one photo, never a multi-selection.
+        if (_gpsSelectionCount != 1 || _gpsCurrentCoordinates is not { } gps)
+            return;
         try
         {
             // ShellExecute opens the Windows default EXTERNAL browser.
@@ -1227,8 +1229,9 @@ public partial class MainWindow
     private void UpdateGpsGoogleButton()
     {
         // Keep the existing icon + localized caption from XAML intact.
-        // A multiple selection may open the currently focused photo only.
-        GpsGoogleButton.IsEnabled = _gpsCurrentCoordinates is not null;
+        // External Google Maps receives one position, never a collection.
+        GpsGoogleButton.IsEnabled = _gpsSelectionCount == 1 &&
+            _gpsCurrentCoordinates is not null;
         GpsGoogleButton.ToolTip = UiLanguage.T(
             "Google Maps im Standardbrowser öffnen");
     }
