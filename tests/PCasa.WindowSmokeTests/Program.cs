@@ -1893,6 +1893,61 @@ internal static class Program
                     Flush(window);
                 }
 
+                // A large selected set must fit its camera FIRST, then
+                // cluster at that exact zoom. Previously the map clustered
+                // at its old zoom, overpainting Europe with black marker
+                // borders until a manual zoom forced a fresh projection.
+                var parseGpsMessage = viewerType.GetMethod(
+                    "ParseGpsJavascriptMessage", reflectFlags)!;
+                const string fitAckJson =
+                    "{\"type\":\"gps-fit-ready\",\"version\":47,\"zoom\":1.25}";
+                var fitAck = parseGpsMessage.Invoke(null, new object[] { fitAckJson })
+                    ?? throw new Exception("GPS camera-fit acknowledgment not parsed.");
+                var fitAckType = fitAck.GetType();
+                if (!Equals(fitAckType.GetProperty("Kind")?.GetValue(fitAck), "gps-fit-ready") ||
+                    !Equals(fitAckType.GetProperty("Id")?.GetValue(fitAck), 47L) ||
+                    fitAckType.GetProperty("Zoom")?.GetValue(fitAck) is not double fittedZoom ||
+                    Math.Abs(fittedZoom - 1.25) > .001 ||
+                    parseGpsMessage.Invoke(null, new object[] {
+                        "{\"type\":\"gps-fit-ready\",\"version\":47,\"zoom\":25}"
+                    }) is not null)
+                    throw new Exception("GPS camera fit bridge accepts stale/invalid zoom.");
+
+                using (var gpsHtmlStream = typeof(PCasa.App.MainWindow).Assembly
+                    .GetManifestResourceStream("PCasa.App.Resources.gps-map.html"))
+                {
+                    if (gpsHtmlStream is null)
+                        throw new Exception("GPS map HTML resource missing.");
+                    using var gpsHtmlReader = new System.IO.StreamReader(gpsHtmlStream);
+                    var gpsHtml = gpsHtmlReader.ReadToEnd();
+                    var prepare = gpsHtml.IndexOf("window.pcasaPrepareGpsExtent",
+                        StringComparison.Ordinal);
+                    var fit = gpsHtml.IndexOf("map.fitBounds(", prepare,
+                        StringComparison.Ordinal);
+                    var ack = gpsHtml.IndexOf("type:'gps-fit-ready'", prepare,
+                        StringComparison.Ordinal);
+                    if (prepare < 0 || fit < prepare || ack < fit ||
+                        gpsHtml.Contains("window.pcasaFitGpsExtent=", StringComparison.Ordinal))
+                        throw new Exception("Map draws clusters before fitting selection viewport.");
+                }
+
+                // Many image identities spanning continents are ALWAYS
+                // retained. A smaller fitted map zoom collapses more of
+                // the same GPS data than the previous (stale) zoom.
+                var worldwide = Enumerable.Range(0, 16000).Select(i =>
+                    new GpsPhotoPosition(i + 1L,
+                        (i % 8) * 10d - 35 + (i % 31) * 0.15,
+                        (i % 16) * 17d - 130 + (i % 29) * 0.2)).ToArray();
+                var atWorldZoom = GpsGeographicClusterer.Cluster(worldwide, 1.1);
+                var atOldZoom = GpsGeographicClusterer.Cluster(worldwide, 7.5);
+                if (atWorldZoom.Count >= atOldZoom.Count ||
+                    atWorldZoom.Sum(g => g.ImageIds.Count) != worldwide.Length ||
+                    atWorldZoom.SelectMany(g => g.ImageIds).Distinct().Count()
+                        != worldwide.Length)
+                    throw new Exception("World-scale cluster radius or image identities are wrong.");
+                Console.WriteLine(
+                    "PASS: GPS initial extent camera-fit handshake and 16,000-photo low-zoom projection.");
+
                 // Provider-neutral map click must resolve real photo IDs in
                 // the existing WPF filmstrip, never just zoom without photos.
                 var clusterClick = viewerType.GetMethod(

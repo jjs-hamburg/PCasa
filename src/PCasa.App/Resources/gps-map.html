@@ -160,15 +160,31 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    transferRequested=true;
    completeTransfer();
  };
- window.pcasaFitGpsExtent=(version,south,west,north,east)=>{
-   if(version!==transferRevision||!Number.isFinite(south)||
-      !Number.isFinite(west)||!Number.isFinite(north)||
-      !Number.isFinite(east)||south>north||west>east)return;
-   if(south===north&&west===east)
-     map.easeTo({center:[west,south],zoom:13,duration:450});
-   else
-     map.fitBounds([[west,south],[east,north]],
-       {padding:35,maxZoom:13,duration:400});
+ // The camera must be fitted BEFORE the first cluster projection:
+ // a world-sized viewport needs a MUCH larger grouping radius than the
+ // map's previous zoom. Fitting AFTER drawing produced overlapping dark
+ // marker borders until the user manually zoomed in and out.
+ // The version belongs to the current WPF selection/query, not to a
+ // marker transfer that has not yet begun.
+ window.pcasaPrepareGpsExtent=(version,south,west,north,east)=>{
+   if(!Number.isSafeInteger(version)||version<0||
+      !Number.isFinite(south)||!Number.isFinite(west)||
+      !Number.isFinite(north)||!Number.isFinite(east)||
+      south>north||west>east||
+      Math.abs(south)>90||Math.abs(north)>90||
+      Math.abs(west)>180||Math.abs(east)>180)return;
+   try {
+     map.resize();
+     if(south===north&&west===east)
+       map.jumpTo({center:[west,south],zoom:13});
+     else
+       map.fitBounds([[west,south],[east,north]],
+         {padding:35,maxZoom:13,duration:0});
+     // No marker data is transferred until WPF receives the camera zoom.
+     post({type:'gps-fit-ready',version,zoom:map.getZoom()});
+   } catch(err) {
+     post({type:'error',message:'GPS map bounds: '+String(err)});
+   }
  };
  window.pcasaApplyProvider = (provider) => {
    if (!provider || !provider.url) return;

@@ -44,6 +44,9 @@ public partial class MainWindow
     private IReadOnlyList<GpsPoint> _gpsPoints = [];
     private IReadOnlyList<GpsPhotoCluster> _gpsPresentedClusters = [];
     private long _gpsClusterRequestRevision;
+    // While the map is fitting a new selection, ignore moveend-triggered
+    // reclusters. The first projection must use the FINAL camera zoom.
+    private long _gpsPendingFitQueryRevision = -1;
     private double _gpsCurrentMapZoom = 2;
     private (double Lat, double Lon)? _gpsCurrentCoordinates;
 
@@ -71,6 +74,7 @@ public partial class MainWindow
         {
             _gpsQueryRevision++;
             _gpsClusterRequestRevision++;
+            _gpsPendingFitQueryRevision = -1;
             _gpsFilmstripRevision++;
             CloseGpsFullscreenImage();
             if (_gpsBrowser is not null)
@@ -346,6 +350,16 @@ public partial class MainWindow
                     ? new GpsMapMessage("bounds", South: south, West: west,
                         North: north, East: east) : null;
             }
+            case "gps-fit-ready":
+            {
+                var zoom = Number("zoom");
+                return root.TryGetProperty("version", out var version) &&
+                    version.ValueKind == JsonValueKind.Number &&
+                    version.TryGetInt64(out var rev) &&
+                    zoom is >= 0 and <= 23
+                    ? new GpsMapMessage("gps-fit-ready", Id: rev, Zoom: zoom)
+                    : null;
+            }
             case "viewport":
             {
                 var lat = Number("lat");
@@ -419,6 +433,17 @@ public partial class MainWindow
                     SetGpsDraft(draft.Lat, draft.Lon, recenter: false);
                 GpsPickPosition_Changed(this, new RoutedEventArgs());
             }
+            else if (data.Kind == "gps-fit-ready" &&
+                     data.Zoom is double finalZoom &&
+                     data.Id == _gpsQueryRevision &&
+                     data.Id == _gpsPendingFitQueryRevision)
+            {
+                // The one camera-fit acknowledgment starts the ONE existing
+                // scheduler projection using the actual displayed zoom.
+                _gpsPendingFitQueryRevision = -1;
+                _gpsCurrentMapZoom = finalZoom;
+                _ = PublishGpsClustersAsync();
+            }
             else if (data.Kind == "draft" &&
                      data.Latitude is double dLat &&
                      data.Longitude is double dLon)
@@ -450,7 +475,10 @@ public partial class MainWindow
                 if (Math.Abs(zoom - _gpsCurrentMapZoom) > 0.02)
                 {
                     _gpsCurrentMapZoom = zoom;
-                    _ = PublishGpsClustersAsync();
+                    // map.fitBounds emits moveend before gps-fit-ready.
+                    // Do NOT publish a second intermediate projection.
+                    if (_gpsPendingFitQueryRevision < 0)
+                        _ = PublishGpsClustersAsync();
                 }
             }
             else if (data.Kind == "cluster-click")
@@ -534,10 +562,27 @@ public partial class MainWindow
     private async Task PublishGpsClustersAsync(bool fitSelection = false)
     {
         if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
-            _gpsBrowser is not { IsDisposed: false }) return;
-        var request = ++_gpsClusterRequestRevision;
+            _gpsBrowser is not { IsDisposed: false } map) return;
         var queryRevision = _gpsQueryRevision;
         var snapshot = _gpsPoints.ToArray();
+        if (fitSelection && snapshot.Length > 0)
+        {
+            // Old code clustered at the PREVIOUS camera zoom, committed
+            // hundreds of overlapping markers, then animated fitBounds.
+            // At world scale this created the photographed black patches.
+            // Fit first and wait for the exact reported zoom before the
+            // existing scheduler computes/publishes its ONE cluster set.
+            _gpsPendingFitQueryRevision = queryRevision;
+            ++_gpsClusterRequestRevision;
+            map.ExecuteScriptAsync("window.pcasaPrepareGpsExtent(" +
+                queryRevision + "," +
+                snapshot.Min(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
+                snapshot.Min(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + "," +
+                snapshot.Max(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
+                snapshot.Max(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + ")");
+            return;
+        }
+        var request = ++_gpsClusterRequestRevision;
         var zoom = _gpsCurrentMapZoom;
         try
         {
@@ -581,17 +626,6 @@ public partial class MainWindow
             if (_gpsHighlightedImageId is long focusedId)
                 HighlightGpsPointOnMap(focusedId);
 
-            // Camera fit uses actual original geographic extrema, not
-            // averaged cluster centers. A zoom refresh never moves the map.
-            if (fitSelection && snapshot.Length > 0)
-            {
-                browser.ExecuteScriptAsync("window.pcasaFitGpsExtent(" +
-                    revision + "," +
-                    snapshot.Min(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
-                    snapshot.Min(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + "," +
-                    snapshot.Max(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
-                    snapshot.Max(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + ")");
-            }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { PCasaDiagnostics.Write("GPS.ClusterProjection", ex); }
@@ -657,6 +691,11 @@ public partial class MainWindow
     {
         if (_sidebarMode != "GPS") return;
         var revision = ++_gpsQueryRevision;
+        // Invalidate any older camera-fit reply when a newer catalog
+        // snapshot supersedes it. If a fit was in progress, redo it once
+        // for the latest snapshot rather than showing stale-scale markers.
+        var fitWasPending = _gpsPendingFitQueryRevision >= 0;
+        _gpsPendingFitQueryRevision = -1;
         var selectedIds = _selectedImageIds.ToArray();
         // A map-point filmstrip is a temporary view. Only a REAL change of
         // gallery selection replaces it. Background photo imports may
@@ -816,7 +855,8 @@ public partial class MainWindow
             if (_gpsGoogleWebsiteActive)
                 NavigateGoogleMapsToSelection();
             else
-                _ = PublishGpsClustersAsync(fitSelection: selectionChanged);
+                _ = PublishGpsClustersAsync(fitSelection:
+                    selectionChanged || fitWasPending);
             if (_appearance.ShowGpsFilmstrip)
                 GpsPhotoPopup.Visibility = Visibility.Collapsed;
             else
