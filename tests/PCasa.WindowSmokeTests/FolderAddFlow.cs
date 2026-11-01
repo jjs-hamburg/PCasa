@@ -737,6 +737,27 @@ internal static class FolderAddFlow
             Until(window, () => liveScroller.ViewportHeight > 100 &&
                 liveSurface.GetFolderOffset(later.Id) is > 2,
                 "WPF gallery did not establish a non-global folder boundary.");
+            var moreLast = Enumerable.Range(0, 12).Select(i =>
+                Path.Combine(afterRestart, $"last-{i:00}.jpg")).ToArray();
+            foreach (var photo in moreLast) WriteJpeg(photo);
+            var fillLast = Task.Run(() =>
+            {
+                foreach (var photo in moreLast)
+                    liveScanner.ScanFile(liveEndRoot, photo);
+            });
+            Until(window, () => fillLast.IsCompleted, "Last-folder scan failed.");
+            fillLast.GetAwaiter().GetResult();
+            var navigation = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshBrowseGalleryAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            // Extend the last section BEFORE navigating to the middle one:
+            // otherwise ScrollViewer clamps the requested middle-folder
+            // beginning because there are too few images below it.
+            var refresh = (Task)navigation!.Invoke(window,
+                [true, false, false])!;
+            Until(window, () => refresh.IsCompleted,
+                "Explicit gallery refresh after real scan did not complete.");
+            refresh.GetAwaiter().GetResult();
             var laterStart = liveSurface.GetFolderOffset(later.Id)!.Value;
             liveScroller.ScrollToVerticalOffset(laterStart);
             Until(window, () => liveSurface.GetLiveFolderEdge(
@@ -825,26 +846,13 @@ internal static class FolderAddFlow
             // Re-enable a large upper folder section, after hiding it, and
             // confirm that the current last folder stays at the same image.
             // This reproduces the reported focus jump on folder expansion.
-            var moreLast = Enumerable.Range(0, 12).Select(i =>
-                Path.Combine(afterRestart, $"last-{i:00}.jpg")).ToArray();
-            foreach (var photo in moreLast) WriteJpeg(photo);
-            var fillLast = Task.Run(() =>
-            {
-                foreach (var photo in moreLast)
-                    liveScanner.ScanFile(liveEndRoot, photo);
-            });
-            Until(window, () => fillLast.IsCompleted, "Last-folder scan failed.");
-            fillLast.GetAwaiter().GetResult();
-            var navigation = typeof(PCasa.App.MainWindow).GetMethod(
-                "RefreshBrowseGalleryAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            // Explicitly use the established user-navigation refresh before
-            // positioning the target, never a second test-only UI index.
-            var refresh = (Task)navigation!.Invoke(window,
+            // Switching to the last folder explicitly reconciles foreign
+            // scan commits without changing the previously followed folder.
+            var lastRefresh = (Task)navigation!.Invoke(window,
                 [true, false, false])!;
-            Until(window, () => refresh.IsCompleted,
-                "Explicit gallery refresh after real scan did not complete.");
-            refresh.GetAwaiter().GetResult();
+            Until(window, () => lastRefresh.IsCompleted,
+                "Last-folder explicit refresh did not complete.");
+            lastRefresh.GetAwaiter().GetResult();
             var lastFolder = new ImageCatalogRepository(db).GetPhotoFolders()
                 .Single(folder => SamePath(folder.LocalPath, afterRestart));
             var lastStart = liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
