@@ -51,6 +51,9 @@ public partial class MainWindow
     // reclusters. The first projection must use the FINAL camera zoom.
     private long _gpsPendingFitQueryRevision = -1;
     private double _gpsCurrentMapZoom = 2;
+    // The map's own monotonically increasing camera-event sequence.
+    // Old queued Chromium messages cannot overwrite a newer viewport.
+    private long _gpsCameraRevision = -1;
     private (double Lat, double Lon)? _gpsCurrentCoordinates;
 
     private IEnumerable<GpsMapProvider> AllGpsProviders()
@@ -244,7 +247,8 @@ public partial class MainWindow
         double? Latitude = null, double? Longitude = null, double? Zoom = null,
         double? South = null, double? West = null, double? North = null,
         double? East = null, int? Received = null, int? SelectedCount = null,
-        long Version = 0);
+        long Version = 0, long CameraRevision = -1,
+        double? ProjectionZoom = null, int? MarkerCount = null);
 
     private static GpsMapMessage? ParseGpsJavascriptMessage(string message)
     {
@@ -262,6 +266,13 @@ public partial class MainWindow
                 !value.TryGetDouble(out var number) || !double.IsFinite(number))
                 return null;
             return number;
+        }
+        long CameraRevision()
+        {
+            return root.TryGetProperty("cameraRevision", out var value) &&
+                value.ValueKind == JsonValueKind.Number &&
+                value.TryGetInt64(out var revision) && revision >= 0
+                    ? revision : -1;
         }
         switch (kind)
         {
@@ -281,7 +292,10 @@ public partial class MainWindow
                     ReadInteger("received", out var total) &&
                     ReadInteger("selected", out var count)
                     ? new GpsMapMessage("gps-sync", Id: revision,
-                        Received: total, SelectedCount: count)
+                        Received: total, SelectedCount: count,
+                        Zoom: Number("zoom"), ProjectionZoom: Number("projectionZoom"),
+                        MarkerCount: ReadInteger("markerCount", out var markers)
+                            ? markers : null)
                     : null;
             }
             case "cluster-click":
@@ -361,8 +375,19 @@ public partial class MainWindow
                     version.ValueKind == JsonValueKind.Number &&
                     version.TryGetInt64(out var rev) &&
                     zoom is >= 0 and <= 23
-                    ? new GpsMapMessage("gps-fit-ready", Id: rev, Zoom: zoom)
+                    ? new GpsMapMessage("gps-fit-ready", Id: rev,
+                        Zoom: zoom, CameraRevision: CameraRevision())
                     : null;
+            }
+            case "gps-projection-stale":
+            {
+                var zoom = Number("zoom");
+                return root.TryGetProperty("version", out var version) &&
+                    version.ValueKind == JsonValueKind.Number &&
+                    version.TryGetInt64(out var transfer) &&
+                    zoom is >= 0 and <= 23
+                    ? new GpsMapMessage("gps-projection-stale", Id: transfer,
+                        Zoom: zoom, CameraRevision: CameraRevision()) : null;
             }
             case "viewport":
             {
@@ -374,7 +399,8 @@ public partial class MainWindow
                     fit.TryGetInt64(out var fitId) ? fitId : -1;
                 return lat is double && lon is double && zoom is double
                     ? new GpsMapMessage("viewport", Latitude: lat,
-                        Longitude: lon, Zoom: zoom, Version: fitVersion) : null;
+                        Longitude: lon, Zoom: zoom, Version: fitVersion,
+                        CameraRevision: CameraRevision()) : null;
             }
             default:
                 return null;
@@ -406,6 +432,30 @@ public partial class MainWindow
                     PCasaDiagnostics.WriteMessage("GPS.Map.Transfer",
                         $"Map transfer {data.Id}: received {data.Received}/{_gpsPoints.Count}, " +
                         $"selected {data.SelectedCount}/{expectedSelected}");
+                // Capture the real first-frame state for large selections.
+                // This is bounded by the existing rotating diagnostics log.
+                if (expectedSelected >= 1000)
+                    PCasaDiagnostics.WriteMessage("GPS.Map.Presented",
+                        $"Transfer={data.Id}; Photos={data.Received}; " +
+                        $"Markers={data.MarkerCount}; ProjectedZoom={data.ProjectionZoom:R}; " +
+                        $"ActualZoom={data.Zoom:R}; Camera={_gpsCameraRevision}");
+            }
+            else if (data.Kind == "gps-projection-stale" &&
+                     data.Id == _gpsMapTransferRevision &&
+                     data.Zoom is double actualZoom &&
+                     data.CameraRevision >= _gpsCameraRevision)
+            {
+                // Never rely on a pending-fit flag to suppress recovery.
+                // The map already knows its actual camera zoom. A rejected
+                // transfer is NOT an acknowledged render; retry via the
+                // one existing scheduled cluster projection.
+                _gpsCameraRevision = data.CameraRevision;
+                _gpsPendingFitQueryRevision = -1;
+                _gpsCurrentMapZoom = actualZoom;
+                PCasaDiagnostics.WriteMessage("GPS.Map.Reproject",
+                    $"Transfer={data.Id}; ActualZoom={actualZoom:R}; " +
+                    $"Camera={data.CameraRevision}; Photos={_gpsPoints.Count}");
+                _ = PublishGpsClustersAsync();
             }
             else if (data.Kind == "gps-overlay-empty" &&
                      data.Id == _gpsMapTransferRevision &&
@@ -421,6 +471,7 @@ public partial class MainWindow
             }
             else if (data.Kind == "ready")
             {
+                _gpsCameraRevision = -1;
                 _gpsBrowserReady = true;
                 GpsMapStatus.Visibility = Visibility.Collapsed;
                 ApplyGpsMapProvider();
@@ -442,11 +493,13 @@ public partial class MainWindow
             }
             else if (data.Kind == "gps-fit-ready" &&
                      data.Zoom is double finalZoom &&
-                     data.Id == _gpsPendingFitQueryRevision)
+                     data.Id == _gpsPendingFitQueryRevision &&
+                     data.CameraRevision >= _gpsCameraRevision)
             {
                 // The one camera-fit acknowledgment starts the ONE existing
                 // scheduler projection using the actual displayed zoom.
                 _gpsPendingFitQueryRevision = -1;
+                _gpsCameraRevision = data.CameraRevision;
                 _gpsCurrentMapZoom = finalZoom;
                 _ = PublishGpsClustersAsync();
             }
@@ -470,8 +523,10 @@ public partial class MainWindow
                      data.Zoom is double zoom &&
                      lat is >= -90 and <= 90 &&
                      lon is >= -180 and <= 180 &&
-                     zoom is >= 0 and <= 23)
+                     zoom is >= 0 and <= 23 &&
+                     data.CameraRevision >= _gpsCameraRevision)
             {
+                _gpsCameraRevision = data.CameraRevision;
                 // The map is the owner of camera movements; this only
                 // persists them, without changing the displayed camera.
                 _appearance.GpsMapCenterLat = lat;
@@ -622,7 +677,8 @@ public partial class MainWindow
             var selected = snapshot.Count(p => p.Selected);
             browser.ExecuteScriptAsync("window.pcasaBeginClusters(" +
                 revision + "," + chunks.Length + "," + snapshot.Length +
-                "," + selected + ")");
+                "," + selected + "," +
+                zoom.ToString("R", CultureInfo.InvariantCulture) + ")");
             for (var i = 0; i < chunks.Length; i++)
             {
                 var json = JsonSerializer.Serialize(chunks[i].Select(g => new

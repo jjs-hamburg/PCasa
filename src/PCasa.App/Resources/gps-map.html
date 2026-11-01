@@ -50,7 +50,9 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  let ready=false,highlightedClusterId=null;
  let clusters=[],markerEntries=new Map(),transferRevision=-1;
  let transferChunks=[],transferExpected=0,transferRequested=false,
-     transferActive=false,transferTotal=0,transferSelected=0;
+     transferActive=false,transferTotal=0,transferSelected=0,
+     transferZoom=null;
+ let cameraRevision=0;
  const locationIsValid=p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)&&
    Math.abs(p.lat)<=90&&Math.abs(p.lon)<=180&&
    Number.isSafeInteger(p.id)&&Number.isSafeInteger(p.count)&&p.count>0;
@@ -133,19 +135,31 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      post({type:'error',message:'Geographic clusters missing photo identities'});
      transferActive=false;return;
    }
+   // Never accept a cluster distribution calculated for another
+   // zoom. Keep the last successfully drawn overlay until its replacement
+   // arrives: rejecting a transfer must NEVER erase the map.
+   if(assembled.length && Math.abs(map.getZoom()-transferZoom)>.02) {
+     transferActive=false;transferChunks=[];
+     post({type:'gps-projection-stale',version:transferRevision,
+       zoom:map.getZoom(),cameraRevision});
+     return;
+   }
    transferActive=false;transferChunks=[];
    clusters=assembled;
    drawClusters();
    post({type:'gps-sync',version:transferRevision,
-     received:sum,selected:transferSelected});
+     received:sum,selected:transferSelected,
+     markerCount:markerEntries.size,projectionZoom:transferZoom,
+     zoom:map.getZoom()});
  }
- window.pcasaBeginClusters=(version,count,total,selected)=>{
+ window.pcasaBeginClusters=(version,count,total,selected,zoom)=>{
    if(!Number.isSafeInteger(version)||version<transferRevision||
       !Number.isSafeInteger(count)||count<0||
       !Number.isSafeInteger(total)||total<0||
-      !Number.isSafeInteger(selected)||selected<0||selected>total)return;
+      !Number.isSafeInteger(selected)||selected<0||selected>total||
+      (total>0&&(!Number.isFinite(zoom)||zoom<0||zoom>23)))return;
    transferRevision=version;transferExpected=count;
-   transferTotal=total;transferSelected=selected;
+   transferTotal=total;transferSelected=selected;transferZoom=zoom;
    transferChunks=new Array(count);transferRequested=false;transferActive=true;
  };
  window.pcasaAppendClusters=(version,index,chunk)=>{
@@ -183,7 +197,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
        map.fitBounds([[west,south],[east,north]],
          {padding:35,maxZoom:13,duration:0});
      // No marker data is transferred until WPF receives the camera zoom.
-     post({type:'gps-fit-ready',version,zoom:map.getZoom()});
+     post({type:'gps-fit-ready',version,zoom:map.getZoom(),cameraRevision});
    } catch(err) {
      post({type:'error',message:'GPS map bounds: '+String(err)});
    }
@@ -254,10 +268,11 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      map.jumpTo({center:[lon,lat],zoom});
  };
  map.on('moveend',()=>{
+   ++cameraRevision;
    drawClusters();
    const p=map.getCenter();
    post({type:'viewport',lat:p.lat,lon:p.lng,zoom:map.getZoom(),
-     fitVersion:latestFitQueryVersion});
+     fitVersion:latestFitQueryVersion,cameraRevision});
  });
  window.pcasaResize = () => {map.resize();drawClusters();};
  map.on('load',()=>{fallback.remove();});

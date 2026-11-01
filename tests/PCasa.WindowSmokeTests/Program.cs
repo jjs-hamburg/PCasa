@@ -1917,10 +1917,17 @@ internal static class Program
                     throw new Exception("GPS camera fit bridge accepts stale/invalid zoom.");
 
                 var viewportAck = parseGpsMessage.Invoke(null, new object[] {
-                    "{\"type\":\"viewport\",\"lat\":53.5,\"lon\":10,\"zoom\":1.25,\"fitVersion\":47}"
+                    "{\"type\":\"viewport\",\"lat\":53.5,\"lon\":10,\"zoom\":1.25,\"fitVersion\":47,\"cameraRevision\":8}"
                 }) ?? throw new Exception("GPS fit viewport not parsed.");
-                if (!Equals(viewportAck.GetType().GetProperty("Version")?.GetValue(viewportAck), 47L))
-                    throw new Exception("GPS fit viewport lost camera-fit identity.");
+                if (!Equals(viewportAck.GetType().GetProperty("Version")?.GetValue(viewportAck), 47L) ||
+                    !Equals(viewportAck.GetType().GetProperty("CameraRevision")?.GetValue(viewportAck), 8L))
+                    throw new Exception("GPS fit viewport lost camera ordering or fit identity.");
+                var staleTransfer = parseGpsMessage.Invoke(null, new object[] {
+                    "{\"type\":\"gps-projection-stale\",\"version\":71,\"zoom\":1.1,\"cameraRevision\":9}"
+                }) ?? throw new Exception("GPS stale transfer callback not parsed.");
+                if (!Equals(staleTransfer.GetType().GetProperty("Id")?.GetValue(staleTransfer), 71L) ||
+                    !Equals(staleTransfer.GetType().GetProperty("CameraRevision")?.GetValue(staleTransfer), 9L))
+                    throw new Exception("GPS stale transfer missing revision or camera ordering.");
 
                 using (var gpsHtmlStream = typeof(PCasa.App.MainWindow).Assembly
                     .GetManifestResourceStream("PCasa.App.Resources.gps-map.html"))

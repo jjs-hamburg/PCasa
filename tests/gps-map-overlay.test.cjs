@@ -79,9 +79,9 @@ assert.ok(messages.some(x=>x.type==='ready'));
 assert.equal(activeMap.getSource('pcasa-selected'),undefined,
   'There must be no second selected GeoJSON renderer');
 
-function send(version,items,total,selected,chunk=150){
+function send(version,items,total,selected,chunk=150,zoom=activeMap.getZoom()){
   const chunks=Math.ceil(items.length/chunk);
-  window.pcasaBeginClusters(version,chunks,total,selected);
+  window.pcasaBeginClusters(version,chunks,total,selected,zoom);
   window.pcasaCommitClusters(version);
   for(let i=0;i<chunks;i++)
     window.pcasaAppendClusters(version,i,items.slice(i*chunk,(i+1)*chunk));
@@ -90,7 +90,7 @@ const big=[
   {id:1,lat:53.5,lon:10,count:3000,selected:true},
   {id:3001,lat:26.1,lon:-80,count:3000,selected:true}
 ];
-window.pcasaBeginClusters(1,2,6000,6000);
+window.pcasaBeginClusters(1,2,6000,6000,activeMap.getZoom());
 window.pcasaAppendClusters(1,1,big.slice(1));
 window.pcasaCommitClusters(1);
 assert.equal(live().length,0,'Incomplete transfer cannot expose partial geography');
@@ -168,14 +168,14 @@ activeMap.emit('moveend');
 assert.ok(live().every(m=>m.element.classList.contains('maplibregl-marker')),
   'Zooming and style switches must never stack GPS pins in one vertical column');
 
-window.pcasaBeginClusters(4,1,7200,7200);
+window.pcasaBeginClusters(4,1,7200,7200,activeMap.getZoom());
 window.pcasaAppendClusters(4,0,[{id:200,lat:0,lon:0,count:7,selected:true}]);
 window.pcasaCommitClusters(4);
 assert.equal(sum(),7200,'Incomplete membership must never silently replace valid data');
 assert.ok(messages.some(x=>x.type==='error'&&x.message.includes('missing photo')));
 send(5,single,1,1);
-window.pcasaBeginClusters(6,1,6000,6000);
-window.pcasaBeginClusters(7,1,1,1);
+window.pcasaBeginClusters(6,1,6000,6000,activeMap.getZoom());
+window.pcasaBeginClusters(7,1,1,1,activeMap.getZoom());
 window.pcasaAppendClusters(6,0,big);window.pcasaCommitClusters(6);
 window.pcasaAppendClusters(7,0,single);window.pcasaCommitClusters(7);
 assert.equal(sum(),1,'Superseded transfers cannot republish old clusters');
@@ -195,6 +195,24 @@ assert.equal(live().length,0,
   'Changing map provider or zoom must not resurrect old no-selection markers');
 send(9,single,1,1);
 assert.equal(live().length,1,'A new explicit selection restores only its photo');
+// Reproduce the production failure: a correct map fit, followed by a
+// delayed high-zoom cluster job. It must neither draw a black blob NOR
+// erase the last validated overlay while WPF schedules its replacement.
+activeMap.zoom=1.1;
+const lastGood=live().length;
+send(10,worldwide,7200,7200,2,7.5);
+assert.equal(live().length,lastGood,
+  'Outdated projection must never overwrite or clear an existing map');
+const rejected=messages.find(m=>m.type==='gps-projection-stale'&&m.version===10);
+assert.ok(rejected&&rejected.zoom===1.1,
+  'Renderer must report actual zoom for a scheduler re-projection');
+send(11,worldwide,7200,7200,2,1.1);
+assert.equal(live().length,5,
+  'New projection must be drawn at the actual zoom without user +/-');
+assert.equal(sum(),7200,'All GPS photo identities survive projection recovery');
+assert.ok(messages.some(m=>m.type==='gps-sync'&&m.version===11&&
+  m.zoom===m.projectionZoom&&m.markerCount===5),
+  'Rendered marker count and actual/projected zoom must be acknowledged');
 // The #986 regression cleared all pins while expecting an unacknowledged
 // re-cluster request. A complete valid transfer must ALWAYS render, even
 // if the map was fitted just beforehand and no manual zoom takes place.
