@@ -364,6 +364,16 @@ public partial class MainWindow
                     ? new GpsMapMessage("gps-fit-ready", Id: rev, Zoom: zoom)
                     : null;
             }
+            case "gps-projection-stale":
+            {
+                var zoom = Number("zoom");
+                return root.TryGetProperty("version", out var version) &&
+                    version.ValueKind == JsonValueKind.Number &&
+                    version.TryGetInt64(out var rev) &&
+                    zoom is >= 0 and <= 23
+                    ? new GpsMapMessage("gps-projection-stale",
+                        Id: rev, Zoom: zoom) : null;
+            }
             case "viewport":
             {
                 var lat = Number("lat");
@@ -406,6 +416,19 @@ public partial class MainWindow
                     PCasaDiagnostics.WriteMessage("GPS.Map.Transfer",
                         $"Map transfer {data.Id}: received {data.Received}/{_gpsPoints.Count}, " +
                         $"selected {data.SelectedCount}/{expectedSelected}");
+            }
+            else if (data.Kind == "gps-projection-stale" &&
+                     data.Id == _gpsMapTransferRevision &&
+                     data.Zoom is double actualZoom &&
+                     _gpsPendingFitQueryRevision < 0)
+            {
+                // MapLibre owns the camera. A result calculated for a
+                // superseded zoom must never become the rendered overlay.
+                PCasaDiagnostics.WriteMessage("GPS.Map.ProjectionStale",
+                    $"Transfer={data.Id}; LastKnownZoom={_gpsCurrentMapZoom:R}; " +
+                    $"ActualZoom={actualZoom:R}; Photos={_gpsPoints.Count}");
+                _gpsCurrentMapZoom = actualZoom;
+                _ = PublishGpsClustersAsync();
             }
             else if (data.Kind == "gps-overlay-empty" &&
                      data.Id == _gpsMapTransferRevision &&
@@ -620,9 +643,12 @@ public partial class MainWindow
             var revision = ++_gpsMapTransferRevision;
             var chunks = clustered.Chunk(150).ToArray();
             var selected = snapshot.Count(p => p.Selected);
+            // The JS renderer rejects a projection if the physical camera
+            // changed while the scheduled calculation was in flight.
             browser.ExecuteScriptAsync("window.pcasaBeginClusters(" +
                 revision + "," + chunks.Length + "," + snapshot.Length +
-                "," + selected + ")");
+                "," + selected + "," +
+                zoom.ToString("R", CultureInfo.InvariantCulture) + ")");
             for (var i = 0; i < chunks.Length; i++)
             {
                 var json = JsonSerializer.Serialize(chunks[i].Select(g => new
