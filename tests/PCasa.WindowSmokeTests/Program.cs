@@ -463,7 +463,13 @@ internal static class Program
                     gaps.Max() - gaps.Min() > 1.5)
                     throw new Exception($"Actual menu caption gaps ({language}) differ: " +
                         string.Join(", ", gaps.Select(gap => gap.ToString("F1"))) +
-                        $"; left={positions[0].Left:F1}");
+                        $"; left={positions[0].Left:F1}; " +
+                        string.Join("; ", items.Select((item, i) => {
+                            item.ApplyTemplate();
+                            var cp = (ContentPresenter)item.Template.FindName("MenuHeaderPresenter", item)!;
+                            var g = (Grid)item.Template.FindName("MenuHeaderPresenter", item)!.Parent;
+                            return $"[{item.Header}:itemW={item.Width:F1}/actual={item.ActualWidth:F1}/captionW={positions[i].Width:F1}/captionX={positions[i].Left:F1}/gridW={g.ActualWidth:F1}]";
+                        })));
             }
             AssertCaptionGaps("de");
             Console.WriteLine("PASS: Actual menu caption gaps, measured from visible text, are equal.");
