@@ -122,6 +122,28 @@ internal static class FolderAddFlow
                 "Completed scan did not expose its second JPEG and updated folder count.");
             Console.WriteLine("PASS: Full catalog/gallery and parent count complete without background monitoring.");
 
+            // The previous Edit-menu command is now an icon-only toggle
+            // immediately left of the property Filter. Both edges must call
+            // the SAME folder inversion and undo on the second click.
+            initialTreeRoot.IsSelected = true;
+            Flush(window);
+            var invertSelection = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GalleryInvertSelectionToggle")
+                ?? throw new Exception("Folder selection inversion toggle missing.");
+            var selectedImages = (HashSet<long>)typeof(PCasa.App.MainWindow)
+                .GetField("_selectedImageIds", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(window)!;
+            if (selectedImages.Count != 0)
+                throw new Exception("New gallery folder should start unselected.");
+            invertSelection.IsChecked = true;
+            Flush(window);
+            if (selectedImages.Count != 1)
+                throw new Exception("Inversion toggle selected anything outside the current folder.");
+            invertSelection.IsChecked = false;
+            Flush(window);
+            if (selectedImages.Count != 0)
+                throw new Exception("Second inversion toggle did not restore previous selection.");
+            Console.WriteLine("PASS: Folder selection inversion toggle affects only the selected folder.");
+
             // A manual folder creation borrows the NAS scan's existing progress
             // window. Its 1/1 final caption must NEVER remain frozen when the
             // overlay ends, even if the next SMB callback is delayed.

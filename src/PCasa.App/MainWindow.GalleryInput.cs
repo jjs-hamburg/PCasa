@@ -34,7 +34,8 @@ public partial class MainWindow
             return;
         if (ctrl && e.Key == Key.I)
         {
-            InvertCurrentFolderSelection();
+            GalleryInvertSelectionToggle.IsChecked =
+                GalleryInvertSelectionToggle.IsChecked != true;
             e.Handled = true;
             return;
         }
@@ -125,16 +126,42 @@ public partial class MainWindow
         }
     }
 
-    private void GalleryInvertSelection_Click(object sender, RoutedEventArgs e)
-        => InvertCurrentFolderSelection();
+    private bool _suppressGalleryInvertToggle;
+    private long? _invertedGallerySelectionFolderId;
 
-    private void InvertCurrentFolderSelection()
+    private void FileExit_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void ResetGalleryInvertSelectionToggle()
+    {
+        if (GalleryInvertSelectionToggle is null) return;
+        _suppressGalleryInvertToggle = true;
+        try { GalleryInvertSelectionToggle.IsChecked = false; }
+        finally { _suppressGalleryInvertToggle = false; }
+        _invertedGallerySelectionFolderId = null;
+    }
+
+    private void GalleryInvertSelectionToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressGalleryInvertToggle || !_browseInitialized) return;
+        if (!InvertCurrentFolderSelection())
+        {
+            ResetGalleryInvertSelectionToggle();
+            return;
+        }
+        _invertedGallerySelectionFolderId =
+            (FoldersTree.SelectedItem as TreeViewItem)?.Tag is FolderTreeTag tag
+                ? tag.PhotoFolderId : null;
+    }
+
+    // Reuse the original Ctrl+I selection operation; the toggle only
+    // reflects whether the user last inverted this folder's selection.
+    private bool InvertCurrentFolderSelection()
     {
         if ((FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
             FolderTreeTag { PhotoFolderId: long folderId })
         {
             StatusText.Text = UiLanguage.T("Zum Invertieren einen Bildordner auswählen.");
-            return;
+            return false;
         }
 
         // Invert the WHOLE folder, not the currently filtered results.
@@ -148,6 +175,7 @@ public partial class MainWindow
         _gallerySelection.Reset();
         ApplyGallerySelection();
         StatusText.Text = UiLanguage.Format("{0:N0} Dateien ausgewählt (Ordner invertiert)", _selectedImageIds.Count);
+        return true;
     }
 
     private static T? FindAncestor<T>(DependencyObject? element)

@@ -413,25 +413,27 @@
             </Grid.RowDefinitions>
             <Border Grid.Row="0" MinHeight="42"
                     Background="{DynamicResource PcasaTopBrush}">
-                <Menu Background="Transparent"
+                <Menu x:Name="MainMenu" Background="Transparent"
                       Foreground="{DynamicResource PcasaTextBrush}"
                       VerticalAlignment="Center"
                       Padding="0">
                     <Menu.Resources>
                         <!-- Local menu template only: no application-wide style changes. -->
                         <Style TargetType="{x:Type MenuItem}">
+                            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
                             <Setter Property="Background" Value="{DynamicResource PcasaPanelBrush}" />
                             <Setter Property="FontSize" Value="13" />
                             <Setter Property="Template">
                                 <Setter.Value>
                                     <ControlTemplate TargetType="{x:Type MenuItem}">
-                                        <Grid HorizontalAlignment="Left">
-                                            <Border x:Name="ItemBackground" Background="Transparent">
+                                        <Grid HorizontalAlignment="Stretch" MinWidth="{TemplateBinding MinWidth}">
+                                            <Border x:Name="ItemBackground" HorizontalAlignment="Stretch" Background="Transparent">
                                                 <Grid Height="28">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition x:Name="MenuCheckColumn" Width="20"/>
-                                                        <ColumnDefinition x:Name="MenuLabelColumn" Width="Auto"/>
+                                                        <ColumnDefinition x:Name="MenuLabelColumn" Width="*"/>
                                                         <ColumnDefinition x:Name="MenuArrowColumn" Width="15"/>
                                                     </Grid.ColumnDefinitions>
                                                     <TextBlock x:Name="CheckMark" Grid.Column="0" Text="✓"
@@ -453,7 +455,7 @@
                                                 <Border Background="{DynamicResource PcasaPanelBrush}"
                                                         BorderBrush="{DynamicResource PcasaDividerBrush}"
                                                         BorderThickness="1" Padding="1">
-                                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                                    <StackPanel IsItemsHost="True" HorizontalAlignment="Stretch" KeyboardNavigation.DirectionalNavigation="Cycle"/>
                                                 </Border>
                                             </Popup>
                                         </Grid>
@@ -483,10 +485,10 @@
                             </Setter>
                         </Style>
                     </Menu.Resources>
-                    <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
-                    <MenuItem Header="{loc:Tr Key='Bearbeiten'}" Margin="0,0,20,0" HorizontalAlignment="Left">
-                        <MenuItem Header="{loc:Tr Key='Auswahl invertieren (aktueller Ordner)'}"
-                                  InputGestureText="{loc:Tr Key='Strg+I'}" Click="GalleryInvertSelection_Click"/>
+                    <!-- Equal fixed 20px gaps in both languages, independently
+                         of the text width. The menu itself stays in its own row. -->
+                    <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,20,0" HorizontalAlignment="Left">
+                        <MenuItem Header="{loc:Tr Key='Beenden'}" Click="FileExit_Click"/>
                     </MenuItem>
                     <MenuItem Header="{loc:Tr Key='Ordner'}" Margin="0,0,20,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Ordner-Manager...'}"
@@ -496,8 +498,9 @@
                                   Header="{loc:Tr Key='Alle überwachten Ordner einlesen'}"
                                   Click="BrowseScanAll_Click" />
                     </MenuItem>
-                    <!-- The main menu always has its own row. Keep all original
-                         menu commands and sorting in its search-toolbar dropdown. -->
+                    <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
+                              Margin="0,0,20,0" HorizontalAlignment="Left"
+                              Click="AppearanceSettings_Click"/>
                     <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,20,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Sprache'}">
                             <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de"
@@ -505,15 +508,9 @@
                             <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
-                    </MenuItem>
-                    <MenuItem Header="{loc:Tr Key='Extras'}" Margin="0,0,20,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Schreibfehler'}"
-                                  Click="WriteErrorsMenu_Click" />
+                                  Click="WriteErrorsMenu_Click"/>
                     </MenuItem>
-                    <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
-                              Margin="0,0,20,0" HorizontalAlignment="Left"
-                              Click="AppearanceSettings_Click"/>
-                    <MenuItem Header="{loc:Tr Key='Hilfe'}" Margin="0,0,20,0" HorizontalAlignment="Left" />
                 </Menu>
             </Border>
             <Border Grid.Row="1" MinHeight="42"
@@ -534,6 +531,22 @@
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
+                    <!-- Invert selection of the currently selected folder.
+                         Retains Ctrl+I, represented by one blue-framed toggle. -->
+                    <primitives:ToggleButton x:Name="GalleryInvertSelectionToggle"
+                              Width="31" Height="27" Padding="2" Margin="2,0,5,0"
+                              ToolTip="{loc:Tr Key='Auswahl invertieren (aktueller Ordner)'}"
+                              Checked="GalleryInvertSelectionToggle_Changed"
+                              Unchecked="GalleryInvertSelectionToggle_Changed">
+                        <Viewbox Width="20" Height="20" Stretch="Uniform">
+                            <Canvas Width="24" Height="24">
+                                <Path Data="M 3,4 H 11 V 12 H 3 Z M 13,12 H 21 V 20 H 13 Z M 14,4 L 20,4 L 20,10 M 20,4 L 12,12 M 10,20 L 4,20 L 4,14 M 4,20 L 12,12"
+                                      Stroke="{DynamicResource PcasaTextBrush}"
+                                      StrokeThickness="1.65" StrokeLineJoin="Round"
+                                      StrokeStartLineCap="Round" Fill="Transparent"/>
+                            </Canvas>
+                        </Viewbox>
+                    </primitives:ToggleButton>
                     <Border x:Name="GalleryAttributeFilterFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="2,0,3,0">
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <!-- The funnel itself toggles inversion; its shape turns upside down. -->
@@ -611,6 +624,17 @@
 </Border>
 <Border x:Name="SearchGroupFrame" Style="{StaticResource PcasaToolbarGroupFrameStyle}" Margin="0,0,2,0">
  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+  <Border x:Name="SearchGroupLeadingMagnifier" Width="27" Height="27"
+          Margin="3,0,6,0" CornerRadius="4" BorderThickness="1"
+          BorderBrush="{DynamicResource PcasaToolbarFrameBrush}"
+          Background="{DynamicResource PcasaPanelAltBrush}"
+          Effect="{StaticResource PcasaButtonShadow}" IsHitTestVisible="False">
+   <Grid>
+    <Border CornerRadius="3" Background="{StaticResource PcasaButtonDepthBrush}" IsHitTestVisible="False"/>
+    <ContentControl Template="{StaticResource PcasaSearchMagnifierTemplate}"
+                    Width="17" Height="17" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+   </Grid>
+  </Border>
   <TextBlock x:Name="SearchWhatCaption" Text="{loc:Tr Key='WAS?'}" FontSize="12"
              Margin="2,0,5,0" VerticalAlignment="Center" Foreground="{DynamicResource PcasaTextBrush}"/>
   <RadioButton x:Name="SearchTagsMode" GroupName="SearchMode" Style="{StaticResource PcasaSearchChoiceStyle}"
@@ -638,24 +662,9 @@
     Style="{StaticResource PcasaSearchInvertStyle}" Content="{loc:Tr Key='NOT'}"
     ToolTip="{loc:Tr Key='Treffer im gewählten Suchbereich umkehren'}"
     Checked="FilterResultsInversion_Changed" Unchecked="FilterResultsInversion_Changed"/>
-  <!-- The magnifier is a compact, separate leading field, analogous to the
-       filter/sort pictograms. Keep the whole search region at 180px. -->
-  <Border x:Name="SearchMagnifierFrame" Width="27" Height="27" Margin="0,0,4,0"
-          CornerRadius="4" BorderThickness="1"
-          BorderBrush="{DynamicResource PcasaToolbarFrameBrush}"
-          Background="{DynamicResource PcasaPanelAltBrush}"
-          Effect="{StaticResource PcasaButtonShadow}" IsHitTestVisible="False">
-   <Grid>
-    <Border CornerRadius="3" Background="{StaticResource PcasaButtonDepthBrush}"
-            IsHitTestVisible="False"/>
-    <ContentControl Template="{StaticResource PcasaSearchMagnifierTemplate}"
-                    Width="17" Height="17" HorizontalAlignment="Center"
-                    VerticalAlignment="Center"/>
-   </Grid>
-  </Border>
-  <Grid Width="149" Height="27" VerticalAlignment="Center">
+  <Grid Width="180" Height="27" Margin="1,0,0,0" VerticalAlignment="Center">
    <TextBox x:Name="TagSearchBox" VerticalContentAlignment="Center" FontSize="12"
-            Padding="7,0,27,0" ToolTip="{loc:Tr Key='Tags oder Dateinamen suchen'}"
+            Padding="29,0,27,0" ToolTip="{loc:Tr Key='Tags oder Dateinamen suchen'}"
             TextChanged="TagSearchBox_TextChanged">
     <TextBox.Style><Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
      <Style.Triggers><DataTrigger Binding="{Binding IsChecked, ElementName=InvertFilterToggle}" Value="True">
@@ -663,6 +672,8 @@
      </DataTrigger></Style.Triggers>
     </Style></TextBox.Style>
    </TextBox>
+   <ContentControl Template="{StaticResource PcasaSearchMagnifierTemplate}" Width="17" Height="17"
+    Margin="7,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False"/>
    <Button x:Name="ClearTagSearchButton" HorizontalAlignment="Right" VerticalAlignment="Center"
       Margin="0,0,2,0" Style="{StaticResource PcasaSearchClearButtonStyle}"
       ToolTip="{loc:Tr Key='Suchfilter löschen'}" Visibility="Collapsed" Click="ClearTagSearch_Click"/>

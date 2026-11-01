@@ -1196,6 +1196,13 @@ public partial class MainWindow
             return;
         }
 
+        // Inversion is a folder-local toggle, never a global permanent
+        // selection mode. Reset its visual state on a tree-folder change,
+        // WITHOUT performing another inversion.
+        if (_invertedGallerySelectionFolderId is long invertedId &&
+            tag.PhotoFolderId != invertedId)
+            ResetGalleryInvertSelectionToggle();
+
         // Explicit navigation to a different folder ends the previous
         // thumbnail selection. Scrolling does not alter the selection.
         if (_selectedImageIds.Count > 0)

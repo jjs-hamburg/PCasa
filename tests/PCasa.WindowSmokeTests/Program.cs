@@ -56,11 +56,22 @@ internal static class Program
                 ?? throw new Exception("Main menu was not constructed.");
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
-            if (!labels.SequenceEqual(new[] { "Datei", "Bearbeiten",
-                    "Ordner", "Optionen", "Extras", "Darstellung", "Hilfe" }))
+            if (!labels.SequenceEqual(new[] {
+                    "Datei", "Ordner", "Darstellung", "Optionen" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
-            Console.WriteLine("PASS: Real MainWindow creates expected menu.");
+            var fileMenu = items.Single(item => Equals(item.Header, "Datei"));
+            if (fileMenu.Items.OfType<MenuItem>().Count() != 1 ||
+                !Equals(fileMenu.Items.OfType<MenuItem>().Single().Header, "Beenden"))
+                throw new Exception("File menu must contain only Exit.");
+            var optionsMenu = items.Single(item => Equals(item.Header, "Optionen"));
+            if (!optionsMenu.Items.OfType<MenuItem>().Any(item =>
+                    Equals(item.Header, "Schreibfehler")) ||
+                items.Any(item => Equals(item.Header, "Extras") ||
+                                  Equals(item.Header, "Hilfe") ||
+                                  Equals(item.Header, "Bearbeiten")))
+                throw new Exception("Write errors belong under Options; Edit, Extras and Help were removed.");
+            Console.WriteLine("PASS: Menu reduced and reorganized without losing commands.");
 
             var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Single appearance dialog menu missing.");
@@ -185,7 +196,7 @@ internal static class Program
                 !englishMenu.IsChecked || germanMenu.IsChecked ||
                 !menu.Items.OfType<MenuItem>()
                     .Select(item => item.Header?.ToString())
-                    .SequenceEqual(new[] { "File", "Edit", "Folder", "Options", "Extras", "Appearance", "Help" }))
+                    .SequenceEqual(new[] { "File", "Folder", "Appearance", "Options" }))
                 throw new Exception("English translations were not applied live.");
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
                     ?.Content?.ToString() != "Gallery view")
@@ -451,6 +462,25 @@ internal static class Program
             Console.WriteLine("PASS: Menu label gaps are consistent: " +
                 string.Join(", ", gaps.Select(gap => gap.ToString("F1"))));
 
+            // A highlighted submenu row must occupy the entire dropdown
+            // width, not just the length of its own caption.
+            var optionsForWidth = items.Single(item => Equals(item.Header, "Optionen"));
+            optionsForWidth.IsSubmenuOpen = true;
+            Flush(window);
+            var submenuEntries = optionsForWidth.Items.OfType<MenuItem>().ToArray();
+            var menuRowWidths = submenuEntries.Select(item =>
+            {
+                item.ApplyTemplate();
+                return (item.Template.FindName("ItemBackground", item) as Border)?.ActualWidth ?? 0;
+            }).ToArray();
+            optionsForWidth.IsSubmenuOpen = false;
+            Flush(window);
+            if (menuRowWidths.Length < 2 ||
+                menuRowWidths.Any(width => width < 60) ||
+                menuRowWidths.Max() - menuRowWidths.Min() > 2)
+                throw new Exception("Submenu highlights do not span the entire dropdown width: " +
+                    string.Join(", ", menuRowWidths.Select(width => width.ToString("F1"))));
+
             // Opening the REAL submenu must install the configured rightward
             // placement callback, not fall back to WPF's alternating default.
             var options = items.Single(item => Equals(item.Header, "Optionen"));
@@ -510,6 +540,15 @@ internal static class Program
                 ?? throw new Exception("Sort arrow missing.");
             var attributeFrame = window.FindName("GalleryAttributeFilterFrame") as Border
                 ?? throw new Exception("Compact property filter frame is missing.");
+            var invertSelectionToggle = window.FindName("GalleryInvertSelectionToggle") as ToggleButton
+                ?? throw new Exception("Select-invert toggle must be left of the attribute filter.");
+            if (invertSelectionToggle.IsChecked == true ||
+                invertSelectionToggle.Parent is not StackPanel toolbarPanel ||
+                toolbarPanel.Children.IndexOf(invertSelectionToggle) + 1 !=
+                    toolbarPanel.Children.IndexOf(attributeFrame) ||
+                invertSelectionToggle.ToolTip?.ToString() !=
+                    "Auswahl invertieren (aktueller Ordner)")
+                throw new Exception("Selection inversion toggle is not compactly positioned left of Filter.");
             var attributeLabel = window.FindName("GalleryAttributeFilterLabel") as TextBlock
                 ?? throw new Exception("Property filter must display its active state.");
             var attributeInvert = window.FindName("GalleryAttributeFilterInvertButton") as Button
@@ -627,7 +666,7 @@ internal static class Program
                 !ReferenceEquals(searchField.Parent, searchGroup.Children[^1]))
                 throw new Exception("Sort and search must retain their original separate group frames.");
             if (!searchRow.Children.Cast<UIElement>().SequenceEqual(
-                    new UIElement[] { attributeFrame, sortFrame, searchFrame }))
+                    new UIElement[] { invertSelectionToggle, attributeFrame, sortFrame, searchFrame }))
                 throw new Exception("Filter must be inserted before the unchanged sort/search order.");
             if (Math.Abs(sortFrame.ActualHeight - searchFrame.ActualHeight) > .5 ||
                 !Equals(sortFrame.BorderBrush, searchFrame.BorderBrush))
@@ -645,18 +684,20 @@ internal static class Program
                     Math.Abs(((control as Control)?.FontSize ?? 12) - 12) > .1)
                     throw new Exception("All toolbar controls must be 27px high at 12pt: " + control.Name);
             }
-            var searchMagnifier = window.FindName("SearchMagnifierFrame") as Border
-                ?? throw new Exception("Magnifier must be outside and immediately before the search field.");
+            var searchMagnifier = window.FindName("SearchGroupLeadingMagnifier") as Border
+                ?? throw new Exception("Search group needs an added leading magnifier before WAS.");
+            var searchGroupRow = searchMagnifier.Parent as StackPanel
+                ?? throw new Exception("Search pictogram must sit inside the existing search group.");
             if (searchMagnifier.Child is not Grid magnifierContent ||
                 !Descendants<ContentControl>(magnifierContent).Any() ||
-                !ReferenceEquals(searchMagnifier.Parent, (searchField.Parent as Grid)?.Parent) ||
-                ((StackPanel)searchMagnifier.Parent).Children.IndexOf(searchMagnifier) + 1 !=
-                    ((StackPanel)searchMagnifier.Parent).Children.IndexOf((Grid)searchField.Parent))
-                throw new Exception("Search magnifier must precede the search input in the same compact row.");
+                searchGroupRow.Children.IndexOf(searchMagnifier) + 1 !=
+                    searchGroupRow.Children.IndexOf(whatLabel) ||
+                searchField.Parent is not Grid searchInputGrid ||
+                !Descendants<ContentControl>(searchInputGrid).Any() ||
+                Math.Abs(searchInputGrid.ActualWidth - 180) > 1 ||
+                Math.Abs(searchField.Padding.Left - 29) > .1)
+                throw new Exception("Search must have both original in-field and added leading magnifier.");
             if (Math.Abs(sortButton.Width - 145) > .1 ||
-                Math.Abs(searchField.Parent is Grid sg ? sg.ActualWidth - 149 : 1000) > 1 ||
-                Math.Abs(searchMagnifier.ActualWidth + searchMagnifier.Margin.Right +
-                    ((Grid)searchField.Parent).ActualWidth - 180) > 1 ||
                 items.Any(item => Math.Abs(item.Margin.Right - 20) > .01) ||
                 Math.Abs(whatLabel.FontSize - 12) > .1 ||
                 Math.Abs(whereLabel.FontSize - 12) > .1)
