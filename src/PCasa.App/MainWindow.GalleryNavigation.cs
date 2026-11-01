@@ -29,8 +29,7 @@ public partial class MainWindow
             Math.Max(1, BrowseScrollViewer.ViewportHeight));
 
     private bool GalleryAtLiveEdge()
-        => _browseIndex.Count == 0 ||
-           CurrentGalleryLiveEdge() is { } edge && (edge.AtStart || edge.AtEnd);
+        => CurrentGalleryLiveEdge() is not { } edge || edge.AtStart || edge.AtEnd;
 
     // Following a folder edge must not jump to the beginning/end of the
     // entire gallery (which could be tens of thousands of photos away).
@@ -59,8 +58,8 @@ public partial class MainWindow
 
     private bool DeferScanGalleryPublication(long? changedFolderId = null)
     {
-        if (_browseIndex.Count == 0) return false; // First imported JPEG.
         var edge = CurrentGalleryLiveEdge();
+        if (edge is null) return false; // First imported JPEG; no displayed section.
         // An image committed in another folder must never move the current
         // viewport, even when it happens to be at a global gallery edge.
         if (edge is { } current && (current.AtStart || current.AtEnd) &&

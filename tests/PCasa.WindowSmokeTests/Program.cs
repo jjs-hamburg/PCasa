@@ -769,7 +769,7 @@ internal static class Program
                 var scanHeld = (bool)scanDirtyField.GetValue(window)!;
                 var stationaryAnchor = surface.CaptureImageAnchor(scroller.VerticalOffset);
                 if (!scanHeld || stationaryAnchor is null ||
-                    (bool)scrollDefer.Invoke(window, null)! != true)
+                    (bool)scrollDefer.Invoke(window, new object?[] { 100L })! != true)
                     throw new Exception("Automatic scan publication not held in gallery interior.");
 
                 // The user has STOPPED scrolling: scanner UI notifications
@@ -807,21 +807,17 @@ internal static class Program
                 scanDirtyField.SetValue(window, false);
                 scroller.ScrollToTop();
                 Flush(window);
-                if ((bool)scrollDefer.Invoke(window, null)!)
-                    throw new Exception("Top of gallery unexpectedly froze scanner publication.");
+                if ((bool)scrollDefer.Invoke(window, new object?[] { 100L })!)
+                    throw new Exception("First folder's own start unexpectedly froze publication.");
                 scroller.ScrollToBottom();
                 Flush(window);
-                if ((bool)scrollDefer.Invoke(window, null)!)
-                    throw new Exception("End of gallery unexpectedly froze scanner publication.");
+                if ((bool)scrollDefer.Invoke(window, new object?[] { 200L })!)
+                    throw new Exception("Last folder's own end unexpectedly froze publication.");
                 Console.WriteLine("PASS: Gallery first and last rows remain live during scans.");
 
-                // An image from ANOTHER catalog folder must still reach
-                // the gallery at either live edge. This was the real bug:
-                // OnCatalogImageCommitted was suppressed during scans,
-                // and OnCatalogImageIndexed ignored non-active folders.
-                // Assert the existing 750ms coalescer is notified, then
-                // cancel its synthetic event before it touches the runner
-                // database; this is a UI publication-policy test.
+                // A foreign-folder commit must NOT disrupt an unrelated
+                // viewport, even when that viewport is at a GLOBAL edge.
+                // The changed folder's own edge is the only live boundary.
                 var catalogPending = scrollType.GetField(
                     "_catalogPublicationPending", scrollFlags)!;
                 var catalogTimer = scrollType.GetField(
@@ -829,33 +825,32 @@ internal static class Program
                 foreach (var atStart in new[] { true, false })
                 {
                     catalogPending.SetValue(window, 0);
+                    scanDirtyField.SetValue(window, false);
                     if (atStart) scroller.ScrollToTop();
                     else scroller.ScrollToBottom();
                     Flush(window);
-                    var activeAtEdge = (long?)folderBeforeScroll.GetValue(window);
-                    var incomingOtherFolder = activeAtEdge == 100L ? 200L : 100L;
+                    var edge = surface.GetLiveFolderEdge(
+                        scroller.VerticalOffset, scroller.ViewportHeight)
+                        ?? throw new Exception("Global edge has no source folder.");
+                    var incomingOtherFolder = edge.FolderId == 100L ? 200L : 100L;
+                    if ((bool)scrollDefer.Invoke(window,
+                            new object?[] { edge.FolderId })!)
+                        throw new Exception("Current folder's own edge was frozen.");
                     scannerNotification.Invoke(window, new object[] {
                         atStart ? @"C:\synthetic\other-folder-top.jpg" :
                             @"C:\synthetic\other-folder-bottom.jpg", incomingOtherFolder });
                     Flush(window);
                     var queued = (int)catalogPending.GetValue(window)!;
                     var deferred = (bool)scanDirtyField.GetValue(window)!;
-                    // An indexed-photo notification now uses ONE small
-                    // photo-index publication for EVERY folder. A full
-                    // catalog re-read for another folder is the regression
-                    // that made large galleries appear static during scans.
-                    // This synthetic notification has no backed image, so
-                    // the real SQLite/visible-image test lives in FolderAddFlow.
-                    if (queued != 0 || deferred)
+                    if (queued != 0 || !deferred)
                         throw new Exception(
-                            $"Cross-folder indexed-photo arrival scheduled a full gallery reload " +
-                            $"or froze a live edge: AtStart={atStart}; " +
-                            $"Queued={queued}; Deferred={deferred}.");
+                            $"Foreign image did not preserve current folder: " +
+                            $"AtStart={atStart}; Queued={queued}; Deferred={deferred}.");
                     ((DispatcherTimer?)catalogTimer.GetValue(window))?.Stop();
                     catalogPending.SetValue(window, 0);
                 }
                 Console.WriteLine(
-                    "PASS: New photos in other folders reach both gallery live edges.");
+                    "PASS: Own folder edges are live; foreign-folder scans remain deferred.");
             }
             finally
             {
