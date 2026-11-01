@@ -126,7 +126,7 @@ internal static class FolderAddFlow
             // immediately left of the property Filter. Both edges must call
             // the SAME folder inversion and undo on the second click.
             initialTreeRoot.IsSelected = true;
-            Flush(window);
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
             var invertSelection = (System.Windows.Controls.Primitives.ToggleButton?)window.FindName("GalleryInvertSelectionToggle")
                 ?? throw new Exception("Folder selection inversion toggle missing.");
             var selectedImages = (HashSet<long>)typeof(PCasa.App.MainWindow)
@@ -135,11 +135,11 @@ internal static class FolderAddFlow
             if (selectedImages.Count != 0)
                 throw new Exception("New gallery folder should start unselected.");
             invertSelection.IsChecked = true;
-            Flush(window);
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
             if (selectedImages.Count != 1)
                 throw new Exception("Inversion toggle selected anything outside the current folder.");
             invertSelection.IsChecked = false;
-            Flush(window);
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ContextIdle);
             if (selectedImages.Count != 0)
                 throw new Exception("Second inversion toggle did not restore previous selection.");
             Console.WriteLine("PASS: Folder selection inversion toggle affects only the selected folder.");
