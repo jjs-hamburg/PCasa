@@ -106,7 +106,8 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 using var writer = new ExifToolKeywordWriter.Session();
                 writer.WriteGps(path,
                     mode == EditMode.Remove ? null : latitude,
-                    mode == EditMode.Remove ? null : longitude, token);
+                    mode == EditMode.Remove ? null : longitude, token,
+                    knownSourceLengthBytes: before.Length);
                 writeMilliseconds = elapsed.ElapsedMilliseconds - readMilliseconds;
                 // Never cancel between the physical write and catalog commit.
                 if (File.GetLastWriteTimeUtc(path).Ticks != indexedTicks)

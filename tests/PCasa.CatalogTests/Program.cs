@@ -4243,6 +4243,23 @@ internal static class Program
 
     private static void JpegGpsEditRoundTrip()
     {
+        // VPN/SMB writes are full original-file rewrites, not short EXIF
+        // reads. Their timeout must scale with bytes yet remain bounded,
+        // so slow but successful writes do not repeat after 90 seconds.
+        var timeoutMethod = typeof(ExifToolKeywordWriter.Session)
+            .GetMethod("GpsWriteResponseTimeout",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+            ?? throw new Exception("GPS write timeout budget missing.");
+        TimeSpan Budget(long bytes) =>
+            (TimeSpan)(timeoutMethod.Invoke(null, [bytes])
+                ?? throw new Exception("GPS write budget returned null."));
+        if (Budget(0) != TimeSpan.FromMinutes(2) ||
+            Budget(7L * 1024 * 1024) <= TimeSpan.FromSeconds(90) ||
+            Budget(7L * 1024 * 1024) >= Budget(40L * 1024 * 1024) ||
+            Budget(long.MaxValue) != TimeSpan.FromMinutes(30))
+            throw new Exception("GPS SMB write timeout is not size-aware and bounded.");
+
         using var sandbox = new Sandbox();
         var path = Path.Combine(sandbox.Images, "gps-edit.jpg");
         WriteJpeg(path);

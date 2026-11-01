@@ -116,9 +116,10 @@ public static class ExifToolKeywordWriter
 
         // A timeout leaves ReadLineAsync outstanding. Never reuse that stream.
         private string ReadResponseOrReset(Process process, int request,
-            CancellationToken token)
+            CancellationToken token, TimeSpan? timeout = null)
         {
-            try { return ReadResponse(process, request, token); }
+            try { return ReadResponse(process, request, token,
+                timeout ?? TimeSpan.FromSeconds(90)); }
             catch
             {
                 ResetFailedProcess(process);
@@ -148,14 +149,14 @@ public static class ExifToolKeywordWriter
         }
 
         private static string ReadResponse(Process process, int request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, TimeSpan timeout)
         {
             var response = new StringBuilder();
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var line = process.StandardOutput.ReadLineAsync(cancellationToken)
-                    .AsTask().WaitAsync(TimeSpan.FromSeconds(90), cancellationToken)
+                    .AsTask().WaitAsync(timeout, cancellationToken)
                     .GetAwaiter().GetResult();
                 if (line is null)
                     throw new IOException("ExifTool wurde vor der Bestätigung beendet.");
@@ -211,7 +212,8 @@ public static class ExifToolKeywordWriter
         // repository), atomic native commit and native-response validation
         // as keyword writes. Never add -o or create an XMP sidecar.
         public void WriteGps(string imagePath, double? latitude, double? longitude,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            long? knownSourceLengthBytes = null)
         {
             if (latitude.HasValue != longitude.HasValue ||
                 latitude is < -90 or > 90 || longitude is < -180 or > 180 ||
@@ -254,15 +256,38 @@ public static class ExifToolKeywordWriter
             lock (_operationGate)
             {
                 Interlocked.Increment(ref _activeWrites);
-                try { ExecuteMetadataEdit(imagePath, commands, cancellationToken); }
+                try
+                {
+                    // A slow SMB/VPN write can legitimately take much longer
+                    // than an ExifTool metadata read. Use the source size
+                    // already checked by the GPS repository when available.
+                    var length = knownSourceLengthBytes ??
+                        new FileInfo(imagePath).Length;
+                    ExecuteMetadataEdit(imagePath, commands, cancellationToken,
+                        GpsWriteResponseTimeout(length));
+                }
                 finally { Interlocked.Decrement(ref _activeWrites); }
             }
+        }
+
+        // The 90-second EXIF/keyword response timeout is for short metadata
+        // operations. A GPS edit rewrites the original over SMB and needs
+        // a bounded size-aware budget. Measured VPN transfers may take 60-90
+        // seconds for 5-7 MB. A generous allowance avoids aborting healthy
+        // writes and repeatedly rewriting them after package recovery.
+        internal static TimeSpan GpsWriteResponseTimeout(long sourceBytes)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(sourceBytes);
+            var wholeMiB = Math.Ceiling(sourceBytes / (1024d * 1024d));
+            return TimeSpan.FromSeconds(Math.Min(30d * 60d,
+                120d + wholeMiB * 30d));
         }
 
         // Shared native write lifecycle: a scheduler yield can interrupt
         // BEFORE the request, never during ExifTool's temporary-file swap.
         private void ExecuteMetadataEdit(string imagePath,
-            IReadOnlyList<string> commands, CancellationToken cancellationToken)
+            IReadOnlyList<string> commands, CancellationToken cancellationToken,
+            TimeSpan? writeTimeout = null)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
@@ -285,7 +310,10 @@ public static class ExifToolKeywordWriter
             string response;
             try
             {
-                response = ReadResponseOrReset(process, request, CancellationToken.None);
+                // This is the one native-write completion boundary. Do not
+                // kill a healthy SMB rewrite at the read-only 90s limit.
+                response = ReadResponseOrReset(process, request,
+                    CancellationToken.None, writeTimeout);
             }
             catch
             {
