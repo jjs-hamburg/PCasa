@@ -1836,8 +1836,15 @@ internal static class TagFlow
                 "ReadImageInfo", System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic)
                 ?? throw new Exception("Image info reader missing.");
-            var imageInfo = infoGetter.Invoke(window, [editorIds[0], "Info"]) as string
+            var infoResult = infoGetter.Invoke(window, [editorIds[0], "Info"])
                 ?? throw new Exception("Image info was empty.");
+            var imageInfo = infoResult.GetType().GetProperty("Text")?.GetValue(infoResult)
+                as string ?? throw new Exception("Image info text was empty.");
+            // The result also carries optional GPS coordinates from this
+            // one catalog read; the Info pane must never fetch them twice.
+            if (infoResult.GetType().GetProperty("Latitude") is null ||
+                infoResult.GetType().GetProperty("Longitude") is null)
+                throw new Exception("Image info GPS fields missing.");
             if (!imageInfo.Contains("Tags:", StringComparison.Ordinal) ||
                 !imageInfo.Contains(editableTag, StringComparison.Ordinal))
                 throw new Exception("Image information does not include stored tags.");
