@@ -23,25 +23,32 @@ public partial class MainWindow
     // deliberately navigates or follows a live list edge.
     private bool _scanGalleryPublicationDeferred;
 
-    private (long FolderId, bool AtStart, bool AtEnd)? CurrentGalleryLiveEdge()
+    private (long FolderId, bool AtStart, bool AtEnd,
+        double StartScreenY, double EndScreenY)? CurrentGalleryLiveEdge(
+        long? photoFolderId = null)
         => BrowseSurface.GetLiveFolderEdge(
             BrowseScrollViewer.VerticalOffset,
-            Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            Math.Max(1, BrowseScrollViewer.ViewportHeight), photoFolderId);
 
     private bool GalleryAtLiveEdge()
-        => CurrentGalleryLiveEdge() is not { } edge || edge.AtStart || edge.AtEnd;
+        => !BrowseSurface.HasVisiblePhotoSections ||
+           CurrentGalleryLiveEdge() is not null;
 
     // Following a folder edge must not jump to the beginning/end of the
     // entire gallery (which could be tens of thousands of photos away).
-    private void FollowGalleryFolderEdge(long folderId, bool atStart)
+    // Retain the boundary's screen coordinate. A visible first row need
+    // not be at viewport Y=0, and a visible last row need not be at the
+    // bottom of the global gallery.
+    private void FollowGalleryFolderEdge(long folderId, bool atStart,
+        double previousBoundaryScreenY)
     {
         BrowseScrollViewer.UpdateLayout();
-        var offset = atStart
+        var boundary = atStart
             ? BrowseSurface.GetFolderOffset(folderId)
-            : BrowseSurface.GetFolderTrailingOffset(
-                folderId, BrowseScrollViewer.ViewportHeight);
-        if (offset is double position)
-            BrowseScrollViewer.ScrollToVerticalOffset(Math.Max(0, position));
+            : BrowseSurface.GetFolderBottomOffset(folderId);
+        if (boundary is double position)
+            BrowseScrollViewer.ScrollToVerticalOffset(
+                Math.Max(0, position - previousBoundaryScreenY));
         BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
             Math.Max(1, BrowseScrollViewer.ViewportHeight));
     }
@@ -58,12 +65,12 @@ public partial class MainWindow
 
     private bool DeferScanGalleryPublication(long? changedFolderId = null)
     {
-        var edge = CurrentGalleryLiveEdge();
-        if (edge is null) return false; // First imported JPEG; no displayed section.
-        // An image committed in another folder must never move the current
-        // viewport, even when it happens to be at a global gallery edge.
-        if (edge is { } current && (current.AtStart || current.AtEnd) &&
-            (changedFolderId is null || current.FolderId == changedFolderId))
+        // A truly empty gallery must display the first JPEG immediately.
+        // The interior of an existing folder also has no live edge, but
+        // must remain frozen rather than being mistaken for an empty view.
+        if (!BrowseSurface.HasVisiblePhotoSections) return false;
+        var edge = CurrentGalleryLiveEdge(changedFolderId);
+        if (edge is { } visible && (visible.AtStart || visible.AtEnd))
             return false;
         _scanGalleryPublicationDeferred = true;
         return true;

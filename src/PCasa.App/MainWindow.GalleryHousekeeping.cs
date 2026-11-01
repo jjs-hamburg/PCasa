@@ -214,21 +214,49 @@ public partial class MainWindow
 
     private void UpdateGalleryFolderVisibility(bool preserveGalleryAnchor = true)
     {
-        var previousAnchor = preserveGalleryAnchor && _browseInitialized
+        // Capture the user's exact image and optional folder-start boundary
+        // BEFORE removing sections above it. A shrinking ScrollViewer clamps
+        // the old pixel offset, which is NOT a user navigation.
+        var anchor = preserveGalleryAnchor && _browseInitialized
             ? CaptureGalleryAnchor() : null;
-        // Ordinary searches still reveal ALL hits in collapsed descendants.
-        // Galerieansicht is explicitly constrained BEFORE publishing the
-        // index, so it never needs a second independent visual hiding rule.
+        var visibleFolder = BrowseSurface.GetFolderIdAtOffset(
+            BrowseScrollViewer.VerticalOffset + 1);
+        var firstRow = preserveGalleryAnchor && visibleFolder is long folderId
+            ? CurrentGalleryLiveEdge(folderId) : null;
+        var startBoundary = firstRow is { AtStart: true } ? firstRow : null;
+        var navigationVersion = _explicitGalleryNavigationVersion;
+
         IReadOnlySet<long> hidden =
             !string.IsNullOrWhiteSpace(TagSearchBox?.Text)
                 ? new HashSet<long>()
                 : GetGalleryHiddenFolderIds();
 
-        if (BrowseSurface.SetHiddenFolders(hidden) && previousAnchor is { } anchor)
+        if (!BrowseSurface.SetHiddenFolders(hidden) || anchor is not { } image)
+            return;
+
+        // The current visibility operation replaces any earlier pending scan
+        // anchor; otherwise a stale image can win the later WPF reflow.
+        _pendingGalleryAnchor = image;
+        _restoringGalleryLayoutAnchor = true;
+        BrowseScrollViewer.UpdateLayout();
+        RestorePendingGalleryAnchor();
+        if (startBoundary is { } start)
+            FollowGalleryFolderEdge(start.FolderId, true, start.StartScreenY);
+
+        // WPF can post a second extent correction after layout. Restore once
+        // more using the SAME pre-change identity, unless the user has
+        // deliberately navigated in the meantime.
+        _ = Dispatcher.BeginInvoke(new Action(() =>
         {
-            QueueGalleryAnchorRestore(anchor);
-            RestoreAnchorAfterSidebarLayout();
-        }
+            if (Dispatcher.HasShutdownStarted ||
+                navigationVersion != _explicitGalleryNavigationVersion)
+                return;
+            _pendingGalleryAnchor = image;
+            RestorePendingGalleryAnchor();
+            if (startBoundary is { } boundary)
+                FollowGalleryFolderEdge(boundary.FolderId, true,
+                    boundary.StartScreenY);
+        }), DispatcherPriority.Loaded);
     }
 
     private static void GatherCollapsedPaths(TreeViewItem item, List<string> paths)

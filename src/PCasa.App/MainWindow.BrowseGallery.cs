@@ -697,7 +697,8 @@ public partial class MainWindow
         // Anchor the CURRENT viewport, never the obsolete starting position.
         if (fromScanner) QueueGalleryAnchorRestore();
         var liveFolder = fromScanner ? CurrentGalleryLiveEdge() : null;
-        (long FolderId, bool AtStart, bool AtEnd)? followFolder =
+        (long FolderId, bool AtStart, bool AtEnd,
+            double StartScreenY, double EndScreenY)? followFolder =
             liveFolder is { } liveEdge && (liveEdge.AtStart || liveEdge.AtEnd)
                 ? liveEdge : null;
         var navigationVersion = _explicitGalleryNavigationVersion;
@@ -746,7 +747,8 @@ public partial class MainWindow
                 RestorePendingGalleryAnchor();
                 if (followFolder is { } current &&
                     navigationVersion == _explicitGalleryNavigationVersion)
-                    FollowGalleryFolderEdge(current.FolderId, current.AtStart);
+                    FollowGalleryFolderEdge(current.FolderId, current.AtStart,
+                        current.AtStart ? current.StartScreenY : current.EndScreenY);
                 else
                     BrowseSurface.SetViewport(
                         BrowseScrollViewer.VerticalOffset,

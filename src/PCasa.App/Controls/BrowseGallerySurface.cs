@@ -339,23 +339,52 @@ public sealed class BrowseGallerySurface : FrameworkElement
         return section?.Top;
     }
 
-    // Edges belong to the folder SECTION currently under the viewport, not
-    // the entire continuous gallery. The scanner never needs to rebuild the
-    // virtual surface to determine whether this folder is being followed.
-    public (long FolderId, bool AtStart, bool AtEnd)? GetLiveFolderEdge(
-        double verticalOffset, double viewportHeight)
+    // Null means no FIRST/LAST row is visible; it does NOT mean the
+    // gallery is empty. Both sides of a folder boundary may share a viewport.
+    public bool HasVisiblePhotoSections
+    {
+        get { EnsureLayout(); return _sections.Count > 0; }
+    }
+
+    public (long FolderId, bool AtStart, bool AtEnd,
+        double StartScreenY, double EndScreenY)? GetLiveFolderEdge(
+        double verticalOffset, double viewportHeight, long? photoFolderId = null)
     {
         EnsureLayout();
-        if (_sections.Count == 0) return null;
-
         var top = Math.Max(0, verticalOffset);
-        var section = FindSectionAt(top + 1);
-        if (section is null) return null;
         var bottom = top + Math.Max(1, viewportHeight);
         const double tolerance = 2;
-        return (section.Folder.Id,
-            top <= section.Top + tolerance,
-            bottom >= section.Bottom - tolerance);
+
+        foreach (var section in _sections)
+        {
+            if (photoFolderId is long target && section.Folder.Id != target)
+                continue;
+            if (section.Top > bottom || section.Bottom < top)
+                continue;
+            // Only first and last IMAGE rows count, not arbitrary interior
+            // images or the absolute start/end of the ScrollViewer.
+            var firstTop = section.ImagesTop;
+            var firstBottom = firstTop + section.RowImageHeights[0];
+            var lastTop = section.ImagesTop +
+                section.RowOffsets[section.RowCount - 1];
+            var lastBottom = lastTop +
+                section.RowImageHeights[section.RowCount - 1];
+            var atStart = firstBottom >= top - tolerance &&
+                firstTop <= bottom + tolerance;
+            var atEnd = lastTop <= bottom + tolerance &&
+                lastBottom >= top - tolerance;
+            if (atStart || atEnd)
+                return (section.Folder.Id, atStart, atEnd,
+                    section.Top - top, section.Bottom - top);
+        }
+        return null;
+    }
+
+    public double? GetFolderBottomOffset(long photoFolderId)
+    {
+        EnsureLayout();
+        return _sections.FirstOrDefault(section =>
+            section.Folder.Id == photoFolderId)?.Bottom;
     }
 
     public double? GetFolderTrailingOffset(long photoFolderId, double viewportHeight)

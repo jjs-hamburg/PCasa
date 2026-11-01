@@ -116,12 +116,11 @@ public partial class MainWindow
         // while the user is viewing the middle of an unrelated folder.
         if (change.FromScanner &&
             DeferScanGalleryPublication(change.Image.PhotoFolderId)) return;
-        var liveEdge = change.FromScanner ? CurrentGalleryLiveEdge() : null;
-        var followFolderStart = liveEdge is { AtStart: true } &&
-            liveEdge.Value.FolderId == change.Image.PhotoFolderId;
+        var liveEdge = change.FromScanner
+            ? CurrentGalleryLiveEdge(change.Image.PhotoFolderId) : null;
+        var followFolderStart = liveEdge is { AtStart: true };
         var followFolderEnd = !followFolderStart &&
-            liveEdge is { AtEnd: true } &&
-            liveEdge.Value.FolderId == change.Image.PhotoFolderId;
+            liveEdge is { AtEnd: true };
         var navigationVersion = _explicitGalleryNavigationVersion;
 
         // If a complete catalog refresh was concurrently reading SQLite,
@@ -205,7 +204,10 @@ public partial class MainWindow
             RestorePendingGalleryAnchor();
             if (navigationVersion == _explicitGalleryNavigationVersion &&
                 (followFolderStart || followFolderEnd))
-                FollowGalleryFolderEdge(change.Image.PhotoFolderId, followFolderStart);
+                FollowGalleryFolderEdge(change.Image.PhotoFolderId,
+                    followFolderStart, followFolderStart
+                        ? liveEdge!.Value.StartScreenY
+                        : liveEdge!.Value.EndScreenY);
         }
     }
 }

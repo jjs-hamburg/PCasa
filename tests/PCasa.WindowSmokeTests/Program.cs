@@ -801,6 +801,29 @@ internal static class Program
                 Console.WriteLine(
                     "PASS: Scan commits never reflow a stationary middle viewport.");
 
+                // The NEXT folder's first row is live even with the
+                // previous folder still visible above it. Its section is
+                // not the global ScrollViewer beginning.
+                var secondStart = surface.GetFolderOffset(200)!.Value;
+                scroller.ScrollToVerticalOffset(secondStart - 60);
+                Flush(window);
+                if (scroller.VerticalOffset <= 2 ||
+                    surface.GetLiveFolderEdge(
+                        scroller.VerticalOffset, scroller.ViewportHeight, 200)
+                        is not { AtStart: true } ||
+                    (bool)scrollDefer.Invoke(window, new object?[] { 200L })!)
+                    throw new Exception("Visible non-global folder start was not live.");
+
+                // No first/last row is visible deep inside the large first
+                // folder. Null here means INTERIOR, not an empty gallery.
+                scroller.ScrollToVerticalOffset(2200);
+                Flush(window);
+                if (surface.GetLiveFolderEdge(
+                        scroller.VerticalOffset, scroller.ViewportHeight, 100)
+                        is not null ||
+                    !(bool)scrollDefer.Invoke(window, new object?[] { 100L })!)
+                    throw new Exception("Folder interior was mistaken for an empty/live gallery.");
+
                 // Top and bottom remain live. Do not flush the synthetic
                 // index into the actual empty runner database during this
                 // policy test; only evaluate the publication gate.

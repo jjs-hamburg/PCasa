@@ -769,6 +769,14 @@ internal static class FolderAddFlow
                 throw new Exception("Folder-start test accidentally used the global gallery start.");
             activeFolderField.SetValue(window, (long?)later.Id);
 
+            // The first photo row is visible BELOW the preceding folder's
+            // last row. It is not at the viewport's exact first pixel.
+            liveScroller.ScrollToVerticalOffset(laterStart - 60);
+            Until(window, () => liveSurface.GetLiveFolderEdge(
+                    liveScroller.VerticalOffset, liveScroller.ViewportHeight, later.Id)
+                    is { AtStart: true },
+                "Middle folder first row was not recognized with previous folder visible.");
+            var beforeCommitOffset = liveScroller.VerticalOffset;
             var firstLive = Path.Combine(laterFolder, "000-live-begin.jpg");
             WriteJpeg(firstLive);
             var firstLiveScan = Task.Run(() => liveScanner.ScanFile(liveRoot, firstLive));
@@ -777,9 +785,8 @@ internal static class FolderAddFlow
             firstLiveScan.GetAwaiter().GetResult();
             Until(window, () => IsVisiblyRendered(firstLive),
                 "Real committed JPEG did not appear at the start of its OWN folder.");
-            if (Math.Abs(liveScroller.VerticalOffset -
-                    liveSurface.GetFolderOffset(later.Id)!.Value) > 3)
-                throw new Exception("Live scan displaced the folder-start scroll anchor.");
+            if (Math.Abs(liveScroller.VerticalOffset - beforeCommitOffset) > 3)
+                throw new Exception("Live scan moved the visible start boundary of its own folder.");
             Console.WriteLine("PASS: Real scan publishes new JPG at non-global folder start.");
 
             // A committed photo in a DIFFERENT folder must not make this
@@ -883,6 +890,12 @@ internal static class FolderAddFlow
             upperRoot.IsExpanded = false;
             Until(window, () => liveSurface.GetFolderOffset(later.Id) is null,
                 "Collapsing upper folders did not hide the affected gallery section.");
+            Until(window, () =>
+                liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset) == viewAnchor &&
+                liveSurface.GetLiveFolderEdge(
+                    liveScroller.VerticalOffset, liveScroller.ViewportHeight,
+                    lastFolder.Id) is { AtStart: true },
+                "Hiding upper folders moved the current folder START into its interior.");
             upperRoot.IsExpanded = true;
             Until(window, () => liveSurface.CaptureImageAnchor(
                     liveScroller.VerticalOffset) == viewAnchor,
