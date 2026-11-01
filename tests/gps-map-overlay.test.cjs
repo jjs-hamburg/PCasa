@@ -135,6 +135,9 @@ assert.equal(activeMap.getZoom(),0.85);
 assert.ok(messages.some(x=>x.type==='gps-fit-ready' &&
   x.version===3 && x.zoom===0.85),
   'Camera-fit acknowledgment must deliver actual world viewport zoom');
+assert.ok(messages.some(x=>x.type==='viewport' &&
+  x.fitVersion===3 && x.zoom===0.85),
+  'Map moveend carries the fit identity to recover missing pins');
 assert.equal(live().length,beforeFitMarkers,
   'Camera adjustment must not publish any unclustered intermediate markers');
 const fittedBounds=JSON.stringify(activeMap.bounds);

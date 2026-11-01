@@ -32,7 +32,24 @@ public partial class MainWindow
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return new ImageTagRepository(_database).PendingTagPaths();
+                    // Both existing durable write sources contribute to one
+                    // red dot; there is no additional persisted marker state.
+                    var paths = new List<string>(
+                        new ImageTagRepository(_database).PendingTagPaths());
+                    using var db = _database.OpenConnection();
+                    using var cmd = db.CreateCommand();
+                    cmd.CommandText = """
+                        SELECT DISTINCT i.local_path
+                        FROM scheduler_packages p
+                        JOIN json_each(p.payload_json, '$.ImageIds') image
+                        JOIN images i ON i.id=CAST(image.value AS INTEGER)
+                        WHERE p.package_type='gps-edit-v1'
+                          AND p.state IN ('queued','running','deferred')
+                          AND CAST(image.key AS INTEGER)>=p.completed_steps;
+                        """;
+                    using var reader = cmd.ExecuteReader();
+                    while (reader.Read()) paths.Add(reader.GetString(0));
+                    return paths;
                 },
                 () => version == _pendingTagDisplayVersion,
                 workKind: SchedulerWorkKind.CatalogRead);
@@ -41,7 +58,7 @@ public partial class MainWindow
         catch (Exception ex) { PCasaDiagnostics.Write("Tags.PendingDots", ex); return; }
         if (version != _pendingTagDisplayVersion || Dispatcher.HasShutdownStarted) return;
         // Red dots belong to FOLDER nodes. The one durable truth is the
-        // image-level pending_tag_edits table; no independent marker state.
+        // tag intents and GPS journal steps; no independent marker state.
         // Build direct/ancestor lookups once instead of scanning all pending
         // paths for EVERY tree node (quadratic on large NAS trees).
         var direct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

@@ -1916,6 +1916,12 @@ internal static class Program
                     }) is not null)
                     throw new Exception("GPS camera fit bridge accepts stale/invalid zoom.");
 
+                var viewportAck = parseGpsMessage.Invoke(null, new object[] {
+                    "{\"type\":\"viewport\",\"lat\":53.5,\"lon\":10,\"zoom\":1.25,\"fitVersion\":47}"
+                }) ?? throw new Exception("GPS fit viewport not parsed.");
+                if (!Equals(viewportAck.GetType().GetProperty("Version")?.GetValue(viewportAck), 47L))
+                    throw new Exception("GPS fit viewport lost camera-fit identity.");
+
                 using (var gpsHtmlStream = typeof(PCasa.App.MainWindow).Assembly
                     .GetManifestResourceStream("PCasa.App.Resources.gps-map.html"))
                 {
@@ -1930,7 +1936,8 @@ internal static class Program
                     var ack = gpsHtml.IndexOf("type:'gps-fit-ready'", prepare,
                         StringComparison.Ordinal);
                     if (prepare < 0 || fitCallOffset < prepare || ack < fitCallOffset ||
-                        gpsHtml.Contains("window.pcasaFitGpsExtent=", StringComparison.Ordinal))
+                        (!gpsHtml.Contains("fitVersion:latestFitQueryVersion", StringComparison.Ordinal) ||
+                         gpsHtml.Contains("window.pcasaFitGpsExtent=", StringComparison.Ordinal)))
                         throw new Exception("Map draws clusters before fitting selection viewport.");
                 }
 

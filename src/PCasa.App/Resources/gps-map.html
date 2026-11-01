@@ -256,7 +256,8 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  map.on('moveend',()=>{
    drawClusters();
    const p=map.getCenter();
-   post({type:'viewport',lat:p.lat,lon:p.lng,zoom:map.getZoom()});
+   post({type:'viewport',lat:p.lat,lon:p.lng,zoom:map.getZoom(),
+     fitVersion:latestFitQueryVersion});
  });
  window.pcasaResize = () => {map.resize();drawClusters();};
  map.on('load',()=>{fallback.remove();});

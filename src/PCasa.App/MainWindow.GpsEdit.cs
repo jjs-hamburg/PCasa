@@ -383,6 +383,7 @@ public partial class MainWindow
             // An accepted persistent package owns an immutable coordinate
             // snapshot; keeping its draft in the editor is misleading.
                 ClearGpsEditorDraft();
+            _ = RefreshPendingTagDotsAsync();
             _ = ObserveGpsEditAsync(completion, key);
         }
         catch (Exception ex)
@@ -426,6 +427,12 @@ public partial class MainWindow
                         }, packageKey: key));
                 _scheduler.ReportProgress(key, "GPS in Originaldateien schreiben",
                     completed, request.ImageIds.Length);
+                // Refresh in bounded batches, not per original file.
+                if (!Dispatcher.HasShutdownStarted &&
+                    (completed == 1 || completed % 8 == 0 ||
+                     completed == request.ImageIds.Length))
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                        _ = RefreshPendingTagDotsAsync()));
                 return Task.CompletedTask;
             });
         }
@@ -445,6 +452,7 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
             {
                 EndVisibleManualOperation(key);
+                _ = RefreshPendingTagDotsAsync();
                 // Only refresh the existing locally packed thumbnail index,
                 // so the GPS badge changes without decoding/rebuilding images.
                 if (_browseInitialized)

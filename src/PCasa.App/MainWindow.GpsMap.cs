@@ -365,9 +365,12 @@ public partial class MainWindow
                 var lat = Number("lat");
                 var lon = Number("lon");
                 var zoom = Number("zoom");
+                var fitVersion = root.TryGetProperty("fitVersion", out var fit) &&
+                    fit.ValueKind == JsonValueKind.Number &&
+                    fit.TryGetInt64(out var fitId) ? fitId : -1;
                 return lat is double && lon is double && zoom is double
                     ? new GpsMapMessage("viewport", Latitude: lat,
-                        Longitude: lon, Zoom: zoom) : null;
+                        Longitude: lon, Zoom: zoom, Version: fitVersion) : null;
             }
             default:
                 return null;
@@ -435,7 +438,6 @@ public partial class MainWindow
             }
             else if (data.Kind == "gps-fit-ready" &&
                      data.Zoom is double finalZoom &&
-                     data.Id == _gpsQueryRevision &&
                      data.Id == _gpsPendingFitQueryRevision)
             {
                 // The one camera-fit acknowledgment starts the ONE existing
@@ -472,14 +474,19 @@ public partial class MainWindow
                 _appearance.GpsMapCenterLon = lon;
                 _appearance.GpsMapZoom = zoom;
                 SaveAppearance();
-                if (Math.Abs(zoom - _gpsCurrentMapZoom) > 0.02)
+                var matchedFit = _gpsPendingFitQueryRevision >= 0 &&
+                    data.Version == _gpsPendingFitQueryRevision;
+                var zoomChanged = Math.Abs(zoom - _gpsCurrentMapZoom) > 0.02;
+                _gpsCurrentMapZoom = zoom;
+                if (matchedFit)
                 {
-                    _gpsCurrentMapZoom = zoom;
-                    // map.fitBounds emits moveend before gps-fit-ready.
-                    // Do NOT publish a second intermediate projection.
-                    if (_gpsPendingFitQueryRevision < 0)
-                        _ = PublishGpsClustersAsync();
+                    // The fit's versioned moveend is a second way to
+                    // finish camera fitting without leaving zero markers.
+                    _gpsPendingFitQueryRevision = -1;
+                    _ = PublishGpsClustersAsync();
                 }
+                else if (zoomChanged && _gpsPendingFitQueryRevision < 0)
+                    _ = PublishGpsClustersAsync();
             }
             else if (data.Kind == "cluster-click")
             {
@@ -691,11 +698,8 @@ public partial class MainWindow
     {
         if (_sidebarMode != "GPS") return;
         var revision = ++_gpsQueryRevision;
-        // Invalidate any older camera-fit reply when a newer catalog
-        // snapshot supersedes it. If a fit was in progress, redo it once
-        // for the latest snapshot rather than showing stale-scale markers.
-        var fitWasPending = _gpsPendingFitQueryRevision >= 0;
-        _gpsPendingFitQueryRevision = -1;
+        // A background catalog refresh of the SAME selection must not
+        // cancel its in-flight fit and leave a blank world map.
         var selectedIds = _selectedImageIds.ToArray();
         // A map-point filmstrip is a temporary view. Only a REAL change of
         // gallery selection replaces it. Background photo imports may
@@ -703,6 +707,7 @@ public partial class MainWindow
         var selectionChanged = !_gpsFilmstripSelectionSnapshot.SetEquals(selectedIds);
         if (selectionChanged)
         {
+            _gpsPendingFitQueryRevision = -1;
             _gpsFilmstripSelectionSnapshot = selectedIds.ToHashSet();
             _gpsFilmstripPointIds = null;
         }
@@ -801,6 +806,7 @@ public partial class MainWindow
                         rootId, path, BackgroundFolderChangeKind.ScanFile,
                         Recursive: false, ForceExifRefresh: true));
             }
+            var pointsChanged = !_gpsPoints.SequenceEqual(points);
             _gpsPoints = points;
             // Only current selected photo IDs can own the GPS projection.
             // A canceled or obsolete read may never republish older markers.
@@ -854,9 +860,11 @@ public partial class MainWindow
                             selectedGps.Length > 0 ? selectedGps.Length : points.Count);
             if (_gpsGoogleWebsiteActive)
                 NavigateGoogleMapsToSelection();
-            else
+            else if (selectionChanged || pointsChanged)
                 _ = PublishGpsClustersAsync(fitSelection:
-                    selectionChanged || fitWasPending);
+                    selectedGps.Length > 0);
+            // An unchanged selection keeps its existing pending projection.
+            // Live catalog refreshes cannot starve the GPS renderer.
             if (_appearance.ShowGpsFilmstrip)
                 GpsPhotoPopup.Visibility = Visibility.Collapsed;
             else
