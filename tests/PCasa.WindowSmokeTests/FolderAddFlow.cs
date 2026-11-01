@@ -813,14 +813,11 @@ internal static class FolderAddFlow
                 "Foreign photo did not enter the catalog.");
             if (liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)
                     != stableAnchor ||
-                Math.Abs(liveScroller.VerticalOffset -
-                    liveSurface.GetFolderOffset(later.Id)!.Value) > 3)
+                Math.Abs(liveScroller.VerticalOffset - beforeCommitOffset) > 3)
                 throw new Exception(
                     $"Foreign-folder scan moved the current gallery focus: " +
                     $"Before={stableAnchor}, After={liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)}, " +
-                    $"Offset={liveScroller.VerticalOffset:F2}, Expected={liveSurface.GetFolderOffset(later.Id)!.Value - 60:F2}, " +
-                    $"Deferred={typeof(PCasa.App.MainWindow).GetField(\"_scanGalleryPublicationDeferred\", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)}, " +
-                    $"ForeignEdge={liveSurface.GetLiveFolderEdge(liveScroller.VerticalOffset,liveScroller.ViewportHeight,new ImageCatalogRepository(db).GetPhotoFolders().Single(f => SamePath(f.LocalPath,afterRestart)).Id)}");
+                    $"Offset={liveScroller.VerticalOffset:F2}, Expected={beforeCommitOffset:F2}");
             Console.WriteLine("PASS: Foreign-folder scan preserves the current folder anchor.");
 
             // Grow the middle folder beyond a viewport to test the REAL
