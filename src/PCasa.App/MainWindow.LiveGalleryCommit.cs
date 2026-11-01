@@ -17,7 +17,8 @@ public partial class MainWindow
         long? ReplacedImageId,
         PhotoFolderSummary? PreviousFolder,
         PhotoFolderSummary TargetFolder,
-        int CatalogImageCount);
+        int CatalogImageCount,
+        bool FromScanner);
 
     // Scanner publishes only a committed identity. The UI decides whether it
     // belongs to the currently selected photo folder; unrelated NAS progress
@@ -57,7 +58,8 @@ public partial class MainWindow
                     var id = _imageCatalog.GetImageId(canonicalPath);
                     if (id is long imageId &&
                         _imageCatalog.GetImagePhotoFolderId(imageId) == photoFolderId)
-                        PublishCommittedGalleryImage(tier, imageId, null);
+                        PublishCommittedGalleryImage(tier, imageId, null,
+                            fromScanner: true);
                     return true;
                 }, workKind: SchedulerWorkKind.CatalogRead);
         }
@@ -70,7 +72,7 @@ public partial class MainWindow
 
     private void PublishCommittedGalleryImage(
         int? activeTier, long imageId, long? previousFolderId,
-        long? replacedImageId = null)
+        long? replacedImageId = null, bool fromScanner = false)
     {
         if (activeTier is not int tier) return;
 
@@ -87,7 +89,7 @@ public partial class MainWindow
 
             var publication = new LiveGalleryCommit(tier, image,
                 previousFolderId, replacedImageId, source, target,
-                _imageCatalog.CountAll());
+                _imageCatalog.CountAll(), fromScanner);
             if (Dispatcher.HasShutdownStarted) return;
             _ = Dispatcher.BeginInvoke(
                 new Action(() => _ = ApplyCommittedGalleryImageAsync(publication)),
@@ -109,8 +111,12 @@ public partial class MainWindow
 
         // An indexed image may have been fetched BEFORE scrolling began.
         // Guard the actual UI publication as well as the initial notification.
-        if (DeferScanGalleryPublication(change.Image.PhotoFolderId)) return;
-        var liveEdge = CurrentGalleryLiveEdge();
+        // Only background scanner publications are deferred. Manual P0
+        // copies/moves must publish each committed step immediately, even
+        // while the user is viewing the middle of an unrelated folder.
+        if (change.FromScanner &&
+            DeferScanGalleryPublication(change.Image.PhotoFolderId)) return;
+        var liveEdge = change.FromScanner ? CurrentGalleryLiveEdge() : null;
         var followFolderStart = liveEdge is { AtStart: true } &&
             liveEdge.Value.FolderId == change.Image.PhotoFolderId;
         var followFolderEnd = !followFolderStart &&
