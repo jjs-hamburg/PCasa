@@ -23,18 +23,29 @@ public partial class MainWindow
     // deliberately navigates or follows a live list edge.
     private bool _scanGalleryPublicationDeferred;
 
-    private bool GalleryAtTrailingLiveEdge()
-    {
-        var height = BrowseScrollViewer.ScrollableHeight;
-        return height > 2 && height - BrowseScrollViewer.VerticalOffset <= 2;
-    }
-
-    private bool GalleryAtLeadingLiveEdge()
-        => BrowseScrollViewer.VerticalOffset <= 2;
+    private (long FolderId, bool AtStart, bool AtEnd)? CurrentGalleryLiveEdge()
+        => BrowseSurface.GetLiveFolderEdge(
+            BrowseScrollViewer.VerticalOffset,
+            Math.Max(1, BrowseScrollViewer.ViewportHeight));
 
     private bool GalleryAtLiveEdge()
-        => BrowseScrollViewer.ScrollableHeight <= 2 ||
-           GalleryAtLeadingLiveEdge() || GalleryAtTrailingLiveEdge();
+        => _browseIndex.Count == 0 ||
+           CurrentGalleryLiveEdge() is { } edge && (edge.AtStart || edge.AtEnd);
+
+    // Following a folder edge must not jump to the beginning/end of the
+    // entire gallery (which could be tens of thousands of photos away).
+    private void FollowGalleryFolderEdge(long folderId, bool atStart)
+    {
+        BrowseScrollViewer.UpdateLayout();
+        var offset = atStart
+            ? BrowseSurface.GetFolderOffset(folderId)
+            : BrowseSurface.GetFolderTrailingOffset(
+                folderId, BrowseScrollViewer.ViewportHeight);
+        if (offset is double position)
+            BrowseScrollViewer.ScrollToVerticalOffset(Math.Max(0, position));
+        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+            Math.Max(1, BrowseScrollViewer.ViewportHeight));
+    }
 
     private void RegisterGalleryUserScroll()
     {
@@ -46,9 +57,15 @@ public partial class MainWindow
             PublishDeferredScanGallery();
     }
 
-    private bool DeferScanGalleryPublication()
+    private bool DeferScanGalleryPublication(long? changedFolderId = null)
     {
-        if (GalleryAtLiveEdge()) return false;
+        if (_browseIndex.Count == 0) return false; // First imported JPEG.
+        var edge = CurrentGalleryLiveEdge();
+        // An image committed in another folder must never move the current
+        // viewport, even when it happens to be at a global gallery edge.
+        if (edge is { } current && (current.AtStart || current.AtEnd) &&
+            (changedFolderId is null || current.FolderId == changedFolderId))
+            return false;
         _scanGalleryPublicationDeferred = true;
         return true;
     }

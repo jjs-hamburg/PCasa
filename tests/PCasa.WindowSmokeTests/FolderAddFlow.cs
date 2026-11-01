@@ -729,39 +729,164 @@ internal static class FolderAddFlow
                 return ordinal >= 0 && visible is { } span &&
                     ordinal >= span.First && ordinal <= span.Last;
             }
-            // A new photo is placed at the ACTUAL beginning, but the
-            // UI's previously focused tree folder is different. This
-            // recreates the cross-folder scanner path from the bug report.
-            liveScroller.ScrollToTop();
+            // The live edges must be calculated per FOLDER, not from the
+            // scrollable height of the complete gallery. A middle folder's
+            // beginning is deliberately NOT the top of the global viewport.
+            window.Height = 410;
+            window.Width = 900;
+            Until(window, () => liveScroller.ViewportHeight > 100 &&
+                liveSurface.GetFolderOffset(later.Id) is > 2,
+                "WPF gallery did not establish a non-global folder boundary.");
+            var laterStart = liveSurface.GetFolderOffset(later.Id)!.Value;
+            liveScroller.ScrollToVerticalOffset(laterStart);
+            Until(window, () => liveSurface.GetLiveFolderEdge(
+                    liveScroller.VerticalOffset, liveScroller.ViewportHeight)
+                    is { FolderId: var folderId, AtStart: true } &&
+                    folderId == later.Id,
+                "Could not navigate to a non-global folder start.");
+            if (liveScroller.VerticalOffset <= 2)
+                throw new Exception("Folder-start test accidentally used the global gallery start.");
             activeFolderField.SetValue(window, (long?)later.Id);
-            var firstLive = Path.Combine(initialRoot, "000-live-begin.jpg");
+
+            var firstLive = Path.Combine(laterFolder, "000-live-begin.jpg");
             WriteJpeg(firstLive);
             var firstLiveScan = Task.Run(() => liveScanner.ScanFile(liveRoot, firstLive));
             Until(window, () => firstLiveScan.IsCompleted,
-                "Real beginning-edge scanner could not commit a JPEG.");
+                "Real folder-start scanner could not commit a JPEG.");
             firstLiveScan.GetAwaiter().GetResult();
             Until(window, () => IsVisiblyRendered(firstLive),
-                "A real committed JPEG was absent from the visible TOP row.");
-            if (liveScroller.VerticalOffset > 2)
-                throw new Exception("Live scan displaced the beginning-of-gallery scroll position.");
-            Console.WriteLine("PASS: Real cross-folder JPG commit appears at top live edge.");
+                "Real committed JPEG did not appear at the start of its OWN folder.");
+            if (Math.Abs(liveScroller.VerticalOffset -
+                    liveSurface.GetFolderOffset(later.Id)!.Value) > 3)
+                throw new Exception("Live scan displaced the folder-start scroll anchor.");
+            Console.WriteLine("PASS: Real scan publishes new JPG at non-global folder start.");
 
-            // A second photo after the first real publication also has to
-            // appear without a manual reload or navigation.
-            var secondLive = Path.Combine(afterRestart, "zzz-live-end.jpg");
+            // A committed photo in a DIFFERENT folder must not make this
+            // folder move, even if the foreign photo sorts before/after it.
+            var foreignPhoto = Path.Combine(afterRestart, "000-foreign-no-jump.jpg");
+            var stableAnchor = liveSurface.CaptureImageAnchor(
+                liveScroller.VerticalOffset);
+            WriteJpeg(foreignPhoto);
+            var foreignScan = Task.Run(() => liveScanner.ScanFile(liveEndRoot, foreignPhoto));
+            Until(window, () => foreignScan.IsCompleted,
+                "Real foreign-folder scanner could not commit a JPEG.");
+            foreignScan.GetAwaiter().GetResult();
+            // Pump the real WPF dispatcher rather than just testing the event
+            // dispatch (a previous regression test made precisely that error).
+            Until(window, () => new ImageCatalogRepository(db).GetImageId(
+                    foreignPhoto) is long,
+                "Foreign photo did not enter the catalog.");
+            if (liveSurface.CaptureImageAnchor(liveScroller.VerticalOffset)
+                    != stableAnchor ||
+                Math.Abs(liveScroller.VerticalOffset -
+                    liveSurface.GetFolderOffset(later.Id)!.Value) > 3)
+                throw new Exception("Foreign-folder scan moved the current gallery focus.");
+            Console.WriteLine("PASS: Foreign-folder scan preserves the current folder anchor.");
+
+            // Grow the middle folder beyond a viewport to test the REAL
+            // trailing boundary (not just a short section visible all at once).
+            var moreMiddle = Enumerable.Range(0, 12).Select(i =>
+                Path.Combine(laterFolder, $"middle-{i:00}.jpg")).ToArray();
+            foreach (var photo in moreMiddle) WriteJpeg(photo);
+            var fillMiddle = Task.Run(() =>
+            {
+                foreach (var photo in moreMiddle)
+                    liveScanner.ScanFile(liveRoot, photo);
+            });
+            Until(window, () => fillMiddle.IsCompleted,
+                "Middle-folder synthetic scan did not complete.");
+            fillMiddle.GetAwaiter().GetResult();
+            Until(window, () => new ImageCatalogRepository(db).GetImageId(
+                    moreMiddle[^1]) is long && IsVisiblyRendered(firstLive),
+                "Middle-folder start did not remain visible during scan.");
+            var middleEndOffset = liveSurface.GetFolderTrailingOffset(
+                later.Id, liveScroller.ViewportHeight)!.Value;
+            liveScroller.ScrollToVerticalOffset(middleEndOffset);
+            Until(window, () => liveSurface.GetLiveFolderEdge(
+                    liveScroller.VerticalOffset, liveScroller.ViewportHeight)
+                    is { FolderId: var folderId, AtEnd: true } &&
+                    folderId == later.Id,
+                "Could not navigate to the middle folder's trailing edge.");
+
+            var secondLive = Path.Combine(laterFolder, "zzz-live-end.jpg");
             WriteJpeg(secondLive);
-            liveScroller.ScrollToBottom();
-            activeFolderField.SetValue(window, (long?)firstFolder.Id);
-            var bottomScan = Task.Run(() => liveScanner.ScanFile(liveEndRoot, secondLive));
+            var bottomScan = Task.Run(() => liveScanner.ScanFile(liveRoot, secondLive));
             Until(window, () => bottomScan.IsCompleted,
-                "Real end-edge scanner could not commit a JPEG.");
+                "Real folder-end scanner could not commit a JPEG.");
             bottomScan.GetAwaiter().GetResult();
             Until(window, () => IsVisiblyRendered(secondLive),
-                "A real committed JPEG was absent from the visible LAST row.");
-            if (liveScroller.ScrollableHeight > 2 &&
-                liveScroller.ScrollableHeight - liveScroller.VerticalOffset > 2)
-                throw new Exception("Live scan displaced the end-of-gallery scroll position.");
-            Console.WriteLine("PASS: Real second JPG arrives at end live edge.");
+                "Real committed JPEG did not appear at the end of its OWN folder.");
+            if (Math.Abs(liveScroller.VerticalOffset -
+                    liveSurface.GetFolderTrailingOffset(
+                        later.Id, liveScroller.ViewportHeight)!.Value) > 3)
+                throw new Exception("Live scan displaced the folder-end scroll anchor.");
+            Console.WriteLine("PASS: Real scan publishes new JPG at non-global folder end.");
+
+            // Re-enable a large upper folder section, after hiding it, and
+            // confirm that the current last folder stays at the same image.
+            // This reproduces the reported focus jump on folder expansion.
+            var moreLast = Enumerable.Range(0, 12).Select(i =>
+                Path.Combine(afterRestart, $"last-{i:00}.jpg")).ToArray();
+            foreach (var photo in moreLast) WriteJpeg(photo);
+            var fillLast = Task.Run(() =>
+            {
+                foreach (var photo in moreLast)
+                    liveScanner.ScanFile(liveEndRoot, photo);
+            });
+            Until(window, () => fillLast.IsCompleted, "Last-folder scan failed.");
+            fillLast.GetAwaiter().GetResult();
+            var navigation = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshBrowseGalleryAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            // Explicitly use the established user-navigation refresh before
+            // positioning the target, never a second test-only UI index.
+            var refresh = (Task)navigation!.Invoke(window,
+                [true, false, false])!;
+            Until(window, () => refresh.IsCompleted,
+                "Explicit gallery refresh after real scan did not complete.");
+            refresh.GetAwaiter().GetResult();
+            var lastFolder = new ImageCatalogRepository(db).GetPhotoFolders()
+                .Single(folder => SamePath(folder.LocalPath, afterRestart));
+            var lastStart = liveSurface.GetFolderOffset(lastFolder.Id)!.Value;
+            liveScroller.ScrollToVerticalOffset(lastStart);
+            Until(window, () => liveSurface.GetLiveFolderEdge(
+                    liveScroller.VerticalOffset, liveScroller.ViewportHeight)
+                    is { FolderId: var folderId, AtStart: true } &&
+                    folderId == lastFolder.Id,
+                "Cannot position last folder before visibility test.");
+            activeFolderField.SetValue(window, (long?)lastFolder.Id);
+            var viewAnchor = liveSurface.CaptureImageAnchor(
+                liveScroller.VerticalOffset);
+            if (viewAnchor is null)
+                throw new Exception("Last folder has no visible image anchor.");
+
+            var settings = typeof(PCasa.App.MainWindow).GetField(
+                "_appearance", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(window)!;
+            settings.GetType().GetProperty("HideCollapsedFolders")!
+                .SetValue(settings, true);
+            var upperRoot = Walk(restoredTree).Single(item =>
+                SamePath(PathOf(item), initialRoot));
+            upperRoot.IsExpanded = true;
+            var updateVisibility = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateGalleryFolderVisibility",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            updateVisibility.Invoke(window, [true]);
+            upperRoot.IsExpanded = false;
+            Until(window, () => !liveSurface.GetVisibleIndexRanges().Any(
+                    range => range.First < 0),
+                "Visibility reflow did not settle.");
+            upperRoot.IsExpanded = true;
+            Until(window, () => liveSurface.CaptureImageAnchor(
+                    liveScroller.VerticalOffset) == viewAnchor,
+                "Re-expanding folders above the current folder moved the image focus.");
+            if (activeFolderField.GetValue(window) is not long focusedFolder ||
+                focusedFolder != lastFolder.Id)
+                throw new Exception("Re-expanding upper folders changed the active folder.");
+            Console.WriteLine("PASS: Hiding/revealing folders above the viewport preserves photo and folder focus.");
+            settings.GetType().GetProperty("HideCollapsedFolders")!
+                .SetValue(settings, false);
+            updateVisibility.Invoke(window, [true]);
             runningScanField.SetValue(window, previousRunningScan);
             activeFolderField.SetValue(window, previousActiveFolder);
             window.Close();

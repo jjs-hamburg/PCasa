@@ -696,8 +696,10 @@ public partial class MainWindow
         // A user may have moved after the initial async catalog read began.
         // Anchor the CURRENT viewport, never the obsolete starting position.
         if (fromScanner) QueueGalleryAnchorRestore();
-        var followGalleryStart = fromScanner && GalleryAtLeadingLiveEdge();
-        var followGalleryEnd = fromScanner && GalleryAtTrailingLiveEdge();
+        var liveFolder = fromScanner ? CurrentGalleryLiveEdge() : null;
+        var followFolder = liveFolder is { } liveEdge &&
+            (liveEdge.AtStart || liveEdge.AtEnd) ? liveEdge : null;
+        var navigationVersion = _explicitGalleryNavigationVersion;
         PublishPhotoFolderSnapshot(nextFolders, imageCount);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
             nextIndex = _browseIndex;
@@ -741,13 +743,13 @@ public partial class MainWindow
                 BrowseScrollViewer.UpdateLayout();
                 RestoreGalleryPositionOnce();
                 RestorePendingGalleryAnchor();
-                if (followGalleryStart)
-                    BrowseScrollViewer.ScrollToTop();
-                else if (followGalleryEnd)
-                    BrowseScrollViewer.ScrollToBottom();
-                BrowseSurface.SetViewport(
-                    BrowseScrollViewer.VerticalOffset,
-                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+                if (followFolder is { } current &&
+                    navigationVersion == _explicitGalleryNavigationVersion)
+                    FollowGalleryFolderEdge(current.FolderId, current.AtStart);
+                else
+                    BrowseSurface.SetViewport(
+                        BrowseScrollViewer.VerticalOffset,
+                        Math.Max(1, BrowseScrollViewer.ViewportHeight));
             },
             DispatcherPriority.Loaded);
 

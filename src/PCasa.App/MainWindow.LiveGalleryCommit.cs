@@ -33,7 +33,7 @@ public partial class MainWindow
             // A stable interior viewport never reflows for scanner images.
             // At either live edge, however, EVERY committed folder belongs
             // to the continuous gallery, not just the currently focused one.
-            if (DeferScanGalleryPublication()) return;
+            if (DeferScanGalleryPublication(photoFolderId)) return;
             // The focused folder is NOT a filter on scanner publication.
             // Every new committed photo uses the SAME indexed-image path:
             // reading the whole catalog for non-active folders on each scan
@@ -109,9 +109,14 @@ public partial class MainWindow
 
         // An indexed image may have been fetched BEFORE scrolling began.
         // Guard the actual UI publication as well as the initial notification.
-        if (DeferScanGalleryPublication()) return;
-        var followGalleryStart = GalleryAtLeadingLiveEdge();
-        var followGalleryEnd = GalleryAtTrailingLiveEdge();
+        if (DeferScanGalleryPublication(change.Image.PhotoFolderId)) return;
+        var liveEdge = CurrentGalleryLiveEdge();
+        var followFolderStart = liveEdge is { AtStart: true } &&
+            liveEdge.Value.FolderId == change.Image.PhotoFolderId;
+        var followFolderEnd = !followFolderStart &&
+            liveEdge is { AtEnd: true } &&
+            liveEdge.Value.FolderId == change.Image.PhotoFolderId;
+        var navigationVersion = _explicitGalleryNavigationVersion;
 
         // If a complete catalog refresh was concurrently reading SQLite,
         // its previously sampled folder list must not supersede this newer
@@ -192,16 +197,9 @@ public partial class MainWindow
         finally
         {
             RestorePendingGalleryAnchor();
-            if (followGalleryStart || followGalleryEnd)
-            {
-                BrowseScrollViewer.UpdateLayout();
-                if (followGalleryStart)
-                    BrowseScrollViewer.ScrollToTop();
-                else
-                    BrowseScrollViewer.ScrollToBottom();
-                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
-                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
-            }
+            if (navigationVersion == _explicitGalleryNavigationVersion &&
+                (followFolderStart || followFolderEnd))
+                FollowGalleryFolderEdge(change.Image.PhotoFolderId, followFolderStart);
         }
     }
 }

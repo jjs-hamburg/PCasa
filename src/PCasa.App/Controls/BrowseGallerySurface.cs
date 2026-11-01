@@ -339,6 +339,33 @@ public sealed class BrowseGallerySurface : FrameworkElement
         return section?.Top;
     }
 
+    // Edges belong to the folder SECTION currently under the viewport, not
+    // the entire continuous gallery. The scanner never needs to rebuild the
+    // virtual surface to determine whether this folder is being followed.
+    public (long FolderId, bool AtStart, bool AtEnd)? GetLiveFolderEdge(
+        double verticalOffset, double viewportHeight)
+    {
+        EnsureLayout();
+        if (_sections.Count == 0) return null;
+
+        var top = Math.Max(0, verticalOffset);
+        var section = FindSectionAt(top + 1);
+        if (section is null) return null;
+        var bottom = top + Math.Max(1, viewportHeight);
+        const double tolerance = 2;
+        return (section.Folder.Id,
+            top <= section.Top + tolerance,
+            bottom >= section.Bottom - tolerance);
+    }
+
+    public double? GetFolderTrailingOffset(long photoFolderId, double viewportHeight)
+    {
+        EnsureLayout();
+        var section = _sections.FirstOrDefault(candidate => candidate.Folder.Id == photoFolderId);
+        return section is null ? null : Math.Max(section.Top,
+            section.Bottom - Math.Max(1, viewportHeight));
+    }
+
     public (int First, int Last)? GetVisibleIndexRange()
     {
         EnsureLayout();
