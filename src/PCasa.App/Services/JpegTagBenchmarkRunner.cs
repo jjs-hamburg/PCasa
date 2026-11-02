@@ -12,7 +12,8 @@ public static class JpegTagBenchmarkRunner
 {
     public sealed record Report(string SourcePath, long SourceBytes,
         TimeSpan ExifToolElapsed, TimeSpan PrototypeElapsed,
-        bool ServerSideCopyUsed, bool Verified)
+        bool ServerSideCopyUsed, bool Verified,
+        TimeSpan ExifToolTestCopyElapsed = default)
     {
         public override string ToString()
         {
@@ -27,8 +28,11 @@ public static class JpegTagBenchmarkRunner
                 "Quelle: " + SourcePath + Environment.NewLine +
                 "Größe: " + (SourceBytes / (1024d * 1024d)).ToString("F2") +
                 " MiB" + Environment.NewLine +
-                "ExifTool (Kopie + Tags + GPS): " +
+                "ExifTool (nur Tags + GPS auf Testkopie): " +
                 ExifToolElapsed.TotalSeconds.ToString("F2") + " s" +
+                Environment.NewLine +
+                "ExifTool-Testkopie (nicht mitgerechnet): " +
+                ExifToolTestCopyElapsed.TotalSeconds.ToString("F2") + " s" +
                 Environment.NewLine +
                 "JPEG-Prototyp (Kopie + Tags + GPS): " +
                 PrototypeElapsed.TotalSeconds.ToString("F2") + " s" +
@@ -73,7 +77,8 @@ public static class JpegTagBenchmarkRunner
             "Gesamtgröße: " +
             (reports.Sum(x => x.SourceBytes) / (1024d * 1024d)).ToString("F2") +
             " MiB" + Environment.NewLine +
-            "ExifTool gesamt: " + totalBaseline.ToString("F2") + " s" +
+            "ExifTool-Schreibzeit gesamt (ohne Vorbereitungskopien): " +
+            totalBaseline.ToString("F2") + " s" +
             Environment.NewLine +
             "JPEG-Prototyp gesamt: " + totalPrototype.ToString("F2") + " s" +
             Environment.NewLine +
@@ -127,7 +132,7 @@ public static class JpegTagBenchmarkRunner
         // apply only to temporary copies and must be checked independently.
         const double testLatitude = 53.55782;
         const double testLongitude = 10.00896;
-        TimeSpan baseline = default, prototype = default;
+        TimeSpan baseline = default, prototype = default, baselineTestCopy = default;
         bool copyChunk = false;
         try
         {
@@ -135,8 +140,13 @@ public static class JpegTagBenchmarkRunner
             {
                 var tags = reader.ReadSnapshot(source, token).Combined.ToList();
                 tags.Add("PCasaBenchmark-" + nonce[..10]);
+                // To benchmark the production ExifTool write fairly,
+                // prepare its disposable test copy OUTSIDE the timed write.
+                // The original itself must NEVER be used as the test target.
                 var timer = Stopwatch.StartNew();
                 File.Copy(source, baselinePath);
+                baselineTestCopy = timer.Elapsed;
+                timer.Restart();
                 reader.Write(baselinePath, tags, token,
                     knownSourceLengthBytes: sourceBytes);
                 reader.WriteGps(baselinePath, testLatitude, testLongitude,
@@ -191,7 +201,7 @@ public static class JpegTagBenchmarkRunner
                     "Der Vergleich der JPEG-Bilddaten oder Quelldatei ist fehlgeschlagen.");
 
             return new Report(source, sourceBytes, baseline, prototype,
-                copyChunk, Verified: true);
+                copyChunk, Verified: true, baselineTestCopy);
         }
         finally
         {
