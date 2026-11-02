@@ -19,6 +19,7 @@ namespace PCasa.App.Services;
 public static class JpegMpfStagedWriter
 {
     private static long _attempts;
+    private static long _xmpMismatchDiagnostics;
 
     public static bool TryWrite(string path, ExifToolKeywordWriter.Session session,
         IReadOnlyList<string> keywords, bool updateTags,
@@ -90,10 +91,42 @@ public static class JpegMpfStagedWriter
             // Keep the exact same strict acceptance contract as before,
             // but report which individual check refused the local candidate.
             // Do NOT put GPS coordinates, keywords or EXIF values in logs.
-            if (!newTags.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase)
-                    .SetEquals(updateTags ? expected : originalTags.Xmp.ToHashSet(
-                        StringComparer.OrdinalIgnoreCase)))
+            var actualXmp = newTags.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var expectedXmp = updateTags ? expected :
+                originalTags.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!actualXmp.SetEquals(expectedXmp))
             {
+                // Diagnostic only: no metadata values, temporary files or
+                // extra ExifTool calls. Keep the existing strict rejection.
+                // Limit output for the automatically resumed tag packages.
+                var mismatchIndex = Interlocked.Increment(
+                    ref _xmpMismatchDiagnostics);
+                if (mismatchIndex <= 5 || mismatchIndex % 25 == 0)
+                {
+                    var beforeXmp = originalTags.Xmp.ToHashSet(
+                        StringComparer.OrdinalIgnoreCase);
+                    var afterIptc = newTags.Iptc.ToHashSet(
+                        StringComparer.OrdinalIgnoreCase);
+                    var missing = expectedXmp.Except(actualXmp,
+                        StringComparer.OrdinalIgnoreCase).ToHashSet(
+                        StringComparer.OrdinalIgnoreCase);
+                    var extra = actualXmp.Except(expectedXmp,
+                        StringComparer.OrdinalIgnoreCase).ToHashSet(
+                        StringComparer.OrdinalIgnoreCase);
+                    PCasaDiagnostics.WriteMessage("JPEG.MPF.XmpMismatch",
+                        $"File={Path.GetFileName(path)}; Mode={(updateTags ? "Tags" : "GPS")}; " +
+                        $"Index={mismatchIndex}; Requested={keywords.Count}; " +
+                        $"ExpectedXmp={expectedXmp.Count}; BeforeXmp={beforeXmp.Count}; " +
+                        $"BeforeIptc={originalTags.Iptc.Count}; AfterXmp={actualXmp.Count}; " +
+                        $"AfterIptc={afterIptc.Count}; MissingXmp={missing.Count}; " +
+                        $"ExtraXmp={extra.Count}; MissingPresentInIptc=" +
+                        $"{missing.Count(tag => afterIptc.Contains(tag))}; " +
+                        $"ExtraAlreadyInBeforeXmp={extra.Count(tag => beforeXmp.Contains(tag))}; " +
+                        $"XmpUnchanged={actualXmp.SetEquals(beforeXmp)}; " +
+                        $"IptcMatchesExpected={afterIptc.SetEquals(expected)}; " +
+                        $"CombinedMatchesExpected={newTags.Combined.ToHashSet(
+                            StringComparer.OrdinalIgnoreCase).SetEquals(expected)}");
+                }
                 Log("MetadataMismatch:XmpKeywords");
                 return false;
             }
