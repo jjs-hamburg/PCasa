@@ -4344,8 +4344,8 @@ internal static class Program
         "0100"u8.CopyTo(payload.AsSpan(22));
         U16(26, 0xb001); U16(28, 4); U32(30, 1); U32(34, 2);
         U16(38, 0xb002); U16(40, 7); U32(42, 32); U32(46, 50);
-        U32(54, 0); // IFD next offset
-        U32(58, 0x00030000); // Primary JPEG attributes
+        U32(50, 0); // IFD next offset
+        U32(54, 0x00030000); // Primary JPEG attributes
         var insert = 2;
         while (insert + 4 < primary.Length && primary[insert] == 0xff &&
             primary[insert + 1] is >= 0xe0 and <= 0xef)
@@ -4355,8 +4355,8 @@ internal static class Program
         }
         var mpfBytes = Segment(0xe2, payload);
         var sizeFirst = primary.Length + iso.Length + mpfBytes.Length;
-        U32(62, (uint)sizeFirst);
-        U32(66, 0);
+        U32(58, (uint)sizeFirst);
+        U32(62, 0);
         U32(74, (uint)secondary.Length);
         // MPF's TIFF header starts after the preceding ISO APP2 block.
         var mpfTiffAt = insert + iso.Length + 8;
