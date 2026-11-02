@@ -51,8 +51,8 @@ public static class JpegTagBenchmarkRunner
         var source = Path.GetFullPath(sourcePath);
         if (!File.Exists(source))
             throw new FileNotFoundException("Das JPG wurde nicht gefunden.", source);
-        if (Path.GetExtension(source) is not (var ext) ||
-            !ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
+        var ext = Path.GetExtension(source);
+        if (!ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
             !ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException("Bitte ein JPG oder JPEG auswählen.");
 
