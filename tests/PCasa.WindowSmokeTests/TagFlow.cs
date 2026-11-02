@@ -748,14 +748,14 @@ internal static class TagFlow
                 "GpsPlaceSearchBox", "GpsPlaceSearchButton", "GpsPlaceResults",
                 "GpsPlaceResultsPopup", "GpsEditPanel",
                 "GpsPlaceSearchClearButton",
-                "GpsPickPositionToggle", "GpsApplyMissingButton",
-                "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
+                "GpsPickPositionToggle", "GpsReplaceButton", "GpsRemoveButton", "GpsDraftCoordinates",
                 "GpsShowAreaButton", "GpsClearAreaButton"
             })
                 if (window.FindName(controlName) is null)
                     throw new Exception("GPS editing control missing: " + controlName);
-            if (window.FindName("GpsApplyMissingButton") is not Button missingGpsButton ||
-                missingGpsButton.IsEnabled ||
+            if (window.FindName("GpsReplaceButton") is not Button replaceGpsButton ||
+                replaceGpsButton.IsEnabled ||
+                window.FindName("GpsApplyMissingButton") is not null ||
                 window.FindName("GpsRemoveButton") is not Button removeGpsButton)
                 throw new Exception("GPS editor must require a draft for assignment.");
             // Removal is enabled only when the actual gallery has selected
@@ -769,8 +769,8 @@ internal static class TagFlow
             var gpsToolsPanel = (Grid?)window.FindName("GpsEditPanel")
                 ?? throw new Exception("GPS actions grid is missing.");
             if (gpsToolsPanel.Visibility != Visibility.Visible ||
-                gpsToolsPanel.ColumnDefinitions.Count != 4)
-                throw new Exception("GPS Pick/Assign/Replace/Remove must remain in one row.");
+                gpsToolsPanel.ColumnDefinitions.Count != 3)
+                throw new Exception("GPS Pick/Replace/Remove must remain in one row.");
             Console.WriteLine("PASS: GPS tools are immediately available without an editor launcher.");
 
             // Search results are a popup UNDER the search box, not an
@@ -1359,8 +1359,7 @@ internal static class TagFlow
             void CheckFixedRows()
             {
                 foreach (var captionName in new[] {
-                    "GpsPickPositionToggleCaption", "GpsApplyMissingButtonCaption",
-                    "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
+                    "GpsPickPositionToggleCaption", "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
                     "GpsShowAreaCaption", "GpsClearAreaCaption",
                     "GpsCopyButtonCaption", "GpsGoogleButtonCaption" })
                     if (window.FindName(captionName) is not TextBlock caption ||
@@ -1384,8 +1383,7 @@ internal static class TagFlow
                     throw new Exception("GPS controls changed position between normal and expanded modes.");
             }
             foreach (var captionName in new[] {
-                "GpsPickPositionToggleCaption", "GpsApplyMissingButtonCaption",
-                "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
+                "GpsPickPositionToggleCaption", "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
                 "GpsShowAreaCaption", "GpsClearAreaCaption",
                 "GpsCopyButtonCaption", "GpsGoogleButtonCaption" })
                 if (window.FindName(captionName) is not TextBlock text ||
