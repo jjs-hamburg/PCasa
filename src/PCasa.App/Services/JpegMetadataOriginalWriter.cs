@@ -75,6 +75,19 @@ public static class JpegMetadataOriginalWriter
         if (!SafeBasicJpeg(path, out var headerReason))
         {
             checkpointHeader = clock.ElapsedMilliseconds;
+            // MPF/Ultra-HDR images can contain a second full JPEG with
+            // location-dependent offsets. Never reassemble their headers
+            // with the ordinary fast writer. For remote sources only,
+            // use a locally edited, verified copy of the FULL image.
+            if (headerReason == "MPF" &&
+                AdaptiveMetadataWriteTimeout.SourceKey(path).StartsWith(
+                    "SMB:", StringComparison.Ordinal))
+            {
+                var staged = JpegMpfStagedWriter.TryWrite(path, session,
+                    keywords, updateTags, latitude, longitude, token);
+                Report(staged ? "VerifiedMpfStage" : "HeaderFallback:MPFUnverified");
+                return staged;
+            }
             Report("HeaderFallback:" + headerReason);
             return false;
         }
@@ -197,17 +210,17 @@ public static class JpegMetadataOriginalWriter
         }
     }
 
-    private static bool Near(double? a, double? b) =>
+    internal static bool Near(double? a, double? b) =>
         a is double left && b is double right &&
         Math.Abs(left - right) < 0.0001;
 
-    private static bool SameGps(ImageExifData left, ImageExifData right) =>
+    internal static bool SameGps(ImageExifData left, ImageExifData right) =>
         (left.GpsLatitude is null && right.GpsLatitude is null ||
             Near(left.GpsLatitude, right.GpsLatitude)) &&
         (left.GpsLongitude is null && right.GpsLongitude is null ||
             Near(left.GpsLongitude, right.GpsLongitude));
 
-    private static bool SameUnchangedExif(string left, string right, bool ignoreGps)
+    internal static bool SameUnchangedExif(string left, string right, bool ignoreGps)
     {
         using var a = JsonDocument.Parse(left);
         using var b = JsonDocument.Parse(right);
