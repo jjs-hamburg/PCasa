@@ -159,8 +159,10 @@ internal static class Program
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
         Run("GPS edit writes originals, verifies metadata and never creates sidecars", JpegGpsEditRoundTrip, failures);
         Run("JPEG tag prototype adds, removes and preserves original image bytes", JpegTagRewritePrototypeRoundTrip, failures);
-        Run("User JPEG benchmark compares equivalent Tag copies and cleans test files",
+        Run("User JPEG benchmark checks Tags and GPS together and cleans test copies",
             JpegTagBenchmarkCreatesOnlyVerifiedCopies, failures);
+        Run("JPEG prototype adds/removes Tags and GPS while preserving EXIF and compressed pixels",
+            JpegTagAndGpsPrototypeRoundTrip, failures);
         Run("Adaptive Tag/GPS timeouts track real throughput per source without probes",
             AdaptiveMetadataWriteTimeoutIsolatedAndBounded, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
@@ -4299,6 +4301,74 @@ internal static class Program
             @"\\test-server\photos\photo.jpg");
         if (!uncKey.StartsWith("SMB:", StringComparison.Ordinal))
             throw new Exception("UNC source was not classified as SMB.");
+    }
+
+    private static void JpegTagAndGpsPrototypeRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "combined-jpeg-original.jpg");
+        var updated = Path.Combine(sandbox.Images, "combined-jpeg-updated.jpg");
+        var cleared = Path.Combine(sandbox.Images, "combined-jpeg-cleared.jpg");
+        WriteJpeg(path);
+        RunExifTool("-overwrite_original",
+            "-EXIF:Make=Sony", "-EXIF:Model=ILCE-7M4",
+            "-EXIF:DateTimeOriginal=2024:04:03 09:01:02",
+            "-EXIF:Artist=Preserve EXIF",
+            "-EXIF:GPSLatitude=50.12345", "-EXIF:GPSLatitudeRef=N",
+            "-EXIF:GPSLongitude=8.67891", "-EXIF:GPSLongitudeRef=E",
+            path);
+        using (var writer = new ExifToolKeywordWriter.Session())
+            writer.Write(path, new[] { "Keep", "Delete" });
+        var hash = JpegGpsPatchPrototype.CompressedImageHash(path);
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var sourceFields = RunExifTool("-s3", "-EXIF:DateTimeOriginal",
+            "-EXIF:Artist", "-EXIF:Make", "-EXIF:Model", path);
+
+        using (var session = new ExifToolKeywordWriter.Session())
+        {
+            JpegTagRewritePrototype.CreateMetadataCopy(path, updated,
+                new[] { "Keep", "Added" }, 53.5, 10.25, session);
+            JpegTagRewritePrototype.CreateMetadataCopy(updated, cleared,
+                new[] { "Keep" }, null, null, session);
+        }
+
+        using var gpsReader = new ImageExifReader();
+        var input = gpsReader.Read(path);
+        var newGps = gpsReader.Read(updated);
+        var removedGps = gpsReader.Read(cleared);
+        if (input.GpsLatitude is not double startLat ||
+            Math.Abs(startLat - 50.12345) > 0.001 ||
+            input.GpsLongitude is not double startLon ||
+            Math.Abs(startLon - 8.67891) > 0.001)
+            throw new Exception("JPEG Tag/GPS prototype changed the source.");
+        if (newGps.GpsLatitude is not double lat ||
+            Math.Abs(lat - 53.5) > 0.0001 ||
+            newGps.GpsLongitude is not double lon ||
+            Math.Abs(lon - 10.25) > 0.0001)
+            throw new Exception("JPEG prototype did not update existing GPS.");
+        if (removedGps.GpsLatitude is not null ||
+            removedGps.GpsLongitude is not null)
+            throw new Exception("JPEG prototype did not remove GPS.");
+        using (var reader = new ExifToolKeywordWriter.Session())
+        {
+            var added = reader.ReadSnapshot(updated);
+            var removed = reader.ReadSnapshot(cleared);
+            foreach (var field in new[] { added.Xmp, added.Iptc })
+                if (field.Count != 2 ||
+                    !field.Contains("Keep") || !field.Contains("Added"))
+                    throw new Exception("JPEG prototype failed combined Tag additions/deletions.");
+            foreach (var field in new[] { removed.Xmp, removed.Iptc })
+                if (field.Count != 1 || !field.Contains("Keep"))
+                    throw new Exception("JPEG prototype failed Tag removal.");
+        }
+        foreach (var output in new[] { updated, cleared })
+        {
+            if (!hash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(output)) ||
+                File.GetLastWriteTimeUtc(output) != stamp ||
+                RunExifTool("-s3", "-EXIF:DateTimeOriginal",
+                    "-EXIF:Artist", "-EXIF:Make", "-EXIF:Model", output) != sourceFields)
+                throw new Exception("Prototype changed JPEG pixels or unrelated EXIF.");
+        }
     }
 
     private static void JpegTagBenchmarkCreatesOnlyVerifiedCopies()

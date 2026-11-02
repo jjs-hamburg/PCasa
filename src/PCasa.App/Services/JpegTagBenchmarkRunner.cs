@@ -22,15 +22,15 @@ public static class JpegTagBenchmarkRunner
                 PrototypeElapsed.TotalSeconds) /
                 Math.Max(0.001d, Math.Min(ExifToolElapsed.TotalSeconds,
                     PrototypeElapsed.TotalSeconds));
-            return "PCasa JPEG-Tag-Benchmark (nur Testkopien)" +
+            return "PCasa JPEG-Tag+GPS-Benchmark (nur Testkopien)" +
                 Environment.NewLine +
                 "Quelle: " + SourcePath + Environment.NewLine +
                 "Größe: " + (SourceBytes / (1024d * 1024d)).ToString("F2") +
                 " MiB" + Environment.NewLine +
-                "ExifTool (Kopie + Tags): " +
+                "ExifTool (Kopie + Tags + GPS): " +
                 ExifToolElapsed.TotalSeconds.ToString("F2") + " s" +
                 Environment.NewLine +
-                "JPEG-Prototyp (Kopie + Tags): " +
+                "JPEG-Prototyp (Kopie + Tags + GPS): " +
                 PrototypeElapsed.TotalSeconds.ToString("F2") + " s" +
                 Environment.NewLine +
                 "SMB CopyChunk genutzt: " +
@@ -38,7 +38,7 @@ public static class JpegTagBenchmarkRunner
                 Environment.NewLine +
                 "Schneller: " + faster + " (" + ratio.ToString("F2") +
                 "x)" + Environment.NewLine +
-                "Tag-/Bilddatenprüfung: " +
+                "Tag-/GPS-/Bilddatenprüfung: " +
                 (Verified ? "Bestanden" : "NICHT BESTANDEN") +
                 Environment.NewLine +
                 "Original unverändert; Testkopien werden gelöscht.";
@@ -69,6 +69,10 @@ public static class JpegTagBenchmarkRunner
         var sourceBytes = original.Length;
         var sourceTicks = original.LastWriteTimeUtc.Ticks;
         var sourceHash = JpegGpsPatchPrototype.CompressedImageHash(source);
+        // Fixed test coordinates, unrelated to the original picture. They
+        // apply only to temporary copies and must be checked independently.
+        const double testLatitude = 53.55782;
+        const double testLongitude = 10.00896;
         TimeSpan baseline = default, prototype = default;
         bool copyChunk = false;
         try
@@ -82,12 +86,15 @@ public static class JpegTagBenchmarkRunner
                 File.Copy(source, baselinePath);
                 reader.Write(baselinePath, tags, token,
                     knownSourceLengthBytes: sourceBytes);
+                reader.WriteGps(baselinePath, testLatitude, testLongitude,
+                    token);
                 baseline = timer.Elapsed;
 
                 token.ThrowIfCancellationRequested();
                 timer.Restart();
-                var outcome = JpegTagRewritePrototype.CreateTagCopy(source,
-                    prototypePath, tags, token);
+                var outcome = JpegTagRewritePrototype.CreateMetadataCopy(
+                    source, prototypePath, tags,
+                    testLatitude, testLongitude, reader, token);
                 prototype = timer.Elapsed;
                 copyChunk = outcome.ServerSideCopyUsed;
 
@@ -97,6 +104,14 @@ public static class JpegTagBenchmarkRunner
                 var actualOriginal = reader.ReadSnapshot(source, token);
                 var baselineTags = reader.ReadSnapshot(baselinePath, token);
                 var prototypeTags = reader.ReadSnapshot(prototypePath, token);
+                using var gpsReader = new ImageExifReader();
+                var baselineGps = gpsReader.Read(baselinePath, token);
+                var prototypeGps = gpsReader.Read(prototypePath, token);
+                static bool SameGps(ImageExifData data) =>
+                    data.GpsLatitude is double latitude &&
+                    data.GpsLongitude is double longitude &&
+                    Math.Abs(latitude - testLatitude) < 0.0001 &&
+                    Math.Abs(longitude - testLongitude) < 0.0001;
                 var expected = tags.ToHashSet(StringComparer.OrdinalIgnoreCase);
                 if (!baselineTags.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase)
                         .SetEquals(expected) ||
@@ -107,9 +122,10 @@ public static class JpegTagBenchmarkRunner
                     !prototypeTags.Iptc.ToHashSet(StringComparer.OrdinalIgnoreCase)
                         .SetEquals(expected) ||
                     actualOriginal.Combined.Any(t => t.StartsWith(
-                        "PCasaBenchmark-", StringComparison.OrdinalIgnoreCase)))
+                        "PCasaBenchmark-", StringComparison.OrdinalIgnoreCase)) ||
+                    !SameGps(baselineGps) || !SameGps(prototypeGps))
                     throw new InvalidDataException(
-                        "Die JPEG-Metadaten stimmen nicht überein.");
+                        "Die JPEG-Tags oder GPS-Koordinaten stimmen nicht überein.");
             }
 
             if (!sourceHash.SequenceEqual(

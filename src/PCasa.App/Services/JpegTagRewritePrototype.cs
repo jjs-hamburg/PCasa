@@ -28,6 +28,25 @@ public static class JpegTagRewritePrototype
     /// </summary>
     public static Result CreateTagCopy(string originalPath, string targetPath,
         IReadOnlyList<string> keywords, CancellationToken token = default)
+        => CreateCopy(originalPath, targetPath, keywords, updateGps: false,
+            latitude: null, longitude: null, session: null, token);
+
+    /// <summary>
+    /// Combined JPEG Tag/GPS proof of concept; supports setting AND clearing
+    /// GPS coordinates, always on an entirely new output JPEG.
+    /// A caller-owned ExifTool session can be reused across many images.
+    /// </summary>
+    public static Result CreateMetadataCopy(string originalPath, string targetPath,
+        IReadOnlyList<string> keywords, double? latitude, double? longitude,
+        ExifToolKeywordWriter.Session? session = null,
+        CancellationToken token = default)
+        => CreateCopy(originalPath, targetPath, keywords, updateGps: true,
+            latitude, longitude, session, token);
+
+    private static Result CreateCopy(string originalPath, string targetPath,
+        IReadOnlyList<string> keywords, bool updateGps,
+        double? latitude, double? longitude,
+        ExifToolKeywordWriter.Session? session, CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(originalPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
@@ -75,8 +94,19 @@ public static class JpegTagRewritePrototype
 
             // EXIF/IPTC/XMP semantics remain with the verified ExifTool
             // engine; only the small local metadata carrier is rewritten.
-            using (var writer = new ExifToolKeywordWriter.Session())
-                writer.Write(carrierPath, keywords, token);
+            if (session is null)
+            {
+                using var owned = new ExifToolKeywordWriter.Session();
+                owned.Write(carrierPath, keywords, token);
+                if (updateGps)
+                    owned.WriteGps(carrierPath, latitude, longitude, token);
+            }
+            else
+            {
+                session.Write(carrierPath, keywords, token);
+                if (updateGps)
+                    session.WriteGps(carrierPath, latitude, longitude, token);
+            }
             var metadataTime = watch.Elapsed;
 
             byte[] rewrittenMetadata;
