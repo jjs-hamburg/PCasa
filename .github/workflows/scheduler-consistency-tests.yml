@@ -96,8 +96,10 @@ jobs:
           }
           New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
+          Copy-Item -Path "tools/PCasa-JPEG-Benchmark.cmd" -Destination "publish/PCasa/PCasa-JPEG-Benchmark.cmd" -Force
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
           if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
+          if (-not (Test-Path "publish/PCasa/PCasa-JPEG-Benchmark.cmd")) { throw "JPEG benchmark launcher missing" }
           $dll = "publish/PCasa/PCasa.App.dll"
           $dllHash = (Get-FileHash -Path $dll -Algorithm SHA256).Hash
           @(

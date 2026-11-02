@@ -50,6 +50,57 @@ public partial class App : Application
             "; AppAssembly=" + assembly.Location);
     }
 
+    // An isolated user-invoked benchmark mode; it never creates the
+    // ordinary MainWindow, scheduler or monitored-folder background jobs.
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        if (e.Args.Length == 0 || !string.Equals(e.Args[0],
+            "--jpeg-benchmark", StringComparison.OrdinalIgnoreCase))
+        {
+            base.OnStartup(e);
+            return;
+        }
+
+        try
+        {
+            var source = e.Args.Length > 1 ? e.Args[1] : null;
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                var picker = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "PCasa JPEG-Benchmark: JPG auf einer SMB-Freigabe auswählen",
+                    Filter = "JPEG-Bilder (*.jpg;*.jpeg)|*.jpg;*.jpeg"
+                };
+                if (picker.ShowDialog() != true) return;
+                source = picker.FileName;
+            }
+
+            var result = JpegTagBenchmarkRunner.Run(source);
+            var folder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "PCasa");
+            Directory.CreateDirectory(folder);
+            var report = Path.Combine(folder, "JPEG-Benchmark.txt");
+            File.WriteAllText(report, result + Environment.NewLine,
+                System.Text.Encoding.UTF8);
+            MessageBox.Show(result + Environment.NewLine + Environment.NewLine +
+                "Bericht gespeichert unter:" + Environment.NewLine + report,
+                "PCasa – JPEG-Benchmark", MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                "Der JPEG-Benchmark konnte nicht abgeschlossen werden." +
+                Environment.NewLine + ex.Message +
+                Environment.NewLine +
+                "Das Original wurde nicht verändert.",
+                "PCasa – JPEG-Benchmark", MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally { Shutdown(); }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         // WPF can exit through a path other than MainWindow.Close().

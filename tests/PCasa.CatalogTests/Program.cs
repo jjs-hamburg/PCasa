@@ -159,6 +159,8 @@ internal static class Program
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
         Run("GPS edit writes originals, verifies metadata and never creates sidecars", JpegGpsEditRoundTrip, failures);
         Run("JPEG tag prototype adds, removes and preserves original image bytes", JpegTagRewritePrototypeRoundTrip, failures);
+        Run("User JPEG benchmark compares equivalent Tag copies and cleans test files",
+            JpegTagBenchmarkCreatesOnlyVerifiedCopies, failures);
         Run("Adaptive Tag/GPS timeouts track real throughput per source without probes",
             AdaptiveMetadataWriteTimeoutIsolatedAndBounded, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
@@ -4297,6 +4299,34 @@ internal static class Program
             @"\\test-server\photos\photo.jpg");
         if (!uncKey.StartsWith("SMB:", StringComparison.Ordinal))
             throw new Exception("UNC source was not classified as SMB.");
+    }
+
+    private static void JpegTagBenchmarkCreatesOnlyVerifiedCopies()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "benchmark-source.jpg");
+        WriteJpeg(path);
+        using (var writer = new ExifToolKeywordWriter.Session())
+            writer.Write(path, new[] { "Existing Tag" });
+        var originalHash = JpegGpsPatchPrototype.CompressedImageHash(path);
+        var originalStamp = File.GetLastWriteTimeUtc(path);
+        var initialFiles = Directory.GetFiles(sandbox.Images)
+            .OrderBy(p => p, StringComparer.Ordinal).ToArray();
+
+        var result = JpegTagBenchmarkRunner.Run(path);
+        if (result.ExifToolElapsed <= TimeSpan.Zero ||
+            result.PrototypeElapsed <= TimeSpan.Zero ||
+            result.SourceBytes <= 0 ||
+            !result.Verified || result.ToString().Contains("nicht verifiziert",
+                StringComparison.OrdinalIgnoreCase))
+            throw new Exception("User JPEG benchmark did not complete and verify.");
+        if (!Directory.GetFiles(sandbox.Images)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .SequenceEqual(initialFiles) ||
+            !JpegGpsPatchPrototype.CompressedImageHash(path)
+                .SequenceEqual(originalHash) ||
+            File.GetLastWriteTimeUtc(path) != originalStamp)
+            throw new Exception("JPEG benchmark modified original or left test copies.");
     }
 
     private static void JpegTagRewritePrototypeRoundTrip()
