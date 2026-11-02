@@ -174,12 +174,17 @@ public static class JpegMpfStagedWriter
             File.Copy(local, remote, overwrite: false);
             upload = clock.ElapsedMilliseconds - download - edit;
 
-            // Independently verify bytes that reached the NAS.
-            // The original source remains untouched up to the final commit.
-            var localHash = HashFile(local);
-            var remoteHash = HashFile(remote);
-            if (!localHash.SequenceEqual(remoteHash))
-                throw new IOException("Remote MPF candidate differs from verified local JPEG.");
+            // The entire candidate was already validated locally (MPF,
+            // compressed image bytes, XMP/IPTC, GPS and unchanged EXIF).
+            // File.Copy reports write errors. Check the destination length
+            // without reading the whole NAS file back across a slow VPN.
+            // Equal length is a transport-completion guard, not a bytewise
+            // proof; SMB/TCP provide the transport integrity checks.
+            var verifiedLocalLength = new FileInfo(local).Length;
+            var uploaded = new FileInfo(remote);
+            uploaded.Refresh();
+            if (verifiedLocalLength <= 0 || uploaded.Length != verifiedLocalLength)
+                throw new IOException("Remote MPF candidate has an incomplete length.");
             var current = new FileInfo(path);
             if (current.Length != size || current.LastWriteTimeUtc != modified)
                 throw new IOException("MPF original changed during local metadata edit.");
@@ -205,13 +210,6 @@ public static class JpegMpfStagedWriter
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
-    }
-
-    private static byte[] HashFile(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-            FileShare.Read);
-        return SHA256.HashData(stream);
     }
 
     private sealed record MpfSnapshot(int ImageCount, int SecondaryBytes,
