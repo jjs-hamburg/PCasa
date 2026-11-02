@@ -19,7 +19,7 @@ public static class JpegTagRewritePrototype
 
     public sealed record Result(TimeSpan MetadataTime, TimeSpan CopyTime,
         long SourceBytes, long OriginalMetadataBytes,
-        long ResultMetadataBytes);
+        long ResultMetadataBytes, bool ServerSideCopyUsed);
 
     /// <summary>
     /// The target must not exist. The original is never written to, deleted
@@ -90,6 +90,7 @@ public static class JpegTagRewritePrototype
             token.ThrowIfCancellationRequested();
             watch.Restart();
             var targetCreated = false;
+            var usedServerSideCopy = false;
             try
             {
                 using (var output = new FileStream(targetPath, FileMode.CreateNew,
@@ -97,9 +98,23 @@ public static class JpegTagRewritePrototype
                 {
                     targetCreated = true;
                     output.Write(rewrittenMetadata);
-                    original.Position = originalTail;
-                    original.CopyTo(output, 1024 * 1024);
+                    output.Flush();
+                    var offloaded = JpegSmbCopyChunkPrototype.TryCopyUnchangedTail(
+                        original, output, originalTail,
+                        rewrittenMetadata.LongLength, originalLength - originalTail,
+                        token);
+                    if (!offloaded)
+                    {
+                        // Some SMB servers do not implement CopyChunk. A
+                        // partially completed offload is never trusted:
+                        // reset the NEW output before a regular byte copy.
+                        output.SetLength(rewrittenMetadata.LongLength);
+                        output.Position = rewrittenMetadata.LongLength;
+                        original.Position = originalTail;
+                        original.CopyTo(output, 1024 * 1024);
+                    }
                     output.Flush(flushToDisk: true);
+                    usedServerSideCopy = offloaded;
                 }
                 File.SetLastWriteTimeUtc(targetPath, sourceTime);
                 if (new FileInfo(originalPath).Length != originalLength ||
@@ -109,7 +124,8 @@ public static class JpegTagRewritePrototype
                     .SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(targetPath)))
                     throw new IOException("JPEG compressed image bytes changed.");
                 return new Result(metadataTime, watch.Elapsed, originalLength,
-                    originalMetadata.LongLength, rewrittenMetadata.LongLength);
+                    originalMetadata.LongLength, rewrittenMetadata.LongLength,
+                    usedServerSideCopy);
             }
             catch
             {

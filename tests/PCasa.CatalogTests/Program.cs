@@ -4383,7 +4383,8 @@ internal static class Program
             $"remove metadata={remove.MetadataTime.TotalMilliseconds:F0}ms " +
             $"rewrite={remove.CopyTime.TotalMilliseconds:F0}ms; " +
             $"source={add.SourceBytes}B; " +
-            $"header={add.OriginalMetadataBytes}->{add.ResultMetadataBytes}B");
+            $"header={add.OriginalMetadataBytes}->{add.ResultMetadataBytes}B; " +
+            $"serverCopy={(add.ServerSideCopyUsed ? "yes" : "no")}");
     }
 
     private static void JpegGpsEditRoundTrip()
