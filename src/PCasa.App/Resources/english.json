@@ -426,5 +426,21 @@
   "Zur Fotokarte": "Back to photo map",
   "Zur gemerkten Position springen": "Jump to remembered position",
   "Zur vorherigen Position zurück": "Return to previous position",
-  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images"
+  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images",
+  "GPS ersetzen": "Replace GPS",
+  "Fixieren": "Pin",
+  "Fixiert": "Pinned",
+  "Leeren": "Clear",
+  "GPS → Galerie": "GPS → Gallery",
+  "Position bereit – GPS ersetzen.": "Position ready – replace GPS.",
+  "Ersetzt die GPS-Positionen aller markierten Galeriefotos durch den gewählten Kartenpunkt.": "Replaces GPS positions of all selected gallery photos with the chosen map location.",
+  "Entfernt GPS von allen markierten Galeriefotos. Erst Fotos in der Galerie auswählen.": "Removes GPS coordinates from selected gallery photos. First select photos in the gallery.",
+  "Filmstrip festhalten, während die Galerie neu ausgewählt wird.": "Pin the filmstrip while selecting other gallery photos.",
+  "Ein GPS-Foto im Filmstrip und mindestens ein Zielfoto in der Galerie markieren. Vorhandene Positionen werden überschrieben.": "Select exactly one geotagged filmstrip photo and one or more gallery targets. Existing GPS coordinates will be overwritten.",
+  "Leert nur den fixierten Filmstrip. Die Galerie und Originaldateien bleiben unverändert.": "Clears the pinned filmstrip only; the gallery and original photos stay unchanged.",
+  "Kopiert die GPS-Koordinaten eines ausgewählten Fotos. Ohne gültige Koordinaten nicht verfügbar.": "Copies GPS coordinates of the focused photo; requires valid GPS data.",
+  "Nur für ein ausgewähltes Foto mit gültigen GPS-Koordinaten verfügbar.": "Available only for one selected photo with valid GPS coordinates.",
+  "Hebt den Filter Im Ausschnitt auf, sofern er aktiv ist.": "Clears the in-view filter if it is active.",
+  "Fixierung lösen: Filmstrip folgt wieder der Galerieauswahl.": "Unpin: filmstrip follows the gallery selection again.",
+  "Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.": "Pin the current filmstrip photos. New gallery selections then update only the map."
 }

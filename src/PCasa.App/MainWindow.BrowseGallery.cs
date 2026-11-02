@@ -27,6 +27,8 @@ public partial class MainWindow
     private bool _folderManagerOpen;
     private bool _folderManagerCommitPending;
     private BrowseCacheProgressWindow? _browseProgressWindow;
+    // One user choice across all present/future progress windows in this session.
+    private bool _progressHiddenByUser;
 
     // The ONE progress presenter is shared by scanner, cache and manual
     // callers. Its lifetime belongs to this owner, not to whichever caller
@@ -38,11 +40,19 @@ public partial class MainWindow
     private BrowseCacheProgressWindow AcquireProgressPresenter(object owner)
     {
         _progressPresenterOwners.Add(owner);
-        var presenter = _browseProgressWindow ??=
-            new BrowseCacheProgressWindow { Owner = this };
+        if (_browseProgressWindow is null)
+        {
+            _browseProgressWindow = new BrowseCacheProgressWindow { Owner = this };
+            _browseProgressWindow.SetUserHidden(_progressHiddenByUser);
+            _browseProgressWindow.UserHiddenChanged += OnProgressUserHiddenChanged;
+        }
+        var presenter = _browseProgressWindow;
         AttachProgressStatus(presenter);
         return presenter;
     }
+
+    private void OnProgressUserHiddenChanged(bool hidden)
+        => _progressHiddenByUser = hidden;
 
     private void ReleaseProgressPresenter(object owner)
     {
@@ -56,7 +66,11 @@ public partial class MainWindow
             presenter.ProgressPresentationChanged -= VisibleProgressStatusChanged;
             _attachedProgressPresenter = null;
         }
-        presenter?.Finish();
+        if (presenter is not null)
+        {
+            presenter.UserHiddenChanged -= OnProgressUserHiddenChanged;
+            presenter.Finish();
+        }
     }
 
     private async void BrowseSurface_Loaded(object sender, RoutedEventArgs e)

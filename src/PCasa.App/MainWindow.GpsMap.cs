@@ -807,7 +807,6 @@ public partial class MainWindow
             _gpsCurrentCoordinates = null;
             GpsCopyButton.IsEnabled = false;
             GpsRemoveButton.IsEnabled = false;
-            GpsApplyMissingButton.IsEnabled = false;
             GpsReplaceButton.IsEnabled = false;
             GpsCoordinatesText.Text = UiLanguage.T("Keine Fotos ausgewählt");
             GpsPhotoPopup.Visibility = Visibility.Collapsed;
@@ -900,8 +899,6 @@ public partial class MainWindow
                     ? (selectedGps[0].Lat, selectedGps[0].Lon) : null;
             GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
             GpsRemoveButton.IsEnabled = selectedIds.Length > 0;
-            GpsApplyMissingButton.IsEnabled = selectedIds.Length > 0 &&
-                _gpsDraft.HasValue;
             GpsReplaceButton.IsEnabled = selectedIds.Length > 0 &&
                 _gpsDraft.HasValue;
             UpdateGpsGoogleButton();

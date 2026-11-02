@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using PCasa.App.Data;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -35,6 +36,11 @@ public partial class MainWindow
     private HashSet<long>? _gpsFilmstripPointIds;
     private readonly Dictionary<long, BrowseThumbnailIndexEntry> _gpsFilmstripIndexes = [];
     private readonly HashSet<long> _gpsFilmstripRequestedIds = [];
+    // A pinned strip owns a snapshot of image identities/thumbnails, not a
+    // second gallery selection or an additional catalog owner.
+    private bool _gpsFilmstripFrozen;
+    private bool _gpsFilmstripFocusActive;
+    private long? _gpsLastMapSourceFocusId;
 
     private void InitializeGpsFilmstrip()
     {
@@ -42,6 +48,7 @@ public partial class MainWindow
         GpsFilmstripToggle.IsChecked = _appearance.ShowGpsFilmstrip;
         _gpsFilmstripUpdating = false;
         ApplyGpsFilmstripVisibility();
+        UpdateGpsFilmstripControls();
     }
 
     private void ApplyGpsFilmstripVisibility()
@@ -58,7 +65,7 @@ public partial class MainWindow
         else
         {
             _gpsFilmstripPointIds = null;
-            _gpsHighlightedImageId = null;
+            if (!_gpsFilmstripFrozen) _gpsHighlightedImageId = null;
             if (!_gpsFullscreen && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
                 CloseGpsFullscreenImage();
         }
@@ -67,12 +74,82 @@ public partial class MainWindow
             UpdateGpsFilmstrip();
     }
 
+    private void UpdateGpsFilmstripControls()
+    {
+        if (GpsFilmstripFreezeToggle is null) return;
+        GpsFilmstripFreezeCaption.Text = _gpsFilmstripFrozen
+            ? UiLanguage.T("Fixiert") : UiLanguage.T("Fixieren");
+        GpsFilmstripFreezeToggle.ToolTip = _gpsFilmstripFrozen
+            ? UiLanguage.T("Fixierung lösen: Filmstrip folgt wieder der Galerieauswahl.")
+            : UiLanguage.T("Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.");
+        GpsFilmstripCountText.Text = _gpsFilmstripEntries.Count.ToString("N0");
+        GpsFilmstripClearButton.IsEnabled = _gpsFilmstripFrozen &&
+            _gpsFilmstripEntries.Count > 0;
+        var source = GpsFilmstripList.SelectedItem as GpsFilmstripEntry;
+        GpsFilmstripToGalleryButton.IsEnabled = source is not null &&
+            GpsFilmstripList.SelectedItems.Count == 1 &&
+            _selectedImageIds.Count > 0 &&
+            _gpsPoints.Any(p => p.Id == source.Id);
+    }
+
+    private void GpsFilmstripFreeze_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_gpsFilmstripUpdating) return;
+        _gpsFilmstripFrozen = GpsFilmstripFreezeToggle.IsChecked == true;
+        _gpsFilmstripPointIds = null;
+        if (!_gpsFilmstripFrozen)
+        {
+            _gpsFilmstripFocusActive = false;
+            UpdateGpsFilmstrip();
+            _ = RefreshGpsMapAsync();
+        }
+        UpdateGpsFilmstripControls();
+    }
+
+    private void GpsFilmstripClear_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_gpsFilmstripFrozen) return;
+        ++_gpsFilmstripRevision;
+        _gpsFilmstripUpdating = true;
+        _gpsFilmstripEntries = [];
+        _gpsFilmstripIndexes.Clear();
+        _gpsFilmstripRequestedIds.Clear();
+        GpsFilmstripList.ItemsSource = null;
+        _gpsFilmstripUpdating = false;
+        _gpsFilmstripFocusActive = false;
+        _gpsHighlightedImageId = null;
+        UpdateGpsFilmstripControls();
+        // The map still follows the gallery, even while the pinned strip
+        // is empty. Clearing a strip never clears gallery selection/GPS.
+        _ = RefreshGpsMapAsync();
+    }
+
+    private void GpsFilmstripToGallery_Click(object sender, RoutedEventArgs e)
+    {
+        if (GpsFilmstripList.SelectedItems.Count != 1 ||
+            GpsFilmstripList.SelectedItem is not GpsFilmstripEntry source ||
+            _selectedImageIds.Count == 0)
+            return;
+        var point = _gpsPoints.FirstOrDefault(p => p.Id == source.Id);
+        if (point is null) return;
+        _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Replace,
+            (point.Lat, point.Lon));
+    }
+
     // A clicked cluster is a temporary VIEW of its photo identities, not a
     // new gallery selection or an additional query/scheduler. Reuse the one
     // existing filmstrip and its packed-thumbnail reader.
     private void ShowGpsPointGroup(HashSet<long> ids, long anchorId)
     {
         if (ids.Count == 0 || !ids.Contains(anchorId)) return;
+        if (_gpsFilmstripFrozen)
+        {
+            // Clicking map clusters never replaces a pinned source set.
+            HighlightGpsPointOnMap(anchorId);
+            if (ids.Count == 1 && !_gpsFullscreen)
+                ShowGpsPhotoPopup(anchorId);
+            return;
+        }
         _gpsFilmstripPointIds = ids;
         if (!_appearance.ShowGpsFilmstrip)
         {
@@ -95,12 +172,23 @@ public partial class MainWindow
     private void UpdateGpsFilmstrip()
     {
         var revision = ++_gpsFilmstripRevision;
+        if (_gpsFilmstripFrozen)
+        {
+            // A gallery search, folder change or scan does not replace this
+            // snapshot. Keep the existing selected item and packed thumbnails.
+            if (_sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip &&
+                !ReferenceEquals(GpsFilmstripList.ItemsSource, _gpsFilmstripEntries))
+                GpsFilmstripList.ItemsSource = _gpsFilmstripEntries;
+            UpdateGpsFilmstripControls();
+            return;
+        }
         if (_sidebarMode != "GPS" || !_appearance.ShowGpsFilmstrip)
         {
             _gpsFilmstripEntries = [];
             _gpsFilmstripIndexes.Clear();
             _gpsFilmstripRequestedIds.Clear();
             GpsFilmstripList.ItemsSource = null;
+            UpdateGpsFilmstripControls();
             return;
         }
 
@@ -153,6 +241,7 @@ public partial class MainWindow
             p.Id == _gpsHighlightedImageId)
             ?? entries.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
         _gpsFilmstripUpdating = false;
+        UpdateGpsFilmstripControls();
         GpsFilmstripToggle.ToolTip = UiLanguage.T("Filmstreifen") +
             (_gpsFilmstripPointIds is null ? "" :
                 $" · {selected.Count:N0} Fotos am Kartenpunkt") +
@@ -230,6 +319,14 @@ public partial class MainWindow
         FocusGpsPhotoForDisplay(item.Id);
         GpsPhotoPopup.Visibility = Visibility.Collapsed;
         HighlightGpsPointOnMap(item.Id);
+        if (_gpsFilmstripFrozen)
+        {
+            _gpsFilmstripFocusActive = true;
+            // The source may be outside the current gallery/map query.
+            // The existing catalog-to-map path adds that ID by identity.
+            _ = RefreshGpsMapAsync();
+        }
+        UpdateGpsFilmstripControls();
         // Only an ALREADY OPEN image follows single clicks. Ordinary strip
         // navigation remains map-highlight only and never changes gallery
         // selection, map scale or the current map viewport.

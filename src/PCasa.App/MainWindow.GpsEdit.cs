@@ -70,7 +70,6 @@ public partial class MainWindow
         _gpsDraft = null;
         GpsDraftCoordinates.Text = string.Empty;
         GpsEditStatus.Text = string.Empty;
-        GpsApplyMissingButton.IsEnabled = false;
         GpsReplaceButton.IsEnabled = false;
         GpsPickPositionToggle.IsChecked = false;
         if (_gpsBrowserReady && !_gpsGoogleWebsiteActive &&
@@ -278,8 +277,7 @@ public partial class MainWindow
         _gpsDraft = (lat, lon);
         GpsDraftCoordinates.Text = UiLanguage.Format(
             "Neues GPS-Ziel: {0:F6}°, {1:F6}°", lat, lon);
-        GpsEditStatus.Text = UiLanguage.T("Position bereit – GPS übernehmen oder ändern.");
-        GpsApplyMissingButton.IsEnabled = _selectedImageIds.Count > 0;
+        GpsEditStatus.Text = UiLanguage.T("Position bereit – GPS ersetzen.");
         GpsReplaceButton.IsEnabled = _selectedImageIds.Count > 0;
         if (!_gpsBrowserReady || _gpsBrowser is null || _gpsGoogleWebsiteActive) return;
         _gpsBrowser.ExecuteScriptAsync("window.pcasaSetDraft?.(" +
@@ -288,28 +286,22 @@ public partial class MainWindow
             (recenter ? "true" : "false") + ")");
     }
 
-    private void GpsApplyMissing_Click(object sender, RoutedEventArgs e)
-        => _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.MissingOnly);
     private void GpsReplace_Click(object sender, RoutedEventArgs e)
         => _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Replace);
     private void GpsRemove_Click(object sender, RoutedEventArgs e)
         => _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Remove);
 
-    private async Task CommitGpsEditAsync(GpsMetadataRepository.EditMode mode)
+    private async Task CommitGpsEditAsync(GpsMetadataRepository.EditMode mode,
+        (double Lat, double Lon)? coordinatesOverride = null)
     {
         var ids = _selectedImageIds.Distinct().ToArray();
         if (ids.Length == 0) return;
-        if (mode != GpsMetadataRepository.EditMode.Remove && _gpsDraft is null)
+        var coordinates = coordinatesOverride ?? _gpsDraft;
+        if (mode != GpsMetadataRepository.EditMode.Remove && coordinates is null)
         {
             GpsEditStatus.Text = UiLanguage.T("Zuerst einen Ort suchen oder auf die Karte klicken.");
             return;
         }
-        if (mode == GpsMetadataRepository.EditMode.Replace &&
-            MessageBox.Show(this,
-                UiLanguage.Format("Vorhandene GPS-Positionen für bis zu {0} ausgewählte Bilder überschreiben?", ids.Length),
-                UiLanguage.T("GPS ändern"), MessageBoxButton.YesNo,
-                MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-
         try
         {
             // Validate ALL extensions before enqueuing a permanent P0 package.
@@ -351,8 +343,8 @@ public partial class MainWindow
                     "GPS", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var request = new GpsEditRecipe(ids, _gpsDraft?.Lat,
-                _gpsDraft?.Lon, mode);
+            var request = new GpsEditRecipe(ids, coordinates?.Lat,
+                coordinates?.Lon, mode);
             var key = "gps:edit:" + Guid.NewGuid().ToString("N");
             var payload = JsonSerializer.Serialize(request);
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", ids.Length);

@@ -48,6 +48,13 @@ public partial class BrowseCacheProgressWindow : Window
     private string? _pendingOriginalPreviewPath;
     private bool _finished;
     public event EventHandler? ProgressPresentationChanged;
+    // MainWindow owns this preference beyond any presenter lifetime.
+    public event Action<bool>? UserHiddenChanged;
+    public void SetUserHidden(bool hidden)
+    {
+        _hiddenByUser = hidden;
+        if (hidden && IsVisible) Hide();
+    }
     public bool IsManualPresentationActive => _manualPresentationActive;
     public string ProgressStatusText =>
         PhaseText.Text + (string.IsNullOrWhiteSpace(CountText.Text)
@@ -235,7 +242,7 @@ public partial class BrowseCacheProgressWindow : Window
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _manualPresentationActive = true;
         _showingScanDuringManualWait = false;
-        _hiddenByUser = false;
+        // A new manual action is NOT permission to undo the user's Hide.
         PhaseText.Text = UiLanguage.T(name) + " · " + UiLanguage.T("angefordert");
         Progress.IsIndeterminate = true;
         CountText.Text = $"0 / {total:N0}";
@@ -245,7 +252,7 @@ public partial class BrowseCacheProgressWindow : Window
         FolderPathText.ToolTip = null;
         _manualCurrentImagePath = null;
         CurrentThumbnail.Source = null;
-        if (!IsVisible) Show();
+        RevealActiveProgress();
         PublishProgressStatus();
     }
 
@@ -684,6 +691,7 @@ public partial class BrowseCacheProgressWindow : Window
               (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null)))
             return;
         _hiddenByUser = false;
+        UserHiddenChanged?.Invoke(false);
         if (Owner?.WindowState != WindowState.Minimized)
         {
             if (!IsVisible) Show();
@@ -694,6 +702,7 @@ public partial class BrowseCacheProgressWindow : Window
     private void Hide_Click(object sender, RoutedEventArgs e)
     {
         _hiddenByUser = true;
+        UserHiddenChanged?.Invoke(true);
         Hide();
     }
 
@@ -703,6 +712,7 @@ public partial class BrowseCacheProgressWindow : Window
         {
             e.Cancel = true;
             _hiddenByUser = true;
+            UserHiddenChanged?.Invoke(true);
             Hide();
             return;
         }
