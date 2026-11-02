@@ -1,3 +1,4 @@
+using System.IO;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 
@@ -287,7 +288,7 @@ public static class JpegGpsPatchPrototype
             Put32(at + 8, checked((uint)minutes));
             Put32(at + 12, 1);
             Put32(at + 16, checked((uint)remainder));
-            Put32(at + 20, unitsPerSecond);
+            Put32(at + 20, (uint)unitsPerSecond);
         }
 
         exif[latRef] = (byte)(lat < 0 ? 'S' : 'N');

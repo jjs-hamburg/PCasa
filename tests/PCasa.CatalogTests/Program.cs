@@ -158,6 +158,7 @@ internal static class Program
         Run("Per-image tag batch records one atomic local intent transaction", PerImageTagBatchCommitsAtomically, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
         Run("GPS edit writes originals, verifies metadata and never creates sidecars", JpegGpsEditRoundTrip, failures);
+        Run("JPEG tag prototype adds, removes and preserves original image bytes", JpegTagRewritePrototypeRoundTrip, failures);
         Run("Adaptive Tag/GPS timeouts track real throughput per source without probes",
             AdaptiveMetadataWriteTimeoutIsolatedAndBounded, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
@@ -4296,6 +4297,70 @@ internal static class Program
             @"\\test-server\photos\photo.jpg");
         if (!uncKey.StartsWith("SMB:", StringComparison.Ordinal))
             throw new Exception("UNC source was not classified as SMB.");
+    }
+
+    private static void JpegTagRewritePrototypeRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var original = Path.Combine(sandbox.Images, "tag-prototype-original.jpg");
+        var first = Path.Combine(sandbox.Images, "tag-prototype-added.jpg");
+        var second = Path.Combine(sandbox.Images, "tag-prototype-removed.jpg");
+        WriteJpeg(original);
+        var originalHash = JpegGpsPatchPrototype.CompressedImageHash(original);
+        var originalTime = File.GetLastWriteTimeUtc(original);
+        using (var writer = new ExifToolKeywordWriter.Session())
+            writer.Write(original, new[] { "Original", "Keep" });
+        var inputHash = JpegGpsPatchPrototype.CompressedImageHash(original);
+        if (!originalHash.SequenceEqual(inputHash))
+            throw new Exception("ExifTool baseline changed compressed pixels.");
+
+        // This prototype generates new JPEG headers on a tiny local image
+        // and copies the original compressed bytes without touching source.
+        var add = JpegTagRewritePrototype.CreateTagCopy(original, first,
+            new[] { "Original", "Keep", "Added with Ümlaut", "Another" });
+        using (var reader = new ExifToolKeywordWriter.Session())
+        {
+            var snap = reader.ReadSnapshot(first);
+            foreach (var field in new[] { snap.Xmp, snap.Iptc })
+                foreach (var name in new[] { "Original", "Keep",
+                    "Added with Ümlaut", "Another" })
+                    if (!field.Contains(name, StringComparer.Ordinal))
+                        throw new Exception("Prototype failed to add tags in both metadata namespaces: " + name);
+        }
+
+        var remove = JpegTagRewritePrototype.CreateTagCopy(first, second,
+            new[] { "Keep", "Another" });
+        using (var reader = new ExifToolKeywordWriter.Session())
+        {
+            var snap = reader.ReadSnapshot(second);
+            foreach (var field in new[] { snap.Xmp, snap.Iptc })
+                if (field.Count != 2 ||
+                    !field.Contains("Keep", StringComparer.Ordinal) ||
+                    !field.Contains("Another", StringComparer.Ordinal))
+                    throw new Exception("Prototype failed to remove existing tags.");
+            var originalTags = reader.ReadSnapshot(original);
+            if (!originalTags.Xmp.Contains("Original") ||
+                originalTags.Xmp.Contains("Another"))
+                throw new Exception("Prototype changed an original JPEG.");
+        }
+        if (!inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(first)) ||
+            !inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(second)) ||
+            File.GetLastWriteTimeUtc(original) != originalTime ||
+            File.GetLastWriteTimeUtc(first) != originalTime ||
+            File.GetLastWriteTimeUtc(second) != originalTime)
+            throw new Exception("JPEG prototype changed compressed image bytes or timestamps.");
+        if (Directory.EnumerateFiles(sandbox.Images).Any(p =>
+            p.EndsWith(".xmp", StringComparison.OrdinalIgnoreCase) ||
+            p.EndsWith("_exiftool_tmp", StringComparison.OrdinalIgnoreCase) ||
+            p.EndsWith("_original", StringComparison.OrdinalIgnoreCase)))
+            throw new Exception("Prototype left a sidecar/ExifTool orphan.");
+
+        Console.WriteLine($"JPEG TAG PROTOTYPE: add metadata={add.MetadataTime.TotalMilliseconds:F0}ms " +
+            $"rewrite={add.CopyTime.TotalMilliseconds:F0}ms, " +
+            $"remove metadata={remove.MetadataTime.TotalMilliseconds:F0}ms " +
+            $"rewrite={remove.CopyTime.TotalMilliseconds:F0}ms; " +
+            $"source={add.SourceBytes}B; " +
+            $"header={add.OriginalMetadataBytes}->{add.ResultMetadataBytes}B");
     }
 
     private static void JpegGpsEditRoundTrip()
