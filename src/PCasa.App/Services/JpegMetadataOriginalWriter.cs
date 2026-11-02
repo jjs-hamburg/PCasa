@@ -110,8 +110,9 @@ public static class JpegMetadataOriginalWriter
 
             if (!SameUnchangedExif(originalExif.Json, candidateExif.Json,
                 ignoreGps: !updateTags))
-                throw new InvalidDataException(
-                    "JPEG-Kandidat hat andere EXIF-/Kameradaten verändert.");
+                // This candidate cannot safely preserve this camera's
+                // metadata. The source remains untouched: use ExifTool.
+                return false;
 
             // The prototype independently checks the complete compressed
             // image-tail SHA-256. Check identity again at the commit boundary.

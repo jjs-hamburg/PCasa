@@ -163,6 +163,8 @@ internal static class Program
             JpegTagBenchmarkCreatesOnlyVerifiedCopies, failures);
         Run("JPEG prototype adds/removes Tags and GPS while preserving EXIF and compressed pixels",
             JpegTagAndGpsPrototypeRoundTrip, failures);
+        Run("Optimized original JPEG Tag and GPS writes atomically replace only verified JPEGs",
+            JpegOriginalWriterRoundTrip, failures);
         Run("Adaptive Tag/GPS timeouts track real throughput per source without probes",
             AdaptiveMetadataWriteTimeoutIsolatedAndBounded, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
@@ -4301,6 +4303,70 @@ internal static class Program
             @"\\test-server\photos\photo.jpg");
         if (!uncKey.StartsWith("SMB:", StringComparison.Ordinal))
             throw new Exception("UNC source was not classified as SMB.");
+    }
+
+    private static void JpegOriginalWriterRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "jpeg-fast-original.jpg");
+        WriteJpeg(path);
+        RunExifTool("-overwrite_original",
+            "-EXIF:Make=Sony", "-EXIF:Model=ILCE-7M4",
+            "-EXIF:Artist=Original",
+            "-EXIF:DateTimeOriginal=2024:07:01 13:45:11",
+            "-EXIF:GPSLatitude=48.135", "-EXIF:GPSLatitudeRef=N",
+            "-EXIF:GPSLongitude=11.582", "-EXIF:GPSLongitudeRef=E", path);
+        var before = JpegGpsPatchPrototype.CompressedImageHash(path);
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var standard = RunExifTool("-s3", "-EXIF:Make", "-EXIF:Model",
+            "-EXIF:Artist", "-EXIF:DateTimeOriginal", path);
+        using (var writer = new ExifToolKeywordWriter.Session())
+        {
+            if (!JpegMetadataOriginalWriter.TryWriteTags(path,
+                    new[] { "Keep", "Added" }, writer, CancellationToken.None))
+                throw new Exception("Ordinary JPEG refused production Tag fast path.");
+            var afterTags = writer.ReadSnapshot(path);
+            if (!afterTags.Xmp.Contains("Keep") ||
+                !afterTags.Iptc.Contains("Added"))
+                throw new Exception("Optimized original Tag writer did not persist keywords.");
+            if (!JpegMetadataOriginalWriter.TryWriteGps(path, 53.5, 10.25,
+                    writer, CancellationToken.None))
+                throw new Exception("Ordinary JPEG refused production GPS fast path.");
+            using (var exif = new ImageExifReader())
+            {
+                var result = exif.Read(path);
+                if (result.GpsLatitude is not double lat ||
+                    result.GpsLongitude is not double lon ||
+                    Math.Abs(lat - 53.5) > 0.0001 ||
+                    Math.Abs(lon - 10.25) > 0.0001)
+                    throw new Exception("Optimized GPS original not updated.");
+            }
+            if (!JpegMetadataOriginalWriter.TryWriteGps(path, null, null,
+                    writer, CancellationToken.None))
+                throw new Exception("Ordinary JPEG refused production GPS removal.");
+            using var final = new ImageExifReader();
+            if (final.Read(path).GpsLatitude is not null ||
+                final.Read(path).GpsLongitude is not null)
+                throw new Exception("Optimized original GPS deletion failed.");
+            if (!JpegMetadataOriginalWriter.TryWriteTags(path,
+                    Array.Empty<string>(), writer, CancellationToken.None))
+                throw new Exception("Ordinary JPEG refused production tag deletion.");
+            if (writer.ReadSnapshot(path).Combined.Count != 0)
+                throw new Exception("Optimized original Tag deletion failed.");
+        }
+        if (!before.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(path)) ||
+            File.GetLastWriteTimeUtc(path) != stamp ||
+            RunExifTool("-s3", "-EXIF:Make", "-EXIF:Model",
+                "-EXIF:Artist", "-EXIF:DateTimeOriginal", path) != standard)
+            throw new Exception("Fast original JPEG edits changed pixels, timestamp or camera EXIF.");
+        if (Directory.EnumerateFiles(sandbox.Images).Count() != 1)
+            throw new Exception("Fast original JPEG editing leaked temporary copies or sidecars.");
+
+        // Unknown file types MUST be sent to the existing ExifTool writer.
+        if (JpegMetadataOriginalWriter.TryWriteTags(
+            Path.Combine(sandbox.Images, "unsupported.nef"), new[] { "X" },
+            new ExifToolKeywordWriter.Session(), CancellationToken.None))
+            throw new Exception("RAW format was accepted by JPEG-only writer.");
     }
 
     private static void JpegTagAndGpsPrototypeRoundTrip()
