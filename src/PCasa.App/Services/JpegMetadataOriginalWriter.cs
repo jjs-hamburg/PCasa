@@ -72,10 +72,10 @@ public static class JpegMetadataOriginalWriter
         // Refuse multi-picture JPEGs and extended XMP whose absolute offsets
         // can refer to bytes outside ordinary APP1. These require ExifTool's
         // more complete metadata model. A false positive only loses speed.
-        if (!SafeBasicJpeg(path))
+        if (!SafeBasicJpeg(path, out var headerReason))
         {
             checkpointHeader = clock.ElapsedMilliseconds;
-            Report("HeaderFallback");
+            Report("HeaderFallback:" + headerReason);
             return false;
         }
         checkpointHeader = clock.ElapsedMilliseconds;
@@ -239,45 +239,83 @@ public static class JpegMetadataOriginalWriter
         return true;
     }
 
-    private static bool SafeBasicJpeg(string path)
+    private static bool SafeBasicJpeg(string path, out string reason)
     {
-        // APP marker scan only, at most 16 MiB. For uncommon layouts return
-        // to ExifTool without modifying the source or allocating large arrays.
+        // Strict, read-only guard. Every refusal supplies a precise category;
+        // never relax protection merely because a source is on slow SMB.
+        reason = "Unknown";
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read,
             FileShare.Read);
         if (file.ReadByte() != 0xff || file.ReadByte() != 0xd8)
+        {
+            reason = "MissingSOI";
             return false;
+        }
         for (var n = 0; n < 512 && file.Position < 16 * 1024 * 1024; n++)
         {
-            if (file.ReadByte() != 0xff) return false;
+            var markerPrefix = file.ReadByte();
+            if (markerPrefix != 0xff)
+            {
+                reason = markerPrefix < 0 ? "TruncatedMarker" : "UnexpectedMarkerPrefix";
+                return false;
+            }
             int marker;
             do { marker = file.ReadByte(); }
             while (marker == 0xff);
-            if (marker == 0xda) return true;
+            if (marker == 0xda)
+            {
+                reason = "Supported";
+                return true;
+            }
             if (marker <= 0 || marker is 0xd8 or 0xd9 ||
                 marker is >= 0xd0 and <= 0xd7)
+            {
+                reason = "InvalidMarker:" + marker.ToString("X2");
                 return false;
+            }
             var hi = file.ReadByte();
             var lo = file.ReadByte();
             var size = (hi << 8) + lo - 2;
-            if (hi < 0 || lo < 0 || size < 0 || file.Position + size > file.Length)
+            if (hi < 0 || lo < 0 || size < 0 ||
+                file.Position + size > file.Length)
+            {
+                reason = "InvalidSegment:" + marker.ToString("X2");
                 return false;
+            }
             if (marker is >= 0xe1 and <= 0xef)
             {
-                // Scan only header APP blocks. MPF and Extended XMP can hold
-                // absolute offsets or cross-segment links that move on edit.
+                // MPF/MPO, Extended XMP, JUMBF and gain maps can contain
+                // cross-segment offsets. Do not rebase these without
+                // explicitly proving the container format is safe.
                 var count = Math.Min(size, 256);
                 var sample = new byte[count];
                 file.ReadExactly(sample);
-                if (sample.AsSpan().StartsWith("MPF\0"u8) ||
-                    sample.AsSpan().StartsWith("http://ns.adobe.com/xmp/extension/"u8) ||
-                    sample.AsSpan().StartsWith("JUMBF"u8) ||
-                    sample.AsSpan().StartsWith("HDRGM"u8))
+                if (sample.AsSpan().StartsWith("MPF\0"u8))
+                {
+                    reason = "MPF";
                     return false;
+                }
+                if (sample.AsSpan().StartsWith(
+                    "http://ns.adobe.com/xmp/extension/"u8))
+                {
+                    reason = "ExtendedXMP";
+                    return false;
+                }
+                if (sample.AsSpan().StartsWith("JUMBF"u8))
+                {
+                    reason = "JUMBF";
+                    return false;
+                }
+                if (sample.AsSpan().StartsWith("HDRGM"u8))
+                {
+                    reason = "HDRGainMap";
+                    return false;
+                }
                 file.Position += size - count;
             }
             else file.Position += size;
         }
+        reason = "HeaderLimitOrNoSOS";
         return false;
     }
 }
