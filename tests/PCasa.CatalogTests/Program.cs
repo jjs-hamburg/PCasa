@@ -4307,15 +4307,30 @@ internal static class Program
         var second = Path.Combine(sandbox.Images, "tag-prototype-removed.jpg");
         WriteJpeg(original);
         var originalHash = JpegGpsPatchPrototype.CompressedImageHash(original);
-        var originalTime = File.GetLastWriteTimeUtc(original);
         using (var writer = new ExifToolKeywordWriter.Session())
             writer.Write(original, new[] { "Original", "Keep" });
+        // Test source identity is the file AS GIVEN to the prototype,
+        // after preparing the test JPEG with ExifTool.
+        var originalTime = File.GetLastWriteTimeUtc(original);
         var inputHash = JpegGpsPatchPrototype.CompressedImageHash(original);
         if (!originalHash.SequenceEqual(inputHash))
             throw new Exception("ExifTool baseline changed compressed pixels.");
 
+        // Compare equivalent operations: create a new test JPEG and add
+        // keywords by the production ExifTool writer. Local results do
+        // NOT establish SMB performance; remote gains require real testing.
+        var baselinePath = Path.Combine(sandbox.Images, "tag-prototype-exiftool.jpg");
+        var baselineTimer = System.Diagnostics.Stopwatch.StartNew();
+        File.Copy(original, baselinePath);
+        using (var standard = new ExifToolKeywordWriter.Session())
+            standard.Write(baselinePath,
+                new[] { "Original", "Keep", "Added with Ümlaut", "Another" });
+        baselineTimer.Stop();
+        if (!inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(baselinePath)))
+            throw new Exception("ExifTool benchmark copy changed compressed image bytes.");
+
         // This prototype generates new JPEG headers on a tiny local image
-        // and copies the original compressed bytes without touching source.
+        // and copies original compressed bytes without touching source.
         var add = JpegTagRewritePrototype.CreateTagCopy(original, first,
             new[] { "Original", "Keep", "Added with Ümlaut", "Another" });
         using (var reader = new ExifToolKeywordWriter.Session())
@@ -4343,18 +4358,26 @@ internal static class Program
                 originalTags.Xmp.Contains("Another"))
                 throw new Exception("Prototype changed an original JPEG.");
         }
-        if (!inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(first)) ||
-            !inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(second)) ||
-            File.GetLastWriteTimeUtc(original) != originalTime ||
-            File.GetLastWriteTimeUtc(first) != originalTime ||
-            File.GetLastWriteTimeUtc(second) != originalTime)
-            throw new Exception("JPEG prototype changed compressed image bytes or timestamps.");
+        if (!inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(first)))
+            throw new Exception("Added-tag JPEG changed compressed image bytes.");
+        if (!inputHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(second)))
+            throw new Exception("Removed-tag JPEG changed compressed image bytes.");
+        if (File.GetLastWriteTimeUtc(original) != originalTime)
+            throw new Exception("Tag prototype changed the original timestamp.");
+        if (File.GetLastWriteTimeUtc(first) != originalTime)
+            throw new Exception("Added-tag JPEG did not retain source timestamp.");
+        if (File.GetLastWriteTimeUtc(second) != originalTime)
+            throw new Exception("Removed-tag JPEG did not retain source timestamp.");
         if (Directory.EnumerateFiles(sandbox.Images).Any(p =>
             p.EndsWith(".xmp", StringComparison.OrdinalIgnoreCase) ||
             p.EndsWith("_exiftool_tmp", StringComparison.OrdinalIgnoreCase) ||
             p.EndsWith("_original", StringComparison.OrdinalIgnoreCase)))
             throw new Exception("Prototype left a sidecar/ExifTool orphan.");
 
+        Console.WriteLine($"JPEG TAG PROTOTYPE local benchmark: ExifTool-copy-write=" +
+            $"{baselineTimer.Elapsed.TotalMilliseconds:F0}ms; " +
+            $"prototype-copy-write={(add.MetadataTime + add.CopyTime).TotalMilliseconds:F0}ms. " +
+            "NOT a prediction for SMB/VPN.");
         Console.WriteLine($"JPEG TAG PROTOTYPE: add metadata={add.MetadataTime.TotalMilliseconds:F0}ms " +
             $"rewrite={add.CopyTime.TotalMilliseconds:F0}ms, " +
             $"remove metadata={remove.MetadataTime.TotalMilliseconds:F0}ms " +
