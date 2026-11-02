@@ -87,25 +87,51 @@ public static class JpegMpfStagedWriter
             var expected = updateTags ? keywords.ToHashSet(
                 StringComparer.OrdinalIgnoreCase) :
                 originalTags.Combined.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Keep the exact same strict acceptance contract as before,
+            // but report which individual check refused the local candidate.
+            // Do NOT put GPS coordinates, keywords or EXIF values in logs.
             if (!newTags.Xmp.ToHashSet(StringComparer.OrdinalIgnoreCase)
                     .SetEquals(updateTags ? expected : originalTags.Xmp.ToHashSet(
-                        StringComparer.OrdinalIgnoreCase)) ||
-                !newTags.Iptc.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                        StringComparer.OrdinalIgnoreCase)))
+            {
+                Log("MetadataMismatch:XmpKeywords");
+                return false;
+            }
+            if (!newTags.Iptc.ToHashSet(StringComparer.OrdinalIgnoreCase)
                     .SetEquals(updateTags ? expected : originalTags.Iptc.ToHashSet(
-                        StringComparer.OrdinalIgnoreCase)) ||
-                !newTags.Combined.ToHashSet(StringComparer.OrdinalIgnoreCase)
-                    .SetEquals(expected) ||
-                (updateTags
-                    ? !JpegMetadataOriginalWriter.SameGps(originalExif, newExif)
-                    : (latitude.HasValue
-                        ? !JpegMetadataOriginalWriter.Near(newExif.GpsLatitude, latitude) ||
-                          !JpegMetadataOriginalWriter.Near(newExif.GpsLongitude, longitude)
-                        : newExif.GpsLatitude is not null ||
-                          newExif.GpsLongitude is not null)) ||
-                !JpegMetadataOriginalWriter.SameUnchangedExif(
+                        StringComparer.OrdinalIgnoreCase)))
+            {
+                Log("MetadataMismatch:IptcKeywords");
+                return false;
+            }
+            if (!newTags.Combined.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    .SetEquals(expected))
+            {
+                Log("MetadataMismatch:CombinedKeywords");
+                return false;
+            }
+            if (updateTags
+                ? !JpegMetadataOriginalWriter.SameGps(originalExif, newExif)
+                : (latitude.HasValue
+                    ? !JpegMetadataOriginalWriter.Near(newExif.GpsLatitude, latitude) ||
+                      !JpegMetadataOriginalWriter.Near(newExif.GpsLongitude, longitude)
+                    : newExif.GpsLatitude is not null ||
+                      newExif.GpsLongitude is not null))
+            {
+                Log("MetadataMismatch:Gps");
+                return false;
+            }
+            if (!JpegMetadataOriginalWriter.SameUnchangedExif(
                     originalExif.Json, newExif.Json, ignoreGps: !updateTags))
             {
-                Log("MetadataMismatch");
+                // The shared EXIF comparator exposes the FIRST differing
+                // field. Only its GROUP/TAG name is safe to log.
+                var detail = JpegMetadataOriginalWriter.LastFallbackDifference
+                    ?? "Unknown";
+                var end = detail.IndexOf(": ", StringComparison.Ordinal);
+                var fieldName = end >= 0 ? detail[..end] : detail;
+                if (fieldName.Length > 96) fieldName = fieldName[..96];
+                Log("MetadataMismatch:Exif:" + fieldName);
                 return false;
             }
 
