@@ -165,6 +165,8 @@ internal static class Program
             JpegTagAndGpsPrototypeRoundTrip, failures);
         Run("Optimized original JPEG Tag and GPS writes atomically replace only verified JPEGs",
             JpegOriginalWriterRoundTrip, failures);
+        Run("MPF dual-image JPEG staging retains second picture, offset and HDR payload during Tag/GPS edits",
+            MpfStagedWriterPreservesBothImages, failures);
         Run("Adaptive Tag/GPS timeouts track real throughput per source without probes",
             AdaptiveMetadataWriteTimeoutIsolatedAndBounded, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
@@ -4303,6 +4305,105 @@ internal static class Program
             @"\\test-server\photos\photo.jpg");
         if (!uncKey.StartsWith("SMB:", StringComparison.Ordinal))
             throw new Exception("UNC source was not classified as SMB.");
+    }
+
+    private static void MpfStagedWriterPreservesBothImages()
+    {
+        using var sandbox = new Sandbox();
+        var jpeg = Path.Combine(sandbox.Images, "dual-mpf.jpg");
+        var second = Path.Combine(sandbox.Images, "gainmap.jpg");
+        WriteJpeg(jpeg);
+        WriteJpeg(second);
+        RunExifTool("-overwrite_original", "-EXIF:Make=Samsung",
+            "-EXIF:Model=SM-S938B",
+            "-EXIF:DateTimeOriginal=2025:12:27 13:01:29", jpeg);
+        var primary = File.ReadAllBytes(jpeg);
+        var secondary = File.ReadAllBytes(second);
+        File.Delete(second);
+
+        var iso = Segment(0xe2,
+            System.Text.Encoding.ASCII.GetBytes(
+                "urn:iso:std:iso:ts:21496:-1\0\0\0\0\0"));
+
+        // MPF version 0100: 2 images, 2x16-byte MPEntry, absolute second
+        // image beginning computed relative to the MPF TIFF header.
+        var payload = new byte[86];
+        "MPF\0"u8.CopyTo(payload);
+        payload[4] = (byte)'I';
+        payload[5] = (byte)'I';
+        void U16(int at, ushort val) =>
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(
+                payload.AsSpan(at, 2), val);
+        void U32(int at, uint val) =>
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+                payload.AsSpan(at, 4), val);
+        U16(6, 42);
+        U32(8, 8);
+        U16(12, 3);
+        U16(14, 0xb000); U16(16, 7); U32(18, 4);
+        "0100"u8.CopyTo(payload.AsSpan(22));
+        U16(26, 0xb001); U16(28, 4); U32(30, 1); U32(34, 2);
+        U16(38, 0xb002); U16(40, 7); U32(42, 32); U32(46, 50);
+        U32(54, 0); // IFD next offset
+        U32(58, 0x00030000); // Primary JPEG attributes
+        var insert = 2;
+        while (insert + 4 < primary.Length && primary[insert] == 0xff &&
+            primary[insert + 1] is >= 0xe0 and <= 0xef)
+        {
+            var size = (primary[insert + 2] << 8) | primary[insert + 3];
+            insert += size + 2;
+        }
+        var mpfBytes = Segment(0xe2, payload);
+        var sizeFirst = primary.Length + iso.Length + mpfBytes.Length;
+        U32(62, (uint)sizeFirst);
+        U32(66, 0);
+        U32(74, (uint)secondary.Length);
+        // MPF's TIFF header starts after the preceding ISO APP2 block.
+        var mpfTiffAt = insert + iso.Length + 8;
+        U32(78, (uint)(sizeFirst - mpfTiffAt));
+        mpfBytes = Segment(0xe2, payload);
+        var combined = new byte[sizeFirst + secondary.Length];
+        Buffer.BlockCopy(primary, 0, combined, 0, insert);
+        Buffer.BlockCopy(iso, 0, combined, insert, iso.Length);
+        Buffer.BlockCopy(mpfBytes, 0, combined, insert + iso.Length, mpfBytes.Length);
+        Buffer.BlockCopy(primary, insert, combined,
+            insert + iso.Length + mpfBytes.Length, primary.Length - insert);
+        Buffer.BlockCopy(secondary, 0, combined, sizeFirst, secondary.Length);
+        File.WriteAllBytes(jpeg, combined);
+
+        var sourceHash = JpegGpsPatchPrototype.CompressedImageHash(jpeg);
+        var modificationTime = File.GetLastWriteTimeUtc(jpeg);
+        using var writer = new ExifToolKeywordWriter.Session();
+        if (!JpegMpfStagedWriter.TryWrite(jpeg, writer, new[] { "HDR", "Keep" },
+            updateTags: true, null, null, CancellationToken.None))
+            throw new Exception("Synthetic MPF Tag edit rejected or changed secondary image.");
+        if (!JpegMpfStagedWriter.TryWrite(jpeg, writer,
+            Array.Empty<string>(), updateTags: false, 53.5, 10.25,
+            CancellationToken.None))
+            throw new Exception("Synthetic MPF GPS edit rejected or changed secondary image.");
+        if (!sourceHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(jpeg)))
+            throw new Exception("MPF edit changed the original compressed picture stream.");
+        var meta = new ImageExifReader().Read(jpeg);
+        if (meta.GpsLatitude is not double lat ||
+            Math.Abs(lat - 53.5) > 0.0001)
+            throw new Exception("MPF GPS did not survive native edit.");
+        if (!writer.ReadSnapshot(jpeg).Combined.Contains("HDR"))
+            throw new Exception("MPF tags did not survive native edit.");
+        if (File.GetLastWriteTimeUtc(jpeg) != modificationTime)
+            throw new Exception("MPF editing did not preserve timestamp.");
+        if (Directory.GetFiles(sandbox.Images).Length != 1)
+            throw new Exception("MPF editing leaked local candidate in image folder.");
+
+        static byte[] Segment(byte marker, byte[] payload)
+        {
+            var segment = new byte[payload.Length + 4];
+            segment[0] = 0xff; segment[1] = marker;
+            var length = payload.Length + 2;
+            segment[2] = (byte)(length >> 8);
+            segment[3] = (byte)length;
+            Buffer.BlockCopy(payload, 0, segment, 4, payload.Length);
+            return segment;
+        }
     }
 
     private static void JpegOriginalWriterRoundTrip()

@@ -16,7 +16,7 @@ namespace PCasa.App.Services;
 /// If this format cannot be proven safe, return false while the original
 /// remains untouched and let the existing native writer handle it.
 /// </summary>
-internal static class JpegMpfStagedWriter
+public static class JpegMpfStagedWriter
 {
     private static long _attempts;
 
