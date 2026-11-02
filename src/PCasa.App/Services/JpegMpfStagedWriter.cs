@@ -73,6 +73,7 @@ public static class JpegMpfStagedWriter
                 before.SecondaryBytes != after.SecondaryBytes ||
                 !before.SecondaryHash.SequenceEqual(after.SecondaryHash) ||
                 !before.Iso21496Hash.SequenceEqual(after.Iso21496Hash) ||
+                !before.ProtectedAppHash.SequenceEqual(after.ProtectedAppHash) ||
                 !oldTailHash.SequenceEqual(
                     JpegGpsPatchPrototype.CompressedImageHash(local)))
             {
@@ -155,7 +156,7 @@ public static class JpegMpfStagedWriter
     }
 
     private sealed record MpfSnapshot(int ImageCount, int SecondaryBytes,
-        byte[] SecondaryHash, byte[] Iso21496Hash);
+        byte[] SecondaryHash, byte[] Iso21496Hash, byte[] ProtectedAppHash);
 
     private static bool TryInspect(string path, out MpfSnapshot snapshot)
     {
@@ -167,6 +168,7 @@ public static class JpegMpfStagedWriter
         int imageCount = 0, secondSize = 0;
         long secondStart = -1;
         byte[]? isoHash = null;
+        var protectedApp = new List<string>();
         var foundMpf = false;
         var foundSos = false;
         for (var n = 0; n < 512 && file.Position < 16 * 1024 * 1024; n++)
@@ -182,12 +184,17 @@ public static class JpegMpfStagedWriter
             var size = (hi << 8) + lo - 2;
             if (hi < 0 || lo < 0 || size < 0 ||
                 file.Position + size > file.Length) return false;
-            if (marker == 0xe2)
+            if (marker is >= 0xe0 and <= 0xef)
             {
                 var at = file.Position;
                 var chunk = new byte[size];
                 file.ReadExactly(chunk);
-                if (chunk.AsSpan().StartsWith("MPF\0"u8))
+                var isMpf = marker == 0xe2 &&
+                    chunk.AsSpan().StartsWith("MPF\0"u8);
+                var isIso21496 = marker == 0xe2 &&
+                    chunk.AsSpan().StartsWith(
+                        "urn:iso:std:iso:ts:21496:"u8);
+                if (isMpf)
                 {
                     if (foundMpf ||
                         !TryDecodeMpf(chunk, at + 4, out imageCount,
@@ -195,11 +202,30 @@ public static class JpegMpfStagedWriter
                         return false;
                     foundMpf = true;
                 }
-                else if (chunk.AsSpan().StartsWith(
-                    "urn:iso:std:iso:ts:21496:"u8))
+                else if (isIso21496)
                 {
                     if (isoHash is not null) return false; // narrow profile only
                     isoHash = SHA256.HashData(chunk);
+                }
+                else
+                {
+                    // Exif/XMP APP1 and Photoshop/IPTC APP13 may change.
+                    // Preserve everything else verbatim, including ICC
+                    // profiles, Samsung APP4 and unfamiliar camera blocks.
+                    var editable = marker == 0xe1 &&
+                        (chunk.AsSpan().StartsWith("Exif\0\0"u8) ||
+                         chunk.AsSpan().StartsWith(
+                             "http://ns.adobe.com/xap/1.0/"u8)) ||
+                        marker == 0xed &&
+                        chunk.AsSpan().StartsWith("Photoshop 3.0\0"u8);
+                    if (!editable)
+                    {
+                        var tagged = new byte[chunk.Length + 1];
+                        tagged[0] = (byte)marker;
+                        chunk.CopyTo(tagged.AsSpan(1));
+                        protectedApp.Add(Convert.ToHexString(
+                            SHA256.HashData(tagged)));
+                    }
                 }
             }
             else file.Position += size;
@@ -216,9 +242,12 @@ public static class JpegMpfStagedWriter
             return false;
         file.Position = secondStart;
         using var limited = new BoundedReadStream(file, secondSize);
+        protectedApp.Sort(StringComparer.Ordinal);
         snapshot = new MpfSnapshot(imageCount, secondSize,
             SHA256.HashData(limited),
-            isoHash ?? Array.Empty<byte>());
+            isoHash ?? Array.Empty<byte>(),
+            SHA256.HashData(Encoding.ASCII.GetBytes(
+                string.Join("|", protectedApp))));
         return true;
     }
 

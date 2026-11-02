@@ -4324,6 +4324,9 @@ internal static class Program
         var iso = Segment(0xe2,
             System.Text.Encoding.ASCII.GetBytes(
                 "urn:iso:std:iso:ts:21496:-1\0\0\0\0\0"));
+        var vendorApp = Segment(0xe4,
+            System.Text.Encoding.ASCII.GetBytes(
+                "Samsung non-editable camera/HDR extension"));
 
         // MPF version 0100: 2 images, 2x16-byte MPEntry, absolute second
         // image beginning computed relative to the MPF TIFF header.
@@ -4354,20 +4357,25 @@ internal static class Program
             insert += size + 2;
         }
         var mpfBytes = Segment(0xe2, payload);
-        var sizeFirst = primary.Length + iso.Length + mpfBytes.Length;
+        var sizeFirst = primary.Length + iso.Length +
+            vendorApp.Length + mpfBytes.Length;
         U32(58, (uint)sizeFirst);
         U32(62, 0);
         U32(74, (uint)secondary.Length);
         // MPF's TIFF header starts after the preceding ISO APP2 block.
-        var mpfTiffAt = insert + iso.Length + 8;
+        var mpfTiffAt = insert + iso.Length + vendorApp.Length + 8;
         U32(78, (uint)(sizeFirst - mpfTiffAt));
         mpfBytes = Segment(0xe2, payload);
         var combined = new byte[sizeFirst + secondary.Length];
         Buffer.BlockCopy(primary, 0, combined, 0, insert);
         Buffer.BlockCopy(iso, 0, combined, insert, iso.Length);
-        Buffer.BlockCopy(mpfBytes, 0, combined, insert + iso.Length, mpfBytes.Length);
+        Buffer.BlockCopy(vendorApp, 0, combined, insert + iso.Length,
+            vendorApp.Length);
+        Buffer.BlockCopy(mpfBytes, 0, combined,
+            insert + iso.Length + vendorApp.Length, mpfBytes.Length);
         Buffer.BlockCopy(primary, insert, combined,
-            insert + iso.Length + mpfBytes.Length, primary.Length - insert);
+            insert + iso.Length + vendorApp.Length + mpfBytes.Length,
+            primary.Length - insert);
         Buffer.BlockCopy(secondary, 0, combined, sizeFirst, secondary.Length);
         File.WriteAllBytes(jpeg, combined);
 
