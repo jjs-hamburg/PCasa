@@ -210,7 +210,9 @@ public sealed class ImageTagRepository
         if (!changed) return;
         if (!remove) original.Add(tag);
         cancellationToken.ThrowIfCancellationRequested();
-        session.Write(path, original, cancellationToken);
+        if (!JpegMetadataOriginalWriter.TryWriteTags(path, original,
+                session, cancellationToken))
+            session.Write(path, original, cancellationToken);
         // Even ExifTool -P may round a subsecond file timestamp on Windows.
         // Restore the EXACT source timestamp under the per-image write lock.
         // Otherwise the existing file scanner needlessly decodes the same
@@ -535,8 +537,10 @@ public sealed class ImageTagRepository
             if (changed || fieldsDiffer)
             {
                 token.ThrowIfCancellationRequested();
-                writer.Write(path, tags, token,
-                    knownSourceLengthBytes: oldSize);
+                if (!JpegMetadataOriginalWriter.TryWriteTags(path, tags,
+                        writer, token))
+                    writer.Write(path, tags, token,
+                        knownSourceLengthBytes: oldSize);
                 if (File.GetLastWriteTimeUtc(path).Ticks != oldTicks)
                     File.SetLastWriteTimeUtc(path,
                         new DateTime(oldTicks, DateTimeKind.Utc));

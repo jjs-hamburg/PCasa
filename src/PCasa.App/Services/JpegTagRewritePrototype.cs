@@ -28,8 +28,22 @@ public static class JpegTagRewritePrototype
     /// </summary>
     public static Result CreateTagCopy(string originalPath, string targetPath,
         IReadOnlyList<string> keywords, CancellationToken token = default)
-        => CreateCopy(originalPath, targetPath, keywords, updateGps: false,
-            latitude: null, longitude: null, session: null, token);
+        => CreateCopy(originalPath, targetPath, keywords, updateTags: true,
+            updateGps: false, latitude: null, longitude: null, session: null, token);
+
+    public static Result CreateTagCopy(string originalPath, string targetPath,
+        IReadOnlyList<string> keywords, ExifToolKeywordWriter.Session session,
+        CancellationToken token = default)
+        => CreateCopy(originalPath, targetPath, keywords, updateTags: true,
+            updateGps: false, latitude: null, longitude: null, session, token);
+
+    // GPS-only must NOT normalize or change a source's existing XMP/IPTC
+    // keywords as an incidental effect of a coordinate operation.
+    public static Result CreateGpsCopy(string originalPath, string targetPath,
+        double? latitude, double? longitude,
+        ExifToolKeywordWriter.Session session, CancellationToken token = default)
+        => CreateCopy(originalPath, targetPath, Array.Empty<string>(),
+            updateTags: false, updateGps: true, latitude, longitude, session, token);
 
     /// <summary>
     /// Combined JPEG Tag/GPS proof of concept; supports setting AND clearing
@@ -40,11 +54,11 @@ public static class JpegTagRewritePrototype
         IReadOnlyList<string> keywords, double? latitude, double? longitude,
         ExifToolKeywordWriter.Session? session = null,
         CancellationToken token = default)
-        => CreateCopy(originalPath, targetPath, keywords, updateGps: true,
-            latitude, longitude, session, token);
+        => CreateCopy(originalPath, targetPath, keywords, updateTags: true,
+            updateGps: true, latitude, longitude, session, token);
 
     private static Result CreateCopy(string originalPath, string targetPath,
-        IReadOnlyList<string> keywords, bool updateGps,
+        IReadOnlyList<string> keywords, bool updateTags, bool updateGps,
         double? latitude, double? longitude,
         ExifToolKeywordWriter.Session? session, CancellationToken token)
     {
@@ -97,13 +111,13 @@ public static class JpegTagRewritePrototype
             if (session is null)
             {
                 using var owned = new ExifToolKeywordWriter.Session();
-                owned.Write(carrierPath, keywords, token);
+                if (updateTags) owned.Write(carrierPath, keywords, token);
                 if (updateGps)
                     owned.WriteGps(carrierPath, latitude, longitude, token);
             }
             else
             {
-                session.Write(carrierPath, keywords, token);
+                if (updateTags) session.Write(carrierPath, keywords, token);
                 if (updateGps)
                     session.WriteGps(carrierPath, latitude, longitude, token);
             }

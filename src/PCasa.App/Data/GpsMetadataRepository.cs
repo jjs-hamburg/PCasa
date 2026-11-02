@@ -104,10 +104,12 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
             {
                 token.ThrowIfCancellationRequested();
                 using var writer = new ExifToolKeywordWriter.Session();
-                writer.WriteGps(path,
-                    mode == EditMode.Remove ? null : latitude,
-                    mode == EditMode.Remove ? null : longitude, token,
-                    knownSourceLengthBytes: before.Length);
+                var targetLatitude = mode == EditMode.Remove ? null : latitude;
+                var targetLongitude = mode == EditMode.Remove ? null : longitude;
+                if (!JpegMetadataOriginalWriter.TryWriteGps(path,
+                        targetLatitude, targetLongitude, writer, token))
+                    writer.WriteGps(path, targetLatitude, targetLongitude, token,
+                        knownSourceLengthBytes: before.Length);
                 writeMilliseconds = elapsed.ElapsedMilliseconds - readMilliseconds;
                 // Never cancel between the physical write and catalog commit.
                 if (File.GetLastWriteTimeUtc(path).Ticks != indexedTicks)
