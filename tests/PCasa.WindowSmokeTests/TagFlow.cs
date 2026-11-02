@@ -1022,7 +1022,9 @@ internal static class TagFlow
 
             // The scrollbar belongs UNDER the lower perforation; both bands
             // stay fixed across the full viewport instead of moving with items.
-            if (filmPanel.Child is not ListBox filmListForStyle ||
+            if (filmPanel.Child is not Grid filmLayout ||
+                filmLayout.Children.OfType<ListBox>().SingleOrDefault() is not ListBox filmListForStyle ||
+                Grid.GetRow(filmListForStyle) != 1 ||
                 window.FindResource("GpsFilmPerforationBrush") is not DrawingBrush perforations ||
                 perforations.TileMode != TileMode.Tile ||
                 perforations.Drawing is not GeometryDrawing holes ||
@@ -1219,6 +1221,39 @@ internal static class TagFlow
                 scanPresentation.Finish();
             }
             Console.WriteLine("PASS: NAS scan, cache and manual P0 share one priority-correct presenter.");
+
+            // Hide is a user preference, never a transient property of the
+            // current job. Even a newly started manual P0 or scan must not
+            // resurrect the hidden progress window.
+            var hiddenProgress = new PCasa.App.BrowseCacheProgressWindow
+                { Owner = window };
+            var hiddenScanOwner = new object();
+            bool? lastUserVisibility = null;
+            hiddenProgress.UserHiddenChanged += hidden => lastUserVisibility = hidden;
+            try
+            {
+                hiddenProgress.SetUserHidden(true);
+                hiddenProgress.BeginManualOperation("GPS in Originaldateien schreiben", 1);
+                hiddenProgress.UpdateScan(
+                    new ScanProgress(2, 0, 2, 0, null), scanOwner: hiddenScanOwner);
+                hiddenProgress.EndManualOperation();
+                if (hiddenProgress.IsVisible)
+                    throw new Exception("Hidden progress window resurfaced on manual/scan transition.");
+                hiddenProgress.ShowFromStatus();
+                if (!hiddenProgress.IsVisible || lastUserVisibility != false)
+                    throw new Exception("Explicit progress status click did not restore visibility.");
+                hiddenProgress.SetUserHidden(true);
+                hiddenProgress.BeginManualOperation("GPS in Originaldateien schreiben", 1);
+                if (hiddenProgress.IsVisible)
+                    throw new Exception("Later manual job ignored the user's Hide choice.");
+                hiddenProgress.EndManualOperation();
+            }
+            finally
+            {
+                hiddenProgress.EndScanPhase(hiddenScanOwner);
+                hiddenProgress.Finish();
+            }
+            Console.WriteLine("PASS: Hide survives manual jobs/scan transitions; status click alone reopens progress.");
 
             // Two cache jobs may be present: one running, one queued.
             // A queued one must not erase or retire real cache progress.
