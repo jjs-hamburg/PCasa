@@ -14,6 +14,9 @@ public static class ExifToolKeywordWriter
     private static readonly object ActiveGate = new();
     private static readonly HashSet<Session> ActiveSessions = new();
     private static int _activeWrites;
+    // One shared, in-memory estimate per source root. It is not a new
+    // scheduler, background service, retry policy or persistent queue.
+    private static readonly AdaptiveMetadataWriteTimeout WriteTimeouts = new();
 
     public static bool HasActiveWrites => Volatile.Read(ref _activeWrites) != 0;
 
@@ -169,18 +172,20 @@ public static class ExifToolKeywordWriter
         }
 
         public void Write(string imagePath, IReadOnlyList<string> keywords,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            long? knownSourceLengthBytes = null)
         {
             lock (_operationGate)
             {
                 Interlocked.Increment(ref _activeWrites);
-                try { WriteCore(imagePath, keywords, cancellationToken); }
+                try { WriteCore(imagePath, keywords, cancellationToken,
+                    knownSourceLengthBytes); }
                 finally { Interlocked.Decrement(ref _activeWrites); }
             }
         }
 
         private void WriteCore(string imagePath, IReadOnlyList<string> keywords,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, long? knownSourceLengthBytes)
         {
             foreach (var keyword in keywords)
                 if (keyword.Contains('\r') || keyword.Contains('\n'))
@@ -205,7 +210,8 @@ public static class ExifToolKeywordWriter
                 }
                 if (!isSonyArw) commands.Add("-IPTC:CodedCharacterSet=UTF8");
             }
-            ExecuteMetadataEdit(imagePath, commands, cancellationToken);
+            ExecuteMetadataEdit(imagePath, commands, cancellationToken,
+                knownSourceLengthBytes);
         }
 
         // GPS shares the EXACT same ExifTool session, source lock (in the
@@ -258,41 +264,29 @@ public static class ExifToolKeywordWriter
                 Interlocked.Increment(ref _activeWrites);
                 try
                 {
-                    // A slow SMB/VPN write can legitimately take much longer
-                    // than an ExifTool metadata read. Use the source size
-                    // already checked by the GPS repository when available.
-                    var length = knownSourceLengthBytes ??
-                        new FileInfo(imagePath).Length;
                     ExecuteMetadataEdit(imagePath, commands, cancellationToken,
-                        GpsWriteResponseTimeout(length));
+                        knownSourceLengthBytes);
                 }
                 finally { Interlocked.Decrement(ref _activeWrites); }
             }
-        }
-
-        // The 90-second EXIF/keyword response timeout is for short metadata
-        // operations. A GPS edit rewrites the original over SMB and needs
-        // a bounded size-aware budget. Measured VPN transfers may take 60-90
-        // seconds for 5-7 MB. A generous allowance avoids aborting healthy
-        // writes and repeatedly rewriting them after package recovery.
-        internal static TimeSpan GpsWriteResponseTimeout(long sourceBytes)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegative(sourceBytes);
-            var wholeMiB = Math.Ceiling(sourceBytes / (1024d * 1024d));
-            return TimeSpan.FromSeconds(Math.Min(30d * 60d,
-                120d + wholeMiB * 30d));
         }
 
         // Shared native write lifecycle: a scheduler yield can interrupt
         // BEFORE the request, never during ExifTool's temporary-file swap.
         private void ExecuteMetadataEdit(string imagePath,
             IReadOnlyList<string> commands, CancellationToken cancellationToken,
-            TimeSpan? writeTimeout = null)
+            long? knownSourceLengthBytes = null)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
             if (imagePath.Contains('\r') || imagePath.Contains('\n'))
                 throw new ArgumentException("Dateipfade dürfen keine Zeilenumbrüche enthalten.");
+            // Use a caller's already verified FileInfo.Length; only direct
+            // standalone calls need an additional file-size lookup.
+            var length = knownSourceLengthBytes ??
+                new FileInfo(imagePath).Length;
+            var sourceKey = AdaptiveMetadataWriteTimeout.SourceKey(imagePath);
+            var writeTimeout = WriteTimeouts.GetTimeout(sourceKey, length);
             StartIfNeeded();
             var process = _process!;
             cancellationToken.ThrowIfCancellationRequested();
@@ -300,6 +294,7 @@ public static class ExifToolKeywordWriter
             var temporaryExistedBeforeWrite =
                 File.Exists(imagePath + "_exiftool_tmp");
             var request = ++_nextRequestId;
+            var writeStart = Stopwatch.GetTimestamp();
             process.StandardInput.WriteLine("-P");
             process.StandardInput.WriteLine("-overwrite_original");
             foreach (var command in commands)
@@ -310,8 +305,10 @@ public static class ExifToolKeywordWriter
             string response;
             try
             {
-                // This is the one native-write completion boundary. Do not
-                // kill a healthy SMB rewrite at the read-only 90s limit.
+                // Only writes use the shared adaptive deadline. Read-only
+                // EXIF and keyword reads retain their unchanged 90s/30s
+                // response limits. A native write remains noninterruptible
+                // until its atomic file replacement has finished.
                 response = ReadResponseOrReset(process, request,
                     CancellationToken.None, writeTimeout);
             }
@@ -329,6 +326,10 @@ public static class ExifToolKeywordWriter
                 throw new IOException("ExifTool konnte die Datei nicht aktualisieren: " +
                     response.Trim());
             }
+            // Learn ONLY from a successful native commit, never from a
+            // canceled, failed or potentially disconnected source.
+            WriteTimeouts.RecordSuccess(sourceKey, length,
+                Stopwatch.GetElapsedTime(writeStart));
         }
 
         // ExifTool's precise, deterministic temp name for this original.

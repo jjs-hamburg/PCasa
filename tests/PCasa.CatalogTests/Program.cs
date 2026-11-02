@@ -158,6 +158,8 @@ internal static class Program
         Run("Per-image tag batch records one atomic local intent transaction", PerImageTagBatchCommitsAtomically, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
         Run("GPS edit writes originals, verifies metadata and never creates sidecars", JpegGpsEditRoundTrip, failures);
+        Run("Adaptive Tag/GPS timeouts track real throughput per source without probes",
+            AdaptiveMetadataWriteTimeoutIsolatedAndBounded, failures);
         Run("Explorer gallery selection: ctrl, shift range and selected folder Ctrl+A", GalleryExplorerSelection, failures);
         Run("Gallery identity survives sidebar width change", GalleryAnchorSurvivesWidthChange, failures);
         Run("Thumbnail resizing retains image anchor across folder boundaries", ResizeThumbnailPreservesImageAnchor, failures);
@@ -4241,24 +4243,72 @@ internal static class Program
                 throw new Exception("Current Tag revisions were not persisted together.");
     }
 
+    private static void AdaptiveMetadataWriteTimeoutIsolatedAndBounded()
+    {
+        const long MiB = 1024L * 1024;
+        var policy = new AdaptiveMetadataWriteTimeout();
+        const string nas = "SMB:G:\\";
+        const string secondNas = "SMB:S:\\";
+        const string local = "LOCAL:C:\\";
+        var initial = policy.GetTimeout(nas, 7 * MiB);
+        if (initial != TimeSpan.FromSeconds(330) ||
+            policy.GetTimeout(secondNas, 7 * MiB) != initial ||
+            policy.GetTimeout(local, 7 * MiB) != initial)
+            throw new Exception("Fresh source must have the safe size-only budget.");
+
+        // 7 MiB at 100 seconds => native SMB ~14.3 s/MiB.
+        policy.RecordSuccess(nas, 7 * MiB, TimeSpan.FromSeconds(100));
+        var slow = policy.GetTimeout(nas, 7 * MiB);
+        if (slow <= initial || slow > TimeSpan.FromMinutes(30))
+            throw new Exception("A slow successful SMB transfer must increase its own budget.");
+        if (policy.GetTimeout(secondNas, 7 * MiB) != initial ||
+            policy.GetTimeout(local, 7 * MiB) != initial)
+            throw new Exception("SMB and local source estimates contaminated each other.");
+
+        // Eight new fast completions displace the old slow observation.
+        for (var i = 0; i < 8; i++)
+            policy.RecordSuccess(nas, 7 * MiB, TimeSpan.FromSeconds(3));
+        var fast = policy.GetTimeout(nas, 7 * MiB);
+        if (fast >= initial || fast >= slow ||
+            policy.GetTimeout(secondNas, 7 * MiB) != initial)
+            throw new Exception("Recovered fast VPN throughput did not shorten its own budget.");
+
+        policy.RecordSuccess(nas, 7 * MiB, TimeSpan.FromSeconds(175));
+        if (policy.GetTimeout(nas, 7 * MiB) <= slow)
+            throw new Exception("New slow link observation must promptly increase the timeout.");
+        if (policy.GetTimeout(nas, long.MaxValue) != TimeSpan.FromMinutes(30) ||
+            policy.GetTimeout(nas, 0) < TimeSpan.FromMinutes(1))
+            throw new Exception("Adaptive timeout is unbounded or too short for a small source.");
+        try
+        {
+            policy.RecordSuccess(nas, -1, TimeSpan.FromSeconds(1));
+            throw new Exception("Negative file size accepted for speed training.");
+        }
+        catch (ArgumentOutOfRangeException) { }
+
+        // A direct, local source must not be mistaken for a remote share;
+        // neither method makes a network throughput request.
+        var temp = Path.Combine(Path.GetTempPath(), "pcasa-timeout-source.jpg");
+        var localKey = AdaptiveMetadataWriteTimeout.SourceKey(temp);
+        if (!localKey.StartsWith("LOCAL:", StringComparison.Ordinal))
+            throw new Exception("Local source was classified as an SMB share.");
+        var uncKey = AdaptiveMetadataWriteTimeout.SourceKey(
+            @"\\test-server\photos\photo.jpg");
+        if (!uncKey.StartsWith("SMB:", StringComparison.Ordinal))
+            throw new Exception("UNC source was not classified as SMB.");
+    }
+
     private static void JpegGpsEditRoundTrip()
     {
-        // VPN/SMB writes are full original-file rewrites, not short EXIF
-        // reads. Their timeout must scale with bytes yet remain bounded,
-        // so slow but successful writes do not repeat after 90 seconds.
-        var timeoutMethod = typeof(ExifToolKeywordWriter.Session)
-            .GetMethod("GpsWriteResponseTimeout",
-                System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Static)
-            ?? throw new Exception("GPS write timeout budget missing.");
-        TimeSpan Budget(long bytes) =>
-            (TimeSpan)(timeoutMethod.Invoke(null, [bytes])
-                ?? throw new Exception("GPS write budget returned null."));
-        if (Budget(0) != TimeSpan.FromMinutes(2) ||
-            Budget(7L * 1024 * 1024) <= TimeSpan.FromSeconds(90) ||
-            Budget(7L * 1024 * 1024) >= Budget(40L * 1024 * 1024) ||
-            Budget(long.MaxValue) != TimeSpan.FromMinutes(30))
-            throw new Exception("GPS SMB write timeout is not size-aware and bounded.");
+        // The common Tag/GPS native writer starts with the proven SMB
+        // size allowance. The same regression suite separately checks
+        // link-learning, fast/slow adaptation and source isolation.
+        var timeouts = new AdaptiveMetadataWriteTimeout();
+        var budget = timeouts.GetTimeout("SMB:G:\\", 7L * 1024 * 1024);
+        if (timeouts.GetTimeout("SMB:G:\\", 0) != TimeSpan.FromMinutes(2) ||
+            budget != TimeSpan.FromSeconds(330) ||
+            timeouts.GetTimeout("SMB:G:\\", long.MaxValue) != TimeSpan.FromMinutes(30))
+            throw new Exception("Initial Tag/GPS timeout is not size-aware and bounded.");
 
         using var sandbox = new Sandbox();
         var path = Path.Combine(sandbox.Images, "gps-edit.jpg");

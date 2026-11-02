@@ -535,7 +535,8 @@ public sealed class ImageTagRepository
             if (changed || fieldsDiffer)
             {
                 token.ThrowIfCancellationRequested();
-                writer.Write(path, tags, token);
+                writer.Write(path, tags, token,
+                    knownSourceLengthBytes: oldSize);
                 if (File.GetLastWriteTimeUtc(path).Ticks != oldTicks)
                     File.SetLastWriteTimeUtc(path,
                         new DateTime(oldTicks, DateTimeKind.Utc));
