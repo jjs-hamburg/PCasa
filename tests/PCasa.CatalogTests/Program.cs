@@ -24,6 +24,7 @@ internal static class Program
         {
             try
             {
+                NumericLookingKeywordsRoundTrip();
                 JpegTagRoundTrip();
                 JpegGpsEditRoundTrip();
                 JpegUnicodeTagPreservesPixels();
@@ -4382,7 +4383,7 @@ internal static class Program
         var sourceHash = JpegGpsPatchPrototype.CompressedImageHash(jpeg);
         var modificationTime = File.GetLastWriteTimeUtc(jpeg);
         using var writer = new ExifToolKeywordWriter.Session();
-        if (!JpegMpfStagedWriter.TryWrite(jpeg, writer, new[] { "HDR", "Keep" },
+        if (!JpegMpfStagedWriter.TryWrite(jpeg, writer, new[] { "2025", "La Palma" },
             updateTags: true, null, null, CancellationToken.None))
             throw new Exception("Synthetic MPF Tag edit rejected or changed secondary image.");
         if (!JpegMpfStagedWriter.TryWrite(jpeg, writer,
@@ -4395,7 +4396,8 @@ internal static class Program
         if (meta.GpsLatitude is not double lat ||
             Math.Abs(lat - 53.5) > 0.0001)
             throw new Exception("MPF GPS did not survive native edit.");
-        if (!writer.ReadSnapshot(jpeg).Combined.Contains("HDR"))
+        if (!writer.ReadSnapshot(jpeg).Combined.Contains("2025") ||
+            !writer.ReadSnapshot(jpeg).Combined.Contains("La Palma"))
             throw new Exception("MPF tags did not survive native edit.");
         if (File.GetLastWriteTimeUtc(jpeg) != modificationTime)
             throw new Exception("MPF editing did not preserve timestamp.");
@@ -4854,6 +4856,32 @@ internal static class Program
             if (Convert.ToInt32(command.ExecuteScalar()) != 1)
                 throw new Exception("Missing cleanup performance index: " + index);
         }
+    }
+
+    private static void NumericLookingKeywordsRoundTrip()
+    {
+        using var sandbox = new Sandbox();
+        var path = Path.Combine(sandbox.Images, "numeric-looking-tags.jpg");
+        WriteJpeg(path);
+        var expected = new[] { "2025", "La Palma", "0012" };
+        void AssertBothFields(ExifToolKeywordWriter.Session session)
+        {
+            var snapshot = session.ReadSnapshot(path);
+            foreach (var field in new[] { snapshot.Xmp, snapshot.Iptc })
+            {
+                if (!field.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                    .SetEquals(expected))
+                    throw new Exception(
+                        "ExifTool JSON keyword read omitted numeric-looking text.");
+            }
+        }
+        using (var writer = new ExifToolKeywordWriter.Session())
+        {
+            writer.Write(path, expected);
+            AssertBothFields(writer); // same persistent ExifTool process
+        }
+        using (var independentReader = new ExifToolKeywordWriter.Session())
+            AssertBothFields(independentReader);
     }
 
     private static void ExifToolOwnedWritersTerminate()

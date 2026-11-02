@@ -83,6 +83,11 @@ public static class ExifToolKeywordWriter
                 catch (System.ComponentModel.Win32Exception) { }
             });
             var request = ++_nextRequestId;
+            // ExifTool's default JSON renders numeric-looking TEXT tags as
+            // numbers. Preserve their exact spelling ("2025", "0012") so
+            // ReadSnapshot never silently drops user keywords.
+            process.StandardInput.WriteLine("-api");
+            process.StandardInput.WriteLine("StructFormat=JSONQ");
             process.StandardInput.WriteLine("-j");
             process.StandardInput.WriteLine("-XMP-dc:Subject");
             process.StandardInput.WriteLine("-IPTC:Keywords");
