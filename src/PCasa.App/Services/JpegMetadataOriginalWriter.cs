@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -18,6 +19,8 @@ namespace PCasa.App.Services;
 public static class JpegMetadataOriginalWriter
 {
     public static string? LastFallbackDifference { get; private set; }
+    private static long _profileAttempts;
+    private static long _slowSamples;
 
     public static bool TryWriteTags(string path, IReadOnlyList<string> keywords,
         ExifToolKeywordWriter.Session session, CancellationToken token)
@@ -39,11 +42,43 @@ public static class JpegMetadataOriginalWriter
             return false;
         token.ThrowIfCancellationRequested();
 
+        var clock = Stopwatch.StartNew();
+        var ordinal = Interlocked.Increment(ref _profileAttempts);
+        var checkpointHeader = 0L;
+        var checkpointSource = 0L;
+        var checkpointBuild = 0L;
+        var checkpointValidation = 0L;
+        void Report(string outcome)
+        {
+            var elapsed = clock.ElapsedMilliseconds;
+            // Bounded diagnostics: initial samples, every 25th edit,
+            // plus up to 3 unusually slow first occurrences. Never log
+            // one line per file in a huge library.
+            var sample = ordinal <= 4 || ordinal % 25 == 0 ||
+                (elapsed >= 10000 &&
+                 Interlocked.Increment(ref _slowSamples) <= 3);
+            if (!sample) return;
+            PCasaDiagnostics.WriteMessage("JPEG.Write.Profile",
+                $"Mode={(updateTags ? "Tags" : "GPS")}; " +
+                $"Result={outcome}; " +
+                $"HeaderMs={checkpointHeader}; " +
+                $"SourceMetadataMs={checkpointSource}; " +
+                $"BuildCopyHashMs={checkpointBuild}; " +
+                $"VerifyMs={checkpointValidation}; " +
+                $"TotalMs={elapsed}; " +
+                $"File={Path.GetFileName(path)}");
+        }
+
         // Refuse multi-picture JPEGs and extended XMP whose absolute offsets
         // can refer to bytes outside ordinary APP1. These require ExifTool's
         // more complete metadata model. A false positive only loses speed.
         if (!SafeBasicJpeg(path))
+        {
+            checkpointHeader = clock.ElapsedMilliseconds;
+            Report("HeaderFallback");
             return false;
+        }
+        checkpointHeader = clock.ElapsedMilliseconds;
 
         var original = new FileInfo(path);
         var originalSize = original.Length;
@@ -53,6 +88,7 @@ public static class JpegMetadataOriginalWriter
         var originalKeywords = session.ReadSnapshot(path, token);
         using var originalExifReader = new ImageExifReader();
         var originalExif = originalExifReader.Read(path, token);
+        checkpointSource = clock.ElapsedMilliseconds - checkpointHeader;
         var temp = Path.Combine(Path.GetDirectoryName(path)!,
             ".pcasa-jpeg-" + Guid.NewGuid().ToString("N") + ".jpg");
         var created = false;
@@ -72,8 +108,13 @@ public static class JpegMetadataOriginalWriter
             {
                 // Header rejected before original replacement: the native
                 // writer may handle this uncommon JPEG instead.
+                checkpointBuild = clock.ElapsedMilliseconds -
+                    checkpointHeader - checkpointSource;
+                Report("LayoutFallback");
                 return false;
             }
+            checkpointBuild = clock.ElapsedMilliseconds -
+                checkpointHeader - checkpointSource;
 
             // A candidate is not trusted just because ExifTool acknowledged
             // the tiny local carrier. Verify the actual full-size JPEG before
@@ -114,7 +155,15 @@ public static class JpegMetadataOriginalWriter
                 ignoreGps: !updateTags))
                 // This candidate cannot safely preserve this camera's
                 // metadata. The source remains untouched: use ExifTool.
+            {
+                checkpointValidation = clock.ElapsedMilliseconds -
+                    checkpointHeader - checkpointSource - checkpointBuild;
+                Report("ExifFallback");
                 return false;
+            }
+
+            checkpointValidation = clock.ElapsedMilliseconds -
+                checkpointHeader - checkpointSource - checkpointBuild;
 
             // The prototype independently checks the complete compressed
             // image-tail SHA-256. Check identity again at the commit boundary.
@@ -132,6 +181,7 @@ public static class JpegMetadataOriginalWriter
             created = false;
             if (File.GetLastWriteTimeUtc(path) != stamp)
                 File.SetLastWriteTimeUtc(path, stamp);
+            Report("Fast");
             return true;
         }
         finally

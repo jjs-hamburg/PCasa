@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
@@ -135,6 +136,7 @@ public static class JpegTagRewritePrototype
             watch.Restart();
             var targetCreated = false;
             var usedServerSideCopy = false;
+            byte[]? sourceTailHash = null;
             try
             {
                 using (var output = new FileStream(targetPath, FileMode.CreateNew,
@@ -155,7 +157,30 @@ public static class JpegTagRewritePrototype
                         output.SetLength(rewrittenMetadata.LongLength);
                         output.Position = rewrittenMetadata.LongLength;
                         original.Position = originalTail;
-                        original.CopyTo(output, 1024 * 1024);
+                        // Hash the bytes while they are already crossing
+                        // SMB for the copy. Previously we downloaded the
+                        // entire original JPEG tail a SECOND time merely
+                        // to calculate its integrity hash. On VPN this is
+                        // costly. The new output is STILL read and checked
+                        // independently before it can replace an original.
+                        using var digest = IncrementalHash.CreateHash(
+                            HashAlgorithmName.SHA256);
+                        var buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+                        try
+                        {
+                            int read;
+                            while ((read = original.Read(buffer, 0, buffer.Length)) > 0)
+                            {
+                                token.ThrowIfCancellationRequested();
+                                digest.AppendData(buffer, 0, read);
+                                output.Write(buffer, 0, read);
+                            }
+                            sourceTailHash = digest.GetHashAndReset();
+                        }
+                        finally
+                        {
+                            ArrayPool<byte>.Shared.Return(buffer);
+                        }
                     }
                     output.Flush(flushToDisk: true);
                     usedServerSideCopy = offloaded;
@@ -164,9 +189,15 @@ public static class JpegTagRewritePrototype
                 if (new FileInfo(originalPath).Length != originalLength ||
                     File.GetLastWriteTimeUtc(originalPath) != sourceTime)
                     throw new IOException("Original changed during benchmark.");
-                if (!JpegGpsPatchPrototype.CompressedImageHash(originalPath)
-                    .SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(targetPath)))
-                    throw new IOException("JPEG compressed image bytes changed.");
+                // The immutable JPEG tail starts at the first non-APP
+                // segment, which includes DQT/SOF/DHT and compressed pixel
+                // bytes. Compare that entire tail, not just decoded pixels.
+                // CopyChunk needs a separate source read because its data
+                // were not streamed through the client.
+                sourceTailHash ??= HashTail(originalPath, originalTail);
+                if (!sourceTailHash.SequenceEqual(
+                    HashTail(targetPath, rewrittenMetadata.LongLength)))
+                    throw new IOException("JPEG image/scan tail bytes changed.");
                 return new Result(metadataTime, watch.Elapsed, originalLength,
                     originalMetadata.LongLength, rewrittenMetadata.LongLength,
                     usedServerSideCopy);
@@ -247,6 +278,17 @@ public static class JpegTagRewritePrototype
         input.Position = 0;
         input.ReadExactly(prefix);
         return prefix;
+    }
+
+
+    private static byte[] HashTail(string path, long offset)
+    {
+        using var stream = new FileStream(path, FileMode.Open,
+            FileAccess.Read, FileShare.Read);
+        if (offset < 0 || offset > stream.Length)
+            throw new InvalidDataException("Invalid JPEG tail offset.");
+        stream.Position = offset;
+        return SHA256.HashData(stream);
     }
 
     private static byte[] MakeTinyJpeg()
