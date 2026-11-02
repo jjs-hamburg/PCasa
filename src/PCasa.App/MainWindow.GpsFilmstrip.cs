@@ -171,7 +171,6 @@ public partial class MainWindow
     // owner, independent catalog or thumbnail-processing pipeline.
     private void UpdateGpsFilmstrip()
     {
-        var revision = ++_gpsFilmstripRevision;
         if (_gpsFilmstripFrozen)
         {
             // A gallery search, folder change or scan does not replace this
@@ -182,6 +181,7 @@ public partial class MainWindow
             UpdateGpsFilmstripControls();
             return;
         }
+        var revision = ++_gpsFilmstripRevision;
         if (_sidebarMode != "GPS" || !_appearance.ShowGpsFilmstrip)
         {
             _gpsFilmstripEntries = [];
@@ -335,6 +335,18 @@ public partial class MainWindow
             ShowGpsFullscreenImage(item.Id);
     }
 
+    private void GpsFilmstrip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        // Clicking the already selected source must still refocus its map
+        // position after changing the gallery selection.
+        if (!_gpsFilmstripFrozen || _gpsFilmstripFocusActive ||
+            GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item)
+            return;
+        FocusGpsPhotoForDisplay(item.Id);
+        _gpsFilmstripFocusActive = true;
+        _ = RefreshGpsMapAsync();
+    }
+
     private void GpsFilmstrip_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item) return;
@@ -353,7 +365,8 @@ public partial class MainWindow
         // The virtualizing WPF strip owns its scroll position; scrolling must
         // never change the gallery selection or map viewport. Load only the
         // newly visible page for point groups, never thousands of bitmaps.
-        if (_gpsFilmstripPointIds is null || !_appearance.ShowGpsFilmstrip ||
+        if ((!_gpsFilmstripFrozen && _gpsFilmstripPointIds is null) ||
+            !_appearance.ShowGpsFilmstrip ||
             _gpsFilmstripEntries.Count == 0 || e.HorizontalChange == 0)
             return;
         var first = Math.Clamp((int)Math.Floor(e.HorizontalOffset) - 8,

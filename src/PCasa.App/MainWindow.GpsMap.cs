@@ -566,7 +566,7 @@ public partial class MainWindow
                          _gpsSelectionCount > 1)
                 {
                     _gpsHighlightedImageId = selectedId;
-                    if (_appearance.ShowGpsFilmstrip)
+                    if (_appearance.ShowGpsFilmstrip && !_gpsFilmstripFrozen)
                     {
                         GpsPhotoPopup.Visibility = Visibility.Collapsed;
                         _gpsFilmstripUpdating = true;
@@ -631,7 +631,11 @@ public partial class MainWindow
             _gpsBrowser is not { IsDisposed: false } map) return;
         var pointRevision = _gpsPointRevision;
         var snapshot = _gpsPoints.ToArray();
-        if (fitSelection && snapshot.Length > 0)
+        var fitPoints = _gpsFilmstripFrozen && _gpsFilmstripFocusActive &&
+            _gpsHighlightedImageId is long sourceId
+            ? snapshot.Where(p => p.Id == sourceId).ToArray()
+            : snapshot.Where(p => p.Selected).ToArray();
+        if (fitSelection && fitPoints.Length > 0)
         {
             // Old code clustered at the PREVIOUS camera zoom, committed
             // hundreds of overlapping markers, then animated fitBounds.
@@ -642,10 +646,10 @@ public partial class MainWindow
             ++_gpsClusterRequestRevision;
             map.ExecuteScriptAsync("window.pcasaPrepareGpsExtent(" +
                 pointRevision + "," +
-                snapshot.Min(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
-                snapshot.Min(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + "," +
-                snapshot.Max(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
-                snapshot.Max(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + ")");
+                fitPoints.Min(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
+                fitPoints.Min(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + "," +
+                fitPoints.Max(p => p.Lat).ToString("R", CultureInfo.InvariantCulture) + "," +
+                fitPoints.Max(p => p.Lon).ToString("R", CultureInfo.InvariantCulture) + ")");
             return;
         }
         var request = ++_gpsClusterRequestRevision;
@@ -761,6 +765,16 @@ public partial class MainWindow
         // A background catalog refresh of the SAME selection must not
         // cancel its in-flight fit and leave a blank world map.
         var selectedIds = _selectedImageIds.ToArray();
+        var stripSourceId = _gpsFilmstripFrozen && _appearance.ShowGpsFilmstrip &&
+            GpsFilmstripList.SelectedItem is GpsFilmstripEntry stripSource
+            ? (long?)stripSource.Id : null;
+        // A pinned photo is fetched by immutable image ID alongside gallery
+        // targets, without adding it to the gallery selection.
+        var includeStripSource = stripSourceId.HasValue &&
+            (selectedIds.Length > 0 || _gpsFilmstripFocusActive);
+        var queryIds = includeStripSource && !selectedIds.Contains(stripSourceId!.Value)
+            ? selectedIds.Append(stripSourceId!.Value).ToArray()
+            : selectedIds;
         // A map-point filmstrip is a temporary view. Only a REAL change of
         // gallery selection replaces it. Background photo imports may
         // refresh the map repeatedly while the user explores one GPS point.
@@ -771,6 +785,8 @@ public partial class MainWindow
             _gpsPendingFitQueryRevision = -1;
             _gpsFilmstripSelectionSnapshot = selectedIds.ToHashSet();
             _gpsFilmstripPointIds = null;
+            _gpsFilmstripFocusActive = false;
+            _gpsHighlightedImageId = _gallerySelection.FocusedId;
         }
         // The previous selection's map and coordinates must not masquerade
         // as the newly selected 6,000 photos while catalog reads are queued.
@@ -793,7 +809,7 @@ public partial class MainWindow
         // query of the first 5,000 GPS rows across the entire catalog.
         // Clear synchronously, even if a catalog query for the old selection
         // is still in flight or the scheduler is busy scanning the NAS.
-        if (selectedIds.Length == 0)
+        if (queryIds.Length == 0)
         {
             var hadMapContent = _gpsPoints.Count > 0 ||
                 _gpsPresentedClusters.Count > 0 ||
@@ -808,6 +824,7 @@ public partial class MainWindow
             GpsCopyButton.IsEnabled = false;
             GpsRemoveButton.IsEnabled = false;
             GpsReplaceButton.IsEnabled = false;
+            UpdateGpsFilmstripControls();
             GpsCoordinatesText.Text = UiLanguage.T("Keine Fotos ausgewählt");
             GpsPhotoPopup.Visibility = Visibility.Collapsed;
             if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
@@ -847,7 +864,7 @@ public partial class MainWindow
                 cancellation =>
                 {
                     cancellation.ThrowIfCancellationRequested();
-                    return ReadGpsPoints(selectedIds, cancellation,
+                    return ReadGpsPoints(queryIds, cancellation,
                         mismatchedSources);
                 },
                 () => revision == _gpsQueryRevision && _sidebarMode == "GPS",
@@ -866,9 +883,21 @@ public partial class MainWindow
                         rootId, path, BackgroundFolderChangeKind.ScanFile,
                         Recursive: false, ForceExifRefresh: true));
             }
+            var galleryTargetIds = selectedIds.ToHashSet();
+            // The source may be a separate, previously visited folder.
+            // Selected still means a gallery target, except while explicitly
+            // focusing the source for map display.
+            points = points.Select(p => p with { Selected =
+                galleryTargetIds.Contains(p.Id) ||
+                (_gpsFilmstripFrozen && _gpsFilmstripFocusActive &&
+                 stripSourceId == p.Id) }).ToList();
             var pointsChanged = !_gpsPoints.SequenceEqual(points);
             if (pointsChanged) ++_gpsPointRevision;
             _gpsPoints = points;
+            var activeSourceFocus = _gpsFilmstripFrozen &&
+                _gpsFilmstripFocusActive ? stripSourceId : null;
+            var sourceFocusChanged = _gpsLastMapSourceFocusId != activeSourceFocus;
+            _gpsLastMapSourceFocusId = activeSourceFocus;
             // Only current selected photo IDs can own the GPS projection.
             // A canceled or obsolete read may never republish older markers.
             PCasaDiagnostics.WriteMessage("GPS.Map.Query",
@@ -877,7 +906,7 @@ public partial class MainWindow
                 $"DistinctSelectedPositions={points.Where(p => p.Selected)
                     .Select(p => (p.Lat, p.Lon)).Distinct().Count()}; " +
                 $"ZeroZero={points.Count(p => p.Selected && p.Lat == 0 && p.Lon == 0)}");
-            var selectedGps = points.Where(p => p.Selected).ToArray();
+            var selectedGps = points.Where(p => galleryTargetIds.Contains(p.Id)).ToArray();
             _gpsSelectionCount = selectedIds.Length;
             // Public Google URLs cannot encode arbitrary PCasa photo markers.
             // Never silently represent multiple selected images as one pin.
@@ -886,12 +915,13 @@ public partial class MainWindow
             if (googleMultiSelection)
                 ExitGoogleMapsWebsite();
             if (_gpsHighlightedImageId is long oldId &&
-                !selectedGps.Any(p => p.Id == oldId))
+                !points.Any(p => p.Id == oldId))
                 _gpsHighlightedImageId = null;
             // Multi-selection retains a focused coordinate for Google Maps
             // and Copy GPS, while MapLibre still renders all selected points.
-            var focused = selectedGps.FirstOrDefault(p =>
-                p.Id == _gpsHighlightedImageId)
+            var focused = (activeSourceFocus is long activeId
+                    ? points.FirstOrDefault(p => p.Id == activeId) : null)
+                ?? selectedGps.FirstOrDefault(p => p.Id == _gpsHighlightedImageId)
                 ?? selectedGps.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
             _gpsCurrentCoordinates = focused is not null
                 ? (focused.Lat, focused.Lon)
@@ -901,8 +931,12 @@ public partial class MainWindow
             GpsRemoveButton.IsEnabled = selectedIds.Length > 0;
             GpsReplaceButton.IsEnabled = selectedIds.Length > 0 &&
                 _gpsDraft.HasValue;
+            UpdateGpsFilmstripControls();
             UpdateGpsGoogleButton();
-            GpsCoordinatesText.Text = googleMultiSelection
+            GpsCoordinatesText.Text = activeSourceFocus is not null &&
+                focused is not null
+                ? UiLanguage.Format("{0:F6}°, {1:F6}°", focused.Lat, focused.Lon)
+                : googleMultiSelection
                 ? UiLanguage.T("Mehrfachauswahl in PCasa-Fotokarte")
                 : selectedIds.Length > 1
                     ? UiLanguage.Format("GPS: {0:N0} / {1:N0} ausgewählt · {2:N0} Positionen",
@@ -919,9 +953,9 @@ public partial class MainWindow
                             selectedGps.Length > 0 ? selectedGps.Length : points.Count);
             if (_gpsGoogleWebsiteActive)
                 NavigateGoogleMapsToSelection();
-            else if (selectionChanged || pointsChanged)
+            else if (selectionChanged || pointsChanged || sourceFocusChanged)
                 _ = PublishGpsClustersAsync(fitSelection:
-                    selectedGps.Length > 0);
+                    selectedGps.Length > 0 || activeSourceFocus is not null);
             // An unchanged selection keeps its existing pending projection.
             // Live catalog refreshes cannot starve the GPS renderer.
             if (_appearance.ShowGpsFilmstrip)
@@ -930,7 +964,9 @@ public partial class MainWindow
                 SyncGpsPhotoPopupToGallerySelection();
             if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible &&
                 GpsFullscreenImageOverlay.Tag is long shownId &&
-                !_selectedImageIds.Contains(shownId))
+                !_selectedImageIds.Contains(shownId) &&
+                !(_gpsFilmstripFrozen &&
+                  _gpsFilmstripEntries.Any(item => item.Id == shownId)))
                 CloseGpsFullscreenImage();
             UpdateGpsFilmstrip();
         }

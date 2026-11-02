@@ -1442,12 +1442,34 @@ internal static class Program
                 ?? throw new Exception("GPS action row missing.");
             if (Grid.GetColumn(gpsCoords) != 1 ||
                 gpsControls.RowDefinitions.Count != 4 ||
-                gpsActions.ColumnDefinitions.Count != 4 ||
+                gpsActions.ColumnDefinitions.Count != 3 ||
                 Grid.GetRow(gpsActions) != 1 ||
                 gpsActions.Visibility != Visibility.Visible ||
                 gpsControls.HorizontalAlignment != HorizontalAlignment.Stretch ||
                 gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch)
                 throw new Exception("GPS controls are not fixed and compact.");
+            var gpsPin = window.FindName("GpsFilmstripFreezeToggle") as ToggleButton;
+            var gpsTransfer = window.FindName("GpsFilmstripToGalleryButton") as Button;
+            var gpsStripClear = window.FindName("GpsFilmstripClearButton") as Button;
+            var gpsReplace = window.FindName("GpsReplaceButton") as Button;
+            var gpsRemove = window.FindName("GpsRemoveButton") as Button;
+            var gpsStrip = window.FindName("GpsFilmstripList") as ListBox;
+            var rememberedJump = window.FindName("GalleryReturnToRememberedButton") as Button;
+            var departureJump = window.FindName("GalleryReturnToDepartureButton") as Button;
+            if (gpsPin is null || gpsTransfer is null || gpsStripClear is null ||
+                gpsReplace is null || gpsRemove is null || gpsStrip is null ||
+                rememberedJump is null || departureJump is null ||
+                window.FindName("GpsApplyMissingButton") is not null ||
+                Grid.GetColumn(gpsReplace) != 1 || Grid.GetColumn(gpsRemove) != 2 ||
+                Grid.GetRow(gpsStrip) != 1 ||
+                !ToolTipService.GetShowOnDisabled(gpsReplace) ||
+                !ToolTipService.GetShowOnDisabled(gpsRemove) ||
+                !ToolTipService.GetShowOnDisabled(gpsTransfer) ||
+                !ToolTipService.GetShowOnDisabled(gpsStripClear) ||
+                !ToolTipService.GetShowOnDisabled(rememberedJump) ||
+                !ToolTipService.GetShowOnDisabled(departureJump))
+                throw new Exception("GPS filmstrip actions or disabled-button tooltips are missing.");
+            Console.WriteLine("PASS: GPS filmstrip actions and disabled-button explanations are present.");
             Console.WriteLine("PASS: GPS header/controls stay in fixed rows.");
 
 

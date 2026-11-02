@@ -927,7 +927,7 @@
                                      Width="30" Height="27" Padding="2" Margin="2,0,3,0"
                                      ToolTip="{loc:Tr Key='Aktuelle Position merken'}"
                                      Checked="GalleryRememberPosition_Changed"
-                                     Unchecked="GalleryRememberPosition_Changed">
+                                     Unchecked="GalleryRememberPosition_Changed" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="20" Height="20" Stretch="Uniform">
                                     <Canvas Width="24" Height="24">
                                         <!-- Recognizable tilted pushpin: head, two tapered shoulders, pointed needle. -->
@@ -940,8 +940,8 @@
                             <Button x:Name="GalleryReturnToRememberedButton"
                                     Width="30" Height="27" Padding="2" Margin="2,0,2,0"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
-                                    ToolTip="{loc:Tr Key='Zur gemerkten Position springen'}"
-                                    IsEnabled="False" Click="GalleryReturnToRemembered_Click">
+                                    ToolTip="{loc:Tr Key='Springt zur gemerkten Position. Zuerst mit der Stecknadel eine Position merken.'}"
+                                    IsEnabled="False" Click="GalleryReturnToRemembered_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="20" Height="20" Stretch="Uniform">
                                     <Canvas Width="24" Height="24">
                                         <Ellipse Canvas.Left="5" Canvas.Top="5" Width="14" Height="14"
@@ -957,8 +957,8 @@
                             <Button x:Name="GalleryReturnToDepartureButton"
                                     Width="30" Height="27" Padding="2" Margin="2,0,7,0"
                                     Style="{StaticResource PcasaStatusButtonStyle}"
-                                    ToolTip="{loc:Tr Key='Zur vorherigen Position zurück'}"
-                                    IsEnabled="False" Click="GalleryReturnToDeparture_Click">
+                                    ToolTip="{loc:Tr Key='Kehrt nach einem Sprung zur vorherigen Position zurück. Erst eine Position merken und anspringen.'}"
+                                    IsEnabled="False" Click="GalleryReturnToDeparture_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="20" Height="20" Stretch="Uniform">
                                     <Canvas Width="24" Height="24">
                                         <!-- Single U-turn arrow, deliberately distinct from the target symbol. -->
@@ -971,37 +971,37 @@
                             <Button x:Name="GalleryNavigateFolderStartButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Ordneranfang'}" Tag="FolderStart"
-                                     Click="GalleryNavigate_Click">
+                                     Click="GalleryNavigate_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 4,4 H 20 V 20 H 4 Z M 9,6 V 18 M 17,9 L 12,12 L 17,15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateFolderEndButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Ordnerende'}" Tag="FolderEnd"
-                                     Click="GalleryNavigate_Click">
+                                     Click="GalleryNavigate_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 4,4 H 20 V 20 H 4 Z M 15,6 V 18 M 7,9 L 12,12 L 7,15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigatePreviousFolderButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Einen Ordner höher'}" Tag="PreviousFolder"
-                                     Click="GalleryNavigate_Click">
+                                     Click="GalleryNavigate_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,3 H 9 L 12,6 H 22 V 22 H 2 Z M 12,20 V 8 M 7,13 L 12,8 L 17,13" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateNextFolderButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Einen Ordner tiefer'}" Tag="NextFolder"
-                                     Click="GalleryNavigate_Click">
+                                     Click="GalleryNavigate_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 2,3 H 9 L 12,6 H 22 V 22 H 2 Z M 12,8 V 20 M 7,15 L 12,20 L 17,15" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeLineJoin="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateGalleryStartButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Galerieanfang'}" Tag="GalleryStart"
-                                     Click="GalleryNavigate_Click">
+                                     Click="GalleryNavigate_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 5,11 L 12,4 L 19,11 M 5,17 L 12,10 L 19,17 M 4,21 H 20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2" StrokeLineJoin="Round" StrokeStartLineCap="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                             <Button x:Name="GalleryNavigateGalleryEndButton" Width="30" Height="27" Margin="2,0"
                                      Padding="2" Style="{StaticResource PcasaStatusButtonStyle}"
                                      ToolTip="{loc:Tr Key='Galerieende'}" Tag="GalleryEnd"
-                                     Click="GalleryNavigate_Click">
+                                     Click="GalleryNavigate_Click" ToolTipService.ShowOnDisabled="True">
                                 <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24"><Path Data="M 5,5 L 12,12 L 19,5 M 5,11 L 12,18 L 19,11 M 4,21 H 20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2.2" StrokeLineJoin="Round" StrokeStartLineCap="Round" Fill="Transparent"/></Canvas></Viewbox>
                             </Button>
                         </StackPanel>
@@ -1231,7 +1231,7 @@
   <ToggleButton x:Name="GpsPickPositionToggle" Grid.Column="0" Height="31" Padding="3,1" Margin="0,0,3,0" Checked="GpsPickPosition_Changed" Unchecked="GpsPickPosition_Changed" ToolTip="{loc:Tr Key='Auf Karte klicken oder Marker ziehen'}" ToolTipService.ShowOnDisabled="True">
  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M12,2 C7,2 4,6 4,11 C4,16 12,22 12,22 C12,22 20,16 20,11 C20,6 17,2 12,2 Z M9,11 A3,3 0 1 0 15,11 A3,3 0 1 0 9,11" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsPickPositionToggleCaption" Text="{loc:Tr Key='Wählen'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
  </ToggleButton>
-  <Button x:Name="GpsReplaceButton" Grid.Column="1" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsReplace_Click" ToolTip="{loc:Tr Key='Ersetzt die GPS-Positionen aller markierten Galeriefotos durch den gewählten Kartenpunkt.'}" ToolTipService.ShowOnDisabled="True">
+  <Button x:Name="GpsReplaceButton" Grid.Column="1" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsReplace_Click" ToolTip="{loc:Tr Key='Zuerst Galeriefotos markieren und einen Kartenpunkt wählen. GPS ersetzen überschreibt alle vorhandenen Koordinaten.'}" ToolTipService.ShowOnDisabled="True">
  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M4,8 V5 H20 L16,1 M20,5 L16,9 M20,16 V19 H4 L8,15 M4,19 L8,23" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsReplaceButtonCaption" Text="{loc:Tr Key='GPS ersetzen'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
  </Button>
   <Button x:Name="GpsRemoveButton" Grid.Column="2" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsRemove_Click" ToolTip="{loc:Tr Key='Entfernt GPS von allen markierten Galeriefotos. Erst Fotos in der Galerie auswählen.'}" ToolTipService.ShowOnDisabled="True">
@@ -1397,6 +1397,7 @@
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling"
                                      SelectionChanged="GpsFilmstrip_SelectionChanged"
+                                     MouseLeftButtonUp="GpsFilmstrip_MouseLeftButtonUp"
                                      MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
                                      ScrollViewer.ScrollChanged="GpsFilmstrip_ScrollChanged">
                                 <ListBox.ItemsPanel>

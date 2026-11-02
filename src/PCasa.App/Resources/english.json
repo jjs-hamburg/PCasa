@@ -442,5 +442,8 @@
   "Nur für ein ausgewähltes Foto mit gültigen GPS-Koordinaten verfügbar.": "Available only for one selected photo with valid GPS coordinates.",
   "Hebt den Filter Im Ausschnitt auf, sofern er aktiv ist.": "Clears the in-view filter if it is active.",
   "Fixierung lösen: Filmstrip folgt wieder der Galerieauswahl.": "Unpin: filmstrip follows the gallery selection again.",
-  "Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.": "Pin the current filmstrip photos. New gallery selections then update only the map."
+  "Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.": "Pin the current filmstrip photos. New gallery selections then update only the map.",
+  "Zuerst Galeriefotos markieren und einen Kartenpunkt wählen. GPS ersetzen überschreibt alle vorhandenen Koordinaten.": "First select gallery photos and choose a map point. Replace GPS then overwrites all existing coordinates.",
+  "Springt zur gemerkten Position. Zuerst mit der Stecknadel eine Position merken.": "Jumps to the saved position. First save a position using the pin.",
+  "Kehrt nach einem Sprung zur vorherigen Position zurück. Erst eine Position merken und anspringen.": "Returns to the previous position after a jump. First save a position and jump to it."
 }
