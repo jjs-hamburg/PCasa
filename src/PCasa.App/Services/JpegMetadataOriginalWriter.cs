@@ -17,6 +17,8 @@ namespace PCasa.App.Services;
 /// </summary>
 public static class JpegMetadataOriginalWriter
 {
+    public static string? LastFallbackDifference { get; private set; }
+
     public static bool TryWriteTags(string path, IReadOnlyList<string> keywords,
         ExifToolKeywordWriter.Session session, CancellationToken token)
         => TryWrite(path, session, keywords, updateTags: true,
@@ -171,8 +173,20 @@ public static class JpegMetadataOriginalWriter
         }
         var x = Fields(a, ignoreGps);
         var y = Fields(b, ignoreGps);
-        return x.Count == y.Count && x.All(entry =>
-            y.TryGetValue(entry.Key, out var value) && value == entry.Value);
+        foreach (var key in x.Keys.Union(y.Keys).OrderBy(k => k, StringComparer.Ordinal))
+        {
+            x.TryGetValue(key, out var oldValue);
+            y.TryGetValue(key, out var newValue);
+            if (!string.Equals(oldValue, newValue, StringComparison.Ordinal))
+            {
+                LastFallbackDifference = key + ": " +
+                    (oldValue ?? "(missing)") + " -> " +
+                    (newValue ?? "(missing)");
+                return false;
+            }
+        }
+        LastFallbackDifference = null;
+        return true;
     }
 
     private static bool SafeBasicJpeg(string path)

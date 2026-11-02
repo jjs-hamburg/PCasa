@@ -4324,14 +4324,16 @@ internal static class Program
         {
             if (!JpegMetadataOriginalWriter.TryWriteTags(path,
                     new[] { "Keep", "Added" }, writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production Tag fast path.");
+                throw new Exception("Ordinary JPEG refused production Tag fast path: " +
+                    JpegMetadataOriginalWriter.LastFallbackDifference);
             var afterTags = writer.ReadSnapshot(path);
             if (!afterTags.Xmp.Contains("Keep") ||
                 !afterTags.Iptc.Contains("Added"))
                 throw new Exception("Optimized original Tag writer did not persist keywords.");
             if (!JpegMetadataOriginalWriter.TryWriteGps(path, 53.5, 10.25,
                     writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production GPS fast path.");
+                throw new Exception("Ordinary JPEG refused production GPS fast path: " +
+                    JpegMetadataOriginalWriter.LastFallbackDifference);
             using (var exif = new ImageExifReader())
             {
                 var result = exif.Read(path);
@@ -4343,7 +4345,8 @@ internal static class Program
             }
             if (!JpegMetadataOriginalWriter.TryWriteGps(path, null, null,
                     writer, CancellationToken.None))
-                throw new Exception("Ordinary JPEG refused production GPS removal.");
+                throw new Exception("Ordinary JPEG refused production GPS removal: " +
+                    JpegMetadataOriginalWriter.LastFallbackDifference);
             using var final = new ImageExifReader();
             if (final.Read(path).GpsLatitude is not null ||
                 final.Read(path).GpsLongitude is not null)
