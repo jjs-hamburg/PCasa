@@ -64,19 +64,22 @@ public partial class App : Application
 
         try
         {
-            var source = e.Args.Length > 1 ? e.Args[1] : null;
-            if (string.IsNullOrWhiteSpace(source))
+            var sources = e.Args.Length > 1
+                ? e.Args.Skip(1).ToArray()
+                : Array.Empty<string>();
+            if (sources.Length == 0)
             {
                 var picker = new Microsoft.Win32.OpenFileDialog
                 {
-                    Title = "PCasa JPEG-Benchmark: JPG auf einer SMB-Freigabe auswählen",
-                    Filter = "JPEG-Bilder (*.jpg;*.jpeg)|*.jpg;*.jpeg"
+                    Title = "PCasa JPEG-Benchmark – 1 bis 20 JPGs auswählen (Tags + GPS)",
+                    Filter = "JPEG-Bilder (*.jpg;*.jpeg)|*.jpg;*.jpeg",
+                    Multiselect = true
                 };
                 if (picker.ShowDialog() != true) return;
-                source = picker.FileName;
+                sources = picker.FileNames;
             }
 
-            var result = JpegTagBenchmarkRunner.Run(source);
+            var result = JpegTagBenchmarkRunner.RunMany(sources);
             var folder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                 "PCasa");

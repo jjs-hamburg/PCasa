@@ -45,7 +45,61 @@ public static class JpegTagBenchmarkRunner
         }
     }
 
+    /// <summary>
+    /// Reuse one ExifTool stay-open session for a selected batch. Timed per
+    /// image operations include all Tag+GPS metadata writes and JPEG copies,
+    /// not verification reads. No source photo is ever opened for writing.
+    /// </summary>
+    public static string RunMany(IReadOnlyList<string> paths,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        if (paths.Count is < 1 or > 20)
+            throw new ArgumentOutOfRangeException(nameof(paths),
+                "Bitte 1 bis 20 JPEG-Bilder für den Test auswählen.");
+        using var session = new ExifToolKeywordWriter.Session();
+        var reports = new List<Report>();
+        foreach (var path in paths)
+        {
+            token.ThrowIfCancellationRequested();
+            reports.Add(RunCore(path, session, token));
+        }
+
+        var totalBaseline = reports.Sum(x => x.ExifToolElapsed.TotalSeconds);
+        var totalPrototype = reports.Sum(x => x.PrototypeElapsed.TotalSeconds);
+        var ratio = totalBaseline / Math.Max(0.001, totalPrototype);
+        var summary = "PCasa JPEG-Tag+GPS-Benchmark – " +
+            reports.Count + " Bilder" + Environment.NewLine +
+            "Gesamtgröße: " +
+            (reports.Sum(x => x.SourceBytes) / (1024d * 1024d)).ToString("F2") +
+            " MiB" + Environment.NewLine +
+            "ExifTool gesamt: " + totalBaseline.ToString("F2") + " s" +
+            Environment.NewLine +
+            "JPEG-Prototyp gesamt: " + totalPrototype.ToString("F2") + " s" +
+            Environment.NewLine +
+            "Faktor (ExifTool/Prototyp): " + ratio.ToString("F2") + "x" +
+            Environment.NewLine +
+            "SMB CopyChunk: " + reports.Count(x => x.ServerSideCopyUsed) +
+            "/" + reports.Count + " Dateien" + Environment.NewLine +
+            "Alle Tag-/GPS-/Bilddatenprüfungen: " +
+            (reports.All(x => x.Verified) ? "Bestanden" : "FEHLER") +
+            Environment.NewLine +
+            "Originale unverändert; temporäre Kopien entfernt." +
+            Environment.NewLine + Environment.NewLine;
+        return summary + string.Join(Environment.NewLine + Environment.NewLine,
+            reports.Select((report, i) =>
+                "Bild " + (i + 1) + "/" + reports.Count +
+                Environment.NewLine + report));
+    }
+
     public static Report Run(string sourcePath, CancellationToken token = default)
+    {
+        using var session = new ExifToolKeywordWriter.Session();
+        return RunCore(sourcePath, session, token);
+    }
+
+    private static Report RunCore(string sourcePath,
+        ExifToolKeywordWriter.Session reader, CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         var source = Path.GetFullPath(sourcePath);
@@ -78,7 +132,6 @@ public static class JpegTagBenchmarkRunner
         try
         {
             token.ThrowIfCancellationRequested();
-            using (var reader = new ExifToolKeywordWriter.Session())
             {
                 var tags = reader.ReadSnapshot(source, token).Combined.ToList();
                 tags.Add("PCasaBenchmark-" + nonce[..10]);

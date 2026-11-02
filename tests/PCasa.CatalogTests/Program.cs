@@ -4390,9 +4390,30 @@ internal static class Program
             !result.Verified || result.ToString().Contains("nicht verifiziert",
                 StringComparison.OrdinalIgnoreCase))
             throw new Exception("User JPEG benchmark did not complete and verify.");
+        // Multiple images share one native ExifTool session; verify that
+        // each image still receives both Tag and GPS changes and leaves
+        // no test output in the original folder.
         if (!Directory.GetFiles(sandbox.Images)
             .OrderBy(p => p, StringComparer.Ordinal)
-            .SequenceEqual(initialFiles) ||
+            .SequenceEqual(initialFiles))
+            throw new Exception("Single-file JPEG benchmark did not clean its test copies.");
+        var second = Path.Combine(sandbox.Images, "benchmark-second.jpg");
+        WriteJpeg(second);
+        var secondHash = JpegGpsPatchPrototype.CompressedImageHash(second);
+        var batchBefore = Directory.GetFiles(sandbox.Images)
+            .OrderBy(p => p, StringComparer.Ordinal).ToArray();
+        var batchResult = JpegTagBenchmarkRunner.RunMany(new[] { path, second });
+        if (!batchResult.Contains("2 Bilder", StringComparison.Ordinal) ||
+            !batchResult.Contains("Alle Tag-/GPS-/Bilddatenprüfungen: Bestanden",
+                StringComparison.Ordinal) ||
+            !Directory.GetFiles(sandbox.Images)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .SequenceEqual(batchBefore) ||
+            !secondHash.SequenceEqual(JpegGpsPatchPrototype.CompressedImageHash(second)))
+            throw new Exception("Multi-file Tag/GPS benchmark changed originals or left copies.");
+        if (!Directory.GetFiles(sandbox.Images)
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .SequenceEqual(batchBefore) ||
             !JpegGpsPatchPrototype.CompressedImageHash(path)
                 .SequenceEqual(originalHash) ||
             File.GetLastWriteTimeUtc(path) != originalStamp)
