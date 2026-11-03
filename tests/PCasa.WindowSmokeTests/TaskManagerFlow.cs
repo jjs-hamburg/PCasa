@@ -254,7 +254,11 @@ internal static class TaskManagerFlow
                         UiLanguage.Format("{0:N0} geprüft", 14976))
                     throw new Exception("Running scan did not advance from the confirmed restart cursor.");
             }
-            finally { progressWindow.Finish(); }
+            finally
+            {
+                progressWindow.EndManualOperation();
+                progressWindow.Finish();
+            }
 
             releaseBlocker.TrySetResult();
             UntilBackground(() => Task.WhenAll(a, c, blocker).IsCompleted,
