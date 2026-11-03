@@ -77,8 +77,18 @@ public partial class MainWindow
     // A pinned strip owns a snapshot of image identities/thumbnails, not a
     // second gallery selection or an additional catalog owner.
     private bool _gpsFilmstripFrozen;
+    // Durable UI selection by image ID, not ListBoxItem references. Gallery
+    // index refresh/rebinding must never turn Ctrl+A into one selected photo.
+    private readonly HashSet<long> _gpsFilmstripSelectedIds = [];
     private bool _gpsFilmstripFocusActive;
     private long? _gpsLastMapSourceFocusId;
+    // Confirmed original-file removals temporarily override the last
+    // published (possibly stale) browse-index flags. This is UI projection
+    // only; the original and committed EXIF catalog remain authoritative.
+    private readonly HashSet<long> _gpsConfirmedRemovedIds = [];
+    private readonly HashSet<long> _gpsPendingVerifiedRemovals = [];
+    private readonly object _gpsRemovalPresentationGate = new();
+    private bool _gpsRemovalPresentationQueued;
     private IReadOnlyList<BrowseThumbnailIndexEntry>? _gpsFilmstripStatusIndex;
     private HwndSource? _gpsFilmstripHwnd;
     private int _gpsFilmstripVerticalWheelRemainder;
@@ -185,7 +195,8 @@ public partial class MainWindow
         GpsFilmstripFreezeToggle.ToolTip = _gpsFilmstripFrozen
             ? UiLanguage.T("Fixierung lösen: Filmstrip folgt wieder der Galerieauswahl.")
             : UiLanguage.T("Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.");
-        GpsFilmstripCountText.Text = _gpsFilmstripEntries.Count.ToString("N0");
+        GpsFilmstripCountText.Text =
+            $"{GpsFilmstripList.SelectedItems.Count:N0}/{_gpsFilmstripEntries.Count:N0}";
         var source = GpsFilmstripList.SelectedItem as GpsFilmstripEntry;
         var selectedSources = GpsFilmstripList.SelectedItems.Count;
         GpsFilmstripRemoveGpsButton.IsEnabled = selectedSources > 0;
@@ -274,134 +285,193 @@ public partial class MainWindow
         HighlightGpsPointOnMap(anchorId);
     }
 
+    // A completed original-file write may run on the scheduler worker. Queue
+    // one coalesced WPF projection of verified IDs, never an extra writer.
+    private void QueueVerifiedGpsRemoval(long imageId)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        lock (_gpsRemovalPresentationGate)
+        {
+            _gpsPendingVerifiedRemovals.Add(imageId);
+            if (_gpsRemovalPresentationQueued) return;
+            _gpsRemovalPresentationQueued = true;
+        }
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            HashSet<long> removed;
+            lock (_gpsRemovalPresentationGate)
+            {
+                removed = _gpsPendingVerifiedRemovals.ToHashSet();
+                _gpsPendingVerifiedRemovals.Clear();
+                _gpsRemovalPresentationQueued = false;
+            }
+            if (removed.Count == 0 || Dispatcher.HasShutdownStarted) return;
+            _gpsConfirmedRemovedIds.UnionWith(removed);
+
+            // The completed, catalog-verified edit removes photos/markers
+            // NOW, while the usual final thumbnail-index reload may still
+            // be queued behind scans. Failure/parked attempts never call here.
+            RemoveGpsFilmstripEntries(removed);
+            if (_gpsPoints.Any(point => removed.Contains(point.Id)))
+            {
+                _gpsPoints = _gpsPoints
+                    .Where(point => !removed.Contains(point.Id)).ToList();
+                ++_gpsPointRevision;
+                ++_gpsQueryRevision; // discard stale in-flight GPS catalog reads
+                _gpsPresentedClusters = [];
+                _gpsLastMapSourceFocusId = null;
+                _ = PublishGpsClustersAsync();
+            }
+            if (GpsFullscreenImageOverlay.Tag is long displayed &&
+                removed.Contains(displayed))
+                CloseGpsFullscreenImage();
+            UpdateGpsFilmstripControls();
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    // Remove only verified GPS-free sources from the independent filmstrip
+    // selection. Called after a committed original-file write, and again
+    // when the regular catalog index reports that GPS has disappeared.
+    private void RemoveGpsFilmstripEntries(IReadOnlySet<long> removedIds)
+    {
+        if (removedIds.Count == 0 ||
+            !_gpsFilmstripEntries.Any(item => removedIds.Contains(item.Id)))
+            return;
+        _gpsFilmstripSelectedIds.ExceptWith(removedIds);
+        _gpsFilmstripEntries = _gpsFilmstripEntries
+            .Where(item => !removedIds.Contains(item.Id)).ToList();
+        foreach (var id in removedIds)
+        {
+            _gpsFilmstripIndexes.Remove(id);
+            _gpsFilmstripRequestedIds.Remove(id);
+        }
+        if (_gpsHighlightedImageId is long highlighted &&
+            removedIds.Contains(highlighted))
+        {
+            _gpsHighlightedImageId = null;
+            _gpsFilmstripFocusActive = false;
+        }
+        _gpsFilmstripUpdating = true;
+        try
+        {
+            GpsFilmstripList.ItemsSource = _gpsFilmstripEntries;
+            foreach (var item in _gpsFilmstripEntries.Where(item =>
+                         _gpsFilmstripSelectedIds.Contains(item.Id)))
+                GpsFilmstripList.SelectedItems.Add(item);
+        }
+        finally { _gpsFilmstripUpdating = false; }
+        UpdateGpsFilmstripControls();
+    }
+
     // Called from the same catalog selection publication as the map markers.
-    // This strip is a projection of the selected IDs, never another selection
-    // owner, independent catalog or thumbnail-processing pipeline.
+    // Image IDs and their selection are stable across index reloads. Never
+    // detach the virtualized ListBox when its member IDs are unchanged.
     private void UpdateGpsFilmstrip()
     {
         if (_gpsFilmstripFrozen)
         {
-            // Keep the source snapshot, but refresh lightweight status flags
-            // if the catalog index has changed after tag/GPS writes.
-            if (!ReferenceEquals(_gpsFilmstripStatusIndex, _browseIndex))
+            if (!ReferenceEquals(_gpsFilmstripStatusIndex, _browseIndex) ||
+                _gpsConfirmedRemovedIds.Count != 0)
             {
                 var visible = _gpsFilmstripEntries.ToDictionary(item => item.Id);
-                var gpsRemoved = new HashSet<long>();
-                if (visible.Count > 0)
-                    foreach (var index in _browseIndex)
-                        if (visible.TryGetValue(index.ImageId, out var item))
-                        {
-                            item.UpdateStatus(index);
-                            if (!index.HasGps) gpsRemoved.Add(item.Id);
-                        }
-                // The strip must never retain former GPS sources just because
-                // it was pinned when their original-file coordinates were
-                // removed. Preserve OTHER selected source IDs across the
-                // virtual ListBox rebind, including Ctrl/Shift multi-selection.
-                if (gpsRemoved.Count > 0)
-                {
-                    var keepSelected = GpsFilmstripList.SelectedItems
-                        .OfType<GpsFilmstripEntry>().Select(item => item.Id)
-                        .Where(id => !gpsRemoved.Contains(id)).ToHashSet();
-                    _gpsFilmstripEntries = _gpsFilmstripEntries
-                        .Where(item => !gpsRemoved.Contains(item.Id)).ToList();
-                    foreach (var id in gpsRemoved)
+                var removed = _gpsConfirmedRemovedIds.ToHashSet();
+                foreach (var index in _browseIndex)
+                    if (visible.TryGetValue(index.ImageId, out var item))
                     {
-                        _gpsFilmstripIndexes.Remove(id);
-                        _gpsFilmstripRequestedIds.Remove(id);
+                        item.UpdateStatus(index);
+                        if (!index.HasGps) removed.Add(item.Id);
                     }
-                    if (_gpsHighlightedImageId is long highlighted &&
-                        gpsRemoved.Contains(highlighted))
-                    {
-                        _gpsHighlightedImageId = null;
-                        _gpsFilmstripFocusActive = false;
-                    }
-                    _gpsFilmstripUpdating = true;
-                    try
-                    {
-                        GpsFilmstripList.ItemsSource = _gpsFilmstripEntries;
-                        foreach (var item in _gpsFilmstripEntries.Where(item =>
-                                     keepSelected.Contains(item.Id)))
-                            GpsFilmstripList.SelectedItems.Add(item);
-                    }
-                    finally { _gpsFilmstripUpdating = false; }
-                }
+                RemoveGpsFilmstripEntries(removed);
                 _gpsFilmstripStatusIndex = _browseIndex;
             }
             foreach (var item in _gpsFilmstripEntries)
                 item.ShowIcons = _appearance.ShowThumbnailIcons;
-            // A gallery search, folder change or scan does not replace this
-            // snapshot. Keep the existing selected item and packed thumbnails.
-            if (_sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip &&
-                !ReferenceEquals(GpsFilmstripList.ItemsSource, _gpsFilmstripEntries))
-                GpsFilmstripList.ItemsSource = _gpsFilmstripEntries;
             UpdateGpsFilmstripControls();
             return;
         }
-        var revision = ++_gpsFilmstripRevision;
+
         if (_sidebarMode != "GPS" || !_appearance.ShowGpsFilmstrip)
         {
+            ++_gpsFilmstripRevision;
             _gpsFilmstripEntries = [];
+            _gpsFilmstripSelectedIds.Clear();
             _gpsFilmstripIndexes.Clear();
             _gpsFilmstripRequestedIds.Clear();
             _gpsFilmstripStatusIndex = null;
-            GpsFilmstripList.ItemsSource = null;
+            _gpsFilmstripUpdating = true;
+            try { GpsFilmstripList.ItemsSource = null; }
+            finally { _gpsFilmstripUpdating = false; }
             UpdateGpsFilmstripControls();
             return;
         }
 
         var selected = _gpsFilmstripPointIds ?? _selectedImageIds.ToHashSet();
-        _gpsFilmstripIndexes.Clear();
-        _gpsFilmstripRequestedIds.Clear();
-        // The filmstrip is ONLY a GPS source set. The main gallery remains
-        // the unrestricted target selection, including images without GPS.
-        // Use the same catalog index status as the gallery badges.
-        var mapNames = _gpsPoints.ToDictionary(p => p.Id, p => p.Name);
+        var oldEntries = _gpsFilmstripEntries.ToDictionary(item => item.Id);
+        var mapNames = _gpsPoints.ToDictionary(point => point.Id, point => point.Name);
         var entries = new List<GpsFilmstripEntry>();
-        var packed = new List<(GpsFilmstripEntry Item, BrowseThumbnailIndexEntry Index)>();
-        // Follow the same sort/gallery projection the user sees, not database ID
-        // ordering. No source file or NAS roundtrip for the strip.
-        for (var imageIndex = 0; imageIndex < _browseIndex.Count; imageIndex++)
+        var indexes = new Dictionary<long, BrowseThumbnailIndexEntry>();
+        for (var i = 0; i < _browseIndex.Count; i++)
         {
-            // Normal gallery selections retain the existing 160-photo bound.
-            // A clicked map cell must expose ALL its matching photo IDs; the
-            // WPF filmstrip is virtualized, and previews load by scroll page.
             if (_gpsFilmstripPointIds is null &&
                 entries.Count >= MaximumGpsFilmstripPhotos) break;
-            var index = _browseIndex[imageIndex];
-            if (!selected.Contains(index.ImageId) || !index.HasGps)
+            var index = _browseIndex[i];
+            if (!selected.Contains(index.ImageId) || !index.HasGps ||
+                _gpsConfirmedRemovedIds.Contains(index.ImageId))
                 continue;
-            var item = new GpsFilmstripEntry
-            {
-                Id = index.ImageId,
-                Name = mapNames.TryGetValue(index.ImageId, out var gpsName)
-                    ? gpsName : index.FileName,
-                ShowIcons = _appearance.ShowThumbnailIcons
-            };
+            // Retaining the same object also retains pending decoded bitmap
+            // updates and WPF realized item/scroll/selection state.
+            if (!oldEntries.TryGetValue(index.ImageId, out var item))
+                item = new GpsFilmstripEntry
+                {
+                    Id = index.ImageId,
+                    Name = mapNames.TryGetValue(index.ImageId, out var gpsName)
+                        ? gpsName : index.FileName,
+                    ShowIcons = _appearance.ShowThumbnailIcons
+                };
             item.UpdateStatus(index);
+            item.ShowIcons = _appearance.ShowThumbnailIcons;
             entries.Add(item);
-            _gpsFilmstripIndexes[item.Id] = index;
-            if (_browsePageCache is not null)
-            {
-                if (_browsePageCache.TryGet(imageIndex, out var cached))
-                    item.Bitmap = cached;
-            }
+            indexes[item.Id] = index;
             if (item.Bitmap is null &&
-                (_gpsFilmstripPointIds is null ||
-                 entries.Count <= MaximumGpsFilmstripPhotos))
-            {
-                packed.Add((item, index));
-                _gpsFilmstripRequestedIds.Add(item.Id);
-            }
+                _browsePageCache?.TryGet(i, out var cached) == true)
+                item.Bitmap = cached;
         }
-        _gpsFilmstripEntries = entries;
+
+        var unchanged = entries.Count == _gpsFilmstripEntries.Count &&
+            entries.Select(item => item.Id)
+                .SequenceEqual(_gpsFilmstripEntries.Select(item => item.Id));
+        if (!unchanged)
+        {
+            // A changed source set is a new page/thumbnail generation;
+            // unchanged source sets must NOT cancel in-flight page reads.
+            ++_gpsFilmstripRevision;
+            _gpsFilmstripEntries = entries;
+            _gpsFilmstripSelectedIds.IntersectWith(entries.Select(item => item.Id));
+            if (_gpsFilmstripSelectedIds.Count == 0)
+            {
+                var focused = entries.FirstOrDefault(item =>
+                    item.Id == _gpsHighlightedImageId)
+                    ?? entries.FirstOrDefault(item =>
+                        item.Id == _gallerySelection.FocusedId);
+                if (focused is not null)
+                    _gpsFilmstripSelectedIds.Add(focused.Id);
+            }
+            _gpsFilmstripRequestedIds.Clear();
+            _gpsFilmstripUpdating = true;
+            try
+            {
+                GpsFilmstripList.ItemsSource = entries;
+                foreach (var item in entries.Where(item =>
+                             _gpsFilmstripSelectedIds.Contains(item.Id)))
+                    GpsFilmstripList.SelectedItems.Add(item);
+            }
+            finally { _gpsFilmstripUpdating = false; }
+        }
+
+        _gpsFilmstripIndexes.Clear();
+        foreach (var (id, index) in indexes)
+            _gpsFilmstripIndexes[id] = index;
         _gpsFilmstripStatusIndex = _browseIndex;
-        _gpsFilmstripUpdating = true;
-        GpsFilmstripList.ItemsSource = entries;
-        GpsFilmstripList.SelectedItem = entries.FirstOrDefault(p =>
-            p.Id == _gpsHighlightedImageId)
-            ?? entries.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
-        _gpsFilmstripUpdating = false;
         UpdateGpsFilmstripControls();
         GpsFilmstripToggle.ToolTip = UiLanguage.T("GPS Filmstrip") +
             (_gpsFilmstripPointIds is null ? "" :
@@ -409,8 +479,18 @@ public partial class MainWindow
             (_gpsFilmstripPointIds is null &&
              selected.Count > MaximumGpsFilmstripPhotos ? " (max. 160)" : "");
 
-        if (packed.Count == 0) return;
-        _ = LoadGpsFilmstripBitmapsAsync(packed, revision);
+        var pending = new List<(GpsFilmstripEntry Item, BrowseThumbnailIndexEntry Index)>();
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var item = entries[i];
+            if (item.Bitmap is null &&
+                (_gpsFilmstripPointIds is null ||
+                 i < MaximumGpsFilmstripPhotos) &&
+                _gpsFilmstripRequestedIds.Add(item.Id))
+                pending.Add((item, indexes[item.Id]));
+        }
+        if (pending.Count != 0)
+            _ = LoadGpsFilmstripBitmapsAsync(pending, _gpsFilmstripRevision);
     }
 
     private async Task LoadGpsFilmstripBitmapsAsync(
@@ -474,6 +554,10 @@ public partial class MainWindow
     private void GpsFilmstrip_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_gpsFilmstripUpdating) return;
+        foreach (var item in e.RemovedItems.OfType<GpsFilmstripEntry>())
+            _gpsFilmstripSelectedIds.Remove(item.Id);
+        foreach (var item in e.AddedItems.OfType<GpsFilmstripEntry>())
+            _gpsFilmstripSelectedIds.Add(item.Id);
         UpdateGpsFilmstripControls();
 
         // Explorer multi-selection: added items identify the last explicitly

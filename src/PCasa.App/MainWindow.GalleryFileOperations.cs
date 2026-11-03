@@ -27,6 +27,16 @@ public partial class MainWindow
     // This cache is populated by scheduler catalog reads before mouse dragging;
     // no await may ever interrupt an active WPF mouse gesture.
     private readonly Dictionary<long, string> _dragSelectionPathCache = new();
+    // Immutable catalog browse projection, indexed ONCE at publication.
+    // MouseMove/DoDragDrop cannot enumerate 500k thumbnails or open SQLite.
+    private Dictionary<long, BrowseThumbnailIndexEntry> _dragPublishedImages = [];
+    private Dictionary<long, string> _dragPublishedFolders = [];
+
+    private void RebuildDragPublishedIndex()
+    {
+        _dragPublishedImages = _browseIndex.ToDictionary(image => image.ImageId);
+    }
+
 
     private async Task<string[]> SelectedGalleryPathsAsync(long[] selectedIds)
         => (await SelectedGalleryImagePathsAsync(selectedIds))
@@ -40,18 +50,16 @@ public partial class MainWindow
         // The gallery index is a disposable, read-only catalog projection.
         // Use it immediately without touching SQLite or the filesystem.
         var selected = selectedIds.ToHashSet();
-        var folders = _photoFolders.ToDictionary(folder => folder.Id,
-            folder => folder.LocalPath);
+        var folders = _dragPublishedFolders;
         var pathsById = new Dictionary<long, string>(selected.Count);
         foreach (var id in selected)
             if (_dragSelectionPathCache.TryGetValue(id, out var cachedPath))
                 pathsById[id] = cachedPath;
-        foreach (var image in _browseIndex)
+        foreach (var id in selectedIds)
         {
-            if (!selected.Contains(image.ImageId) ||
-                !folders.TryGetValue(image.PhotoFolderId, out var folderPath))
-                continue;
-            pathsById[image.ImageId] = Path.Combine(folderPath, image.FileName);
+            if (_dragPublishedImages.TryGetValue(id, out var image) &&
+                folders.TryGetValue(image.PhotoFolderId, out var folderPath))
+                pathsById[id] = Path.Combine(folderPath, image.FileName);
         }
 
         var missingIds = selected.Where(id => !pathsById.ContainsKey(id)).ToArray();

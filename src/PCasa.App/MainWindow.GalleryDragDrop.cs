@@ -91,6 +91,9 @@ public partial class MainWindow
     {
         if (_viewerOpen || !_selectedImageIds.Contains(e.ImageId)) return;
         var selected = _selectedImageIds.ToArray();
+        // P0 file writes retain their own priority; scans and low-priority
+        // source probes yield until this native Explorer gesture finishes.
+        using var foregroundDrag = _scheduler.BeginNativeDragInteraction();
         try
         {
             // No async/await before native DoDragDrop. A missed path lookup

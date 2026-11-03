@@ -185,6 +185,11 @@ public partial class MainWindow
 
         QueueGalleryAnchorRestore();
         _browseIndex = updated;
+        _dragPublishedImages[change.Image.ImageId] = change.Image;
+        _dragPublishedFolders[change.TargetFolder.Id] =
+            change.TargetFolder.LocalPath;
+        if (change.ReplacedImageId is long replacedId)
+            _dragPublishedImages.Remove(replacedId);
         _dragSelectionPathCache.Remove(change.Image.ImageId);
         try
         {

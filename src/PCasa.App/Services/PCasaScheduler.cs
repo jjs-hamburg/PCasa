@@ -71,6 +71,61 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly Task[] _workers;
     private long _nextId;
     private bool _disposed;
+    // An OLE FileDrop is an immediate foreground gesture. Keep lower-priority
+    // source/scanning work suspended only for its synchronous drag lifetime.
+    // This lease belongs to the ONE scheduler; no second job/queue is built.
+    private int _nativeDragInteractionCount;
+
+    private sealed class NativeDragLease(PCasaScheduler owner) : IDisposable
+    {
+        private PCasaScheduler? _owner = owner;
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.EndNativeDragInteraction();
+    }
+
+    public IDisposable BeginNativeDragInteraction()
+    {
+        List<CancellationTokenSource> yields = [];
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (++_nativeDragInteractionCount == 1)
+                foreach (var lane in new[]
+                    { LaneBackground, LaneInitialImport, LaneUserAction })
+                {
+                    var active = _runningPriorityJobs[lane];
+                    if (active is null || active.YieldRequested) continue;
+                    active.YieldRequested = true;
+                    SetStateUnsafe(active, SchedulerJobState.YieldRequested);
+                    if (_runningYield[lane] is { } token)
+                        yields.Add(token);
+                }
+        }
+        // Cancellation callbacks may re-enter this scheduler. Do not hold
+        // _gate while signaling cooperative preemption.
+        foreach (var yield in yields)
+        {
+            try { yield.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+        return new NativeDragLease(this);
+    }
+
+    private void EndNativeDragInteraction()
+    {
+        lock (_gate)
+        {
+            if (_nativeDragInteractionCount == 0) return;
+            if (--_nativeDragInteractionCount != 0) return;
+            // Workers may have consumed their signals while the drag held
+            // background lanes. Wake those that still have pending work.
+            foreach (var lane in new[]
+                { LaneBackground, LaneInitialImport, LaneUserAction, LaneSourceProbe })
+                if (_pending.Any(item =>
+                    LaneFor(item.Priority, item.Kind) == lane))
+                    _signals[lane].Release();
+        }
+    }
 
     public PCasaScheduler()
     {
@@ -648,7 +703,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                          _pending.Any(x => x.Kind == SchedulerWorkKind.SourceProbe &&
                              x.Priority == SchedulerPriority.ManualAction &&
                              x.Id > candidate.Id));
+                    var blockedByNativeDrag = _nativeDragInteractionCount > 0 &&
+                        lane is LaneBackground or LaneInitialImport or
+                            LaneUserAction or LaneSourceProbe;
                     item = blockedByHigherPriority || newerManualProbe ||
+                        blockedByNativeDrag ||
                         (_restoringDurablePackages &&
                          lane is LaneManual or LaneManualSourceProbe)
                         ? null : candidate;

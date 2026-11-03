@@ -624,6 +624,7 @@ public partial class MainWindow
             PublishPhotoFolderSnapshot(nextFolders, imageCount);
             System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 0);
             _browseIndex = Array.Empty<BrowseThumbnailIndexEntry>();
+            RebuildDragPublishedIndex();
             _dragSelectionPathCache.Clear();
             _displayedBrowseIndex = _browseIndex;
             _browsePageCache.SetIndex(_browseIndex);
@@ -735,6 +736,7 @@ public partial class MainWindow
                 !_browseIndex.SequenceEqual(ordered))
             {
                 _browseIndex = ordered;
+                RebuildDragPublishedIndex();
                 _dragSelectionPathCache.Clear();
             }
             _activeBrowseTier = tier;
@@ -796,6 +798,8 @@ public partial class MainWindow
         IReadOnlyList<PhotoFolderSummary> folders, int imageCount)
     {
         _photoFolders = folders;
+        _dragPublishedFolders = folders.ToDictionary(folder => folder.Id,
+            folder => folder.LocalPath);
         _lastCatalogImageCount = imageCount;
         foreach (var discovered in folders)
         {

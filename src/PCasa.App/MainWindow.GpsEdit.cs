@@ -409,7 +409,8 @@ public partial class MainWindow
             package.AddStep(token =>
             {
                 string? path = null;
-                TryWriteOriginal(OriginalWriteFailureRepository.Gps, key, id,
+                var success = TryWriteOriginal(
+                    OriginalWriteFailureRepository.Gps, key, id,
                     GetOriginalImagePath(id), token,
                     () => new GpsMetadataRepository(_database).Apply(
                         id, request.Latitude, request.Longitude,
@@ -421,6 +422,23 @@ public partial class MainWindow
                                 "GPS in Originaldateien schreiben",
                                 completed - 1, request.ImageIds.Length, current);
                         }, packageKey: key));
+                if (success && request.Mode == GpsMetadataRepository.EditMode.Remove)
+                {
+                    // TryWriteOriginal also treats superseded/no-op steps as
+                    // successful. Only publish a removal when the verified
+                    // committed EXIF catalog actually contains NO coordinates.
+                    using var verifiedDb = _database.OpenConnection();
+                    using var verified = verifiedDb.CreateCommand();
+                    verified.CommandText = """
+                        SELECT EXISTS(SELECT 1 FROM image_exif
+                         WHERE image_id=$id
+                           AND (gps_latitude IS NOT NULL OR
+                                gps_longitude IS NOT NULL));
+                        """;
+                    verified.Parameters.AddWithValue("$id", id);
+                    if (Convert.ToInt32(verified.ExecuteScalar()) == 0)
+                        QueueVerifiedGpsRemoval(id);
+                }
                 _scheduler.ReportProgress(key, "GPS in Originaldateien schreiben",
                     completed, request.ImageIds.Length);
                 // Refresh in bounded batches, not per original file.
