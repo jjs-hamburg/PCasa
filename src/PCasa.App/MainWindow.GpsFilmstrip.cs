@@ -554,10 +554,10 @@ public partial class MainWindow
     private void GpsFilmstrip_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_gpsFilmstripUpdating) return;
-        foreach (var item in e.RemovedItems.OfType<GpsFilmstripEntry>())
-            _gpsFilmstripSelectedIds.Remove(item.Id);
-        foreach (var item in e.AddedItems.OfType<GpsFilmstripEntry>())
-            _gpsFilmstripSelectedIds.Add(item.Id);
+        foreach (var removedSource in e.RemovedItems.OfType<GpsFilmstripEntry>())
+            _gpsFilmstripSelectedIds.Remove(removedSource.Id);
+        foreach (var addedSource in e.AddedItems.OfType<GpsFilmstripEntry>())
+            _gpsFilmstripSelectedIds.Add(addedSource.Id);
         UpdateGpsFilmstripControls();
 
         // Explorer multi-selection: added items identify the last explicitly
