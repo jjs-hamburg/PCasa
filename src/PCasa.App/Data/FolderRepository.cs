@@ -546,10 +546,12 @@ public sealed class FolderRepository
         return cmd.ExecuteNonQuery() == 1;
     }
 
-    // Upgrade unfinished old jobs without replaying their completed
-    // directories. This is additive; the original scan receipt is untouched.
-    public void ImportFirstPassFromRegularScan(
-        string scanKey, long folderId, long generation)
+    // Upgrade ALL unfinished old scans belonging to the same monitored
+    // source, not just the currently selected new job ID. This imports
+    // already confirmed subdirectories from older P0 and initial restore
+    // attempts without replaying any images or changing those original jobs.
+    public void ImportFirstPassFromRegularScans(
+        long folderId, long generation)
     {
         using var connection = _database.OpenConnection();
         using var cmd = connection.CreateCommand();
@@ -563,12 +565,11 @@ public sealed class FolderRepository
               JOIN scan_resume_jobs j ON j.scan_key=d.scan_key
               JOIN monitored_folders m ON m.id=j.monitored_folder_id
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-             WHERE j.scan_key=$key AND j.monitored_folder_id=$id
+             WHERE j.monitored_folder_id=$id
                AND j.source_generation=$generation
                AND s.generation=$generation AND s.desired_present=1
             {FirstPassUpsert};
             """;
-        cmd.Parameters.AddWithValue("$key", scanKey);
         cmd.Parameters.AddWithValue("$id", folderId);
         cmd.Parameters.AddWithValue("$generation", generation);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
