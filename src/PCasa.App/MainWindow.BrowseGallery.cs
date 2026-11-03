@@ -210,7 +210,7 @@ public partial class MainWindow
                 }
                 catch (System.Text.Json.JsonException) { }
             }
-            BeginVisibleManualOperation(record.Key,
+            BeginVisibleManualOperationForDirectory(record.Key,
                 record.Type == "manual-scan-all-v1"
                     ? "Alle Ordner einlesen" : "Ordner aktualisieren", 0,
                 directory);
