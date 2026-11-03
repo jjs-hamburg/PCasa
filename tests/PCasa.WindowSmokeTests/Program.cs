@@ -2105,7 +2105,13 @@ internal static class Program
                 try
                 {
                     sidebarModeField.SetValue(window, "GPS");
-                    catalogField.SetValue(window, synthetic);
+                    // The GPS Filmstrip now admits only geotagged sources.
+                    // Make all four synthetic map-marker images GPS-valid,
+                    // rather than using the generic non-GPS gallery fixture.
+                    var gpsSourceCatalog = synthetic.Select(image =>
+                        image.ImageId is >= 1000 and <= 1003
+                            ? image with { HasGps = true } : image).ToArray();
+                    catalogField.SetValue(window, gpsSourceCatalog);
                     gpsPointsField.SetValue(window, gpsPointArray);
                     versionField.SetValue(window, 77L);
                     clusterField.SetValue(window,
