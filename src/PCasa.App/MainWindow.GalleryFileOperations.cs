@@ -587,24 +587,33 @@ public partial class MainWindow
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!_visibleManualOperations.ContainsKey(status.Key)) return;
-            if (IsTagSeriesKey(status.Key))
-                UpdateVisibleTagSeries(status);
+            // Status notifications originate on worker threads. A queued
+            // BeginInvoke callback may arrive after a newer Running/Queued
+            // transition. Render the CURRENT scheduler snapshot, exactly as
+            // the taskmanager does, never the captured stale event.
+            var latest = _scheduler.Snapshot()
+                .LastOrDefault(job => job.Key == status.Key);
+            var current = latest is null ? status :
+                latest.Id == status.Id ? latest : null;
+            if (current is null) return; // retired worker identity
+            if (IsTagSeriesKey(current.Key))
+                UpdateVisibleTagSeries(current);
             var preferred = PreferredVisibleManualOperation();
             if (preferred is not null &&
                 !string.Equals(preferred, _visibleManualActiveKey,
                     StringComparison.Ordinal))
                 DisplayManualOperation(preferred);
-            if (status.State == SchedulerJobState.Running &&
+            if (current.State == SchedulerJobState.Running &&
                 _visibleManualWindow?.ShowingScanDuringManualWait == true)
-                DisplayManualOperation(status.Key);
-            if (status.Key == _visibleManualActiveKey &&
+                DisplayManualOperation(current.Key);
+            if (current.Key == _visibleManualActiveKey &&
                 _visibleManualWindow?.ShowingScanDuringManualWait != true)
             {
-                var item = _visibleManualOperations[status.Key];
-                _visibleManualWindow?.UpdateManualOperationWithContext(status,
+                var item = _visibleManualOperations[current.Key];
+                _visibleManualWindow?.UpdateManualOperationWithContext(current,
                     item.Title, item.Directory,
-                    ConfirmedManualScanCount(status.Key, status.Processed));
-                RequestVisibleTagThumbnail(status);
+                    ConfirmedManualScanCount(current.Key, current.Processed));
+                RequestVisibleTagThumbnail(current);
             }
             // A *different* older Tag package may have progressed in its
             // scheduler lane. Its completed images count toward the SAME
