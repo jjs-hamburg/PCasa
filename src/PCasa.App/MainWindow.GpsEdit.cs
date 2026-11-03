@@ -308,11 +308,14 @@ public partial class MainWindow
         }
         try
         {
-            // Validate ALL extensions before enqueuing a permanent P0 package.
-            // No sidecar fallback and no endlessly retried unsupported files.
+            // Even the short eligibility check is part of the foreground
+            // MANUAL GPS action, not a lower-priority interactive read. Use
+            // the existing P0 catalog lane so a running NAS scan yields
+            // immediately, BEFORE the durable writer is queued. It still
+            // rejects unsupported originals without sidecars or retries.
             var unsupported = await _scheduler.RunAsync(
                 "gps:validate:" + Guid.NewGuid().ToString("N"),
-                SchedulerPriority.Interactive,
+                SchedulerPriority.ManualAction,
                 token =>
                 {
                     var failures = new List<string>();
@@ -337,7 +340,7 @@ public partial class MainWindow
                         }
                     }
                     return failures;
-                }, workKind: SchedulerWorkKind.CatalogRead);
+                }, workKind: SchedulerWorkKind.Catalog);
             if (unsupported.Count > 0)
             {
                 MessageBox.Show(this,
