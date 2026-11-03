@@ -139,12 +139,13 @@ public sealed class FolderScanner
         CancellationToken cancellationToken = default,
         ScanResumeState? resume = null,
         bool durableInitialImport = false,
-        string? durableScanKey = null)
+        string? durableScanKey = null,
+        bool preferFirstPass = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
             resume: resume, durableInitialImport: durableInitialImport,
-            durableScanKey: durableScanKey);
+            durableScanKey: durableScanKey, preferFirstPass: preferFirstPass);
     }
 
     public ScanResult ScanFile(
@@ -175,7 +176,8 @@ public sealed class FolderScanner
         bool publishCatalogChange = true,
         bool durableInitialImport = false,
         string? durableScanKey = null,
-        bool forceExifRefresh = false)
+        bool forceExifRefresh = false,
+        bool preferFirstPass = false)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -259,6 +261,26 @@ public sealed class FolderScanner
                 : null;
         if (persistentScan && resume is not null)
             resume.InitialFileCursors = fileCursors;
+
+        // A manual first-pass import never starts again at filename zero just
+        // because a new UI request has a different scheduler package key.
+        // Upgrade the old package's existing receipts before they are deleted
+        // on completion. Background verification deliberately ignores this
+        // directory frontier, so new/modified/deleted photos are checked later.
+        if (preferFirstPass && durableScanKey is not null)
+        {
+            _folderRepository.ImportFirstPassFromRegularScan(
+                durableScanKey, folder.Id, generation);
+            var firstPass = _folderRepository.GetDirectoryFirstPass(
+                folder.Id, generation, scanRoot);
+            completedDirectories!.UnionWith(firstPass.Completed);
+            foreach (var (directory, cursor) in firstPass.Cursors)
+                if (!completedDirectories.Contains(directory) &&
+                    (!fileCursors!.TryGetValue(directory, out var previous) ||
+                     StringComparer.OrdinalIgnoreCase.Compare(cursor, previous) > 0))
+                    fileCursors[directory] = cursor;
+        }
+
         if (persistentScan && specificFile is null)
         {
             // A restart log must identify the actual persisted checkpoint,
@@ -318,6 +340,11 @@ public sealed class FolderScanner
                     durableScanKey!, directory, imageFilesSeen, generation, scanEpoch);
             if (!committed)
                 throw new OperationCanceledException("Directory checkpoint superseded.");
+            if ((durableInitialImport || preferFirstPass) &&
+                !_folderRepository.SaveDirectoryFirstPass(
+                    folder.Id, generation, directory, null, completed: true))
+                throw new OperationCanceledException(
+                    "First-pass directory checkpoint superseded.");
             completedDirectories!.Add(directory);
             // A completed directory is now durable; do not keep a large
             // duplicate inventory in memory across the rest of the NAS scan.
@@ -645,6 +672,12 @@ public sealed class FolderScanner
                         if (!committed)
                             throw new OperationCanceledException(
                                 "Scan source or checkpoint superseded.");
+                        if ((durableInitialImport || preferFirstPass) &&
+                            !_folderRepository.SaveDirectoryFirstPass(
+                                folder.Id, generation, directory, fileName,
+                                completed: false))
+                            throw new OperationCanceledException(
+                                "First-pass file checkpoint superseded.");
                         fileCursors[directory] = fileName;
                     }
                 }
