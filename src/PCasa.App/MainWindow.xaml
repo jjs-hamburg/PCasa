@@ -525,6 +525,9 @@
                             <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
+                        <MenuItem x:Name="TaskManagerMenuItem"
+                                  Header="{loc:Tr Key='Taskmanager...'}"
+                                  Click="TaskManagerMenu_Click"/>
                         <MenuItem Header="{loc:Tr Key='Schreibfehler'}"
                                   Click="WriteErrorsMenu_Click"/>
                     </MenuItem>

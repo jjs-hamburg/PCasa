@@ -365,7 +365,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // Durable identity/priority come only from the journal; never
             // substitute a default background priority on restart.
             await EnqueuePackageAsync(package, record.Priority,
-                cancellationToken, workKind: record.WorkKind);
+                cancellationToken, workKind: record.WorkKind,
+                queueOrder: record.QueueOrder);
             journal.SetState(record.Key, "completed", package.CompletedSteps);
         }
         catch (OperationCanceledException)
@@ -452,11 +453,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // SAME scheduler identity and priority through indexing and publication.
     public Task EnqueuePackageAsync(SchedulerTaskPackage package,
         SchedulerPriority priority, CancellationToken cancellationToken = default,
-        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog)
+        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
+        long? queueOrder = null)
     {
         ArgumentNullException.ThrowIfNull(package);
         return EnqueueAsync(package.Key, priority, package.ExecuteAsync,
-            cancellationToken: cancellationToken, workKind: workKind);
+            cancellationToken: cancellationToken, workKind: workKind,
+            queueOrder: queueOrder);
     }
 
     // A dismissed read-only projection must leave no queued scheduler work.
@@ -510,6 +513,93 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 return Task.CompletedTask;
             }, isCurrent, cancellationToken, workKind);
         return result!;
+    }
+
+    // Taskmanager commands are methods on the existing scheduler owner.
+    // A move is persisted before changing the in-memory rank. P0 manual work
+    // always stays in its own lane; crossing lanes cannot promise serial order.
+    public bool MoveDurableTask(string key, int direction)
+    {
+        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
+        lock (_gate)
+        {
+            var moved = journal.Move(key, direction);
+            if (moved is null) return false;
+            var (otherKey, selectedOrder, otherOrder) = moved.Value;
+            foreach (var work in _pending)
+            {
+                if (work.Key == key) work.QueueOrder = selectedOrder;
+                if (work.Key == otherKey) work.QueueOrder = otherOrder;
+            }
+            // Wake workers that consumed their earlier queue signal.
+            foreach (var lane in new[] { LaneManual, LaneBackground,
+                         LaneInitialImport, LaneUserAction })
+                if (_pending.Any(item => LaneFor(item.Priority, item.Kind) == lane))
+                    _signals[lane].Release();
+            return true;
+        }
+    }
+
+    // No new retry queue: activate the same durable recipe through the
+    // scheduler's existing factory and completion observer.
+    public bool RetryDurableTask(string key)
+    {
+        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
+        var record = journal.Pending().FirstOrDefault(item => item.Key == key);
+        if (record is null || record.State != "deferred") return false;
+        if (!_packageFactories.TryGetValue(record.Type, out var factory))
+            throw new InvalidOperationException("Wiederherstellungsrezept fehlt.");
+        var package = factory(record.Key, record.Payload);
+        package.RestoreCursor(record.CompletedSteps);
+        var activated = journal.RestartDeferred(key);
+        if (activated is null) return false;
+        var task = TrackDurableCompletion(QueueDurableExisting(package, activated));
+        try { _durableRestoreObserver?.Invoke(key, task); }
+        catch (Exception ex) { PCasaDiagnostics.Write("Taskmanager.RetryObserver", ex); }
+        return true;
+    }
+
+    public async Task<bool> DeleteDurableTaskAsync(string key)
+    {
+        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
+        var record = journal.Pending().FirstOrDefault(item => item.Key == key);
+        if (record is null) return false;
+        // Tag intents are already mirrored into the displayed catalog.
+        // Silently canceling them after the first SQLite step would leave
+        // pending_tag_edits and wrong keywords. The existing error/discard
+        // path must first reconcile those originals, including offline NAS.
+        if (record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+            (record.CompletedSteps > 0 || record.State == "running" ||
+             record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal)))
+            throw new InvalidOperationException(
+                "Dieser Tag-Auftrag enthält bereits vorgemerkte Änderungen. " +
+                "Er darf erst nach deren sicherem Abgleich oder Verwerfen gelöscht werden.");
+        WorkItem? running;
+        Task? completion = null;
+        lock (_gate)
+        {
+            var waiting = _pending.FirstOrDefault(item => item.Key == key);
+            if (waiting is not null)
+            {
+                if (!journal.Cancel(key)) return false;
+                _pending.Remove(waiting);
+                SetStateUnsafe(waiting, SchedulerJobState.Canceled);
+                waiting.Completion.TrySetCanceled();
+                return true;
+            }
+            running = _runningPriorityJobs.FirstOrDefault(item => item?.Key == key);
+            if (running is null && _runningManualSourceProbe?.Key == key)
+                running = _runningManualSourceProbe;
+            if (running is null)
+                return journal.Cancel(key); // deferred; no live executor
+            completion = running.Completion.Task;
+        }
+        // Cooperative cancellation respects a file's atomic write/commit
+        // boundary. Only once the worker exits may the journal record cancel.
+        await running.UserCancellation.CancelAsync();
+        try { await completion!; }
+        catch (OperationCanceledException) { }
+        return true;
     }
 
     public IReadOnlyList<SchedulerJobSnapshot> Snapshot()
@@ -568,7 +658,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Func<CancellationToken, Task> operation,
         Func<bool>? isCurrent = null,
         CancellationToken cancellationToken = default,
-        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog)
+        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
+        long? queueOrder = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -595,7 +686,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
             else
             {
                 var item = new WorkItem(++_nextId, key, priority, workKind,
-                    operation, isCurrent, cancellationToken);
+                    operation, isCurrent, cancellationToken)
+                {
+                    QueueOrder = queueOrder ?? (priority == SchedulerPriority.ManualAction
+                        ? -_nextId : _nextId)
+                };
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
                     SchedulerJobState.Queued, DateTimeOffset.UtcNow, null)
@@ -696,10 +791,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             // exact user move that requested its preemption.
                             .ThenBy(x => lane == LaneManual ? 0 :
                                 x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
-                            // Manual packages form a stack: newest request
-                            // resumes first, older ones retain their cursor.
-                            .ThenBy(x => lane is LaneManual or LaneManualSourceProbe
-                                ? -x.Id : x.Id)
+                            // Durable user reordering is the actual dispatch
+                            // rank, with the original manual-LIFO default.
+                            // This is NOT a separately sorted UI projection.
+                            .ThenBy(x => x.QueueOrder)
+                            .ThenBy(x => x.Id)
                             .FirstOrDefault();
                     // Manual source probes have a separate executor so blocked
                     // SMB calls do not freeze the manual catalog worker. Yet an
@@ -759,9 +855,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 using (yieldRequest)
                 using (var linked = yieldRequest is null
                     ? CancellationTokenSource.CreateLinkedTokenSource(
-                        _shutdown.Token, item.CancellationToken)
+                        _shutdown.Token, item.CancellationToken,
+                        item.UserCancellation.Token)
                     : CancellationTokenSource.CreateLinkedTokenSource(
-                        _shutdown.Token, item.CancellationToken, yieldRequest.Token))
+                        _shutdown.Token, item.CancellationToken,
+                        item.UserCancellation.Token, yieldRequest.Token))
                 {
                     try
                     {
@@ -969,6 +1067,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         public long Id { get; } = id;
         public string Key { get; } = key;
+        public long QueueOrder { get; set; }
+        public CancellationTokenSource UserCancellation { get; } = new();
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;
         public bool YieldRequested { get; set; }

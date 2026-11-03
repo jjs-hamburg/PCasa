@@ -10,7 +10,10 @@ namespace PCasa.App.Services;
 public sealed record DurablePackageRecord(
     string Key, string Type, string Payload, SchedulerPriority Priority,
     SchedulerWorkKind WorkKind, long Sequence, int CompletedSteps,
-    string State, string? Error);
+    string State, string? Error)
+{
+    public long QueueOrder { get; init; }
+}
 
 public sealed class DurablePackageJournal
 {
@@ -61,6 +64,25 @@ public sealed class DurablePackageJournal
             add.CommandText = "ALTER TABLE scheduler_packages ADD COLUMN retry_after_utc TEXT;";
             add.ExecuteNonQuery();
         }
+        // Legacy LIFO for P0, FIFO for other work. From now on these ranks
+        // are the persisted ordering authority, not a separate UI list.
+        if (!columns.Contains("queue_order"))
+        {
+            using var add = db.CreateCommand();
+            add.CommandText = "ALTER TABLE scheduler_packages ADD COLUMN queue_order INTEGER;";
+            add.ExecuteNonQuery();
+        }
+        using (var migrate = db.CreateCommand())
+        {
+            migrate.CommandText = """
+                UPDATE scheduler_packages
+                   SET queue_order=CASE WHEN priority=0 THEN -sequence ELSE sequence END
+                 WHERE queue_order IS NULL;
+                CREATE INDEX IF NOT EXISTS idx_scheduler_packages_order
+                ON scheduler_packages(priority,work_kind,queue_order);
+                """;
+            migrate.ExecuteNonQuery();
+        }
     }
 
     public DurablePackageRecord Put(string key, string type, string payload,
@@ -81,10 +103,20 @@ public sealed class DurablePackageJournal
         cmd.Parameters.AddWithValue("$kind", (int)workKind);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
         cmd.ExecuteNonQuery();
+        using (var rank = db.CreateCommand())
+        {
+            rank.CommandText = """
+                UPDATE scheduler_packages
+                   SET queue_order=CASE WHEN priority=0 THEN -sequence ELSE sequence END
+                 WHERE package_key=$key AND queue_order IS NULL;
+                """;
+            rank.Parameters.AddWithValue("$key", key);
+            rank.ExecuteNonQuery();
+        }
         using var lookup = db.CreateCommand();
         lookup.CommandText = """
             SELECT sequence,priority,work_kind,completed_steps,state,error,
-                   package_type,payload_json
+                   package_type,payload_json,COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END)
               FROM scheduler_packages WHERE package_key=$key;
             """;
         lookup.Parameters.AddWithValue("$key", key);
@@ -102,7 +134,8 @@ public sealed class DurablePackageJournal
         return new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
             (SchedulerPriority)reader.GetInt32(1), (SchedulerWorkKind)reader.GetInt32(2),
             reader.GetInt64(0), reader.GetInt32(3), reader.GetString(4),
-            reader.IsDBNull(5) ? null : reader.GetString(5));
+            reader.IsDBNull(5) ? null : reader.GetString(5))
+        { QueueOrder = reader.GetInt64(8) };
     }
 
     public IReadOnlyList<DurablePackageRecord> Pending()
@@ -111,9 +144,9 @@ public sealed class DurablePackageJournal
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT package_key,package_type,payload_json,priority,work_kind,
-                   sequence,completed_steps,state,error
+                   sequence,completed_steps,state,error,COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END)
               FROM scheduler_packages WHERE state IN ('queued','running','deferred')
-             ORDER BY priority ASC, sequence ASC;
+             ORDER BY priority ASC, queue_order ASC, sequence ASC;
             """;
         using var reader = cmd.ExecuteReader();
         var results = new List<DurablePackageRecord>();
@@ -123,8 +156,146 @@ public sealed class DurablePackageJournal
                 (SchedulerPriority)reader.GetInt32(3),
                 (SchedulerWorkKind)reader.GetInt32(4), reader.GetInt64(5),
                 reader.GetInt32(6), reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
+                reader.IsDBNull(8) ? null : reader.GetString(8))
+                { QueueOrder = reader.GetInt64(9) });
         return results;
+    }
+
+    // Recent completion is optional presentation history, never a replay
+    // source. Old records are not deleted to support diagnostics.
+    public IReadOnlyList<DurablePackageRecord> RecentCompleted(int limit = 80)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT package_key,package_type,payload_json,priority,work_kind,
+                   sequence,completed_steps,state,error,COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END)
+              FROM scheduler_packages
+             WHERE state='completed'
+             ORDER BY updated_utc DESC LIMIT $limit;
+            """;
+        cmd.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 200));
+        using var reader = cmd.ExecuteReader();
+        var rows = new List<DurablePackageRecord>();
+        while (reader.Read())
+            rows.Add(new DurablePackageRecord(reader.GetString(0),
+                reader.GetString(1), reader.GetString(2),
+                (SchedulerPriority)reader.GetInt32(3),
+                (SchedulerWorkKind)reader.GetInt32(4), reader.GetInt64(5),
+                reader.GetInt32(6), reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8))
+                { QueueOrder = reader.GetInt64(9) });
+        return rows;
+    }
+
+    // A move is an atomic adjacent rank swap inside one execution lane.
+    // P0 always stays above scans, and source I/O cannot be made to look
+    // serial when it actually has another worker.
+    public (string OtherKey, long SelectedOrder, long OtherOrder)? Move(
+        string key, int direction)
+    {
+        if (direction is not (-1 or 1)) throw new ArgumentOutOfRangeException(nameof(direction));
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        string? selectedKey = null;
+        long selectedOrder = 0;
+        SchedulerPriority priority = default;
+        SchedulerWorkKind kind = default;
+        using (var find = db.CreateCommand())
+        {
+            find.Transaction = tx;
+            find.CommandText = """
+                SELECT package_key,queue_order,priority,work_kind
+                  FROM scheduler_packages
+                 WHERE package_key=$key AND state IN ('queued','deferred');
+                """;
+            find.Parameters.AddWithValue("$key", key);
+            using var row = find.ExecuteReader();
+            if (row.Read())
+            {
+                selectedKey = row.GetString(0);
+                selectedOrder = row.GetInt64(1);
+                priority = (SchedulerPriority)row.GetInt32(2);
+                kind = (SchedulerWorkKind)row.GetInt32(3);
+            }
+        }
+        if (selectedKey is null) return null;
+        string? otherKey = null;
+        long otherOrder = 0;
+        using (var next = db.CreateCommand())
+        {
+            next.Transaction = tx;
+            next.CommandText = direction < 0 ? """
+                SELECT package_key,queue_order FROM scheduler_packages
+                 WHERE state IN ('queued','deferred')
+                   AND priority=$priority AND work_kind=$kind
+                   AND queue_order < $rank
+                 ORDER BY queue_order DESC,sequence DESC LIMIT 1;
+                """ : """
+                SELECT package_key,queue_order FROM scheduler_packages
+                 WHERE state IN ('queued','deferred')
+                   AND priority=$priority AND work_kind=$kind
+                   AND queue_order > $rank
+                 ORDER BY queue_order ASC,sequence ASC LIMIT 1;
+                """;
+            next.Parameters.AddWithValue("$priority", (int)priority);
+            next.Parameters.AddWithValue("$kind", (int)kind);
+            next.Parameters.AddWithValue("$rank", selectedOrder);
+            using var row = next.ExecuteReader();
+            if (row.Read())
+            {
+                otherKey = row.GetString(0);
+                otherOrder = row.GetInt64(1);
+            }
+        }
+        if (otherKey is null) return null;
+        using (var update = db.CreateCommand())
+        {
+            update.Transaction = tx;
+            update.CommandText = """
+                UPDATE scheduler_packages SET queue_order=
+                  CASE package_key WHEN $key THEN $otherRank ELSE $selectedRank END,
+                  updated_utc=$now WHERE package_key IN ($key,$other);
+                """;
+            update.Parameters.AddWithValue("$key", key);
+            update.Parameters.AddWithValue("$other", otherKey);
+            update.Parameters.AddWithValue("$selectedRank", selectedOrder);
+            update.Parameters.AddWithValue("$otherRank", otherOrder);
+            update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            if (update.ExecuteNonQuery() != 2)
+                throw new IOException("Task-Reihenfolge konnte nicht gespeichert werden.");
+        }
+        tx.Commit();
+        return (otherKey, otherOrder, selectedOrder);
+    }
+
+    public bool Cancel(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages SET state='canceled',
+                   retry_after_utc=NULL,updated_utc=$now
+             WHERE package_key=$key AND state IN ('queued','running','deferred');
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
+    public DurablePackageRecord? RestartDeferred(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages SET state='queued',error=NULL,
+                retry_after_utc=NULL,updated_utc=$now
+             WHERE package_key=$key AND state='deferred';
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() == 1
+            ? Pending().FirstOrDefault(p => p.Key == key) : null;
     }
 
     // One-time versioned migration for already journaled V1 recovery.
