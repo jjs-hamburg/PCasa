@@ -243,7 +243,7 @@ public partial class BrowseCacheProgressWindow : Window
         _manualPresentationActive = true;
         _showingScanDuringManualWait = false;
         // A new manual action is NOT permission to undo the user's Hide.
-        PhaseText.Text = UiLanguage.T(name) + " · " + UiLanguage.T("angefordert");
+        PhaseText.Text = UiLanguage.T(name) + " · " + UiLanguage.T("wartet");
         Progress.IsIndeterminate = true;
         CountText.Text = $"0 / {total:N0}";
         CurrentFileText.Text = UiLanguage.T("Warte auf Scheduler");
@@ -256,61 +256,80 @@ public partial class BrowseCacheProgressWindow : Window
         PublishProgressStatus();
     }
 
-    public void UpdateManualOperation(SchedulerJobSnapshot progress)
+    public void UpdateManualOperation(SchedulerJobSnapshot progress,
+        string? title = null, string? directory = null, int confirmedProcessed = 0)
     {
         if (_finished || !_manualPresentationActive ||
             Dispatcher.HasShutdownStarted || _showingScanDuringManualWait) return;
-        var phase = UiLanguage.T(progress.Phase ?? "Dateioperation läuft");
-        PhaseText.Text = progress.State switch
-        {
-            SchedulerJobState.Queued => phase + " · " + UiLanguage.T("wartet"),
-            SchedulerJobState.YieldRequested => phase + " · " + UiLanguage.T("pausiert"),
-            _ => phase
-        };
+
+        // YieldRequested and Queued are the SAME waiting condition once a
+        // worker releases its lane. The taskmanager also calls it "Wartet".
+        // Do not mislabel a restored, nonrunning scan as "paused" work.
+        var waiting = progress.State is
+            SchedulerJobState.Queued or SchedulerJobState.YieldRequested;
+        var phase = UiLanguage.T(waiting
+            ? title ?? progress.Phase ?? "Dateioperation läuft"
+            : progress.Phase ?? title ?? "Dateioperation läuft");
+        PhaseText.Text = waiting
+            ? phase + " · " + UiLanguage.T("wartet")
+            : phase;
+
+        // Snapshot counters are volatile after restart. The SAME durable
+        // per-job scan receipt used by the taskmanager supplies the minimum
+        // confirmed count until the scanner publishes its first callback.
+        var processed = Math.Max(progress.Processed, confirmedProcessed);
         Progress.IsIndeterminate = progress.Total == 0;
         if (progress.Total > 0)
         {
             Progress.Maximum = progress.Total;
-            Progress.Value = Math.Min(progress.Total, progress.Processed);
-            CountText.Text = $"{progress.Processed:N0} / {progress.Total:N0}";
+            Progress.Value = Math.Min(progress.Total, processed);
+            CountText.Text = $"{processed:N0} / {progress.Total:N0}";
         }
         else
+            CountText.Text = UiLanguage.Format("{0:N0} geprüft", processed);
+
+        // A yielded scan still has a last filename, but it is no longer
+        // processing that file. Waiting views show the immutable recipe's
+        // directory and never claim an old thumbnail is currently active.
+        if (waiting || progress.CurrentPath is not { Length: > 0 })
         {
-            // A recursive NAS scan has no known total until enumeration ends.
-            CountText.Text = UiLanguage.Format("{0:N0} geprüft", progress.Processed);
-        }
-        if (progress.CurrentPath is not { Length: > 0 })
-        {
-            // A retry/yield may switch away from the previous original.
-            // Do not leave its thumbnail/path attached to a waiting job.
             _manualCurrentImagePath = null;
             CurrentThumbnail.Source = null;
             CurrentFileText.ToolTip = null;
-            FolderPathText.Text = string.Empty;
-            FolderPathText.ToolTip = null;
-            CurrentFileText.Text = progress.State switch
+            FolderPathText.ToolTip = directory;
+            if (waiting && !string.IsNullOrWhiteSpace(directory))
             {
-                SchedulerJobState.Running => "Auftrag wird bearbeitet",
-                SchedulerJobState.YieldRequested => "Wartet auf neueren Auftrag",
-                SchedulerJobState.Queued => "Warte auf Scheduler",
-                SchedulerJobState.Failed => progress.Error ?? "Auftrag fehlgeschlagen",
-                _ => CurrentFileText.Text
-            };
-        }
-        if (progress.CurrentPath is { Length: > 0 })
-        {
-            if (!string.Equals(_manualCurrentImagePath, progress.CurrentPath,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                _manualCurrentImagePath = progress.CurrentPath;
-                // Never label the previous photo as the new original.
-                CurrentThumbnail.Source = null;
+                var trimmed = Path.TrimEndingDirectorySeparator(directory);
+                CurrentFileText.Text = Path.GetFileName(trimmed);
+                if (string.IsNullOrWhiteSpace(CurrentFileText.Text))
+                    CurrentFileText.Text = trimmed;
+                FolderPathText.Text = Path.GetDirectoryName(trimmed) ?? trimmed;
             }
-            CurrentFileText.Text = Path.GetFileName(progress.CurrentPath);
-            CurrentFileText.ToolTip = progress.CurrentPath;
-            FolderPathText.Text = Path.GetDirectoryName(progress.CurrentPath) ?? string.Empty;
-            FolderPathText.ToolTip = progress.CurrentPath;
+            else
+            {
+                CurrentFileText.Text = progress.State switch
+                {
+                    SchedulerJobState.Running => UiLanguage.T("Auftrag wird bearbeitet"),
+                    SchedulerJobState.Failed => progress.Error ?? UiLanguage.T("Auftrag fehlgeschlagen"),
+                    _ => UiLanguage.T("Warte auf Scheduler")
+                };
+                FolderPathText.Text = directory ?? string.Empty;
+            }
+            PublishProgressStatus();
+            return;
         }
+
+        if (!string.Equals(_manualCurrentImagePath, progress.CurrentPath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _manualCurrentImagePath = progress.CurrentPath;
+            CurrentThumbnail.Source = null;
+        }
+        CurrentFileText.Text = Path.GetFileName(progress.CurrentPath);
+        CurrentFileText.ToolTip = progress.CurrentPath;
+        FolderPathText.Text = Path.GetDirectoryName(progress.CurrentPath)
+            ?? string.Empty;
+        FolderPathText.ToolTip = progress.CurrentPath;
         PublishProgressStatus();
     }
 
