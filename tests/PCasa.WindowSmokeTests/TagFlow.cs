@@ -1067,6 +1067,65 @@ internal static class TagFlow
                         setter.Property == Border.BorderBrushProperty)))
                 throw new Exception("Filmstrip has no custom selection frame; blue system selection may return.");
 
+            // The filmstrip must use the SAME status renderer and index flags
+            // as the gallery, including the global Show Icons option.
+            if (filmListForStyle.ItemTemplate.LoadContent() is not StackPanel card ||
+                card.Children.OfType<Border>().FirstOrDefault()?.Child is not Grid photoFrame ||
+                photoFrame.Children.OfType<ThumbnailStatusIconOverlay>().SingleOrDefault()
+                    is not ThumbnailStatusIconOverlay statusOverlay ||
+                statusOverlay.IsHitTestVisible ||
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasGpsProperty) is null ||
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasTagsProperty) is null ||
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.IsRawProperty) is null)
+                throw new Exception("Filmstrip is missing the shared GPS/TAG/RAW thumbnail icon renderer.");
+            var iconProbe = new PCasa.App.MainWindow.GpsFilmstripEntry
+                { Id = 991, Name = "status-icon-probe.jpg" };
+            iconProbe.UpdateStatus(new BrowseThumbnailIndexEntry(
+                991, 1, 96, "", 0, 0, 96, 64,
+                HasGps: true, HasTags: true, IsRaw: true));
+            card.DataContext = iconProbe;
+            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasGpsProperty)?.UpdateTarget();
+            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasTagsProperty)?.UpdateTarget();
+            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.IsRawProperty)?.UpdateTarget();
+            if (!statusOverlay.HasGps || !statusOverlay.HasTags || !statusOverlay.IsRaw)
+                throw new Exception("Filmstrip status icons do not reflect the gallery index flags.");
+            iconProbe.ShowIcons = false;
+            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.ShowIconsProperty)?.UpdateTarget();
+            if (statusOverlay.ShowIcons)
+                throw new Exception("Filmstrip ignores the global status-icon setting.");
+            Console.WriteLine("PASS: GPS/TAG/RAW in filmstrip use the gallery renderer and index flags.");
+
+            // Vertical wheel / precision touchpad gestures scroll the virtual
+            // HORIZONTAL film without scrolling the gallery underneath.
+            var savedFilmItems = filmListForStyle.ItemsSource;
+            try
+            {
+                filmListForStyle.ItemsSource = Enumerable.Range(0, 30)
+                    .Select(i => new PCasa.App.MainWindow.GpsFilmstripEntry
+                        { Id = 10000 + i, Name = "wheel-" + i })
+                    .ToArray();
+                window.UpdateLayout();
+                filmScroller.ScrollToHorizontalOffset(0);
+                window.UpdateLayout();
+                if (filmScroller.ScrollableWidth <= 0)
+                    throw new Exception("Filmstrip wheel probe has no horizontal overflow.");
+                var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice,
+                    Environment.TickCount, -120)
+                {
+                    RoutedEvent = UIElement.PreviewMouseWheelEvent
+                };
+                filmListForStyle.RaiseEvent(wheel);
+                window.UpdateLayout();
+                if (!wheel.Handled || filmScroller.HorizontalOffset <= 0)
+                    throw new Exception("Vertical mouse wheel did not move the horizontal filmstrip.");
+            }
+            finally
+            {
+                filmListForStyle.ItemsSource = savedFilmItems;
+                window.UpdateLayout();
+            }
+            Console.WriteLine("PASS: Mouse wheel scrolls the virtual filmstrip horizontally.");
+
             filmToggle.IsChecked = false;
             if (filmPanel.Visibility != Visibility.Collapsed)
                 throw new Exception("GPS filmstrip could not be hidden.");

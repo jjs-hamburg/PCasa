@@ -507,6 +507,9 @@ public partial class MainWindow
         GalleryViewFilterToggle.IsChecked = _appearance.SearchGalleryViewOnly;
         UpdateAllFoldersButtonState();
         BrowseSurface.SetThumbnailAnnotations(_appearance.ShowThumbnailFileNames, _appearance.ShowThumbnailIcons);
+        // The GPS filmstrip uses the same global thumbnail-icon preference.
+        foreach (var item in _gpsFilmstripEntries)
+            item.ShowIcons = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetFilenameBold(_appearance.BoldThumbnailFileNames);
         BrowseSurface.SetFilenameFontSize(_appearance.ThumbnailFilenameFontSize);
         BrowseSurface.SetShadowEnabled(_appearance.ShowThumbnailShadows == true);

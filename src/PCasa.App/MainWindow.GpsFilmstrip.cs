@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media.Imaging;
 using PCasa.App.Data;
 using PCasa.App.Models;
@@ -15,6 +16,43 @@ public partial class MainWindow
     {
         public long Id { get; init; }
         public string Name { get; init; } = "";
+        // These flags come from the SAME gallery thumbnail index; no second
+        // EXIF/tag/GPS reader or independent state interpretation.
+        private bool _hasGps;
+        private bool _hasTags;
+        private bool _isRaw;
+        private bool _showIcons = true;
+        public bool HasGps => _hasGps;
+        public bool HasTags => _hasTags;
+        public bool IsRaw => _isRaw;
+        public bool ShowIcons
+        {
+            get => _showIcons;
+            set
+            {
+                if (_showIcons == value) return;
+                _showIcons = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ShowIcons)));
+            }
+        }
+        public void UpdateStatus(BrowseThumbnailIndexEntry index)
+        {
+            if (_hasGps != index.HasGps)
+            {
+                _hasGps = index.HasGps;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasGps)));
+            }
+            if (_hasTags != index.HasTags)
+            {
+                _hasTags = index.HasTags;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasTags)));
+            }
+            if (_isRaw != index.IsRaw)
+            {
+                _isRaw = index.IsRaw;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRaw)));
+            }
+        }
         private BitmapSource? _bitmap;
         public BitmapSource? Bitmap
         {
@@ -41,6 +79,11 @@ public partial class MainWindow
     private bool _gpsFilmstripFrozen;
     private bool _gpsFilmstripFocusActive;
     private long? _gpsLastMapSourceFocusId;
+    private IReadOnlyList<BrowseThumbnailIndexEntry>? _gpsFilmstripStatusIndex;
+    private HwndSource? _gpsFilmstripHwnd;
+    private int _gpsFilmstripVerticalWheelRemainder;
+    private int _gpsFilmstripHorizontalWheelRemainder;
+    private const int WmMouseHWheel = 0x020E;
 
     private void InitializeGpsFilmstrip()
     {
@@ -49,6 +92,66 @@ public partial class MainWindow
         _gpsFilmstripUpdating = false;
         ApplyGpsFilmstripVisibility();
         UpdateGpsFilmstripControls();
+        SourceInitialized += GpsFilmstrip_SourceInitialized;
+        Closed += GpsFilmstrip_WindowClosed;
+    }
+
+    private void GpsFilmstrip_SourceInitialized(object? sender, EventArgs e)
+    {
+        // Precision touchpads deliver horizontal gestures as WM_MOUSEHWHEEL.
+        // Scope the hook to THIS WPF window and only the hovered filmstrip.
+        _gpsFilmstripHwnd = PresentationSource.FromVisual(this) as HwndSource;
+        _gpsFilmstripHwnd?.AddHook(GpsFilmstrip_NativeWheel);
+    }
+
+    private void GpsFilmstrip_WindowClosed(object? sender, EventArgs e)
+    {
+        _gpsFilmstripHwnd?.RemoveHook(GpsFilmstrip_NativeWheel);
+        _gpsFilmstripHwnd = null;
+    }
+
+    private IntPtr GpsFilmstrip_NativeWheel(IntPtr hwnd, int message,
+        IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (message != WmMouseHWheel || !_appearance.ShowGpsFilmstrip ||
+            !GpsFilmstripList.IsVisible || !GpsFilmstripList.IsMouseOver)
+            return IntPtr.Zero;
+        var delta = unchecked((short)((wParam.ToInt64() >> 16) & 0xffff));
+        handled = ScrollGpsFilmstripByWheel(delta,
+            ref _gpsFilmstripHorizontalWheelRemainder);
+        return IntPtr.Zero;
+    }
+
+    private void GpsFilmstrip_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        // A normal vertical mouse wheel and a two-finger vertical touchpad
+        // gesture navigate the HORIZONTAL strip. Do not scroll the gallery.
+        if (ScrollGpsFilmstripByWheel(-e.Delta,
+            ref _gpsFilmstripVerticalWheelRemainder))
+            e.Handled = true;
+    }
+
+    private bool ScrollGpsFilmstripByWheel(int delta, ref int remainder)
+    {
+        if (!_appearance.ShowGpsFilmstrip || !GpsFilmstripList.IsVisible)
+            return false;
+        var scroller = GpsFilmstripList.Template.FindName(
+            "GpsFilmScrollViewer", GpsFilmstripList) as ScrollViewer;
+        if (scroller is null || scroller.ScrollableWidth <= 0)
+            return false;
+
+        // The virtualized horizontal stack uses ITEM units. Accumulate
+        // high-resolution touchpad deltas; one wheel notch moves three
+        // frames. Keep scroll within the native ScrollViewer's extent.
+        if (delta != 0 && Math.Sign(remainder) != Math.Sign(delta))
+            remainder = 0;
+        remainder += delta;
+        var steps = remainder / 40;
+        remainder -= steps * 40;
+        if (steps != 0)
+            scroller.ScrollToHorizontalOffset(Math.Clamp(
+                scroller.HorizontalOffset + steps, 0, scroller.ScrollableWidth));
+        return true;
     }
 
     private void ApplyGpsFilmstripVisibility()
@@ -173,6 +276,19 @@ public partial class MainWindow
     {
         if (_gpsFilmstripFrozen)
         {
+            // Keep the source snapshot, but refresh lightweight status flags
+            // if the catalog index has changed after tag/GPS writes.
+            if (!ReferenceEquals(_gpsFilmstripStatusIndex, _browseIndex))
+            {
+                var visible = _gpsFilmstripEntries.ToDictionary(item => item.Id);
+                if (visible.Count > 0)
+                    foreach (var index in _browseIndex)
+                        if (visible.TryGetValue(index.ImageId, out var item))
+                            item.UpdateStatus(index);
+                _gpsFilmstripStatusIndex = _browseIndex;
+            }
+            foreach (var item in _gpsFilmstripEntries)
+                item.ShowIcons = _appearance.ShowThumbnailIcons;
             // A gallery search, folder change or scan does not replace this
             // snapshot. Keep the existing selected item and packed thumbnails.
             if (_sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip &&
@@ -187,6 +303,7 @@ public partial class MainWindow
             _gpsFilmstripEntries = [];
             _gpsFilmstripIndexes.Clear();
             _gpsFilmstripRequestedIds.Clear();
+            _gpsFilmstripStatusIndex = null;
             GpsFilmstripList.ItemsSource = null;
             UpdateGpsFilmstripControls();
             return;
@@ -217,8 +334,10 @@ public partial class MainWindow
             {
                 Id = index.ImageId,
                 Name = mapNames.TryGetValue(index.ImageId, out var gpsName)
-                    ? gpsName : index.FileName
+                    ? gpsName : index.FileName,
+                ShowIcons = _appearance.ShowThumbnailIcons
             };
+            item.UpdateStatus(index);
             entries.Add(item);
             _gpsFilmstripIndexes[item.Id] = index;
             if (_browsePageCache is not null)
@@ -235,6 +354,7 @@ public partial class MainWindow
             }
         }
         _gpsFilmstripEntries = entries;
+        _gpsFilmstripStatusIndex = _browseIndex;
         _gpsFilmstripUpdating = true;
         GpsFilmstripList.ItemsSource = entries;
         GpsFilmstripList.SelectedItem = entries.FirstOrDefault(p =>

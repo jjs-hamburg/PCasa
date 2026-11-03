@@ -1399,6 +1399,7 @@
                                      SelectionChanged="GpsFilmstrip_SelectionChanged"
                                      MouseLeftButtonUp="GpsFilmstrip_MouseLeftButtonUp"
                                      MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
+                                     PreviewMouseWheel="GpsFilmstrip_PreviewMouseWheel"
                                      ScrollViewer.ScrollChanged="GpsFilmstrip_ScrollChanged">
                                 <ListBox.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -1411,8 +1412,19 @@
                                             <Border Height="72" Margin="1,0"
                                                     BorderThickness="1" BorderBrush="#353739"
                                                     Background="#101112">
-                                                <Image Source="{Binding Bitmap}" Stretch="Uniform"
-                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                <Grid ClipToBounds="True">
+                                                    <Image Source="{Binding Bitmap}" Stretch="Uniform"
+                                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                                    <!-- Use the identical GPS/TAG/RAW renderer as the gallery,
+                                                         over the photograph, never over its caption. -->
+                                                    <controls:ThumbnailStatusIconOverlay Width="70" Height="18"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                        Margin="0,0,2,2" IsHitTestVisible="False"
+                                                        HasGps="{Binding HasGps}"
+                                                        HasTags="{Binding HasTags}"
+                                                        IsRaw="{Binding IsRaw}"
+                                                        ShowIcons="{Binding ShowIcons}"/>
+                                                </Grid>
                                             </Border>
                                             <TextBlock Text="{Binding Name}" FontSize="10"
                                                        Foreground="#D1D2D3"

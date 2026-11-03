@@ -40,14 +40,6 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private static readonly Typeface RegularFilenameTypeface = new("Segoe UI");
     private static readonly Typeface BoldFilenameTypeface =
         new(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
-    private static readonly Brush GpsIconBrush = new SolidColorBrush(Color.FromRgb(225, 68, 76));
-    private static readonly Brush RawIconBrush = new SolidColorBrush(Color.FromArgb(215, 33, 37, 42));
-    private static readonly Geometry GpsPinGeometry = Geometry.Parse(
-        "M 4.5,0 C 2,0 0,2 0,4.5 C 0,7 4.5,12 4.5,12 C 4.5,12 9,7 9,4.5 C 9,2 7,0 4.5,0 Z");
-    private static readonly Geometry TagIconGeometry = Geometry.Parse(
-        "M 0,0 L 6,0 L 10,4 L 5,9 L 0,4 Z");
-    private static readonly Pen GpsOutlinePen = new(Brushes.White, 0.5);
-    private static readonly Pen TagOutlinePen = new(Brushes.DimGray, 0.8);
 
     private Brush _headerBrush =
         new SolidColorBrush(Color.FromRgb(231, 231, 231));
@@ -783,7 +775,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
                     drawingContext.DrawImage(bitmap, imageRect);
                     if (_showStatusIcons)
-                        DrawThumbnailStatusIcons(drawingContext, imageRect, entry, pixelsPerDip);
+                        ThumbnailStatusIconRenderer.Draw(drawingContext, imageRect,
+                            entry.HasGps, entry.HasTags, entry.IsRaw, pixelsPerDip);
 
                     if (_selectedImageIds.Contains(entry.ImageId))
                     {
@@ -864,39 +857,6 @@ public sealed class BrowseGallerySurface : FrameworkElement
             new Pen(_mutedBrush, 0.6),
             new Rect(left, top, width, height), 3, 3);
         drawingContext.DrawText(full, new Point(left + 6, top + 4));
-    }
-
-    private static void DrawThumbnailStatusIcons(DrawingContext context,
-        Rect imageRect, BrowseThumbnailIndexEntry entry, double dpi)
-    {
-        var x = imageRect.Right - 11;
-        var y = imageRect.Bottom - 14;
-        if (entry.HasGps)
-        {
-            context.PushTransform(new TranslateTransform(x, y));
-            context.DrawGeometry(GpsIconBrush, GpsOutlinePen, GpsPinGeometry);
-            context.DrawEllipse(Brushes.White, null, new Point(4.5,4.3), 1.6,1.6);
-            context.Pop();
-            x -= 15;
-        }
-        if (entry.HasTags)
-        {
-            context.PushTransform(new TranslateTransform(x, y + 2));
-            context.DrawGeometry(Brushes.White, TagOutlinePen, TagIconGeometry);
-            context.DrawEllipse(Brushes.DimGray, null, new Point(2.5,2.2), 0.8,0.8);
-            context.Pop();
-            x -= 19;
-        }
-        if (entry.IsRaw)
-        {
-            var label = new FormattedText("RAW", CultureInfo.InvariantCulture,
-                FlowDirection.LeftToRight, new Typeface("Segoe UI Semibold"),
-                8, Brushes.White, dpi);
-            var width = label.Width + 4;
-            context.DrawRoundedRectangle(RawIconBrush, null,
-                new Rect(x - width + 9, y + 1, width, 11), 2, 2);
-            context.DrawText(label, new Point(x - width + 11, y + 1));
-        }
     }
 
     private static void DrawEdgeShadow(DrawingContext drawingContext, Rect imageRect)
