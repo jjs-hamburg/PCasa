@@ -1236,6 +1236,11 @@ internal static class Program
             !saved.Cursors.TryGetValue(directory, out var fileName) ||
             fileName != "photo-0000.jpg")
             throw new Exception("Automatic inventory did not persist its last committed file.");
+        // Both the taskmanager and floating progress presenter must use the
+        // same immutable, confirmed number immediately after a restart.
+        if (folders.GetConfirmedRegularScanCount(key) != 1 ||
+            new FolderRepository(db).GetConfirmedRegularScanCount("unknown-scan") != 0)
+            throw new Exception("Read-only progress was not tied to its durable scan receipt.");
         var pending = folders.GetPendingAutomaticInventories();
         if (pending.Count != 1 || pending[0].ScanKey != key ||
             pending[0].ScanRoot != root.LocalPath)
@@ -1245,6 +1250,8 @@ internal static class Program
         // photo that the new process skipped using its persisted cursor.
         File.Delete(Path.Combine(directory, "photo-0000.jpg"));
         db.Initialize();
+        if (new FolderRepository(db).GetConfirmedRegularScanCount(key) != 1)
+            throw new Exception("Restart discarded the confirmed UI progress count.");
         var nextProcess = new FolderScanner(new ImageCatalogRepository(db),
             new ThumbnailCache(), new FolderRepository(db),
             new BrowseThumbnailProfileRepository(db));
@@ -1254,6 +1261,8 @@ internal static class Program
             throw new Exception("Restart lost the saved file cursor/count.");
         if (new ImageCatalogRepository(db).CountAll() != 9)
             throw new Exception("Resumed partial inventory deleted an unseen earlier image.");
+        if (new FolderRepository(db).GetConfirmedRegularScanCount(key) != 0)
+            throw new Exception("Completed scan left an obsolete progress counter.");
 
         // The completed inventory releases its checkpoint. A genuinely
         // NEW complete inventory must visit the whole directory and may
