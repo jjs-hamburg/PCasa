@@ -391,28 +391,31 @@ internal static class GalleryFileOperationFlow
             // release they resume normally without a second task manager.
             var backgroundProbeStarted = 0;
             var nativeDragLease = scheduler.BeginNativeDragInteraction();
-            Task backgroundProbe;
+            Task[] backgroundProbes;
             try
             {
-                backgroundProbe = scheduler.EnqueueAsync(
-                    "test:drag-probe-hold:" + Guid.NewGuid().ToString("N"),
-                    SchedulerPriority.Background,
-                    token =>
-                    {
-                        Interlocked.Exchange(ref backgroundProbeStarted, 1);
-                        return Task.CompletedTask;
-                    }, workKind: SchedulerWorkKind.SourceProbe);
+                backgroundProbes = Enumerable.Range(0, 4)
+                    .Select(i => scheduler.EnqueueAsync(
+                        "test:drag-probe-hold:" + i + ":" +
+                            Guid.NewGuid().ToString("N"),
+                        SchedulerPriority.Background,
+                        token =>
+                        {
+                            Interlocked.Increment(ref backgroundProbeStarted);
+                            return Task.CompletedTask;
+                        }, workKind: SchedulerWorkKind.SourceProbe))
+                    .ToArray();
                 Thread.Sleep(120);
                 if (Volatile.Read(ref backgroundProbeStarted) != 0 ||
-                    backgroundProbe.IsCompleted)
+                    backgroundProbes.Any(task => task.IsCompleted))
                     throw new Exception("Background source I/O started during native Explorer drag.");
             }
             finally { nativeDragLease.Dispose(); }
-            Until(window, () => backgroundProbe.IsCompleted,
-                "Background source probe did not resume after native drag.");
-            backgroundProbe.GetAwaiter().GetResult();
-            if (Volatile.Read(ref backgroundProbeStarted) != 1)
-                throw new Exception("Native drag lease lost its background source work.");
+            Until(window, () => backgroundProbes.All(job => job.IsCompleted),
+                "Multiple background source probes stranded after native drag.");
+            Task.WhenAll(backgroundProbes).GetAwaiter().GetResult();
+            if (Volatile.Read(ref backgroundProbeStarted) != 4)
+                throw new Exception("Native drag lease lost or starved background source jobs.");
             Console.WriteLine("PASS: Native Explorer drag preempts background source work and resumes it on release.");
 
             // With catalog read lanes held, the mouse gesture MUST return

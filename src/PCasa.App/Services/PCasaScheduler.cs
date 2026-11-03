@@ -105,7 +105,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         // _gate while signaling cooperative preemption.
         foreach (var yield in yields)
         {
-            try { yield.Cancel(); }
+            // Cancellation callbacks can be expensive (e.g. network
+            // watchers). Set the yield state immediately but dispatch
+            // callbacks off the WPF mouse handler.
+            try { _ = yield.CancelAsync(); }
             catch (ObjectDisposedException) { }
         }
         return new NativeDragLease(this);
@@ -121,9 +124,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // background lanes. Wake those that still have pending work.
             foreach (var lane in new[]
                 { LaneBackground, LaneInitialImport, LaneUserAction, LaneSourceProbe })
-                if (_pending.Any(item =>
-                    LaneFor(item.Priority, item.Kind) == lane))
-                    _signals[lane].Release();
+            {
+                // A blocked lane can consume MANY signals while the native
+                // drag is active; one wakeup would strand the rest indefinitely.
+                var count = _pending.Count(item =>
+                    LaneFor(item.Priority, item.Kind) == lane);
+                if (count > 0)
+                    _signals[lane].Release(count);
+            }
         }
     }
 

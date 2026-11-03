@@ -3272,7 +3272,7 @@ internal static class TagFlow
                 var visibility = (System.Windows.Controls.Primitives.ToggleButton)
                     window.FindName("GpsFilmstripToggle");
                 var oldBrowse = browseField.GetValue(window);
-                var oldPoints = gpsPointField.GetValue(window);
+                var priorGpsPointsForRegression = gpsPointField.GetValue(window);
                 var oldSidebar = sidebarField.GetValue(window);
                 var oldEntries = entriesField.GetValue(window);
                 var oldList = list.ItemsSource;
@@ -3358,7 +3358,7 @@ internal static class TagFlow
                 {
                     ((HashSet<long>)removedFenceField.GetValue(window)!).Clear();
                     browseField.SetValue(window, oldBrowse);
-                    gpsPointField.SetValue(window, oldPoints);
+                    gpsPointField.SetValue(window, priorGpsPointsForRegression);
                     sidebarField.SetValue(window, oldSidebar);
                     entriesField.SetValue(window, oldEntries);
                     pointGroupField.SetValue(window, oldPointGroup);
