@@ -630,11 +630,15 @@ public partial class MainWindow
         if (_gpsGoogleWebsiteActive || !_gpsBrowserReady ||
             _gpsBrowser is not { IsDisposed: false } map) return;
         var pointRevision = _gpsPointRevision;
-        var snapshot = _gpsPoints.ToArray();
-        var fitPoints = _gpsFilmstripFrozen && _gpsFilmstripFocusActive &&
-            _gpsHighlightedImageId is long sourceId
-            ? snapshot.Where(p => p.Id == sourceId).ToArray()
-            : snapshot.Where(p => p.Selected).ToArray();
+        // Map display, not the underlying gallery selection, follows the
+        // active filmstrip source. Send ONLY that marker to the existing
+        // clustering pipeline; simply highlighting one among many leaves
+        // the unrelated clusters visible (the reported regression).
+        var snapshot = _gpsFilmstripFocusActive &&
+            GpsFilmstripList.SelectedItem is GpsFilmstripEntry source
+            ? _gpsPoints.Where(p => p.Id == source.Id).ToArray()
+            : _gpsPoints.ToArray();
+        var fitPoints = snapshot.Where(p => p.Selected).ToArray();
         if (fitSelection && fitPoints.Length > 0)
         {
             // Old code clustered at the PREVIOUS camera zoom, committed
@@ -765,16 +769,6 @@ public partial class MainWindow
         // A background catalog refresh of the SAME selection must not
         // cancel its in-flight fit and leave a blank world map.
         var selectedIds = _selectedImageIds.ToArray();
-        var stripSourceId = _gpsFilmstripFrozen && _appearance.ShowGpsFilmstrip &&
-            GpsFilmstripList.SelectedItem is GpsFilmstripEntry stripSource
-            ? (long?)stripSource.Id : null;
-        // A pinned photo is fetched by immutable image ID alongside gallery
-        // targets, without adding it to the gallery selection.
-        var includeStripSource = stripSourceId.HasValue &&
-            (selectedIds.Length > 0 || _gpsFilmstripFocusActive);
-        var queryIds = includeStripSource && !selectedIds.Contains(stripSourceId!.Value)
-            ? selectedIds.Append(stripSourceId!.Value).ToArray()
-            : selectedIds;
         // A map-point filmstrip is a temporary view. Only a REAL change of
         // gallery selection replaces it. Background photo imports may
         // refresh the map repeatedly while the user explores one GPS point.
@@ -788,6 +782,18 @@ public partial class MainWindow
             _gpsFilmstripFocusActive = false;
             _gpsHighlightedImageId = _gallerySelection.FocusedId;
         }
+        var stripSourceId = _appearance.ShowGpsFilmstrip &&
+            (_gpsFilmstripFrozen || _gpsFilmstripFocusActive) &&
+            GpsFilmstripList.SelectedItem is GpsFilmstripEntry stripSource
+            ? (long?)stripSource.Id : null;
+        // Pinned sources remain available for GPS → Galerie across folders.
+        // An unpinned source is available while it owns the map focus.
+        // Neither adds the source to the actual gallery targets.
+        var includeStripSource = stripSourceId.HasValue &&
+            (selectedIds.Length > 0 || _gpsFilmstripFocusActive);
+        var queryIds = includeStripSource && !selectedIds.Contains(stripSourceId!.Value)
+            ? selectedIds.Append(stripSourceId!.Value).ToArray()
+            : selectedIds;
         // The previous selection's map and coordinates must not masquerade
         // as the newly selected 6,000 photos while catalog reads are queued.
         // Keep the scheduler as the only read owner; publish loading state
@@ -889,13 +895,13 @@ public partial class MainWindow
             // focusing the source for map display.
             points = points.Select(p => p with { Selected =
                 galleryTargetIds.Contains(p.Id) ||
-                (_gpsFilmstripFrozen && _gpsFilmstripFocusActive &&
+                (_gpsFilmstripFocusActive &&
                  stripSourceId == p.Id) }).ToList();
             var pointsChanged = !_gpsPoints.SequenceEqual(points);
             if (pointsChanged) ++_gpsPointRevision;
             _gpsPoints = points;
-            var activeSourceFocus = _gpsFilmstripFrozen &&
-                _gpsFilmstripFocusActive ? stripSourceId : null;
+            var activeSourceFocus = _gpsFilmstripFocusActive
+                ? stripSourceId : null;
             var sourceFocusChanged = _gpsLastMapSourceFocusId != activeSourceFocus;
             _gpsLastMapSourceFocusId = activeSourceFocus;
             // Only current selected photo IDs can own the GPS projection.

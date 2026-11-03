@@ -1367,6 +1367,14 @@ public partial class MainWindow
             return;
         }
 
+        // Startup layout changes fire ScrollChanged with a nonzero delta
+        // even though the USER never touched the gallery. Previously this
+        // registered explicit navigation and permanently canceled restoring
+        // the persisted last image. Actual wheel/keyboard/folder input still
+        // registers navigation through its existing explicit handlers.
+        if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition)
+            return;
+
         RegisterGalleryUserScroll();
         if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text)) return;
 

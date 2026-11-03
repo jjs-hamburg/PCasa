@@ -936,9 +936,9 @@ internal static class TagFlow
             if (filmPanel.Visibility != Visibility.Visible)
                 throw new Exception("GPS filmstrip could not be enabled.");
 
-            // A single gallery selection without GPS coordinates is still a
-            // FILMSTRIP PHOTO. The map may have no pin, but the strip must
-            // show and open it, and closing the overlay must not remove it.
+            // The GPS Filmstrip is strictly a source collection. Gallery
+            // photos without GPS remain legal targets but must not appear
+            // as sources or acquire coordinates from another photo.
             long noGpsPhoto;
             using (var connection = db.OpenConnection())
             using (var cmd = connection.CreateCommand())
@@ -969,19 +969,11 @@ internal static class TagFlow
                 var stripRows = ((ListBox?)window.FindName("GpsFilmstripList"))?.Items
                     .Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().ToArray()
                     ?? throw new Exception("GPS filmstrip list missing.");
-                if (stripRows.Length != 1 || stripRows[0].Id != noGpsPhoto)
-                    throw new Exception("Single photo without GPS was omitted from filmstrip.");
-                showStripPhoto.Invoke(window, [noGpsPhoto]);
-                if (stripOverlay.Visibility != Visibility.Visible ||
-                    stripOverlay.Tag is not long openId || openId != noGpsPhoto)
-                    throw new Exception("Filmstrip could not open selected photo without GPS.");
-                closeStripPhoto.Invoke(window, null);
-                updateStrip.Invoke(window, null);
-                var surviving = ((ListBox)window.FindName("GpsFilmstripList")!)
-                    .Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().ToArray();
-                if (surviving.Length != 1 || surviving[0].Id != noGpsPhoto)
-                    throw new Exception("Closing GPS photo removed selection from filmstrip.");
-                Console.WriteLine("PASS: Single no-GPS photo remains in filmstrip after opening and closing photo.");
+                if (stripRows.Length != 0)
+                    throw new Exception("GPS Filmstrip incorrectly admitted a photo without GPS.");
+                if (stripOverlay.Visibility == Visibility.Visible)
+                    throw new Exception("Empty GPS Filmstrip unexpectedly opened a photo.");
+                Console.WriteLine("PASS: Non-geotagged gallery targets are excluded from GPS Filmstrip sources.");
 
                 // A click on a many-photo map marker must display ALL its
                 // represented photos through the existing strip, not replace
@@ -1607,6 +1599,24 @@ internal static class TagFlow
                 filmList.ItemsSource = entries;
                 filmList.SelectedItem = entries[0];
                 var keepSelection = selected.ToHashSet();
+
+                var stripRemove = (Button?)window.FindName("GpsFilmstripRemoveGpsButton")
+                    ?? throw new Exception("GPS Filmstrip Remove GPS action missing.");
+                var stripTransfer = (Button?)window.FindName("GpsFilmstripToGalleryButton")
+                    ?? throw new Exception("GPS Filmstrip copy-to-gallery action missing.");
+                if (filmList.SelectionMode != SelectionMode.Extended ||
+                    window.FindName("GpsFilmstripClearButton") is not null)
+                    throw new Exception("GPS Filmstrip must support Explorer multiselect without a Clear button.");
+                filmList.SelectAll(); // standard Ctrl+A in an extended WPF ListBox
+                if (filmList.SelectedItems.Count != 2 || !stripRemove.IsEnabled ||
+                    stripTransfer.IsEnabled || !selected.SetEquals(keepSelection))
+                    throw new Exception("GPS Filmstrip multi-selection or action enablement is incorrect.");
+                filmList.UnselectAll();
+                filmList.SelectedItem = entries[0];
+                if (filmList.SelectedItems.Count != 1 || !stripRemove.IsEnabled ||
+                    !stripTransfer.IsEnabled || !selected.SetEquals(keepSelection))
+                    throw new Exception("One GPS Filmstrip source must enable copy without changing gallery targets.");
+                Console.WriteLine("PASS: Extended GPS source multi-selection enables Remove GPS and disables copy-to-gallery.");
                 var doubleClick = new MouseButtonEventArgs(
                     InputManager.Current.PrimaryMouseDevice,
                     Environment.TickCount, MouseButton.Left);

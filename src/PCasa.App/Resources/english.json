@@ -445,5 +445,7 @@
   "Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.": "Pin the current filmstrip photos. New gallery selections then update only the map.",
   "Zuerst Galeriefotos markieren und einen Kartenpunkt wählen. GPS ersetzen überschreibt alle vorhandenen Koordinaten.": "First select gallery photos and choose a map point. Replace GPS then overwrites all existing coordinates.",
   "Springt zur gemerkten Position. Zuerst mit der Stecknadel eine Position merken.": "Jumps to the saved position. First save a position using the pin.",
-  "Kehrt nach einem Sprung zur vorherigen Position zurück. Erst eine Position merken und anspringen.": "Returns to the previous position after a jump. First save a position and jump to it."
+  "Kehrt nach einem Sprung zur vorherigen Position zurück. Erst eine Position merken und anspringen.": "Returns to the previous position after a jump. First save a position and jump to it.",
+  "GPS Filmstrip": "GPS Filmstrip",
+  "Entfernt GPS aus allen markierten GPS-Filmstrip-Fotos. Mehrfachauswahl mit Strg, Umschalt oder Strg+A.": "Removes GPS coordinates from all selected GPS Filmstrip photos. Multi-select with Ctrl, Shift or Ctrl+A."
 }

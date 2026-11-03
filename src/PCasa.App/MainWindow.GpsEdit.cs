@@ -292,9 +292,13 @@ public partial class MainWindow
         => _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Remove);
 
     private async Task CommitGpsEditAsync(GpsMetadataRepository.EditMode mode,
-        (double Lat, double Lon)? coordinatesOverride = null)
+        (double Lat, double Lon)? coordinatesOverride = null,
+        IReadOnlyCollection<long>? explicitTargetIds = null)
     {
-        var ids = _selectedImageIds.Distinct().ToArray();
+        // Gallery and GPS Filmstrip may initiate the SAME durable P0 writer,
+        // but they own independent selections. Never mutate one to reuse
+        // the other's writing path.
+        var ids = (explicitTargetIds ?? _selectedImageIds).Distinct().ToArray();
         if (ids.Length == 0) return;
         var coordinates = coordinatesOverride ?? _gpsDraft;
         if (mode != GpsMetadataRepository.EditMode.Remove && coordinates is null)

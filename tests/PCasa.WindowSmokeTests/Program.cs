@@ -1450,22 +1450,24 @@ internal static class Program
                 throw new Exception("GPS controls are not fixed and compact.");
             var gpsPin = window.FindName("GpsFilmstripFreezeToggle") as ToggleButton;
             var gpsTransfer = window.FindName("GpsFilmstripToGalleryButton") as Button;
-            var gpsStripClear = window.FindName("GpsFilmstripClearButton") as Button;
+            var gpsStripRemove = window.FindName("GpsFilmstripRemoveGpsButton") as Button;
             var gpsReplace = window.FindName("GpsReplaceButton") as Button;
             var gpsRemove = window.FindName("GpsRemoveButton") as Button;
             var gpsStrip = window.FindName("GpsFilmstripList") as ListBox;
             var rememberedJump = window.FindName("GalleryReturnToRememberedButton") as Button;
             var departureJump = window.FindName("GalleryReturnToDepartureButton") as Button;
-            if (gpsPin is null || gpsTransfer is null || gpsStripClear is null ||
+            if (gpsPin is null || gpsTransfer is null || gpsStripRemove is null ||
                 gpsReplace is null || gpsRemove is null || gpsStrip is null ||
                 rememberedJump is null || departureJump is null ||
                 window.FindName("GpsApplyMissingButton") is not null ||
+                window.FindName("GpsFilmstripClearButton") is not null ||
+                gpsStrip.SelectionMode != SelectionMode.Extended ||
                 Grid.GetColumn(gpsReplace) != 1 || Grid.GetColumn(gpsRemove) != 2 ||
                 Grid.GetRow(gpsStrip) != 1 ||
                 !ToolTipService.GetShowOnDisabled(gpsReplace) ||
                 !ToolTipService.GetShowOnDisabled(gpsRemove) ||
                 !ToolTipService.GetShowOnDisabled(gpsTransfer) ||
-                !ToolTipService.GetShowOnDisabled(gpsStripClear) ||
+                !ToolTipService.GetShowOnDisabled(gpsStripRemove) ||
                 !ToolTipService.GetShowOnDisabled(rememberedJump) ||
                 !ToolTipService.GetShowOnDisabled(departureJump))
                 throw new Exception("GPS filmstrip actions or disabled-button tooltips are missing.");

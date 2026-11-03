@@ -37,7 +37,9 @@ public partial class MainWindow
         public double ThumbnailSpacing { get; set; } = 10;
         public double ThumbnailWidth { get; set; } = 190;
         public bool? ShowThumbnailShadows { get; set; }
-        public bool RestoreGalleryPosition { get; set; }
+        // New profiles remember the current photo by default. Older
+        // profiles retain any explicitly saved user preference.
+        public bool RestoreGalleryPosition { get; set; } = true;
         public double LastScrollOffset { get; set; }
         public string? LastFolderCanonicalPath { get; set; }
         public double LastFolderRelativeOffset { get; set; }
@@ -598,7 +600,10 @@ public partial class MainWindow
         // optional gallery-position restoration is disabled.
         if (FoldersTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag tag })
             _appearance.SelectedTreePath = tag.FullPath;
-        if (_appearance.RestoreGalleryPosition)
+        // Do not overwrite a valid saved anchor with the initial zero
+        // position if PCasa is closed before the catalog becomes visible.
+        if (_appearance.RestoreGalleryPosition && _browseIndex.Count > 0 &&
+            BrowseSurface.HasVisiblePhotoSections)
         {
             var scrollOffset = BrowseScrollViewer.VerticalOffset;
             _appearance.LastScrollOffset = scrollOffset;
@@ -656,7 +661,19 @@ public partial class MainWindow
         // persisted user's anchor a few lines later in the refresh pipeline.
         _pendingGalleryAnchor = null;
         _galleryPositionRestored = true;
+        // This scroll is programmatic RESTORATION, not a user navigation.
+        // Do not let its delayed WPF ScrollChanged event invalidate the
+        // anchor or the pending startup view.
+        _restoringGalleryLayoutAnchor = true;
+        var restorationRevision = ++_galleryLayoutRestoreRevision;
         BrowseScrollViewer.ScrollToVerticalOffset(Math.Max(0, target));
+        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+            Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (restorationRevision == _galleryLayoutRestoreRevision)
+                _restoringGalleryLayoutAnchor = false;
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
         if (BrowseSurface.GetFolderIdAtOffset(target + 4) is long restoredFolderId)
         {
             _activePhotoFolderId = restoredFolderId;

@@ -810,9 +810,14 @@
                                     <Path Data="M 11.5,7 L 11.5,21 M 11.5,13 L 15,13 M 11.5,20 L 15,20" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="10" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
                                     <Rectangle Canvas.Left="16" Canvas.Top="17" Width="7" Height="6" RadiusX="1" RadiusY="1" Fill="#C4CCD7"/>
-                                    <ContentControl Canvas.Left="12.2" Canvas.Top="10"
-                                                    Width="12" Height="12"
-                                                    Template="{StaticResource PcasaCloseGlyphTemplate}"/>
+                                    <!-- Clear red X across BOTH child folders: unmistakable
+                                         "collapse all", not a small decorative close icon. -->
+                                    <Path Data="M 15,10 L 23,23 M 23,10 L 15,23"
+                                          Stroke="#E43642" StrokeThickness="3.5"
+                                          StrokeStartLineCap="Round" StrokeLineJoin="Round"/>
+                                    <Path Data="M 15,10 L 23,23 M 23,10 L 15,23"
+                                          Stroke="#FFFFFF" StrokeThickness="0.6"
+                                          StrokeStartLineCap="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Expand / Compress'}" Click="FolderTreeToggle_Click">
@@ -823,12 +828,10 @@
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Explorer Ansicht'}" Click="ShowAllFilesystemFolders_Click">
-                                <!-- Windows-Explorer style: simple yellow folder with blue tray. -->
+                                <!-- Simple Explorer folder, without extra tray/symbol. -->
                                 <Viewbox Width="23" Height="23"><Canvas Width="24" Height="24">
-                                    <Path Data="M 1,5 Q 1,3 3,3 L 9,3 L 11,5 L 21,5 Q 23,5 23,7 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#EAA312"/>
-                                    <Path Data="M 1,8 L 23,8 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#FFCE37"/>
-                                    <Path Data="M 6,14 Q 6,12 8,12 L 21,12 L 21,20 L 6,20 Z" Fill="#2679B8"/>
-                                    <Path Data="M 9,16 L 18,16" Stroke="#16466F" StrokeThickness="1.5" StrokeStartLineCap="Round"/>
+                                    <Path Data="M 1,5 Q 1,3 3,3 L 9,3 L 11,5 L 21,5 Q 23,5 23,7 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#D99A17"/>
+                                    <Path Data="M 1,9 L 23,9 L 23,20 Q 23,22 21,22 L 3,22 Q 1,22 1,20 Z" Fill="#FFCE37"/>
                                 </Canvas></Viewbox>
                             </Button>
                         </StackPanel>
@@ -1260,7 +1263,7 @@
  </Button>
   <Button x:Name="GpsProviderButton" Grid.Column="3" Width="82" Height="31" Padding="1,0" ToolTip="{loc:Tr Key='Kartenanbieter auswählen'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsProviderButton_Click">
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/><Path Data="M2,3 L7,8 L12,3" Width="11" Height="8" Margin="7,4,0,0" Stretch="Fill" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/></StackPanel></Button>
-  <ToggleButton x:Name="GpsFilmstripToggle" Grid.Column="4" Width="34" Height="31" Margin="5,0,0,0" Padding="3" ToolTip="{loc:Tr Key='Filmstreifen'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed" ToolTipService.ShowOnDisabled="True">
+  <ToggleButton x:Name="GpsFilmstripToggle" Grid.Column="4" Width="34" Height="31" Margin="5,0,0,0" Padding="3" ToolTip="{loc:Tr Key='GPS Filmstrip'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed" ToolTipService.ShowOnDisabled="True">
    <Viewbox Width="21" Height="19"><Canvas Width="28" Height="24"><Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18" RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"/><Path Data="M8,3 V21 M20,3 V21 M3,8 H6 M3,16 H6 M22,8 H25 M22,16 H25" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/><Path Data="M11,8 L17,12 L11,16 Z" Fill="{DynamicResource PcasaTextBrush}"/></Canvas></Viewbox>
   </ToggleButton>
  </Grid>
@@ -1347,7 +1350,7 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5,0,0,0">
-                                        <TextBlock Text="Filmstrip" Foreground="#E0E2E3" FontSize="12" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{loc:Tr Key='GPS Filmstrip'}" Foreground="#E0E2E3" FontSize="12" FontWeight="SemiBold"/>
                                         <TextBlock Text=" (" Foreground="#B9BBBD" FontSize="12"/>
                                         <TextBlock x:Name="GpsFilmstripCountText" Text="0" Foreground="#B9BBBD" FontSize="12"/>
                                         <TextBlock Text=")" Foreground="#B9BBBD" FontSize="12"/>
@@ -1377,12 +1380,12 @@
                                                 ToolTipService.ShowOnDisabled="True">
                                             <TextBlock Text="{loc:Tr Key='GPS → Galerie'}" FontSize="12"/>
                                         </Button>
-                                        <Button x:Name="GpsFilmstripClearButton"
+                                        <Button x:Name="GpsFilmstripRemoveGpsButton"
                                                 Height="27" Margin="2,1" Padding="6,1"
-                                                IsEnabled="False" Click="GpsFilmstripClear_Click"
-                                                ToolTip="{loc:Tr Key='Leert nur den fixierten Filmstrip. Die Galerie und Originaldateien bleiben unverändert.'}"
+                                                IsEnabled="False" Click="GpsFilmstripRemoveGps_Click"
+                                                ToolTip="{loc:Tr Key='Entfernt GPS aus allen markierten GPS-Filmstrip-Fotos. Mehrfachauswahl mit Strg, Umschalt oder Strg+A.'}"
                                                 ToolTipService.ShowOnDisabled="True">
-                                            <TextBlock Text="{loc:Tr Key='Leeren'}" FontSize="12"/>
+                                            <TextBlock Text="{loc:Tr Key='GPS entfernen'}" FontSize="12"/>
                                         </Button>
                                     </StackPanel>
                                 </Grid>
@@ -1396,6 +1399,8 @@
                                      ScrollViewer.CanContentScroll="True"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                     SelectionMode="Extended"
+                                     PreviewKeyDown="GpsFilmstrip_PreviewKeyDown"
                                      SelectionChanged="GpsFilmstrip_SelectionChanged"
                                      MouseLeftButtonUp="GpsFilmstrip_MouseLeftButtonUp"
                                      MouseDoubleClick="GpsFilmstrip_MouseDoubleClick"
@@ -1532,9 +1537,9 @@
                  shows a floating photo while the map stays fullscreen. -->
             <Grid x:Name="GpsFullscreenImageOverlay" Grid.Column="2"
                   Panel.ZIndex="30" Visibility="Collapsed"
-                  Background="#F51C1D20" Cursor="Hand"
+                  Background="{Binding Background, ElementName=BrowseScrollViewer}" Cursor="Hand"
                   MouseLeftButtonUp="GpsFullscreenImageOverlay_Click">
-                <Border x:Name="GpsFullscreenImageFrame" Background="#F51C1D20"
+                <Border x:Name="GpsFullscreenImageFrame" Background="{Binding Background, ElementName=BrowseScrollViewer}"
                         CornerRadius="5">
                     <Grid>
                         <Image x:Name="GpsFullscreenImage" Stretch="Uniform"

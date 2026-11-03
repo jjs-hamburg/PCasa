@@ -186,11 +186,11 @@ public partial class MainWindow
             ? UiLanguage.T("Fixierung lösen: Filmstrip folgt wieder der Galerieauswahl.")
             : UiLanguage.T("Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.");
         GpsFilmstripCountText.Text = _gpsFilmstripEntries.Count.ToString("N0");
-        GpsFilmstripClearButton.IsEnabled = _gpsFilmstripFrozen &&
-            _gpsFilmstripEntries.Count > 0;
         var source = GpsFilmstripList.SelectedItem as GpsFilmstripEntry;
+        var selectedSources = GpsFilmstripList.SelectedItems.Count;
+        GpsFilmstripRemoveGpsButton.IsEnabled = selectedSources > 0;
         GpsFilmstripToGalleryButton.IsEnabled = source is not null &&
-            GpsFilmstripList.SelectedItems.Count == 1 &&
+            selectedSources == 1 &&
             _selectedImageIds.Count > 0 &&
             _gpsPoints.Any(p => p.Id == source.Id);
     }
@@ -209,24 +209,6 @@ public partial class MainWindow
         UpdateGpsFilmstripControls();
     }
 
-    private void GpsFilmstripClear_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_gpsFilmstripFrozen) return;
-        ++_gpsFilmstripRevision;
-        _gpsFilmstripUpdating = true;
-        _gpsFilmstripEntries = [];
-        _gpsFilmstripIndexes.Clear();
-        _gpsFilmstripRequestedIds.Clear();
-        GpsFilmstripList.ItemsSource = null;
-        _gpsFilmstripUpdating = false;
-        _gpsFilmstripFocusActive = false;
-        _gpsHighlightedImageId = null;
-        UpdateGpsFilmstripControls();
-        // The map still follows the gallery, even while the pinned strip
-        // is empty. Clearing a strip never clears gallery selection/GPS.
-        _ = RefreshGpsMapAsync();
-    }
-
     private void GpsFilmstripToGallery_Click(object sender, RoutedEventArgs e)
     {
         if (GpsFilmstripList.SelectedItems.Count != 1 ||
@@ -237,6 +219,29 @@ public partial class MainWindow
         if (point is null) return;
         _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Replace,
             (point.Lat, point.Lon));
+    }
+
+    private void GpsFilmstripRemoveGps_Click(object sender, RoutedEventArgs e)
+    {
+        var sources = GpsFilmstripList.SelectedItems
+            .OfType<GpsFilmstripEntry>().Select(entry => entry.Id)
+            .Distinct().ToArray();
+        if (sources.Length == 0) return;
+        // Immutable filmstrip IDs are handed to the existing durable P0
+        // GPS writer. Never substitute/clear the gallery target selection.
+        _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Remove,
+            explicitTargetIds: sources);
+    }
+
+    private void GpsFilmstrip_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // Make standard Explorer Ctrl+A explicit even when the virtualized
+        // film has only a small subset of its ListBoxItems realized.
+        if (e.Key == Key.A && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            GpsFilmstripList.SelectAll();
+            e.Handled = true;
+        }
     }
 
     // A clicked cluster is a temporary VIEW of its photo identities, not a
@@ -312,9 +317,9 @@ public partial class MainWindow
         var selected = _gpsFilmstripPointIds ?? _selectedImageIds.ToHashSet();
         _gpsFilmstripIndexes.Clear();
         _gpsFilmstripRequestedIds.Clear();
-        // The strip is a projection of the GALLERY SELECTION, not of EXIF GPS
-        // coverage. A selected photo must appear even when coordinates are
-        // absent, invalid or awaiting reindexing.
+        // The filmstrip is ONLY a GPS source set. The main gallery remains
+        // the unrestricted target selection, including images without GPS.
+        // Use the same catalog index status as the gallery badges.
         var mapNames = _gpsPoints.ToDictionary(p => p.Id, p => p.Name);
         var entries = new List<GpsFilmstripEntry>();
         var packed = new List<(GpsFilmstripEntry Item, BrowseThumbnailIndexEntry Index)>();
@@ -328,7 +333,7 @@ public partial class MainWindow
             if (_gpsFilmstripPointIds is null &&
                 entries.Count >= MaximumGpsFilmstripPhotos) break;
             var index = _browseIndex[imageIndex];
-            if (!selected.Contains(index.ImageId))
+            if (!selected.Contains(index.ImageId) || !index.HasGps)
                 continue;
             var item = new GpsFilmstripEntry
             {
@@ -432,24 +437,27 @@ public partial class MainWindow
 
     private void GpsFilmstrip_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_gpsFilmstripUpdating ||
-            GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item) return;
-        // A single click changes only the map highlight, NOT gallery
-        // selection, folder focus or the map photo popup.
+        if (_gpsFilmstripUpdating) return;
+        UpdateGpsFilmstripControls();
+
+        // Explorer multi-selection: added items identify the last explicitly
+        // focused source. The selection can contain many independently of
+        // the gallery; the MAP still previews only this one source.
+        var item = e.AddedItems.OfType<GpsFilmstripEntry>().LastOrDefault()
+            ?? GpsFilmstripList.SelectedItem as GpsFilmstripEntry;
+        if (item is null)
+        {
+            _gpsFilmstripFocusActive = false;
+            _gpsHighlightedImageId = null;
+            _ = RefreshGpsMapAsync();
+            return;
+        }
         FocusGpsPhotoForDisplay(item.Id);
         GpsPhotoPopup.Visibility = Visibility.Collapsed;
-        HighlightGpsPointOnMap(item.Id);
-        if (_gpsFilmstripFrozen)
-        {
-            _gpsFilmstripFocusActive = true;
-            // The source may be outside the current gallery/map query.
-            // The existing catalog-to-map path adds that ID by identity.
-            _ = RefreshGpsMapAsync();
-        }
-        UpdateGpsFilmstripControls();
-        // Only an ALREADY OPEN image follows single clicks. Ordinary strip
-        // navigation remains map-highlight only and never changes gallery
-        // selection, map scale or the current map viewport.
+        _gpsFilmstripFocusActive = true;
+        _ = RefreshGpsMapAsync();
+        // Only an ALREADY OPEN image follows a source click. The normal
+        // gallery selection remains intact even with Ctrl/Shift/Ctrl+A.
         if (GpsFullscreenImageOverlay.Visibility == Visibility.Visible &&
             GpsFullscreenImageOverlay.Tag is long shownId && shownId != item.Id)
             ShowGpsFullscreenImage(item.Id);
@@ -459,7 +467,7 @@ public partial class MainWindow
     {
         // Clicking the already selected source must still refocus its map
         // position after changing the gallery selection.
-        if (!_gpsFilmstripFrozen || _gpsFilmstripFocusActive ||
+        if (_gpsFilmstripFocusActive ||
             GpsFilmstripList.SelectedItem is not GpsFilmstripEntry item)
             return;
         FocusGpsPhotoForDisplay(item.Id);
