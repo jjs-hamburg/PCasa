@@ -422,11 +422,11 @@ public partial class MainWindow
                                 "GPS in Originaldateien schreiben",
                                 completed - 1, request.ImageIds.Length, current);
                         }, packageKey: key));
-                if (success && request.Mode == GpsMetadataRepository.EditMode.Remove)
+                if (success)
                 {
                     // TryWriteOriginal also treats superseded/no-op steps as
-                    // successful. Only publish a removal when the verified
-                    // committed EXIF catalog actually contains NO coordinates.
+                    // successful. Publish ONLY the confirmed catalog state
+                    // after the original-file reader verified the result.
                     using var verifiedDb = _database.OpenConnection();
                     using var verified = verifiedDb.CreateCommand();
                     verified.CommandText = """
@@ -436,8 +436,13 @@ public partial class MainWindow
                                 gps_longitude IS NOT NULL));
                         """;
                     verified.Parameters.AddWithValue("$id", id);
-                    if (Convert.ToInt32(verified.ExecuteScalar()) == 0)
+                    var hasGps = Convert.ToInt32(verified.ExecuteScalar()) != 0;
+                    if (request.Mode == GpsMetadataRepository.EditMode.Remove &&
+                        !hasGps)
                         QueueVerifiedGpsRemoval(id);
+                    else if (request.Mode != GpsMetadataRepository.EditMode.Remove &&
+                             hasGps)
+                        QueueVerifiedGpsPresence(id);
                 }
                 _scheduler.ReportProgress(key, "GPS in Originaldateien schreiben",
                     completed, request.ImageIds.Length);

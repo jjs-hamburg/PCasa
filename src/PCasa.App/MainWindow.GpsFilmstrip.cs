@@ -285,6 +285,17 @@ public partial class MainWindow
         HighlightGpsPointOnMap(anchorId);
     }
 
+    // A later successful replacement of the same photo must lift the
+    // transient removal fence. The next ordinary catalog publication then
+    // brings the newly valid GPS source back without inventing a second DB.
+    private void QueueVerifiedGpsPresence(long imageId)
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+            _gpsConfirmedRemovedIds.Remove(imageId)),
+            System.Windows.Threading.DispatcherPriority.Background);
+    }
+
     // A completed original-file write may run on the scheduler worker. Queue
     // one coalesced WPF projection of verified IDs, never an extra writer.
     private void QueueVerifiedGpsRemoval(long imageId)
@@ -368,6 +379,14 @@ public partial class MainWindow
     // detach the virtualized ListBox when its member IDs are unchanged.
     private void UpdateGpsFilmstrip()
     {
+        // Once a fresh catalog index independently confirms the missing
+        // GPS status, the temporary verified-write fence is no longer needed.
+        if (_gpsConfirmedRemovedIds.Count > 0 &&
+            !ReferenceEquals(_gpsFilmstripStatusIndex, _browseIndex))
+            foreach (var indexed in _browseIndex)
+                if (!indexed.HasGps)
+                    _gpsConfirmedRemovedIds.Remove(indexed.ImageId);
+
         if (_gpsFilmstripFrozen)
         {
             if (!ReferenceEquals(_gpsFilmstripStatusIndex, _browseIndex) ||

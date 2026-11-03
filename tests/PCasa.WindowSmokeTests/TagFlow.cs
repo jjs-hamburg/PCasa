@@ -658,11 +658,12 @@ internal static class TagFlow
             var fullscreenCorners = (System.Windows.Shapes.Path?)window.FindName(
                 "GpsFullscreenCorners")
                 ?? throw new Exception("GPS fullscreen glyph missing.");
-            if (gpsExpand.Width != 43 || gpsExpand.Height != 42 ||
-                gpsFullscreen.Width != 43 || gpsFullscreen.Height != 42 ||
+            if (gpsExpand.Width != 33 || gpsExpand.Height != 31 ||
+                gpsFullscreen.Width != 33 || gpsFullscreen.Height != 31 ||
+                sidebarClose.Width != 31 || sidebarClose.Height != 31 ||
                 expandArrow.StrokeThickness > 2.3 ||
                 fullscreenCorners.StrokeThickness > 2.3)
-                throw new Exception("Expand/fullscreen size or slim stroke regression.");
+                throw new Exception("Compact GPS/Tags/Info header button size or slim stroke regression.");
 
             var zoomNavigator = new PhotoZoomNavigator();
             var navigatorHeader = ((StackPanel)zoomNavigator.Child).Children[0] as Grid;
@@ -1432,6 +1433,10 @@ internal static class TagFlow
             var normalGpsWidth = gpsColumn.ActualWidth;
             var gpsControls = (Grid?)window.FindName("GpsControlsPanel")
                 ?? throw new Exception("GPS controls grid missing.");
+            if (gpsControls.Parent is not Border gpsToolbarFrame ||
+                gpsToolbarFrame.BorderThickness.Left < 1 ||
+                gpsToolbarFrame.CornerRadius.TopLeft < 3)
+                throw new Exception("GPS toolbar is missing its shared framed outline.");
             var gpsHeader = (Grid?)window.FindName("InfoSidebarHeader")
                 ?? throw new Exception("GPS header grid missing.");
             var gpsMapHost = (Grid?)window.FindName("GpsMapHost")
@@ -3240,6 +3245,131 @@ internal static class TagFlow
                     """;
                 cleanup.Parameters.AddWithValue("$folder", b.Id);
                 cleanup.ExecuteNonQuery();
+            }
+
+            // Regression: Ctrl+A must survive repeated non-frozen source
+            // refreshes and even a reordered browse-index publication. A
+            // VERIFIED Remove GPS must immediately remove its source photo
+            // and marker while the final full thumbnail-index refresh is
+            // still pending.
+            {
+                const System.Reflection.BindingFlags flags =
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var cls = typeof(PCasa.App.MainWindow);
+                var browseField = cls.GetField("_browseIndex", flags)!;
+                var gpsPointField = cls.GetField("_gpsPoints", flags)!;
+                var sidebarField = cls.GetField("_sidebarMode", flags)!;
+                var entriesField = cls.GetField("_gpsFilmstripEntries", flags)!;
+                var sourceIdsField = cls.GetField("_gpsFilmstripSelectedIds", flags)!;
+                var pointGroupField = cls.GetField("_gpsFilmstripPointIds", flags)!;
+                var frozenField = cls.GetField("_gpsFilmstripFrozen", flags)!;
+                var removedFenceField = cls.GetField("_gpsConfirmedRemovedIds", flags)!;
+                var update = cls.GetMethod("UpdateGpsFilmstrip", flags)!;
+                var verifiedRemove = cls.GetMethod("QueueVerifiedGpsRemoval", flags)!;
+                var list = (ListBox)window.FindName("GpsFilmstripList");
+                var count = (TextBlock)window.FindName("GpsFilmstripCountText");
+                var visibility = (System.Windows.Controls.Primitives.ToggleButton)
+                    window.FindName("GpsFilmstripToggle");
+                var oldBrowse = browseField.GetValue(window);
+                var oldPoints = gpsPointField.GetValue(window);
+                var oldSidebar = sidebarField.GetValue(window);
+                var oldEntries = entriesField.GetValue(window);
+                var oldList = list.ItemsSource;
+                var oldPointGroup = pointGroupField.GetValue(window);
+                var oldFrozen = frozenField.GetValue(window);
+                var oldVisible = visibility.IsChecked;
+                var modelSelection = (HashSet<long>)sourceIdsField.GetValue(window)!;
+                var oldModelSelection = modelSelection.ToHashSet();
+                var previousIds = selected.ToHashSet();
+                try
+                {
+                    sidebarField.SetValue(window, "GPS");
+                    frozenField.SetValue(window, false);
+                    pointGroupField.SetValue(window, null);
+                    visibility.IsChecked = true;
+                    selected.Clear();
+                    selected.Add(gpsA);
+                    selected.Add(gpsB);
+                    var previewBitmap = new WriteableBitmap(
+                        1, 1, 96, 96, PixelFormats.Bgra32, null);
+                    var fakeSources = new List<PCasa.App.MainWindow.GpsFilmstripEntry>
+                    {
+                        new() { Id = gpsA, Name = "source a", Bitmap = previewBitmap },
+                        new() { Id = gpsB, Name = "source b", Bitmap = previewBitmap }
+                    };
+                    browseField.SetValue(window, new BrowseThumbnailIndexEntry[]
+                    {
+                        new(gpsA, a.Id, 96, "", 0, 0, 96, 64, "source-a.jpg", HasGps: true),
+                        new(gpsB, a.Id, 96, "", 0, 0, 96, 64, "source-b.jpg", HasGps: true)
+                    });
+                    entriesField.SetValue(window, fakeSources);
+                    list.ItemsSource = fakeSources;
+                    modelSelection.Clear();
+                    update.Invoke(window, null);
+                    list.SelectAll();
+                    if (list.SelectedItems.Count != 2 ||
+                        !modelSelection.SetEquals(new[] { gpsA, gpsB }) ||
+                        count.Text != "2/2")
+                        throw new Exception("Ctrl+A source selection/count is inconsistent.");
+                    update.Invoke(window, null);
+                    update.Invoke(window, null);
+                    if (list.SelectedItems.Count != 2 ||
+                        !modelSelection.SetEquals(new[] { gpsA, gpsB }) ||
+                        count.Text != "2/2")
+                        throw new Exception("Filmstrip refresh lost Ctrl+A selection.");
+                    browseField.SetValue(window, new BrowseThumbnailIndexEntry[]
+                    {
+                        new(gpsB, a.Id, 96, "", 0, 0, 96, 64, "source-b.jpg", HasGps: true),
+                        new(gpsA, a.Id, 96, "", 0, 0, 96, 64, "source-a.jpg", HasGps: true)
+                    });
+                    update.Invoke(window, null);
+                    if (list.SelectedItems.Count != 2 ||
+                        !modelSelection.SetEquals(new[] { gpsA, gpsB }) ||
+                        count.Text != "2/2")
+                        throw new Exception("Filmstrip reorder lost selected GPS source IDs.");
+                    Console.WriteLine(
+                        "PASS: Ctrl+A remains 2/2 through source refresh and reorder.");
+
+                    var livePoints = ((System.Collections.IEnumerable)readGps.Invoke(
+                        window, [new long[] { gpsA, gpsB },
+                            CancellationToken.None, null])!)
+                        .Cast<object>().ToArray();
+                    var snapshot = Array.CreateInstance(projectedType, livePoints.Length);
+                    for (var i = 0; i < livePoints.Length; i++)
+                        snapshot.SetValue(livePoints[i], i);
+                    gpsPointField.SetValue(window, snapshot);
+                    verifiedRemove.Invoke(window, [gpsA]);
+                    Until(window, () =>
+                    {
+                        var currentIds = ((System.Collections.IEnumerable)
+                            gpsPointField.GetValue(window)!).Cast<object>()
+                            .Select(p => (long)p.GetType().GetProperty("Id")!.GetValue(p)!)
+                            .ToArray();
+                        return list.Items.Count == 1 &&
+                            ((PCasa.App.MainWindow.GpsFilmstripEntry)list.Items[0]).Id == gpsB &&
+                            count.Text == "1/1" &&
+                            !currentIds.Contains(gpsA);
+                    }, "Verified GPS removal did not remove the source and its marker.");
+                    Console.WriteLine(
+                        "PASS: Verified GPS removal immediately prunes filmstrip and map.");
+                }
+                finally
+                {
+                    ((HashSet<long>)removedFenceField.GetValue(window)!).Clear();
+                    browseField.SetValue(window, oldBrowse);
+                    gpsPointField.SetValue(window, oldPoints);
+                    sidebarField.SetValue(window, oldSidebar);
+                    entriesField.SetValue(window, oldEntries);
+                    pointGroupField.SetValue(window, oldPointGroup);
+                    frozenField.SetValue(window, oldFrozen);
+                    list.ItemsSource = oldList;
+                    modelSelection.Clear();
+                    modelSelection.UnionWith(oldModelSelection);
+                    selected.Clear();
+                    selected.UnionWith(previousIds);
+                    visibility.IsChecked = oldVisible;
+                }
             }
 
             // Explicitly leave an EXIF reader and keyword writer session

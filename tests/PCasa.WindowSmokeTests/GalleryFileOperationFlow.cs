@@ -369,6 +369,52 @@ internal static class GalleryFileOperationFlow
                 BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new Exception("Synchronous drag-file preparation is missing.");
 
+            // A visible, indexed thumbnail must start an Explorer FileDrop
+            // immediately, with NO catalog job or full-index search on
+            // MouseMove. The read-only ID lookup is already published.
+            var preparedIndexField = typeof(PCasa.App.MainWindow).GetField(
+                "_dragPublishedImages", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var knownImages = (System.Collections.IDictionary)
+                preparedIndexField.GetValue(window)!;
+            if (knownImages.Count == 0)
+                throw new Exception("Drag lookup index was not published with gallery.");
+            var knownImageId = (long)knownImages.Keys.Cast<object>().First();
+            var immediateDrag = (string[]?)prepareDrag.Invoke(window,
+                [new long[] { knownImageId }]);
+            if (immediateDrag is not { Length: 1 } ||
+                !Path.IsPathFullyQualified(immediateDrag[0]))
+                throw new Exception("Indexed gallery image could not start native FileDrop synchronously.");
+            Console.WriteLine("PASS: Indexed Explorer FileDrop path is prepared synchronously.");
+
+            // The same scheduler owns a bounded native-drag lease. While
+            // active, background source probes must remain queued; on
+            // release they resume normally without a second task manager.
+            var backgroundProbeStarted = 0;
+            var nativeDragLease = scheduler.BeginNativeDragInteraction();
+            Task backgroundProbe;
+            try
+            {
+                backgroundProbe = scheduler.EnqueueAsync(
+                    "test:drag-probe-hold:" + Guid.NewGuid().ToString("N"),
+                    SchedulerPriority.Background,
+                    token =>
+                    {
+                        Interlocked.Exchange(ref backgroundProbeStarted, 1);
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.SourceProbe);
+                Thread.Sleep(120);
+                if (Volatile.Read(ref backgroundProbeStarted) != 0 ||
+                    backgroundProbe.IsCompleted)
+                    throw new Exception("Background source I/O started during native Explorer drag.");
+            }
+            finally { nativeDragLease.Dispose(); }
+            Until(window, () => backgroundProbe.IsCompleted,
+                "Background source probe did not resume after native drag.");
+            backgroundProbe.GetAwaiter().GetResult();
+            if (Volatile.Read(ref backgroundProbeStarted) != 1)
+                throw new Exception("Native drag lease lost its background source work.");
+            Console.WriteLine("PASS: Native Explorer drag preempts background source work and resumes it on release.");
+
             // With catalog read lanes held, the mouse gesture MUST return
             // without blocking and without attempting a late native drag.
             var dragReadersRelease = new TaskCompletionSource(
