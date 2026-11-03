@@ -228,13 +228,15 @@ public sealed class DurablePackageJournal
             next.CommandText = direction < 0 ? """
                 SELECT package_key,queue_order FROM scheduler_packages
                  WHERE state IN ('queued','deferred')
-                   AND priority=$priority AND work_kind=$kind
+                   AND priority=$priority
+                   AND (work_kind=$kind OR ($kind IN (0,1) AND work_kind IN (0,1)))
                    AND queue_order < $rank
                  ORDER BY queue_order DESC,sequence DESC LIMIT 1;
                 """ : """
                 SELECT package_key,queue_order FROM scheduler_packages
                  WHERE state IN ('queued','deferred')
-                   AND priority=$priority AND work_kind=$kind
+                   AND priority=$priority
+                   AND (work_kind=$kind OR ($kind IN (0,1) AND work_kind IN (0,1)))
                    AND queue_order > $rank
                  ORDER BY queue_order ASC,sequence ASC LIMIT 1;
                 """;

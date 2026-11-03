@@ -22,6 +22,7 @@ internal static class TaskManagerFlow
         {
             var app = new PCasa.App.App();
             app.InitializeComponent();
+            app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             var database = new LocalDatabase(Path.Combine(dir, "pcasa.db"));
             database.Initialize();
             var journal = new DurablePackageJournal(database);
@@ -118,7 +119,9 @@ internal static class TaskManagerFlow
             manager = null;
 
             releaseBlocker.TrySetResult();
-            Task.WhenAll(a, c, blocker).Wait(TimeSpan.FromSeconds(15));
+            UntilBackground(() => Task.WhenAll(a, c, blocker).IsCompleted,
+                "Scheduler did not finish reordered durable tasks.");
+            Task.WhenAll(a, c, blocker).GetAwaiter().GetResult();
             lock (sync)
                 if (!executed.SequenceEqual(new[] { "taskmanager:c", "taskmanager:a" }))
                     throw new Exception("Scheduler ignored the persisted task manager order: " +
@@ -154,7 +157,7 @@ internal static class TaskManagerFlow
             manager?.Close();
             if (scheduler is not null)
             {
-                try { scheduler.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                try { Task.Run(async () => await scheduler.DisposeAsync()).GetAwaiter().GetResult(); }
                 catch (Exception ex) { Console.Error.WriteLine(ex); }
             }
             SqliteConnection.ClearAllPools();
@@ -191,6 +194,10 @@ internal static class TaskManagerFlow
         var until = DateTime.UtcNow.AddSeconds(12);
         while (DateTime.UtcNow < until)
         {
+            var frame = new DispatcherFrame();
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ContextIdle,
+                new Action(() => frame.Continue = false));
+            Dispatcher.PushFrame(frame);
             if (predicate()) return;
             Thread.Sleep(30);
         }

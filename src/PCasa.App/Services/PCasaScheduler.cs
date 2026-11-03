@@ -578,6 +578,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Task? completion = null;
         lock (_gate)
         {
+            // The first tag step can be staging SQLite intents while its
+            // durable cursor still reads zero. Do not cancel in that gap.
+            if (record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+                _runningPriorityJobs.Any(item => item?.Key == key))
+                throw new InvalidOperationException(
+                    "Ein laufender Tag-Schreibauftrag kann erst nach sicherem " +
+                    "Abgleich der vorgemerkten Änderungen entfernt werden.");
             var waiting = _pending.FirstOrDefault(item => item.Key == key);
             if (waiting is not null)
             {
@@ -688,8 +695,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 var item = new WorkItem(++_nextId, key, priority, workKind,
                     operation, isCurrent, cancellationToken)
                 {
+                    // Ephemeral manual preflight (e.g. GPS eligibility)
+                    // must never be buried behind the old durable ledger's
+                    // large historical sequence values. Durable ranks remain
+                    // authoritative relative to each other.
                     QueueOrder = queueOrder ?? (priority == SchedulerPriority.ManualAction
-                        ? -_nextId : _nextId)
+                        ? (long.MinValue / 2) - _nextId : _nextId)
                 };
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
