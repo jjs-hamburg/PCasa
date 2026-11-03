@@ -48,6 +48,8 @@ internal static class Program
         Run("Durable scheduler journal preserves original priority and LIFO order", DurableSchedulerPrioritySurvivesRestart, failures);
         Run("Durable package resumes saved step after process restart", DurableSchedulerCursorSurvivesRestart, failures);
         Run("Durable gallery transfer receipt survives restart and rejects changed identity", DurableGalleryTransferReceiptSurvivesRestart, failures);
+        Run("Old startup transfer probes are retired without erasing unresolved file intentions",
+            LegacyTransferProbesDoNotReplayOnStartup, failures);
         Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
         Run("Cyclic durable retry resumes saved cursor in the same app session", DeferredManualRetryWithinSameSession, failures);
         Run("NAS source failure is probed once for many folders and files", OfflineSourceGateCoalescesQueries, failures);
@@ -595,6 +597,78 @@ internal static class Program
         if (new DurableGalleryTransferJournal(database)
             .MovedImageIds(key).SetEquals(new[] { 17L }) == false)
             throw new Exception("Committed move identity was lost.");
+    }
+
+    private static void LegacyTransferProbesDoNotReplayOnStartup()
+    {
+        using var sandbox = new Sandbox();
+        var (database, _, _) = sandbox.Prepare();
+        const string firstIntent = "legacy:unresolved-transfer-1";
+        const string secondIntent = "legacy:unresolved-transfer-2";
+        var catalog = new ImageCatalogRepository(database);
+        // These are legacy journal intents without a v2 gallery package.
+        // They are data to inspect, not an instruction to launch new P0
+        // work on every restart or to repeat a physical file operation.
+        catalog.BeginRelocationIntent(firstIntent, 123,
+            @"S:\originals\first.jpg", @"G:\destination\first.jpg", 10);
+        catalog.BeginRelocationIntent(secondIntent, 124,
+            @"S:\originals\second.jpg", @"G:\destination\second.jpg", 10);
+
+        var journal = new DurablePackageJournal(database);
+        var firstPayload = System.Text.Json.JsonSerializer.Serialize(firstIntent);
+        var secondPayload = System.Text.Json.JsonSerializer.Serialize(secondIntent);
+        journal.Put("gallery:reconcile-transfer:queued", "transfer-reconcile-v1",
+            firstPayload, SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.Put("gallery:reconcile-transfer:running", "transfer-reconcile-v1",
+            secondPayload, SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.SetState("gallery:reconcile-transfer:running", "running", 0);
+        journal.Put("gallery:reconcile-transfer:deferred", "transfer-reconcile-v1",
+            firstPayload, SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.Defer("gallery:reconcile-transfer:deferred", 0, "NAS unknown");
+        // Real user-owned P0 operations may not be retired accidentally.
+        journal.Put("gallery:file-transfer:real", "gallery-transfer-v1",
+            "{\"Sources\":[\"source.jpg\"],\"Destination\":\"target\",\"Move\":true}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.Put("catalog:complete-scan:real", "manual-folder-scan-v1",
+            "{\"Directory\":\"S:\\\\Archives\"}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+
+        if (journal.RetireLegacyTransferReconciliationPackages() != 3 ||
+            journal.RetireLegacyTransferReconciliationPackages() != 0)
+            throw new Exception("Legacy P0 repair probes were not retired once.");
+        var remaining = new DurablePackageJournal(database).Pending();
+        if (remaining.Count != 2 ||
+            !remaining.Any(p => p.Key == "gallery:file-transfer:real") ||
+            !remaining.Any(p => p.Key == "catalog:complete-scan:real") ||
+            remaining.Any(p => p.Type == "transfer-reconcile-v1"))
+            throw new Exception("Legacy probe migration retired a real user package.");
+        var details = catalog.PendingRelocationDetails();
+        if (details.Count != 2 ||
+            details[0].OperationId != firstIntent ||
+            details[1].OperationId != secondIntent ||
+            details[0].SourcePath != @"S:\originals\first.jpg" ||
+            details[1].DestinationPath != @"G:\destination\second.jpg")
+            throw new Exception("Retiring P0 probes deleted the original move intents.");
+
+        // Startup after a crash must not restart probes or discard intents.
+        database.Initialize();
+        if (new DurablePackageJournal(database)
+                .RetireLegacyTransferReconciliationPackages() != 0 ||
+            new ImageCatalogRepository(database).PendingRelocationIds().Count != 2 ||
+            new DurablePackageJournal(database).DueDeferredKeys().Any(key =>
+                key.StartsWith("gallery:reconcile-transfer:", StringComparison.Ordinal)))
+            throw new Exception("Legacy reconciliation became runnable again on restart.");
+
+        journal.SetState("gallery:reconcile-transfer:running", "completed", 1);
+        using var db = database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*) FROM scheduler_packages
+             WHERE package_type='transfer-reconcile-v1' AND state='failed'
+               AND error LIKE '%manuell geprüft%';
+            """;
+        if (Convert.ToInt32(command.ExecuteScalar()) != 3)
+            throw new Exception("Late callbacks resurrected a retired transfer probe.");
     }
 
     private static void DurableSchedulerPrioritySurvivesRestart()
