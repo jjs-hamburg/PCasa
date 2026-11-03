@@ -226,7 +226,7 @@ internal static class TaskManagerFlow
                     SchedulerJobState.Queued, SchedulerJobState.YieldRequested
                 })
                 {
-                    progressWindow.UpdateManualOperation(
+                    progressWindow.UpdateManualOperationWithContext(
                         waitingScan with { State = state },
                         "Ordner aktualisieren", preservedScanRoot, 14975);
                     var phase = ((TextBlock)progressWindow.FindName("PhaseText")).Text;
@@ -244,7 +244,7 @@ internal static class TaskManagerFlow
                             "CurrentThumbnail")).Source is not null)
                         throw new Exception("Restored waiting scan contradicts taskmanager state or confirmed progress.");
                 }
-                progressWindow.UpdateManualOperation(
+                progressWindow.UpdateManualOperationWithContext(
                     waitingScan with {
                         State = SchedulerJobState.Running,
                         CurrentPath = preservedScanRoot + @"\photo.jpg",
