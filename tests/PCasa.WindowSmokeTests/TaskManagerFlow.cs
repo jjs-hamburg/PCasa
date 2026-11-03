@@ -205,6 +205,57 @@ internal static class TaskManagerFlow
             manager = null;
             journal.Cancel("taskmanager:path-check");
 
+            // A freshly restored scan may have zero volatile progress while
+            // its durable receipt already confirmed thousands of photos.
+            // The compact floating presenter must use the SAME status and
+            // count as the taskmanager, including after a scheduler yield.
+            var progressWindow = new PCasa.App.BrowseCacheProgressWindow();
+            try
+            {
+                progressWindow.BeginManualOperation("Ordner aktualisieren", 0);
+                var waitingScan = new SchedulerJobSnapshot(123,
+                    "taskmanager:path-check", SchedulerPriority.ManualAction,
+                    SchedulerJobState.Queued, DateTimeOffset.UtcNow, null)
+                {
+                    Phase = "Bilder einlesen",
+                    Processed = 0,
+                    CurrentPath = preservedScanRoot + @"\obsolete.jpg",
+                    WorkKind = SchedulerWorkKind.CatalogScan
+                };
+                foreach (var state in new[] {
+                    SchedulerJobState.Queued, SchedulerJobState.YieldRequested
+                })
+                {
+                    progressWindow.UpdateManualOperation(
+                        waitingScan with { State = state },
+                        "Ordner aktualisieren", preservedScanRoot, 14975);
+                    var phase = ((TextBlock)progressWindow.FindName("PhaseText")).Text;
+                    var count = ((TextBlock)progressWindow.FindName("CountText")).Text;
+                    var current = ((TextBlock)progressWindow.FindName("CurrentFileText")).Text;
+                    var parent = ((TextBlock)progressWindow.FindName("FolderPathText")).Text;
+                    if (!phase.Contains(UiLanguage.T("wartet"),
+                            StringComparison.OrdinalIgnoreCase) ||
+                        phase.Contains(UiLanguage.T("pausiert"),
+                            StringComparison.OrdinalIgnoreCase) ||
+                        count != UiLanguage.Format("{0:N0} geprüft", 14975) ||
+                        current != Path.GetFileName(preservedScanRoot) ||
+                        parent != Path.GetDirectoryName(preservedScanRoot) ||
+                        ((System.Windows.Controls.Image)progressWindow.FindName(
+                            "CurrentThumbnail")).Source is not null)
+                        throw new Exception("Restored waiting scan contradicts taskmanager state or confirmed progress.");
+                }
+                progressWindow.UpdateManualOperation(
+                    waitingScan with {
+                        State = SchedulerJobState.Running,
+                        CurrentPath = preservedScanRoot + @"\photo.jpg",
+                        Processed = 14976
+                    }, "Ordner aktualisieren", preservedScanRoot, 14975);
+                if (((TextBlock)progressWindow.FindName("CountText")).Text !=
+                        UiLanguage.Format("{0:N0} geprüft", 14976))
+                    throw new Exception("Running scan did not advance from the confirmed restart cursor.");
+            }
+            finally { progressWindow.Finish(); }
+
             releaseBlocker.TrySetResult();
             UntilBackground(() => Task.WhenAll(a, c, blocker).IsCompleted,
                 "Scheduler did not finish reordered durable tasks.");
