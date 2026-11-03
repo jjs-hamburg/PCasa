@@ -256,7 +256,12 @@ public partial class BrowseCacheProgressWindow : Window
         PublishProgressStatus();
     }
 
-    public void UpdateManualOperation(SchedulerJobSnapshot progress,
+    // Preserve the existing simple API; the directory-aware projection
+    // is used only by the common MainWindow progress owner.
+    public void UpdateManualOperation(SchedulerJobSnapshot progress)
+        => UpdateManualOperationWithContext(progress);
+
+    public void UpdateManualOperationWithContext(SchedulerJobSnapshot progress,
         string? title = null, string? directory = null, int confirmedProcessed = 0)
     {
         if (_finished || !_manualPresentationActive ||
