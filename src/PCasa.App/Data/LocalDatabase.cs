@@ -337,6 +337,33 @@ public sealed class LocalDatabase
             regularScan.ExecuteNonQuery();
         }
 
+        // Long-lived first-pass progress belongs to the monitored source
+        // and the individual directory, NOT to a particular scan job. A
+        // successful job may clear its ordinary restart receipts without
+        // replaying 14,000 previously imported NAS photos next time.
+        // Generation changes (folder selection/exclusions) invalidate this
+        // hint. Background reconciliation remains a full inventory and is
+        // never allowed to use these first-pass shortcuts.
+        using (var firstPass = connection.CreateCommand())
+        {
+            firstPass.CommandText = """
+                CREATE TABLE IF NOT EXISTS scan_directory_first_pass (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_directory TEXT NOT NULL COLLATE NOCASE,
+                    source_generation INTEGER NOT NULL,
+                    last_file_name TEXT,
+                    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
+                    updated_utc TEXT NOT NULL,
+                    PRIMARY KEY (monitored_folder_id,local_directory),
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_scan_directory_first_pass_generation
+                    ON scan_directory_first_pass(monitored_folder_id,source_generation);
+                """;
+            firstPass.ExecuteNonQuery();
+        }
+
         // Original write failures belong to one shared durable ledger, not
         // separate GPS and tag queues. Create the table during DB setup so
         // direct repository callers (tests/CLI) also support supersession.
