@@ -447,6 +447,10 @@ public sealed class TaskManagerWindow : Window
                 var rows = new List<TaskRow>();
                 foreach (var record in active.Concat(done))
                 {
+                    // Old transfer-reconcile-v1 records were temporary
+                    // repair probes, not user-owned transfers. They have
+                    // no meaningful restart, delete or priority action.
+                    if (record.Type == "transfer-reconcile-v1") continue;
                     latest.TryGetValue(record.Key, out var snapshot);
                     var status = record.State switch
                     {
