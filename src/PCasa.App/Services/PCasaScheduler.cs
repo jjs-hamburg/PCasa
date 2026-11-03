@@ -563,6 +563,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
             foreach (var work in _pending)
                 if (changed.TryGetValue(work.Key, out var rank))
                     work.QueueOrder = rank;
+            // The active work item is NOT in _pending. It still needs its
+            // new rank, both to detect that a queued peer outranks it and
+            // to resume in the correct position after cooperative yield.
+            foreach (var active in _runningPriorityJobs)
+                if (active is not null &&
+                    changed.TryGetValue(active.Key, out var rank))
+                    active.QueueOrder = rank;
+            if (_runningManualSourceProbe is { } probe &&
+                changed.TryGetValue(probe.Key, out var probeRank))
+                probe.QueueOrder = probeRank;
 
             var lane = LaneFor(source.Priority, source.WorkKind);
             var current = _runningPriorityJobs[lane];
