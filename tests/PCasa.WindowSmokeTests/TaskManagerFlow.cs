@@ -170,7 +170,7 @@ internal static class TaskManagerFlow
         {
             var child = System.Windows.Media.VisualTreeHelper.GetChild(parent, i);
             if (child is T match) yield return match;
-            foreach (var match in Descendants<T>(child)) yield return match;
+            foreach (var descendant in Descendants<T>(child)) yield return descendant;
         }
     }
 
