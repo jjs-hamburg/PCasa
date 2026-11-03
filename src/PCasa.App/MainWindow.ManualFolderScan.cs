@@ -385,7 +385,11 @@ public partial class MainWindow
                 Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
-                    durableScanKey: requirePendingInitialImport ? null : durableScanKey);
+                    durableScanKey: requirePendingInitialImport ? null : durableScanKey,
+                    // Manual reads are continuation-first. Complete directories
+                    // stay confirmed across different scan jobs; old and changed
+                    // photos belong to later low-priority reconciliation.
+                    preferFirstPass: !requirePendingInitialImport);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)
