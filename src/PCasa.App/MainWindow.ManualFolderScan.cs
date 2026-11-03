@@ -74,7 +74,8 @@ public partial class MainWindow
         RefreshFolderStatusVisuals();
 
         var operationKey = $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
-        BeginVisibleManualOperation(operationKey, "Ordner aktualisieren", 0);
+        BeginVisibleManualOperation(operationKey, "Ordner aktualisieren", 0,
+            directory);
         StatusText.Text = $"Manueller Scan angefordert (höchste Priorität): {directory}";
         var scanActive = false;
         var progress = new Progress<ScanProgress>(scan =>
@@ -361,11 +362,17 @@ public partial class MainWindow
                     // Same identity through scheduler yields and process
                     // restart: a recovered package must NOT begin a new
                     // epoch or replay an already confirmed file.
-                    _manualScanEpoch =
+                    var checkpoint =
                         owner._folderRepository.BeginOrResumeRegularScan(
                             durableScanKey, folder.Id,
                             Path.GetFullPath(directory).Replace('/', '\\'),
-                            folder.CanonicalPath, beginManualEpoch: true).Epoch;
+                            folder.CanonicalPath, beginManualEpoch: true);
+                    _manualScanEpoch = checkpoint.Epoch;
+                    // Restore the durable count BEFORE first UI progress. A
+                    // process restart creates a fresh in-memory scan step.
+                    if (_resume.Enumerator is null)
+                        _resume.ImageFilesSeen =
+                            Math.Max(_resume.ImageFilesSeen, checkpoint.Checked);
                 }
                 _manualGenerationStarted = true;
             }
