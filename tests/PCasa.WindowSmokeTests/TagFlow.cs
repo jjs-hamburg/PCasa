@@ -1067,39 +1067,56 @@ internal static class TagFlow
                         setter.Property == Border.BorderBrushProperty)))
                 throw new Exception("Filmstrip has no custom selection frame; blue system selection may return.");
 
-            // The filmstrip must use the SAME status renderer and index flags
-            // as the gallery, including the global Show Icons option.
-            if (filmListForStyle.ItemTemplate.LoadContent() is not StackPanel card ||
-                card.Children.OfType<Border>().FirstOrDefault()?.Child is not Grid photoFrame ||
-                photoFrame.Children.OfType<ThumbnailStatusIconOverlay>().SingleOrDefault()
-                    is not ThumbnailStatusIconOverlay statusOverlay ||
-                statusOverlay.IsHitTestVisible ||
-                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasGpsProperty) is null ||
-                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasTagsProperty) is null ||
-                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.IsRawProperty) is null)
-                throw new Exception("Filmstrip is missing the shared GPS/TAG/RAW thumbnail icon renderer.");
-            var iconProbe = new PCasa.App.MainWindow.GpsFilmstripEntry
-                { Id = 991, Name = "status-icon-probe.jpg" };
-            iconProbe.UpdateStatus(new BrowseThumbnailIndexEntry(
-                991, 1, 96, "", 0, 0, 96, 64,
-                HasGps: true, HasTags: true, IsRaw: true));
-            card.DataContext = iconProbe;
-            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasGpsProperty)?.UpdateTarget();
-            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasTagsProperty)?.UpdateTarget();
-            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.IsRawProperty)?.UpdateTarget();
-            if (!statusOverlay.HasGps || !statusOverlay.HasTags || !statusOverlay.IsRaw)
-                throw new Exception("Filmstrip status icons do not reflect the gallery index flags.");
-            iconProbe.ShowIcons = false;
-            statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.ShowIconsProperty)?.UpdateTarget();
-            if (statusOverlay.ShowIcons)
-                throw new Exception("Filmstrip ignores the global status-icon setting.");
-            Console.WriteLine("PASS: GPS/TAG/RAW in filmstrip use the gallery renderer and index flags.");
+            // Exercise REAL list item bindings, not a detached
+            // DataTemplate.LoadContent() tree without a WPF presentation root.
+            ThumbnailStatusIconOverlay? FindStatusIcon(DependencyObject node)
+            {
+                if (node is ThumbnailStatusIconOverlay icon) return icon;
+                for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                    if (FindStatusIcon(VisualTreeHelper.GetChild(node, i)) is { } child)
+                        return child;
+                return null;
+            }
 
-            // Vertical wheel / precision touchpad gestures scroll the virtual
-            // HORIZONTAL film without scrolling the gallery underneath.
             var savedFilmItems = filmListForStyle.ItemsSource;
             try
             {
+                var iconProbe = new PCasa.App.MainWindow.GpsFilmstripEntry
+                    { Id = 991, Name = "status-icon-probe.jpg" };
+                iconProbe.UpdateStatus(new BrowseThumbnailIndexEntry(
+                    991, 1, 96, "", 0, 0, 96, 64,
+                    HasGps: true, HasTags: true, IsRaw: true));
+                if (!iconProbe.HasGps || !iconProbe.HasTags || !iconProbe.IsRaw)
+                    throw new Exception("Filmstrip entry lost status bits from the gallery thumbnail index.");
+                filmListForStyle.ItemsSource = new[] { iconProbe };
+                filmScroller.ScrollToHorizontalOffset(0);
+                window.UpdateLayout();
+                var realItem = filmListForStyle.ItemContainerGenerator.ContainerFromIndex(0)
+                    as ListBoxItem
+                    ?? throw new Exception("Filmstrip did not realize its status icon probe.");
+                var statusOverlay = FindStatusIcon(realItem)
+                    ?? throw new Exception("Filmstrip has no shared GPS/TAG/RAW icon overlay.");
+                if (statusOverlay.IsHitTestVisible ||
+                    statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasGpsProperty) is null ||
+                    statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasTagsProperty) is null ||
+                    statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.IsRawProperty) is null)
+                    throw new Exception("Filmstrip icon bindings or click-through are missing.");
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasGpsProperty)?.UpdateTarget();
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.HasTagsProperty)?.UpdateTarget();
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.IsRawProperty)?.UpdateTarget();
+                if (!statusOverlay.HasGps || !statusOverlay.HasTags || !statusOverlay.IsRaw)
+                    throw new Exception(
+                        $"Live filmstrip badges differ from catalog: model={iconProbe.HasGps}/{iconProbe.HasTags}/{iconProbe.IsRaw}; " +
+                        $"visual={statusOverlay.HasGps}/{statusOverlay.HasTags}/{statusOverlay.IsRaw}; " +
+                        $"dataContext={statusOverlay.DataContext?.GetType().Name ?? "null"}");
+                iconProbe.ShowIcons = false;
+                statusOverlay.GetBindingExpression(ThumbnailStatusIconOverlay.ShowIconsProperty)?.UpdateTarget();
+                if (statusOverlay.ShowIcons)
+                    throw new Exception("Filmstrip ignores the global status-icon setting.");
+                Console.WriteLine("PASS: GPS/TAG/RAW in real WPF filmstrip use gallery renderer and index flags.");
+
+                // Vertical mouse wheel/two-finger gesture must scroll the
+                // virtual horizontal strip and never the gallery behind it.
                 filmListForStyle.ItemsSource = Enumerable.Range(0, 30)
                     .Select(i => new PCasa.App.MainWindow.GpsFilmstripEntry
                         { Id = 10000 + i, Name = "wheel-" + i })
