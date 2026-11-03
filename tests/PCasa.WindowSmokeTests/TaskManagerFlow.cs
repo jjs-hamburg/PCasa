@@ -135,6 +135,21 @@ internal static class TaskManagerFlow
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "taskmanager:a"), "Queued task is absent from its live scheduler view.");
+            // A real but transient scheduler job occupies the manual lane.
+            // It has no taskmanager commands and must never appear as a
+            // misleading, unselectable row (nor should its history entries).
+            var displayedKeys = grid.Items.Cast<object>().Select(item =>
+                item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()).ToArray();
+            if (displayedKeys.Contains("taskmanager:blocker") ||
+                displayedKeys.Any(key => key is not null &&
+                    !key.StartsWith("taskmanager:", StringComparison.Ordinal) &&
+                    !key.StartsWith("failed-files:", StringComparison.Ordinal)))
+                throw new Exception("Non-actionable scheduler history leaked into the taskmanager.");
+            if (grid.RowStyle is null || grid.CellStyle is null ||
+                grid.GridLinesVisibility != DataGridGridLinesVisibility.None ||
+                grid.Columns[2].Width.Value > 110 || grid.Columns[3].Width.Value > 110)
+                throw new Exception("Taskmanager lost compact raised row layout.");
+
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "failed-files:taskmanager:failed-original"),
