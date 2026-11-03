@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Markup;
+using System.Windows.Input;
 using System.Windows.Threading;
 using PCasa.App.Data;
 using PCasa.App.Services;
@@ -43,6 +44,9 @@ public sealed class TaskManagerWindow : Window
     private List<TaskRow> _all = [];
     private bool _reading;
     private bool _acting;
+    private Point? _dragOrigin;
+    private string? _dragKey;
+    private const string TaskDragFormat = "PCasa.TaskManager.TaskKey";
 
     public TaskManagerWindow(PCasaScheduler scheduler, LocalDatabase database,
         Func<OriginalWriteFailureRepository.FailedFile, Task>? retryFailedFile = null,
@@ -109,6 +113,11 @@ public sealed class TaskManagerWindow : Window
         AddColumn("Fortschritt", nameof(TaskRow.Progress), new DataGridLength(92));
         AddColumn("Status", nameof(TaskRow.Status), new DataGridLength(92));
         _list.SelectionChanged += (_, _) => UpdateActions();
+        _list.AllowDrop = true;
+        _list.PreviewMouseLeftButtonDown += TaskMouseDown;
+        _list.PreviewMouseMove += TaskMouseMove;
+        _list.DragOver += TaskDragOver;
+        _list.Drop += TaskDrop;
         var listFrame = Frame(_list);
         Grid.SetRow(listFrame, 2);
         outer.Children.Add(listFrame);
@@ -274,6 +283,92 @@ public sealed class TaskManagerWindow : Window
         parent.Children.Add(control);
     }
 
+    // Dragging a tile changes the ACTUAL persisted scheduler order. An
+    // existing worker must yield before the promoted task starts; simply
+    // sorting a visual collection would misrepresent what is executing.
+    private static TaskRow? TaskAt(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is DataGridRow { Item: TaskRow row }) return row;
+            source = source is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(source)
+                : (source as FrameworkContentElement)?.Parent;
+        }
+        return null;
+    }
+
+    private void TaskMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        var row = TaskAt(e.OriginalSource as DependencyObject);
+        _dragOrigin = row is { Movable: true, Durable: true }
+            ? e.GetPosition(_list) : null;
+        _dragKey = _dragOrigin is not null ? row?.Key : null;
+    }
+
+    private void TaskMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_acting || _dragOrigin is not Point origin || _dragKey is null)
+            return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _dragOrigin = null;
+            _dragKey = null;
+            return;
+        }
+        var now = e.GetPosition(_list);
+        if (Math.Abs(now.X - origin.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(now.Y - origin.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+        var key = _dragKey;
+        _dragOrigin = null;
+        _dragKey = null;
+        _refreshTimer.Stop();
+        try
+        {
+            System.Windows.DragDrop.DoDragDrop(_list,
+                new DataObject(TaskDragFormat, key), DragDropEffects.Move);
+        }
+        finally
+        {
+            if (IsLoaded && !_refreshTimer.IsEnabled)
+                _refreshTimer.Start();
+        }
+    }
+
+    private void TaskDragOver(object sender, DragEventArgs e)
+    {
+        var key = e.Data.GetDataPresent(TaskDragFormat)
+            ? e.Data.GetData(TaskDragFormat) as string : null;
+        var target = TaskAt(e.OriginalSource as DependencyObject);
+        var source = _all.FirstOrDefault(row => row.Key == key);
+        e.Effects = !_acting && source is { Movable: true, Durable: true } &&
+            target is { Durable: true } &&
+            target.Status is "Läuft" or "Wartet" &&
+            target.Priority == source.Priority &&
+            target.Key != source.Key
+                ? DragDropEffects.Move : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void TaskDrop(object sender, DragEventArgs e)
+    {
+        TaskDragOver(sender, e);
+        if (e.Effects != DragDropEffects.Move) return;
+        var key = e.Data.GetData(TaskDragFormat) as string;
+        var target = TaskAt(e.OriginalSource as DependencyObject);
+        if (key is null || target is null) return;
+        var targetKey = target.Key;
+        _ = PerformAsync(key, () => Task.Run(() =>
+        {
+            if (!_scheduler.MoveDurableTaskTo(key, targetKey))
+                throw new InvalidOperationException(
+                    "Die Reihenfolge konnte nicht geändert werden. " +
+                    "Der Auftrag ist nicht mehr wartend oder gehört zu einer anderen Ausführungsgruppe.");
+            return true;
+        }));
+    }
+
     private TaskRow? Selection => _list.SelectedItem as TaskRow;
 
     private void ApplyFilters()
@@ -435,6 +530,15 @@ public sealed class TaskManagerWindow : Window
 
     private string DirectoryFor(DurablePackageRecord item, string? currentPath)
     {
+        // The authoritative root of a manual scan is immutable in the
+        // durable recipe. A yield/restart clears CurrentPath by design; it
+        // must never erase the folder shown in this task's tile.
+        if (item.Type == "manual-folder-scan-v1" &&
+            DirectoryFromRecipe(item.Payload) is string root)
+        {
+            _initialDirectoryByKey[item.Key] = root;
+            return root;
+        }
         if (!string.IsNullOrWhiteSpace(currentPath))
         {
             var current = CurrentDirectory(currentPath);
@@ -478,6 +582,25 @@ public sealed class TaskManagerWindow : Window
         catch { return path; }
     }
 
+    private static string? DirectoryFromRecipe(string recipe)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(recipe);
+            if (json.RootElement.ValueKind == JsonValueKind.Object &&
+                json.RootElement.TryGetProperty("Directory", out var element) &&
+                element.ValueKind == JsonValueKind.String)
+            {
+                var path = element.GetString();
+                if (!string.IsNullOrWhiteSpace(path) &&
+                    Path.IsPathFullyQualified(path))
+                    return path;
+            }
+        }
+        catch (JsonException) { }
+        return null;
+    }
+
     private static string? FirstPathFromRecipe(string recipe)
     {
         try
@@ -493,7 +616,8 @@ public sealed class TaskManagerWindow : Window
             {
                 foreach (var member in node.EnumerateObject())
                     if (member.Value.ValueKind == JsonValueKind.String &&
-                        member.Name.Contains("path", StringComparison.OrdinalIgnoreCase))
+                        (member.Name.Contains("path", StringComparison.OrdinalIgnoreCase) ||
+                             member.Name.Contains("directory", StringComparison.OrdinalIgnoreCase)))
                     {
                         var value = member.Value.GetString();
                         if (!string.IsNullOrWhiteSpace(value) &&
