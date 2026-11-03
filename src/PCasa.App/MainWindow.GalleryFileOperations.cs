@@ -360,8 +360,14 @@ public partial class MainWindow
         StatusText.Text = presenter.ProgressStatusText;
     }
 
-    private void BeginVisibleManualOperation(string key, string title, int total,
-        string? directory = null)
+    // Keep the original three-argument entry point used by existing
+    // Tag/GPS workflows and their WPF tests. Only restored folder scans
+    // need to supply an immutable root directory.
+    private void BeginVisibleManualOperation(string key, string title, int total)
+        => BeginVisibleManualOperationForDirectory(key, title, total, null);
+
+    private void BeginVisibleManualOperationForDirectory(
+        string key, string title, int total, string? directory)
     {
         if (_visibleManualOperations.ContainsKey(key)) return;
         if (_visibleManualOperations.Count == 0)
@@ -438,7 +444,7 @@ public partial class MainWindow
         if (latest is not null)
         {
             if (IsTagSeriesKey(key)) UpdateVisibleTagSeries(latest);
-            _visibleManualWindow?.UpdateManualOperation(latest,
+            _visibleManualWindow?.UpdateManualOperationWithContext(latest,
                 item.Title, item.Directory,
                 ConfirmedManualScanCount(key, latest.Processed));
             RequestVisibleTagThumbnail(latest);
@@ -591,7 +597,7 @@ public partial class MainWindow
                 _visibleManualWindow?.ShowingScanDuringManualWait != true)
             {
                 var item = _visibleManualOperations[status.Key];
-                _visibleManualWindow?.UpdateManualOperation(status,
+                _visibleManualWindow?.UpdateManualOperationWithContext(status,
                     item.Title, item.Directory,
                     ConfirmedManualScanCount(status.Key, status.Processed));
                 RequestVisibleTagThumbnail(status);
