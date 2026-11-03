@@ -286,10 +286,46 @@ public partial class MainWindow
             if (!ReferenceEquals(_gpsFilmstripStatusIndex, _browseIndex))
             {
                 var visible = _gpsFilmstripEntries.ToDictionary(item => item.Id);
+                var gpsRemoved = new HashSet<long>();
                 if (visible.Count > 0)
                     foreach (var index in _browseIndex)
                         if (visible.TryGetValue(index.ImageId, out var item))
+                        {
                             item.UpdateStatus(index);
+                            if (!index.HasGps) gpsRemoved.Add(item.Id);
+                        }
+                // The strip must never retain former GPS sources just because
+                // it was pinned when their original-file coordinates were
+                // removed. Preserve OTHER selected source IDs across the
+                // virtual ListBox rebind, including Ctrl/Shift multi-selection.
+                if (gpsRemoved.Count > 0)
+                {
+                    var keepSelected = GpsFilmstripList.SelectedItems
+                        .OfType<GpsFilmstripEntry>().Select(item => item.Id)
+                        .Where(id => !gpsRemoved.Contains(id)).ToHashSet();
+                    _gpsFilmstripEntries = _gpsFilmstripEntries
+                        .Where(item => !gpsRemoved.Contains(item.Id)).ToList();
+                    foreach (var id in gpsRemoved)
+                    {
+                        _gpsFilmstripIndexes.Remove(id);
+                        _gpsFilmstripRequestedIds.Remove(id);
+                    }
+                    if (_gpsHighlightedImageId is long highlighted &&
+                        gpsRemoved.Contains(highlighted))
+                    {
+                        _gpsHighlightedImageId = null;
+                        _gpsFilmstripFocusActive = false;
+                    }
+                    _gpsFilmstripUpdating = true;
+                    try
+                    {
+                        GpsFilmstripList.ItemsSource = _gpsFilmstripEntries;
+                        foreach (var item in _gpsFilmstripEntries.Where(item =>
+                                     keepSelected.Contains(item.Id)))
+                            GpsFilmstripList.SelectedItems.Add(item);
+                    }
+                    finally { _gpsFilmstripUpdating = false; }
+                }
                 _gpsFilmstripStatusIndex = _browseIndex;
             }
             foreach (var item in _gpsFilmstripEntries)
@@ -367,7 +403,7 @@ public partial class MainWindow
             ?? entries.FirstOrDefault(p => p.Id == _gallerySelection.FocusedId);
         _gpsFilmstripUpdating = false;
         UpdateGpsFilmstripControls();
-        GpsFilmstripToggle.ToolTip = UiLanguage.T("Filmstreifen") +
+        GpsFilmstripToggle.ToolTip = UiLanguage.T("GPS Filmstrip") +
             (_gpsFilmstripPointIds is null ? "" :
                 $" · {selected.Count:N0} Fotos am Kartenpunkt") +
             (_gpsFilmstripPointIds is null &&

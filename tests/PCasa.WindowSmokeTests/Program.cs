@@ -1902,12 +1902,25 @@ internal static class Program
                         .Invoke(window, null);
                     var filmstripList = (ListBox?)window.FindName("GpsFilmstripList")
                         ?? throw new Exception("GPS filmstrip list missing.");
-                    filmstripList.ItemsSource = new[] {
-                        new PCasa.App.MainWindow.GpsFilmstripEntry {
-                            Id = 999, Name = "synthetic-viewer-photo.jpg"
-                        }
-                    };
-                    filmstripList.SelectedIndex = 0;
+                    // This is deliberately a synthetic viewer-only photo
+                    // without a catalog/GPS row. Suppress the real filmstrip
+                    // SelectionChanged -> GPS catalog request while setting
+                    // up the isolated double-click test fixture.
+                    var stripUpdating = viewerType.GetField("_gpsFilmstripUpdating", reflectFlags)!;
+                    stripUpdating.SetValue(window, true);
+                    try
+                    {
+                        filmstripList.ItemsSource = new[] {
+                            new PCasa.App.MainWindow.GpsFilmstripEntry {
+                                Id = 999, Name = "synthetic-viewer-photo.jpg"
+                            }
+                        };
+                        filmstripList.SelectedIndex = 0;
+                    }
+                    finally
+                    {
+                        stripUpdating.SetValue(window, false);
+                    }
                     var filmstripDblClick = viewerType.GetMethod(
                         "GpsFilmstrip_MouseDoubleClick", reflectFlags)!;
                     filmstripDblClick.Invoke(window, new object[] {
