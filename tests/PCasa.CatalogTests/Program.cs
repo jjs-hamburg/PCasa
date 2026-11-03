@@ -69,6 +69,8 @@ internal static class Program
         Run("Unreadable photo is skipped; cursor advances and no automatic re-scan is scheduled", SkippedImageAdvancesDurableCursor, failures);
         Run("All ordinary scans resume inside a directory after a process restart",
             RegularScanRestartSafe, failures);
+        Run("Manual scans retain a first-pass cursor per directory across separate jobs while background checks changes",
+            FirstPassDirectorySurvivesJobs, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
@@ -1195,6 +1197,113 @@ internal static class Program
         if (fresh.ImageFilesSeen != 8 || fresh.Removed != 1 ||
             new ImageCatalogRepository(db).CountAll() != 8)
             throw new Exception("A new full inventory did not reconcile the deleted image.");
+    }
+
+    private static void FirstPassDirectorySurvivesJobs()
+    {
+        using var sandbox = new Sandbox();
+        var a = Path.Combine(sandbox.Images, "A-Existing");
+        var b = Path.Combine(sandbox.Images, "B-Existing");
+        Directory.CreateDirectory(a);
+        Directory.CreateDirectory(b);
+        var removed = Path.Combine(a, "photo-001.jpg");
+        WriteJpeg(removed);
+        WriteJpeg(Path.Combine(a, "photo-002.jpg"));
+        WriteJpeg(Path.Combine(b, "photo-001.jpg"));
+        var (db, root, scanner) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+        var generation = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        folders.CompleteInitialScan(root.Id, generation,
+            folders.GetScanEpoch(root.CanonicalPath));
+
+        var initial = scanner.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:first-pass:one", preferFirstPass: true);
+        if (initial.ImageFilesSeen != 3 ||
+            new ImageCatalogRepository(db).CountAll() != 3)
+            throw new Exception("Initial manual first pass did not import three photos.");
+        var first = folders.GetDirectoryFirstPass(
+            root.Id, generation, root.LocalPath);
+        if (!first.Completed.Contains(a) || !first.Completed.Contains(b))
+            throw new Exception("Completed directories lost their stable first-pass receipt.");
+
+        // New photographs, changed photographs, and missing-file cleanup are
+        // deliberately lower priority than finishing the already indexed
+        // directory frontier. A new child directory is still traversed.
+        File.Delete(removed);
+        WriteJpeg(Path.Combine(a, "photo-003.jpg"));
+        var c = Path.Combine(sandbox.Images, "C-Unread");
+        Directory.CreateDirectory(c);
+        WriteJpeg(Path.Combine(c, "photo-001.jpg"));
+        db.Initialize(); // a fresh process uses the same persistent database
+        var reopened = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), new FolderRepository(db),
+            new BrowseThumbnailProfileRepository(db));
+        var next = reopened.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:first-pass:two", preferFirstPass: true);
+        if (next.ImageFilesSeen != 1 || next.Removed != 0 ||
+            new ImageCatalogRepository(db).CountAll() != 4)
+            throw new Exception(
+                "New manual job reread completed directories or pruned an unvisited file.");
+
+        // Background verification does NOT use the fast first-pass hint.
+        // It must eventually see late additions and physically removed files.
+        var verification = reopened.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "background:first-pass:verify");
+        if (verification.ImageFilesSeen != 4 || verification.Removed != 1 ||
+            new ImageCatalogRepository(db).CountAll() != 4)
+            throw new Exception("Lower-priority full background verification was suppressed.");
+
+        // A changed folder selection/exclusion generation must invalidate all
+        // old directory first-pass receipts (not just active job cursors).
+        var hidden = Path.Combine(sandbox.Images, "D-Excluded");
+        Directory.CreateDirectory(hidden);
+        folders.SetExcluded(root.Id, hidden, true);
+        var newerGeneration = folders.GetSourceState(root.CanonicalPath)!.Value.Generation;
+        if (newerGeneration == generation ||
+            folders.GetDirectoryFirstPass(root.Id, newerGeneration,
+                root.LocalPath).Completed.Count != 0)
+            throw new Exception("Source-change fence retained obsolete first-pass state.");
+        var afterChange = reopened.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:first-pass:after-source-change",
+            preferFirstPass: true);
+        if (afterChange.ImageFilesSeen != 4)
+            throw new Exception("Changed source generation did not re-inventory its files.");
+
+        // Migration: older incomplete manual scans have job-only receipts.
+        // The next manual run must adopt those persisted receipts before
+        // the previous job can be cleaned up by its original owner.
+        using var oldSandbox = new Sandbox();
+        var oldDir = Path.Combine(oldSandbox.Images, "Old");
+        Directory.CreateDirectory(oldDir);
+        for (var i = 0; i < 3; i++)
+            WriteJpeg(Path.Combine(oldDir, $"photo-{i:000}.jpg"));
+        var (oldDb, oldRoot, oldScanner) = oldSandbox.Prepare();
+        using var stop = new CancellationTokenSource();
+        var interrupted = false;
+        var progress = new InlineProgress<ScanProgress>(p =>
+        {
+            if (interrupted || p.DiscoveredPhotoFolderId is null) return;
+            interrupted = true;
+            stop.Cancel();
+        });
+        try
+        {
+            oldScanner.ScanDirectory(oldRoot, oldRoot.LocalPath, true,
+                progress: progress, cancellationToken: stop.Token,
+                durableScanKey: "manual:first-pass:legacy");
+            throw new Exception("Legacy scan failed to stop after the first image.");
+        }
+        catch (OperationCanceledException) when (interrupted) { }
+        oldDb.Initialize();
+        var newScanner = new FolderScanner(new ImageCatalogRepository(oldDb),
+            new ThumbnailCache(), new FolderRepository(oldDb),
+            new BrowseThumbnailProfileRepository(oldDb));
+        var migrated = newScanner.ScanDirectory(oldRoot, oldRoot.LocalPath, true,
+            durableScanKey: "manual:first-pass:new-job", preferFirstPass: true);
+        if (migrated.ImageFilesSeen != 2 ||
+            new ImageCatalogRepository(oldDb).CountAll() != 3)
+            throw new Exception(
+                "A new manual job did not adopt the previous job's committed cursor.");
     }
 
     private static void DurableInitialImportRestartSafe()
