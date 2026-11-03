@@ -109,7 +109,13 @@ public partial class MainWindow
         // The old fixed-list cursor stopped on the first offline NAS image
         // and could starve reachable C: photos indefinitely. This migration
         // retains the journal identity/order and does not touch pending tags.
-        new DurablePackageJournal(_database).UpgradeLegacyTagRecovery();
+        var packageJournal = new DurablePackageJournal(_database);
+        packageJournal.UpgradeLegacyTagRecovery();
+        // Legacy one-intent checks are not transfers. An unresolved attempt
+        // is NOT a reason to create two new P0 jobs on every application
+        // start. Retire only these obsolete probes, leaving all relocation
+        // intents and original-file identities in SQLite for manual review.
+        packageJournal.RetireLegacyTransferReconciliationPackages();
         // Restore the read-only view of already journaled P0 tag writes
         // BEFORE the scheduler starts replaying them. This is the same
         // progress presenter used by ordinary manual file operations.
@@ -135,9 +141,10 @@ public partial class MainWindow
                 $"Error={unresolved.Error ?? "(no error recorded)"}");
         }
         StartPendingTagDrain();
-        // Register all persistent relocation intents before any automatic scan
-        // is queued, so recovered manual work keeps precedence on startup.
-        await RecoverPendingFileTransfersAsync();
+        // Unresolved legacy file-transfer intents remain stored, but must
+        // not preempt imports with fresh P0 reconciliation packages. No
+        // filesystem probe or transfer is performed merely by app startup.
+        _ = ReportPendingLegacyTransfersAsync();
         // Unreadable or unsupported recipes remain durable and are retried
         // centrally, but cannot permanently prevent all catalog work.
         QueuePendingInitialScans();
@@ -243,79 +250,37 @@ public partial class MainWindow
         }
     }
 
-    private SchedulerTaskPackage BuildTransferRecoveryPackage(string key, string payload)
-    {
-        var intentId = System.Text.Json.JsonSerializer.Deserialize<string>(payload)
-            ?? throw new InvalidDataException("Ungültige Dateiübertragungs-Wiederherstellung.");
-        var package = new SchedulerTaskPackage(key);
-        package.AddStep(token =>
-        {
-            token.ThrowIfCancellationRequested();
-            var result = _imageCatalog.RecoverRelocations(
-                _folderRepository.GetAll(), token, intentId);
-            _scheduler.ReportProgress(key,
-                result.Unresolved == 0 ? "Verschiebung geprüft" :
-                    "Verschiebung unklar – Prüfbedarf", 1, 1);
-            if (result.Unresolved > 0)
-                PCasaDiagnostics.Write("Catalog.TransferRecovery",
-                    new IOException("Dateizustand bei Wiederherstellung unklar: " + intentId));
-            return Task.CompletedTask;
-        });
-        return package;
-    }
-
-    private async Task RecoverPendingFileTransfersAsync()
+    // Read-only diagnostics for old, ambiguous transfer intents. This
+    // never probes SMB, starts a file operation, or takes P0 priority.
+    // Intents owned by a durable gallery-transfer package are handled by
+    // that package's original staged receipt and must not be duplicated.
+    private async Task ReportPendingLegacyTransfersAsync()
     {
         try
         {
-            // Old manually initiated moves retain their manual priority
-            // after restart. The physical move journal is authoritative,
-            // the scheduler ledger owns their execution and order.
-            var intents = await _scheduler.RunAsync(
-                "catalog:read-pending-relocations",
-                SchedulerPriority.Interactive,
+            var pending = await _scheduler.RunAsync(
+                "catalog:pending-legacy-transfer-review",
+                SchedulerPriority.Background,
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return _imageCatalog.PendingRelocationIds();
+                    return _imageCatalog.PendingRelocationDetails();
                 }, workKind: SchedulerWorkKind.CatalogRead);
-            var durableTransfers = _durableGalleryTransfers;
-            foreach (var intent in intents)
+            foreach (var intent in pending)
             {
-                // A durable gallery package owns this receipt and its intent.
-                // Do not race it with the legacy one-intent repair package.
-                if (durableTransfers.OwnsRelocationIntent(intent))
+                if (_durableGalleryTransfers.OwnsRelocationIntent(intent.OperationId))
                     continue;
-                if (Dispatcher.HasShutdownStarted) return;
-                var key = "gallery:reconcile-transfer:" + Guid.NewGuid().ToString("N");
-                var payload = System.Text.Json.JsonSerializer.Serialize(intent);
-                if (_scheduler.HasActiveDurablePackage("transfer-reconcile-v1", payload))
-                    continue;
-                var package = BuildTransferRecoveryPackage(key, payload);
-                var completion = _scheduler.EnqueueDurablePackageAsync(package,
-                    "transfer-reconcile-v1", payload, SchedulerPriority.ManualAction);
-                _ = ObserveTransferRecoveryAsync(completion);
+                PCasaDiagnostics.WriteMessage("Catalog.TransferNeedsReview",
+                    $"Intent={intent.OperationId}; " +
+                    $"From={intent.SourcePath}; To={intent.DestinationPath}; " +
+                    "Kein automatischer Neustart: physischer Zustand ungeklärt.");
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            PCasaDiagnostics.Write("Catalog.TransferRecovery", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text = "Ausstehende Dateioperationen konnten nicht geprüft werden";
+            PCasaDiagnostics.Write("Catalog.TransferReview", ex);
         }
-    }
-
-    private async Task ObserveTransferRecoveryAsync(Task completion)
-    {
-        try
-        {
-            await completion;
-            if (!Dispatcher.HasShutdownStarted)
-                await RefreshBrowseGalleryAsync(forceIndexReload: true);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { PCasaDiagnostics.Write("Catalog.TransferRecovery", ex); }
     }
 
     private async Task EnsureBrowseCacheAndRefreshAsync()
