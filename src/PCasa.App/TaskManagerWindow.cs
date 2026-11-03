@@ -445,6 +445,7 @@ public sealed class TaskManagerWindow : Window
                     .GroupBy(s => s.Key, StringComparer.Ordinal)
                     .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).First());
                 var rows = new List<TaskRow>();
+                var scanProgress = new FolderRepository(_database);
                 foreach (var record in active.Concat(done))
                 {
                     // Old transfer-reconcile-v1 records were temporary
@@ -463,12 +464,19 @@ public sealed class TaskManagerWindow : Window
                     var work = TaskCaption(record);
                     var path = DirectoryFor(record, snapshot?.CurrentPath);
                     var total = CountRecipeImages(record.Payload);
-                    var progress = snapshot is { Total: > 0 }
-                        ? $"{snapshot.Processed:N0}/{snapshot.Total:N0}"
-                        : total > 0
-                            ? $"{Math.Clamp(record.CompletedSteps - (record.Type.StartsWith("tag-edit-", StringComparison.Ordinal) ? 1 : 0), 0, total):N0}/{total:N0}"
-                            : record.CompletedSteps > 0
-                                ? record.CompletedSteps.ToString("N0") : "–";
+                    // One confirmed scan counter, read from the SAME durable
+                    // receipt as the floating progress window. A queued job
+                    // restored after restart has no in-memory snapshot yet.
+                    var progress = record.Type == "manual-folder-scan-v1"
+                        ? UiLanguage.Format("{0:N0} geprüft",
+                            Math.Max(snapshot?.Processed ?? 0,
+                                scanProgress.GetConfirmedRegularScanCount(record.Key)))
+                        : snapshot is { Total: > 0 }
+                            ? $"{snapshot.Processed:N0}/{snapshot.Total:N0}"
+                            : total > 0
+                                ? $"{Math.Clamp(record.CompletedSteps - (record.Type.StartsWith("tag-edit-", StringComparison.Ordinal) ? 1 : 0), 0, total):N0}/{total:N0}"
+                                : record.CompletedSteps > 0
+                                    ? record.CompletedSteps.ToString("N0") : "–";
                     var isWaiting = status == "Wartet";
                     var movable = isWaiting;
                     var retryable = status == "Fehler" && record.State == "deferred";
