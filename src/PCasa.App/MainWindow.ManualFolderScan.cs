@@ -74,8 +74,8 @@ public partial class MainWindow
         RefreshFolderStatusVisuals();
 
         var operationKey = $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
-        BeginVisibleManualOperation(operationKey, "Ordner aktualisieren", 0,
-            directory);
+        BeginVisibleManualOperationForDirectory(operationKey,
+            "Ordner aktualisieren", 0, directory);
         StatusText.Text = $"Manueller Scan angefordert (höchste Priorität): {directory}";
         var scanActive = false;
         var progress = new Progress<ScanProgress>(scan =>
