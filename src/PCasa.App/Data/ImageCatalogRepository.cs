@@ -67,6 +67,29 @@ public sealed class ImageCatalogRepository
         return ids;
     }
 
+    // Diagnostic-only projection for orphaned legacy move intents. Reading
+    // this information never probes the source drive or changes a file.
+    // Durable gallery-transfer packages retain their own staged receipts.
+    public sealed record PendingRelocationDetail(
+        string OperationId, string SourcePath, string DestinationPath);
+
+    public IReadOnlyList<PendingRelocationDetail> PendingRelocationDetails()
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT operation_id,source_path,destination_path
+              FROM file_transfer_intents
+             ORDER BY created_utc,operation_id;
+            """;
+        using var reader = command.ExecuteReader();
+        var records = new List<PendingRelocationDetail>();
+        while (reader.Read())
+            records.Add(new PendingRelocationDetail(
+                reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+        return records;
+    }
+
     // Reconciliation is conservative: an unreachable NAS or both names
     // existing is NEVER treated as permission to delete an original.
     // Only a confirmed, completed move is adopted into the same catalog.
