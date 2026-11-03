@@ -200,9 +200,20 @@ public partial class MainWindow
                 (p.Type is "manual-folder-scan-v1" or "manual-scan-all-v1")))
         {
             if (!_recoveredManualScanPresentationKeys.Add(record.Key)) continue;
+            string? directory = null;
+            if (record.Type == "manual-folder-scan-v1")
+            {
+                try
+                {
+                    directory = System.Text.Json.JsonSerializer
+                        .Deserialize<ManualScanRecipe>(record.Payload)?.Directory;
+                }
+                catch (System.Text.Json.JsonException) { }
+            }
             BeginVisibleManualOperation(record.Key,
                 record.Type == "manual-scan-all-v1"
-                    ? "Alle Ordner einlesen" : "Ordner aktualisieren", 0);
+                    ? "Alle Ordner einlesen" : "Ordner aktualisieren", 0,
+                directory);
         }
     }
 
