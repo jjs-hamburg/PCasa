@@ -188,87 +188,105 @@ public sealed class DurablePackageJournal
         return rows;
     }
 
-    // A move is an atomic adjacent rank swap inside one execution lane.
-    // P0 always stays above scans, and source I/O cannot be made to look
-    // serial when it actually has another worker.
+    // One persisted ordering authority for the scheduler AND taskmanager.
+    // Reorder by rotating existing ranks inside one SQLite transaction: no
+    // parallel UI priority queue, no rank collisions and no replay of steps.
+    // A running task may be displaced; the scheduler must then yield it
+    // cooperatively before selecting the promoted queued task.
+    public IReadOnlyDictionary<string, long>? Reorder(string key, string targetKey)
+    {
+        if (string.Equals(key, targetKey, StringComparison.Ordinal)) return null;
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        var rows = new List<(string Key, long Rank, SchedulerPriority Priority,
+            SchedulerWorkKind Kind, string State)>();
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT package_key,
+                       COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END),
+                       priority, work_kind, state
+                  FROM scheduler_packages
+                 WHERE state IN ('queued','running','deferred')
+                 ORDER BY priority ASC,queue_order ASC,sequence ASC;
+                """;
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetInt64(1),
+                    (SchedulerPriority)reader.GetInt32(2),
+                    (SchedulerWorkKind)reader.GetInt32(3), reader.GetString(4)));
+        }
+        var source = rows.FindIndex(item => item.Key == key);
+        var target = rows.FindIndex(item => item.Key == targetKey);
+        if (source < 0 || target < 0) return null;
+        var selected = rows[source];
+        var destination = rows[target];
+        if (selected.Priority != destination.Priority ||
+            !SameQueueLane(selected.Kind, destination.Kind))
+            return null;
+        // A moving source must still be queued (or a yielded worker already
+        // back in the queue). The scheduler additionally rejects a live source.
+        var ordered = rows.Where(row =>
+                row.Priority == selected.Priority &&
+                SameQueueLane(row.Kind, selected.Kind))
+            .ToList();
+        source = ordered.FindIndex(row => row.Key == key);
+        target = ordered.FindIndex(row => row.Key == targetKey);
+        if (source == target) return null;
+        var ranks = ordered.Select(row => row.Rank).ToArray();
+        ordered.RemoveAt(source);
+        ordered.Insert(target, selected);
+        var changed = new Dictionary<string, long>(StringComparer.Ordinal);
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            if (ordered[i].Rank == ranks[i]) continue;
+            using var update = db.CreateCommand();
+            update.Transaction = tx;
+            update.CommandText = """
+                UPDATE scheduler_packages
+                   SET queue_order=$rank, updated_utc=$now
+                 WHERE package_key=$key AND state IN ('queued','running','deferred');
+                """;
+            update.Parameters.AddWithValue("$rank", ranks[i]);
+            update.Parameters.AddWithValue("$key", ordered[i].Key);
+            update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            if (update.ExecuteNonQuery() != 1)
+                throw new IOException("Task-Reihenfolge konnte nicht atomar gespeichert werden.");
+            changed.Add(ordered[i].Key, ranks[i]);
+        }
+        tx.Commit();
+        return changed;
+    }
+
+    // A Catalog task and a CatalogScan task share the same worker lane; a
+    // source probe or initial import does not. Preserve that distinction.
+    private static bool SameQueueLane(SchedulerWorkKind a, SchedulerWorkKind b)
+        => a == b || (a is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan &&
+                      b is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan);
+
+    // Keep the existing adjacent API, but route through the same atomic
+    // reorder as mouse drag/drop. There is only ONE mutation code path.
     public (string OtherKey, long SelectedOrder, long OtherOrder)? Move(
         string key, int direction)
     {
-        if (direction is not (-1 or 1)) throw new ArgumentOutOfRangeException(nameof(direction));
-        using var db = _database.OpenConnection();
-        using var tx = db.BeginTransaction();
-        string? selectedKey = null;
-        long selectedOrder = 0;
-        SchedulerPriority priority = default;
-        SchedulerWorkKind kind = default;
-        using (var find = db.CreateCommand())
-        {
-            find.Transaction = tx;
-            find.CommandText = """
-                SELECT package_key,queue_order,priority,work_kind
-                  FROM scheduler_packages
-                 WHERE package_key=$key AND state IN ('queued','deferred');
-                """;
-            find.Parameters.AddWithValue("$key", key);
-            using var row = find.ExecuteReader();
-            if (row.Read())
-            {
-                selectedKey = row.GetString(0);
-                selectedOrder = row.GetInt64(1);
-                priority = (SchedulerPriority)row.GetInt32(2);
-                kind = (SchedulerWorkKind)row.GetInt32(3);
-            }
-        }
-        if (selectedKey is null) return null;
-        string? otherKey = null;
-        long otherOrder = 0;
-        using (var next = db.CreateCommand())
-        {
-            next.Transaction = tx;
-            next.CommandText = direction < 0 ? """
-                SELECT package_key,queue_order FROM scheduler_packages
-                 WHERE state IN ('queued','deferred')
-                   AND priority=$priority
-                   AND (work_kind=$kind OR ($kind IN (0,1) AND work_kind IN (0,1)))
-                   AND queue_order < $rank
-                 ORDER BY queue_order DESC,sequence DESC LIMIT 1;
-                """ : """
-                SELECT package_key,queue_order FROM scheduler_packages
-                 WHERE state IN ('queued','deferred')
-                   AND priority=$priority
-                   AND (work_kind=$kind OR ($kind IN (0,1) AND work_kind IN (0,1)))
-                   AND queue_order > $rank
-                 ORDER BY queue_order ASC,sequence ASC LIMIT 1;
-                """;
-            next.Parameters.AddWithValue("$priority", (int)priority);
-            next.Parameters.AddWithValue("$kind", (int)kind);
-            next.Parameters.AddWithValue("$rank", selectedOrder);
-            using var row = next.ExecuteReader();
-            if (row.Read())
-            {
-                otherKey = row.GetString(0);
-                otherOrder = row.GetInt64(1);
-            }
-        }
-        if (otherKey is null) return null;
-        using (var update = db.CreateCommand())
-        {
-            update.Transaction = tx;
-            update.CommandText = """
-                UPDATE scheduler_packages SET queue_order=
-                  CASE package_key WHEN $key THEN $otherRank ELSE $selectedRank END,
-                  updated_utc=$now WHERE package_key IN ($key,$other);
-                """;
-            update.Parameters.AddWithValue("$key", key);
-            update.Parameters.AddWithValue("$other", otherKey);
-            update.Parameters.AddWithValue("$selectedRank", selectedOrder);
-            update.Parameters.AddWithValue("$otherRank", otherOrder);
-            update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-            if (update.ExecuteNonQuery() != 2)
-                throw new IOException("Task-Reihenfolge konnte nicht gespeichert werden.");
-        }
-        tx.Commit();
-        return (otherKey, otherOrder, selectedOrder);
+        if (direction is not (-1 or 1))
+            throw new ArgumentOutOfRangeException(nameof(direction));
+        var all = Pending();
+        var source = all.FirstOrDefault(row => row.Key == key);
+        if (source is null) return null;
+        var lane = all.Where(row =>
+                row.Priority == source.Priority &&
+                SameQueueLane(row.WorkKind, source.WorkKind)).ToList();
+        var i = lane.FindIndex(row => row.Key == key);
+        if (i < 0 || i + direction < 0 || i + direction >= lane.Count)
+            return null;
+        var neighbor = lane[i + direction];
+        var changed = Reorder(key, neighbor.Key);
+        if (changed is null || !changed.TryGetValue(key, out var selectedRank) ||
+            !changed.TryGetValue(neighbor.Key, out var neighborRank))
+            return null;
+        return (neighbor.Key, selectedRank, neighborRank);
     }
 
     public bool Cancel(string key)
