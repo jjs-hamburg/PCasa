@@ -269,8 +269,8 @@ public sealed class FolderScanner
         // directory frontier, so new/modified/deleted photos are checked later.
         if (preferFirstPass && durableScanKey is not null)
         {
-            _folderRepository.ImportFirstPassFromRegularScan(
-                durableScanKey, folder.Id, generation);
+            _folderRepository.ImportFirstPassFromRegularScans(
+                folder.Id, generation);
             var firstPass = _folderRepository.GetDirectoryFirstPass(
                 folder.Id, generation, scanRoot);
             completedDirectories!.UnionWith(firstPass.Completed);
