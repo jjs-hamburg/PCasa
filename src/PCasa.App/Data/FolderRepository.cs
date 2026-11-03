@@ -453,6 +453,128 @@ public sealed class FolderRepository
             completed, cursors);
     }
 
+    // This is the durable *first-pass* frontier per physical directory.
+    // Unlike scan_resume_jobs it deliberately outlives a completed package.
+    // Only first imports/manual continuation read it; later low-priority
+    // background reconciliation still does a full source inventory.
+    public sealed record DirectoryFirstPass(
+        HashSet<string> Completed, Dictionary<string, string> Cursors);
+
+    public DirectoryFirstPass GetDirectoryFirstPass(
+        long folderId, long generation, string scanRoot)
+    {
+        var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var cursors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT local_directory,last_file_name,completed
+              FROM scan_directory_first_pass
+             WHERE monitored_folder_id=$id AND source_generation=$generation;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var directory = reader.GetString(0);
+            if (!FolderExclusionRules.IsAtOrBelow(directory, scanRoot))
+                continue;
+            if (reader.GetInt32(2) != 0)
+                completed.Add(directory);
+            else if (!reader.IsDBNull(1))
+                cursors[directory] = reader.GetString(1);
+        }
+        return new DirectoryFirstPass(completed, cursors);
+    }
+
+    // A monotonic prefix may advance only after a file's catalog commit (or
+    // an explicitly logged skipped-file failure) and the regular scan receipt.
+    // A change in source membership always invalidates the old frontier.
+    private const string FirstPassUpsert = """
+        ON CONFLICT(monitored_folder_id,local_directory) DO UPDATE SET
+            source_generation=excluded.source_generation,
+            completed=CASE
+                WHEN excluded.source_generation >
+                     scan_directory_first_pass.source_generation
+                THEN excluded.completed
+                ELSE MAX(scan_directory_first_pass.completed,excluded.completed)
+            END,
+            last_file_name=CASE
+                WHEN excluded.source_generation >
+                     scan_directory_first_pass.source_generation
+                THEN excluded.last_file_name
+                WHEN scan_directory_first_pass.completed=1 OR excluded.completed=1
+                THEN NULL
+                WHEN scan_directory_first_pass.last_file_name IS NULL
+                THEN excluded.last_file_name
+                WHEN excluded.last_file_name IS NULL
+                THEN scan_directory_first_pass.last_file_name
+                WHEN excluded.last_file_name COLLATE NOCASE >
+                     scan_directory_first_pass.last_file_name COLLATE NOCASE
+                THEN excluded.last_file_name
+                ELSE scan_directory_first_pass.last_file_name
+            END,
+            updated_utc=excluded.updated_utc
+        WHERE excluded.source_generation >=
+              scan_directory_first_pass.source_generation
+        """;
+
+    public bool SaveDirectoryFirstPass(long folderId, long generation,
+        string directory, string? fileName, bool completed)
+    {
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"""
+            INSERT INTO scan_directory_first_pass(
+                monitored_folder_id,local_directory,source_generation,
+                last_file_name,completed,updated_utc)
+            SELECT $id,$directory,$generation,$file,$completed,$now
+             WHERE EXISTS(
+                 SELECT 1 FROM monitored_folders m
+                   JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                  WHERE m.id=$id AND s.desired_present=1
+                    AND s.generation=$generation)
+            {FirstPassUpsert};
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$directory", directory);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$file", (object?)fileName ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$completed", completed ? 1 : 0);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
+    // Upgrade unfinished old jobs without replaying their completed
+    // directories. This is additive; the original scan receipt is untouched.
+    public void ImportFirstPassFromRegularScan(
+        string scanKey, long folderId, long generation)
+    {
+        using var connection = _database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = $"""
+            INSERT INTO scan_directory_first_pass(
+                monitored_folder_id,local_directory,source_generation,
+                last_file_name,completed,updated_utc)
+            SELECT j.monitored_folder_id,d.local_directory,j.source_generation,
+                   d.last_file_name,d.completed,$now
+              FROM scan_resume_directories d
+              JOIN scan_resume_jobs j ON j.scan_key=d.scan_key
+              JOIN monitored_folders m ON m.id=j.monitored_folder_id
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+             WHERE j.scan_key=$key AND j.monitored_folder_id=$id
+               AND j.source_generation=$generation
+               AND s.generation=$generation AND s.desired_present=1
+            {FirstPassUpsert};
+            """;
+        cmd.Parameters.AddWithValue("$key", scanKey);
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
     // A file receipt is durable only AFTER the image's catalog transaction
     // committed. Both the file cursor and its visible progress count are
     // persisted in this single short transaction.
