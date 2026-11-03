@@ -318,6 +318,39 @@ public sealed class DurablePackageJournal
             ? Pending().FirstOrDefault(p => p.Key == key) : null;
     }
 
+    // Old one-intent reconciliation packages were created with a NEW GUID
+    // on every startup. An ambiguous filesystem state was logged and the
+    // package marked completed, while the actual relocation intent remained
+    // pending. Each later startup spawned another P0 probe and stalled scans.
+    //
+    // Retire only those obsolete *probe packages*. The authoritative
+    // file_transfer_intents rows and their image identities remain untouched
+    // for explicit review. Do not classify this as a successful file move.
+    // The same migration is safe to invoke on every startup.
+    public int RetireLegacyTransferReconciliationPackages()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET state='failed',
+                   error='Automatische Alt-Übertragungsprüfung ausgesetzt; '
+                         || 'Quelldatei und Ziel müssen vor einer Katalogänderung '
+                         || 'manuell geprüft werden.',
+                   retry_after_utc=NULL,
+                   updated_utc=$now
+             WHERE package_type='transfer-reconcile-v1'
+               AND state IN ('queued','running','deferred');
+            """;
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        var retired = cmd.ExecuteNonQuery();
+        if (retired > 0)
+            PCasaDiagnostics.WriteMessage("Scheduler.LegacyTransferRecovery",
+                $"Retired {retired} old startup reconciliation probes; " +
+                "all physical relocation intents preserved for review.");
+        return retired;
+    }
+
     // One-time versioned migration for already journaled V1 recovery.
     // V1 stored a fixed image list and a position within that list. A single
     // offline NAS image blocks all later LOCAL images in that same package.
