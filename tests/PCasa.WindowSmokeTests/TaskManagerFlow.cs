@@ -18,6 +18,7 @@ internal static class TaskManagerFlow
         PCasa.App.TaskManagerWindow? manager = null;
         var releaseBlocker = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource? releaseStagedJob = null;
         try
         {
             var app = new PCasa.App.App();
@@ -233,13 +234,14 @@ internal static class TaskManagerFlow
             // resumes, using its original package instead of a new scan.
             var stageRelease = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
+            releaseStagedJob = stageRelease;
             var stageStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var stage = scheduler.EnqueueAsync("taskmanager:stage",
                 SchedulerPriority.ManualAction, async _ =>
                 {
                     stageStarted.TrySetResult();
-                    await stageRelease.Task;
+                    await stageRelease.Task.WaitAsync(_);
                 });
             UntilBackground(() => stageStarted.Task.IsCompleted,
                 "Could not hold manual lane for reorder regression.");
@@ -278,6 +280,7 @@ internal static class TaskManagerFlow
         finally
         {
             releaseBlocker.TrySetResult();
+            releaseStagedJob?.TrySetResult();
             manager?.Close();
             if (scheduler is not null)
             {
