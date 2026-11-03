@@ -10,6 +10,7 @@
   "{0:N0} Bilder {1} {2}: {3}": "{0:N0} images {1} {2}: {3}",
   "{0:N0} Bilder mit {1:N0} vorgemerkten Tag-Änderungen verwerfen?": "Discard {1:N0} unconfirmed tag changes for {0:N0} images?",
   "{0:N0} Dateien ausgewählt (Ordner invertiert)": "{0:N0} files selected (folder inverted)",
+  "{0:N0} fehlerhaft": "{0:N0} failed",
   "{0:N0} gefunden · {1:N0} unverändert · {2:N0} geändert · {3:N0} Cache-Reparaturen": "{0:N0} found · {1:N0} unchanged · {2:N0} changed · {3:N0} cache repairs",
   "{0:N0} geprüft": "{0:N0} checked",
   "{0:N0} katalogisierte Bilder sind betroffen. Zusätzlich werden alle anderen Dateien in diesem Ordner gelöscht.": "{0:N0} indexed images will be affected. All other files in this folder will also be deleted.",

@@ -26,6 +26,10 @@ public sealed class TaskManagerWindow : Window
     private readonly PCasaScheduler _scheduler;
     private readonly DurablePackageJournal _journal;
     private readonly LocalDatabase _database;
+    private readonly OriginalWriteFailureRepository _originalFailures;
+    private readonly Func<OriginalWriteFailureRepository.FailedFile, Task>? _retryFailedFile;
+    private readonly Func<OriginalWriteFailureRepository.FailedFile, Task>? _discardFailedFile;
+    private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
     private readonly ObservableCollection<TaskRow> _visible = new();
     private readonly DispatcherTimer _refreshTimer;
@@ -39,11 +43,16 @@ public sealed class TaskManagerWindow : Window
     private bool _reading;
     private bool _acting;
 
-    public TaskManagerWindow(PCasaScheduler scheduler, LocalDatabase database)
+    public TaskManagerWindow(PCasaScheduler scheduler, LocalDatabase database,
+        Func<OriginalWriteFailureRepository.FailedFile, Task>? retryFailedFile = null,
+        Func<OriginalWriteFailureRepository.FailedFile, Task>? discardFailedFile = null)
     {
         _scheduler = scheduler;
         _database = database;
         _journal = new DurablePackageJournal(database);
+        _originalFailures = new OriginalWriteFailureRepository(database);
+        _retryFailedFile = retryFailedFile;
+        _discardFailedFile = discardFailedFile;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 1050; Height = 570;
         MinWidth = 840; MinHeight = 390;
@@ -320,13 +329,36 @@ public sealed class TaskManagerWindow : Window
                         snapshot.Priority == SchedulerPriority.ManualAction
                             ? -snapshot.Id : snapshot.Id, false, false, false, false));
                 }
-                return rows.OrderBy(row => row.Status == "Abgeschlossen" ? 1 : 0)
+                // Parked individual originals are real errors, but NOT
+                // additional scheduler tasks. Group by their original P0
+                // package and delegate Retry/Discard to the SAME existing
+                // write-error actions used by the error dialog.
+                var failedGroups = _originalFailures.Unresolved()
+                    .GroupBy(issue => issue.PackageKey, StringComparer.Ordinal)
+                    .ToDictionary(group => "failed-files:" + group.Key,
+                        group => (IReadOnlyList<OriginalWriteFailureRepository.FailedFile>)
+                            group.ToArray(), StringComparer.Ordinal);
+                foreach (var (key, failures) in failedGroups)
+                {
+                    var first = failures[0];
+                    var task = first.Kind == OriginalWriteFailureRepository.Gps
+                        ? UiLanguage.T("GPS schreiben") : UiLanguage.T("Tags schreiben");
+                    rows.Add(new TaskRow(key, task,
+                        CurrentDirectory(first.Path),
+                        UiLanguage.Format("{0:N0} fehlerhaft", failures.Count),
+                        "Fehler", first.Error, 0, long.MaxValue / 4,
+                        false, false, _retryFailedFile is not null,
+                        _discardFailedFile is not null));
+                }
+                return (Rows: rows.OrderBy(row =>
+                        row.Status == "Abgeschlossen" ? 1 : 0)
                     .ThenBy(row => row.Priority)
                     .ThenBy(row => row.Order).ThenBy(row => row.Key)
-                    .ToList();
+                    .ToList(), Failed: failedGroups);
             });
             if (!IsLoaded || Dispatcher.HasShutdownStarted) return;
-            _all = prepared;
+            _all = prepared.Rows;
+            _failedRows = prepared.Failed;
             ApplyFilters();
         }
         catch (Exception ex)
@@ -340,7 +372,12 @@ public sealed class TaskManagerWindow : Window
     private string DirectoryFor(DurablePackageRecord item, string? currentPath)
     {
         if (!string.IsNullOrWhiteSpace(currentPath))
-            return CurrentDirectory(currentPath);
+        {
+            var current = CurrentDirectory(currentPath);
+            if (current.Length > 0 && current != "–")
+                _initialDirectoryByKey[item.Key] = current;
+            return current;
+        }
         if (_initialDirectoryByKey.TryGetValue(item.Key, out var cached))
             return cached;
         var path = FirstPathFromRecipe(item.Payload);
@@ -482,6 +519,16 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is not { Retryable: true }) return;
+        if (_failedRows.TryGetValue(row.Key, out var failedFiles))
+        {
+            _ = PerformAsync(row.Key, async () =>
+            {
+                foreach (var file in failedFiles)
+                    await _retryFailedFile!(file);
+                return true;
+            });
+            return;
+        }
         _ = PerformAsync(row.Key, () => Task.Run(() =>
         {
             if (!_scheduler.RetryDurableTask(row.Key))
@@ -500,7 +547,17 @@ public sealed class TaskManagerWindow : Window
         if (MessageBox.Show(this, prompt, UiLanguage.T("Task löschen"),
             MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
-        _ = PerformAsync(row.Key, () => Task.Run(() => _scheduler.DeleteDurableTaskAsync(row.Key)));
+        if (_failedRows.TryGetValue(row.Key, out var failedFiles))
+        {
+            _ = PerformAsync(row.Key, async () =>
+            {
+                foreach (var file in failedFiles)
+                    await _discardFailedFile!(file);
+                return true;
+            });
+        }
+        else
+            _ = PerformAsync(row.Key, () => Task.Run(() => _scheduler.DeleteDurableTaskAsync(row.Key)));
     }
 
     private async Task PerformAsync(string key, Func<Task<bool>> action)

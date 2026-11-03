@@ -98,7 +98,27 @@ internal static class TaskManagerFlow
                 throw new Exception("Taskmanager silently deleted committed tag intent.");
             journal.Cancel("taskmanager:protected");
 
-            manager = new PCasa.App.TaskManagerWindow(scheduler, database);
+            // Individual GPS/tag write failures remain in the existing
+            // original-write ledger, not in a duplicate task queue. The
+            // taskmanager must expose them as error rows whose actions
+            // delegate back to that original ledger's handlers.
+            var failures = new OriginalWriteFailureRepository(database);
+            failures.RecordFailure(OriginalWriteFailureRepository.Gps,
+                "taskmanager:failed-original", 987654,
+                new IOException("Synthetic original write failure"), permanent: true);
+            var retriedOriginals = 0;
+            var discardedOriginals = 0;
+            manager = new PCasa.App.TaskManagerWindow(scheduler, database,
+                _ =>
+                {
+                    Interlocked.Increment(ref retriedOriginals);
+                    return Task.CompletedTask;
+                },
+                _ =>
+                {
+                    Interlocked.Increment(ref discardedOriginals);
+                    return Task.CompletedTask;
+                });
             manager.Show();
             Pump(manager);
             var checks = Descendants<CheckBox>(manager).ToArray();
@@ -115,6 +135,23 @@ internal static class TaskManagerFlow
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "taskmanager:a"), "Queued task is absent from its live scheduler view.");
+            Until(manager, () => grid.Items.Cast<object>().Any(item =>
+                    item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
+                    == "failed-files:taskmanager:failed-original"),
+                "Permanent original-file errors are missing from the taskmanager.");
+            grid.SelectedItem = grid.Items.Cast<object>().First(item =>
+                item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
+                == "failed-files:taskmanager:failed-original");
+            Pump(manager);
+            var retry = Descendants<Button>(manager).Single(button =>
+                Equals(button.Content, "Neu starten"));
+            var discard = Descendants<Button>(manager).Single(button =>
+                Equals(button.Content, "Löschen"));
+            if (!retry.IsEnabled || !discard.IsEnabled)
+                throw new Exception("Original-write failure cannot be retried/discarded through the shared handlers.");
+            retry.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, retry));
+            Until(manager, () => Volatile.Read(ref retriedOriginals) == 1,
+                "Retry did not use the original-write handler.");
             manager.Close();
             manager = null;
 

@@ -14,7 +14,8 @@ public partial class MainWindow
             existing.Activate();
             return;
         }
-        var manager = new TaskManagerWindow(_scheduler, _database)
+        var manager = new TaskManagerWindow(_scheduler, _database,
+            RetryOriginalWriteAsync, DiscardOriginalWriteAsync)
         {
             Owner = this
         };
