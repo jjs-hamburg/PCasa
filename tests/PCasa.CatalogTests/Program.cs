@@ -625,15 +625,18 @@ internal static class Program
 
         // A new journal instance simulates application restart.
         var restored = new DurablePackageJournal(database).Pending();
+        // The task manager and executor must display the SAME order:
+        // newest manual P0 package first unless the user moves it. This is
+        // now persisted explicitly, rather than showing old insertion order.
         if (restored.Count != 3 ||
-            restored[0].Key != "older" ||
-            restored[1].Key != "newer" ||
+            restored[0].Key != "newer" ||
+            restored[1].Key != "older" ||
             restored[2].Key != "background")
-            throw new Exception("Durable package journal lost original sequence/priority.");
+            throw new Exception("Durable journal lost manual P0 dispatch order.");
         if (restored[0].Priority != SchedulerPriority.ManualAction ||
-            restored[0].CompletedSteps != 2 ||
-            restored[1].CompletedSteps != 1)
-            throw new Exception("Durable package journal lost manual priority or cursor.");
+            restored[0].CompletedSteps != 1 ||
+            restored[1].CompletedSteps != 2)
+            throw new Exception("Durable journal lost original priority or step cursors.");
         // Idempotent re-submission must retain the exact immutable recipe.
         var repeated = journal.Put("older", "test-case", "{}",
             SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);

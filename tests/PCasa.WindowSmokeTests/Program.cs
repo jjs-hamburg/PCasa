@@ -37,6 +37,8 @@ internal static class Program
             return FolderAddFlow.Run();
         if (args.Contains("--gallery-files", StringComparer.OrdinalIgnoreCase))
             return GalleryFileOperationFlow.Run();
+        if (args.Contains("--taskmanager", StringComparer.OrdinalIgnoreCase))
+            return TaskManagerFlow.Run();
 
         PCasa.App.MainWindow? window = null;
         try
