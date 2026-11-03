@@ -287,6 +287,7 @@ public partial class MainWindow
     private readonly Dictionary<string, (string Title, int Total, string? Directory)>
         _visibleManualOperations = new(StringComparer.Ordinal);
     private readonly List<string> _visibleManualOrder = new();
+    private DurablePackageJournal? _manualProgressJournal;
     private string? _visibleManualActiveKey;
     private BrowseCacheProgressWindow? _visibleManualWindow;
 
@@ -417,7 +418,10 @@ public partial class MainWindow
         // before the scheduler rebuilds in-memory snapshots. The display
         // MUST use their persisted dispatch rank, not registration order.
         // The taskmanager and presenter now read this SAME scheduler journal.
-        var queued = new DurablePackageJournal(_database).Pending()
+        // Reuse the read-only journal accessor instead of running schema
+        // migrations on the WPF thread for every scheduler state callback.
+        var queued = (_manualProgressJournal ??=
+                new DurablePackageJournal(_database)).Pending()
             .FirstOrDefault(record => _visibleManualOperations.ContainsKey(record.Key));
         return queued?.Key ?? _visibleManualOrder.LastOrDefault();
     }
