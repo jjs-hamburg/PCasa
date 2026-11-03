@@ -515,29 +515,86 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return result!;
     }
 
-    // Taskmanager commands are methods on the existing scheduler owner.
-    // A move is persisted before changing the in-memory rank. P0 manual work
-    // always stays in its own lane; crossing lanes cannot promise serial order.
+    // Taskmanager commands remain on the ONE scheduler owner. The journal
+    // persists ranks first; a promoted waiting task then preempts a running
+    // durable peer in its OWN worker lane at the next safe scan checkpoint.
+    // No second scheduler or duplicate scan recipe is created.
     public bool MoveDurableTask(string key, int direction)
     {
+        if (direction is not (-1 or 1))
+            throw new ArgumentOutOfRangeException(nameof(direction));
         var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
+        var all = journal.Pending();
+        var source = all.FirstOrDefault(row => row.Key == key);
+        if (source is null) return false;
+        var lane = all.Where(row =>
+                row.Priority == source.Priority &&
+                LaneFor(row.Priority, row.WorkKind) ==
+                    LaneFor(source.Priority, source.WorkKind)).ToList();
+        var index = lane.FindIndex(row => row.Key == key);
+        if (index < 0 || index + direction < 0 || index + direction >= lane.Count)
+            return false;
+        return MoveDurableTaskTo(key, lane[index + direction].Key);
+    }
+
+    // Drag/drop and arrow buttons call the same atomic journal mutation.
+    // The drop target denotes the desired final slot in scheduler dispatch
+    // order; it can be the currently running, interruptible durable scan.
+    public bool MoveDurableTaskTo(string key, string targetKey)
+    {
+        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
+        CancellationTokenSource? yield = null;
+        WorkItem? yielded = null;
         lock (_gate)
         {
-            var moved = journal.Move(key, direction);
-            if (moved is null) return false;
-            var (otherKey, selectedOrder, otherOrder) = moved.Value;
+            var rows = journal.Pending();
+            var source = rows.FirstOrDefault(row => row.Key == key);
+            var target = rows.FirstOrDefault(row => row.Key == targetKey);
+            if (source is null || target is null ||
+                source.Priority != target.Priority ||
+                LaneFor(source.Priority, source.WorkKind) !=
+                    LaneFor(target.Priority, target.WorkKind) ||
+                !_pending.Any(item => item.Key == key &&
+                    item.Priority == source.Priority))
+                return false; // never move the live executor or an absent row
+
+            var changed = journal.Reorder(key, targetKey);
+            if (changed is null || changed.Count == 0) return false;
             foreach (var work in _pending)
+                if (changed.TryGetValue(work.Key, out var rank))
+                    work.QueueOrder = rank;
+
+            var lane = LaneFor(source.Priority, source.WorkKind);
+            var current = _runningPriorityJobs[lane];
+            if (current is not null && current.Key != key &&
+                current.Priority == source.Priority &&
+                changed.TryGetValue(key, out var promotedRank) &&
+                promotedRank < current.QueueOrder &&
+                !current.YieldRequested &&
+                // Do not preempt transient P0 validations or read-only
+                // probes with an unrelated persistent request.
+                rows.Any(row => row.Key == current.Key))
             {
-                if (work.Key == key) work.QueueOrder = selectedOrder;
-                if (work.Key == otherKey) work.QueueOrder = otherOrder;
+                current.YieldRequested = true;
+                SetStateUnsafe(current, SchedulerJobState.YieldRequested);
+                yielded = current;
+                yield = _runningYield[lane];
             }
-            // Wake workers that consumed their earlier queue signal.
-            foreach (var lane in new[] { LaneManual, LaneBackground,
-                         LaneInitialImport, LaneUserAction })
-                if (_pending.Any(item => LaneFor(item.Priority, item.Kind) == lane))
-                    _signals[lane].Release();
-            return true;
+            // Pending signals may have been consumed while the lane ran.
+            if (_pending.Any(item =>
+                LaneFor(item.Priority, item.Kind) == lane))
+                _signals[lane].Release();
         }
+
+        if (yielded is not null) PublishState(yielded);
+        if (yield is not null)
+        {
+            // Native cancellation callbacks can re-enter this owner.
+            // Never execute them under the scheduler lock or WPF drag handler.
+            try { _ = yield.CancelAsync(); }
+            catch (ObjectDisposedException) { }
+        }
+        return true;
     }
 
     // No new retry queue: activate the same durable recipe through the
