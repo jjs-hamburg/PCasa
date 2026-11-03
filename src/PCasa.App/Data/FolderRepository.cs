@@ -339,6 +339,22 @@ public sealed class FolderRepository
         long Generation, long Epoch, int Checked,
         HashSet<string> Completed, Dictionary<string, string> Cursors);
 
+    // Read-only scan progress for every UI projection. The taskmanager and
+    // floating progress window must not use different zero-based counters
+    // after a process restart. The durable scan receipt is authoritative.
+    public int GetConfirmedRegularScanCount(string scanKey)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT checked_count FROM scan_resume_jobs
+            WHERE scan_key=$key LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$key", scanKey);
+        return command.ExecuteScalar() is { } count
+            ? Convert.ToInt32(count) : 0;
+    }
+
     // One scan identity owns its receipts throughout a restart. A *new*
     // manual request has a new scheduler package key and creates a fresh
     // inventory epoch. Recovered packages reuse their old identity/epoch.
