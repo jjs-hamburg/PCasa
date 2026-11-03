@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Text.Json;
 using System.Windows;
@@ -26,6 +27,7 @@ public sealed class TaskManagerWindow : Window
     private readonly DurablePackageJournal _journal;
     private readonly LocalDatabase _database;
     private readonly DataGrid _list = new();
+    private readonly ObservableCollection<TaskRow> _visible = new();
     private readonly DispatcherTimer _refreshTimer;
     private readonly Dictionary<string, string> _initialDirectoryByKey = new();
     private readonly CheckBox _running = new(), _waiting = new(),
@@ -78,6 +80,7 @@ public sealed class TaskManagerWindow : Window
         _list.CanUserDeleteRows = false;
         _list.CanUserReorderColumns = false;
         _list.CanUserSortColumns = false; // actual scheduler dispatch order
+        _list.ItemsSource = _visible;
         _list.SelectionMode = DataGridSelectionMode.Single;
         _list.SelectionUnit = DataGridSelectionUnit.FullRow;
         _list.HeadersVisibility = DataGridHeadersVisibility.Column;
@@ -196,17 +199,41 @@ public sealed class TaskManagerWindow : Window
     private void ApplyFilters()
     {
         var key = Selection?.Key;
-        _list.ItemsSource = _all.Where(row => row.Status switch
+        var filtered = _all.Where(row => row.Status switch
         {
             "Läuft" => _running.IsChecked == true,
             "Wartet" => _waiting.IsChecked == true,
             "Fehler" => _errors.IsChecked == true,
             "Abgeschlossen" => _completed.IsChecked == true,
             _ => false
-        }).ToList();
+        }).ToArray();
+
+        // Preserve the DataGrid's scroll position and row selection when
+        // only the progress or error text changes. Reassigning ItemsSource
+        // on every polling tick made large task lists jump unexpectedly.
+        var sameKeys = filtered.Length == _visible.Count;
+        if (sameKeys)
+            for (var i = 0; i < filtered.Length; i++)
+                if (!string.Equals(filtered[i].Key, _visible[i].Key,
+                    StringComparison.Ordinal))
+                {
+                    sameKeys = false;
+                    break;
+                }
+        if (sameKeys)
+        {
+            for (var i = 0; i < filtered.Length; i++)
+                if (!_visible[i].Equals(filtered[i]))
+                    _visible[i] = filtered[i];
+        }
+        else
+        {
+            _visible.Clear();
+            foreach (var row in filtered)
+                _visible.Add(row);
+        }
         if (key is not null)
-            _list.SelectedItem = _list.Items.Cast<TaskRow>()
-                .FirstOrDefault(item => item.Key == key);
+            _list.SelectedItem = _visible.FirstOrDefault(item => item.Key == key);
         UpdateActions();
     }
 
