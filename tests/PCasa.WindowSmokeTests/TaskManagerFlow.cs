@@ -30,14 +30,26 @@ internal static class TaskManagerFlow
             scheduler.EnableDurablePackages(database);
             var executed = new List<string>();
             object sync = new();
+            var scanStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var scanEntrances = 0;
             SchedulerTaskPackage Make(string key, string payload)
             {
                 var pkg = new SchedulerTaskPackage(key);
-                pkg.AddStep(token =>
+                pkg.AddStep(async token =>
                 {
+                    if (key == "taskmanager:scan-running")
+                    {
+                        var first = false;
+                        lock (sync) first = ++scanEntrances == 1;
+                        if (first)
+                        {
+                            scanStarted.TrySetResult();
+                            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        }
+                    }
                     token.ThrowIfCancellationRequested();
                     lock (sync) executed.Add(key);
-                    return Task.CompletedTask;
                 });
                 return pkg;
             }
@@ -108,6 +120,17 @@ internal static class TaskManagerFlow
                 new IOException("Synthetic original write failure"), permanent: true);
             var retriedOriginals = 0;
             var discardedOriginals = 0;
+            // A manual scan's Directory is part of its durable recipe. It
+            // must remain visible while queued or after a process restart,
+            // even when there is no current-file progress callback.
+            const string preservedScanRoot =
+                @"S:\Archiv.Negative\Negative\1982-Urlaub Frankreich-Portugal";
+            journal.Put("taskmanager:path-check", "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = preservedScanRoot,
+                    MonitoredRootId = (long?)null
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
             manager = new PCasa.App.TaskManagerWindow(scheduler, database,
                 _ =>
                 {
@@ -152,6 +175,16 @@ internal static class TaskManagerFlow
 
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
+                    == "taskmanager:path-check"),
+                "Persisted manual scan is not shown.");
+            var pathRow = grid.Items.Cast<object>().First(item =>
+                item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
+                == "taskmanager:path-check");
+            if (!string.Equals(pathRow.GetType().GetProperty("Directory")?.GetValue(pathRow)
+                    as string, preservedScanRoot, StringComparison.Ordinal))
+                throw new Exception("Queued manual scan lost the directory in its recipe.");
+            Until(manager, () => grid.Items.Cast<object>().Any(item =>
+                    item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "failed-files:taskmanager:failed-original"),
                 "Permanent original-file errors are missing from the taskmanager.");
             grid.SelectedItem = grid.Items.Cast<object>().First(item =>
@@ -169,6 +202,7 @@ internal static class TaskManagerFlow
                 "Retry did not use the original-write handler.");
             manager.Close();
             manager = null;
+            journal.Cancel("taskmanager:path-check");
 
             releaseBlocker.TrySetResult();
             UntilBackground(() => Task.WhenAll(a, c, blocker).IsCompleted,
@@ -194,6 +228,44 @@ internal static class TaskManagerFlow
             if (!journal.RecentCompleted().Any(item =>
                     item.Key == deferred.Key && item.CompletedSteps == 1))
                 throw new Exception("Retried durable task lost its checkpoint.");
+            // Reorder against a RUNNING durable scan, not just two queued
+            // entries. The promoted scan must start before the old worker
+            // resumes, using its original package instead of a new scan.
+            var stageRelease = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var stageStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var stage = scheduler.EnqueueAsync("taskmanager:stage",
+                SchedulerPriority.ManualAction, async _ =>
+                {
+                    stageStarted.TrySetResult();
+                    await stageRelease.Task;
+                });
+            UntilBackground(() => stageStarted.Task.IsCompleted,
+                "Could not hold manual lane for reorder regression.");
+            var promoted = scheduler.EnqueueDurablePackageAsync(
+                Make("taskmanager:promoted", "{}"), "taskmanager-test-v1", "{}",
+                SchedulerPriority.ManualAction);
+            var runningScan = scheduler.EnqueueDurablePackageAsync(
+                Make("taskmanager:scan-running", "{}"), "taskmanager-test-v1",
+                "{}", SchedulerPriority.ManualAction,
+                SchedulerWorkKind.CatalogScan);
+            stageRelease.TrySetResult();
+            UntilBackground(() => scanStarted.Task.IsCompleted,
+                "Newest durable scan did not enter the running state.");
+            if (!scheduler.MoveDurableTaskTo(
+                "taskmanager:promoted", "taskmanager:scan-running"))
+                throw new Exception("Could not promote queued scan above running P0 peer.");
+            UntilBackground(() => Task.WhenAll(promoted, runningScan).IsCompleted,
+                "Promoted task did not preempt the running same-priority scan.");
+            Task.WhenAll(promoted, runningScan).GetAwaiter().GetResult();
+            lock (sync)
+                if (!executed.TakeLast(2).SequenceEqual(new[]
+                    { "taskmanager:promoted", "taskmanager:scan-running" }))
+                    throw new Exception("Promoted task did not run before yielded scan: " +
+                        string.Join(", ", executed));
+            try { stage.GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
             Console.WriteLine(
                 "PASS: Compact taskmanager, filters, P0 order, durable move/delete, protected tags and retry.");
             return 0;
