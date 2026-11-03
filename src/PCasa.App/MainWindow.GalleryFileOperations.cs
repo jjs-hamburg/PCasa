@@ -417,9 +417,11 @@ public partial class MainWindow
     }
 
     private int ConfirmedManualScanCount(string key, int displayed)
-        => key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal)
-            ? Math.Max(displayed,
-                _folderRepository.GetConfirmedRegularScanCount(key))
+        // Avoid a SQLite round-trip for every newly committed image. Only
+        // fresh, zero-valued restart snapshots need their stored cursor.
+        => displayed == 0 &&
+            key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal)
+            ? _folderRepository.GetConfirmedRegularScanCount(key)
             : displayed;
 
     private void DisplayManualOperation(string key)
@@ -451,7 +453,8 @@ public partial class MainWindow
     {
         // The same local-cache preview serves Tag writes AND recovered
         // manual scans. Never decode a NAS original in the presenter.
-        if (!(status.Key.StartsWith("tags:", StringComparison.Ordinal) ||
+        if (status.State != SchedulerJobState.Running ||
+            !(status.Key.StartsWith("tags:", StringComparison.Ordinal) ||
               status.Key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
               status.Key.StartsWith("catalog:scan-all:", StringComparison.Ordinal)) ||
             status.CurrentPath is not { Length: > 0 } source ||
