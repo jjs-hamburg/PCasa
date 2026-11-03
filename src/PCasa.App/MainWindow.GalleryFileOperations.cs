@@ -284,7 +284,7 @@ public partial class MainWindow
     // not a second job queue. If a new manual action starts before an older
     // action ends, its status takes precedence; ending the older action must
     // never close the newer action's window.
-    private readonly Dictionary<string, (string Title, int Total)>
+    private readonly Dictionary<string, (string Title, int Total, string? Directory)>
         _visibleManualOperations = new(StringComparer.Ordinal);
     private readonly List<string> _visibleManualOrder = new();
     private string? _visibleManualActiveKey;
@@ -360,7 +360,8 @@ public partial class MainWindow
         StatusText.Text = presenter.ProgressStatusText;
     }
 
-    private void BeginVisibleManualOperation(string key, string title, int total)
+    private void BeginVisibleManualOperation(string key, string title, int total,
+        string? directory = null)
     {
         if (_visibleManualOperations.ContainsKey(key)) return;
         if (_visibleManualOperations.Count == 0)
@@ -368,7 +369,7 @@ public partial class MainWindow
             _visibleManualWindow = AcquireProgressPresenter(_manualProgressOwner);
             _scheduler.ProgressChanged += VisibleManualProgressChanged;
         }
-        _visibleManualOperations.Add(key, (title, total));
+        _visibleManualOperations.Add(key, (title, total, directory));
         if (IsTagSeriesKey(key))
             _visibleTagSeries.TryAdd(key, (Math.Max(0, total), 0));
         _visibleManualOrder.Add(key);
@@ -397,14 +398,29 @@ public partial class MainWindow
 
     private string? PreferredVisibleManualOperation()
     {
-        var active = _scheduler.Snapshot()
+        // Actual work ALWAYS wins. A yielded worker is already giving up the
+        // lane and must not be shown as running in another UI projection.
+        var running = _scheduler.Snapshot()
             .Where(job => _visibleManualOperations.ContainsKey(job.Key) &&
-                job.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested)
-            .OrderBy(job => job.State == SchedulerJobState.Running ? 0 : 1)
-            .ThenByDescending(job => job.StartedAt)
+                job.State == SchedulerJobState.Running)
+            .OrderByDescending(job => job.StartedAt)
             .FirstOrDefault();
-        return active?.Key ?? _visibleManualOrder.LastOrDefault();
+        if (running is not null) return running.Key;
+
+        // At startup the recovered P0 jobs are registered with the presenter
+        // before the scheduler rebuilds in-memory snapshots. The display
+        // MUST use their persisted dispatch rank, not registration order.
+        // The taskmanager and presenter now read this SAME scheduler journal.
+        var queued = new DurablePackageJournal(_database).Pending()
+            .FirstOrDefault(record => _visibleManualOperations.ContainsKey(record.Key));
+        return queued?.Key ?? _visibleManualOrder.LastOrDefault();
     }
+
+    private int ConfirmedManualScanCount(string key, int displayed)
+        => key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal)
+            ? Math.Max(displayed,
+                _folderRepository.GetConfirmedRegularScanCount(key))
+            : displayed;
 
     private void DisplayManualOperation(string key)
     {
@@ -420,7 +436,9 @@ public partial class MainWindow
         if (latest is not null)
         {
             if (IsTagSeriesKey(key)) UpdateVisibleTagSeries(latest);
-            _visibleManualWindow?.UpdateManualOperation(latest);
+            _visibleManualWindow?.UpdateManualOperation(latest,
+                item.Title, item.Directory,
+                ConfirmedManualScanCount(key, latest.Processed));
             RequestVisibleTagThumbnail(latest);
         }
         RenderVisibleTagSeries();
@@ -569,7 +587,10 @@ public partial class MainWindow
             if (status.Key == _visibleManualActiveKey &&
                 _visibleManualWindow?.ShowingScanDuringManualWait != true)
             {
-                _visibleManualWindow?.UpdateManualOperation(status);
+                var item = _visibleManualOperations[status.Key];
+                _visibleManualWindow?.UpdateManualOperation(status,
+                    item.Title, item.Directory,
+                    ConfirmedManualScanCount(status.Key, status.Processed));
                 RequestVisibleTagThumbnail(status);
             }
             // A *different* older Tag package may have progressed in its
