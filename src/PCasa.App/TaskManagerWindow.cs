@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Media;
+using System.Windows.Markup;
 using System.Windows.Threading;
 using PCasa.App.Data;
 using PCasa.App.Services;
@@ -54,8 +55,8 @@ public sealed class TaskManagerWindow : Window
         _retryFailedFile = retryFailedFile;
         _discardFailedFile = discardFailedFile;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
-        Width = 1050; Height = 570;
-        MinWidth = 840; MinHeight = 390;
+        Width = 940; Height = 465;
+        MinWidth = 760; MinHeight = 330;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
         SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
@@ -65,6 +66,7 @@ public sealed class TaskManagerWindow : Window
         outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Content = outer;
 
@@ -94,29 +96,38 @@ public sealed class TaskManagerWindow : Window
         _list.SelectionUnit = DataGridSelectionUnit.FullRow;
         _list.HeadersVisibility = DataGridHeadersVisibility.Column;
         _list.RowHeaderWidth = 0;
-        _list.GridLinesVisibility = DataGridGridLinesVisibility.Horizontal;
+        _list.GridLinesVisibility = DataGridGridLinesVisibility.None;
+        _list.RowHeight = 41;
         _list.FontSize = 12;
+        ConfigureTaskTiles();
         _list.EnableRowVirtualization = true;
         _list.EnableColumnVirtualization = true;
         _list.Margin = new Thickness(7);
-        AddColumn("Aufgabe", nameof(TaskRow.Title), 1.25);
-        AddColumn("Verzeichnis", nameof(TaskRow.Directory), 2.4);
-        AddColumn("Fortschritt", nameof(TaskRow.Progress), .8);
-        AddColumn("Status", nameof(TaskRow.Status), .8);
+        AddColumn("Aufgabe", nameof(TaskRow.Title), new DataGridLength(220));
+        AddColumn("Verzeichnis", nameof(TaskRow.Directory),
+            new DataGridLength(1, DataGridLengthUnitType.Star));
+        AddColumn("Fortschritt", nameof(TaskRow.Progress), new DataGridLength(92));
+        AddColumn("Status", nameof(TaskRow.Status), new DataGridLength(92));
         _list.SelectionChanged += (_, _) => UpdateActions();
         var listFrame = Frame(_list);
         Grid.SetRow(listFrame, 2);
         outer.Children.Add(listFrame);
 
-        var footer = new Grid { Margin = new Thickness(4, 8, 4, 0) };
+        // The complete error is visible without fighting the action buttons
+        // for horizontal space. The original source path remains in ToolTip.
+        _detail.VerticalAlignment = VerticalAlignment.Center;
+        _detail.TextWrapping = TextWrapping.Wrap;
+        _detail.MaxHeight = 48;
+        _detail.FontSize = 11;
+        _detail.Margin = new Thickness(8, 5, 8, 5);
+        _detail.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
+        var detailFrame = Frame(_detail);
+        detailFrame.MinHeight = 30;
+        Grid.SetRow(detailFrame, 3);
+        outer.Children.Add(detailFrame);
+        var footer = new Grid { Margin = new Thickness(4, 7, 4, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        _detail.VerticalAlignment = VerticalAlignment.Center;
-        _detail.FontSize = 11;
-        _detail.TextTrimming = TextTrimming.CharacterEllipsis;
-        _detail.Margin = new Thickness(4, 0, 10, 0);
-        _detail.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
-        footer.Children.Add(_detail);
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         Button(_up, "Nach oben", () => Move(-1), actions);
@@ -133,7 +144,7 @@ public sealed class TaskManagerWindow : Window
         actions.Children.Add(close);
         Grid.SetColumn(actions, 1);
         footer.Children.Add(actions);
-        Grid.SetRow(footer, 3);
+        Grid.SetRow(footer, 4);
         outer.Children.Add(footer);
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -172,24 +183,84 @@ public sealed class TaskManagerWindow : Window
         parent.Children.Add(box);
     }
 
-    private void AddColumn(string label, string property, double weight)
+    private void AddColumn(string label, string property, DataGridLength width)
     {
         var column = new DataGridTextColumn
         {
             Header = UiLanguage.T(label),
             Binding = new Binding(property),
-            Width = new DataGridLength(weight, DataGridLengthUnitType.Star)
+            Width = width
         };
+        var textStyle = new Style(typeof(TextBlock));
+        textStyle.Setters.Add(new Setter(TextBlock.VerticalAlignmentProperty,
+            VerticalAlignment.Center));
+        textStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty,
+            TextTrimming.CharacterEllipsis));
         if (property == nameof(TaskRow.Directory))
-        {
-            var textStyle = new Style(typeof(TextBlock));
-            textStyle.Setters.Add(new Setter(TextBlock.TextTrimmingProperty,
-                TextTrimming.CharacterEllipsis));
             textStyle.Setters.Add(new Setter(FrameworkElement.ToolTipProperty,
                 new Binding(nameof(TaskRow.Directory))));
-            column.ElementStyle = textStyle;
-        }
+        column.ElementStyle = textStyle;
         _list.Columns.Add(column);
+    }
+
+    private void ConfigureTaskTiles()
+    {
+        // A row is one raised, compact tile. Reuse the application's theme
+        // brushes and button-depth overlay instead of hardcoded dark colors.
+        // The DataGrid is only the virtualized layout and selection owner.
+        _list.RowStyle = (Style)XamlReader.Parse("""
+            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   TargetType="{x:Type DataGridRow}">
+              <Setter Property="MinHeight" Value="39"/>
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="{x:Type DataGridRow}">
+                    <Border x:Name="Tile" Margin="2,2,2,2"
+                            CornerRadius="5" BorderThickness="1"
+                            BorderBrush="{DynamicResource PcasaDividerBrush}"
+                            Background="{DynamicResource PcasaPanelAltBrush}"
+                            Effect="{DynamicResource PcasaButtonShadow}">
+                      <Grid>
+                        <Border Background="{DynamicResource PcasaButtonDepthBrush}"
+                                CornerRadius="4" IsHitTestVisible="False"/>
+                        <DataGridCellsPresenter/>
+                      </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Tile" Property="BorderBrush"
+                                Value="{DynamicResource PcasaToolbarFrameBrush}"/>
+                      </Trigger>
+                      <Trigger Property="IsSelected" Value="True">
+                        <Setter TargetName="Tile" Property="BorderBrush"
+                                Value="{DynamicResource PcasaAccentBrush}"/>
+                        <Setter TargetName="Tile" Property="Background"
+                                Value="{DynamicResource PcasaSelectionBrush}"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
+            </Style>
+            """);
+        _list.CellStyle = (Style)XamlReader.Parse("""
+            <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                   xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                   TargetType="{x:Type DataGridCell}">
+              <Setter Property="Background" Value="Transparent"/>
+              <Setter Property="BorderThickness" Value="0"/>
+              <Setter Property="Padding" Value="7,0,5,0"/>
+              <Setter Property="VerticalContentAlignment" Value="Center"/>
+              <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+              <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                  <Setter Property="Background" Value="Transparent"/>
+                  <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+                </Trigger>
+              </Style.Triggers>
+            </Style>
+            """);
     }
 
     private static void Button(Button control, string title, Action click, Panel parent)
@@ -253,8 +324,12 @@ public sealed class TaskManagerWindow : Window
         _down.IsEnabled = !_acting && row is { Movable: true };
         _restart.IsEnabled = !_acting && row is { Retryable: true };
         _delete.IsEnabled = !_acting && row is { Deletable: true };
-        _detail.Text = row?.Error ?? row?.Directory ?? "";
-        _detail.ToolTip = _detail.Text;
+        _detail.Text = row is null ? "" : row.Error is { Length: > 0 }
+            ? UiLanguage.T("Fehler") + ": " + row.Error
+            : row.Status == "Abgeschlossen"
+                ? UiLanguage.T("Abgeschlossen") : row.Directory;
+        _detail.ToolTip = row is null ? null :
+            _detail.Text + Environment.NewLine + row.Directory;
     }
 
     private async Task RefreshAsync()
@@ -296,39 +371,26 @@ public sealed class TaskManagerWindow : Window
                             : record.CompletedSteps > 0
                                 ? record.CompletedSteps.ToString("N0") : "–";
                     var isWaiting = status == "Wartet";
+                    var movable = isWaiting;
+                    var retryable = status == "Fehler" && record.State == "deferred";
+                    // Tag write intents may already be staged in SQLite. The
+                    // scheduler must protect them against accidental deletion;
+                    // an unmanageable active task is not shown as actionable.
+                    var deletable = record.State is "queued" or "deferred" or "running" &&
+                        !(record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+                            (record.CompletedSteps > 0 || record.State == "running" ||
+                             record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal)));
+                    if (!movable && !retryable && !deletable && status != "Abgeschlossen")
+                        continue;
                     rows.Add(new TaskRow(record.Key, work, path, progress,
                         status, record.Error ?? snapshot?.Error,
                         (int)record.Priority, record.QueueOrder, true,
-                        isWaiting, status == "Fehler" && record.State == "deferred",
-                        record.State is "queued" or "deferred" or "running"));
+                        movable, retryable, deletable));
                 }
-                var keys = rows.Select(row => row.Key).ToHashSet(StringComparer.Ordinal);
-                foreach (var snapshot in snapshots)
-                {
-                    if (keys.Contains(snapshot.Key) ||
-                        snapshot.State is SchedulerJobState.Canceled ||
-                        snapshot.WorkKind is SchedulerWorkKind.CatalogRead or
-                            SchedulerWorkKind.ThumbnailRead or SchedulerWorkKind.ViewerRead)
-                        continue;
-                    if (snapshot.Priority is SchedulerPriority.Interactive &&
-                        snapshot.WorkKind == SchedulerWorkKind.Catalog)
-                        continue; // transient UI publication, not an operation
-                    var status = snapshot.State switch
-                    {
-                        SchedulerJobState.Running => "Läuft",
-                        SchedulerJobState.Queued or SchedulerJobState.YieldRequested => "Wartet",
-                        SchedulerJobState.Failed => "Fehler",
-                        SchedulerJobState.Completed => "Abgeschlossen",
-                        _ => "Wartet"
-                    };
-                    if (status == "Abgeschlossen" && !showCompleted) continue;
-                    rows.Add(new TaskRow(snapshot.Key, BackgroundCaption(snapshot.Key),
-                        CurrentDirectory(snapshot.CurrentPath), snapshot.Total > 0
-                            ? $"{snapshot.Processed:N0}/{snapshot.Total:N0}" : "–",
-                        status, snapshot.Error, (int)snapshot.Priority,
-                        snapshot.Priority == SchedulerPriority.ManualAction
-                            ? -snapshot.Id : snapshot.Id, false, false, false, false));
-                }
+                // Transient scheduler snapshots (including historical failures,
+                // catalog/cache refresh and source probes) have NO user
+                // actions. They do not belong in a Taskmanager. We still
+                // consult the snapshots above for active durable progress.
                 // Parked individual originals are real errors, but NOT
                 // additional scheduler tasks. Group by their original P0
                 // package and delegate Retry/Discard to the SAME existing
@@ -340,6 +402,8 @@ public sealed class TaskManagerWindow : Window
                             group.ToArray(), StringComparer.Ordinal);
                 foreach (var (key, failures) in failedGroups)
                 {
+                    if (_retryFailedFile is null && _discardFailedFile is null)
+                        continue; // no control is available in this window
                     var first = failures[0];
                     var task = first.Kind == OriginalWriteFailureRepository.Gps
                         ? UiLanguage.T("GPS schreiben") : UiLanguage.T("Tags schreiben");
