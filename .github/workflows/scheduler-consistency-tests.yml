@@ -11,6 +11,14 @@ on:
 permissions:
   contents: read
 
+# Every source commit on this development branch supersedes its predecessor.
+# Test/build only the newest push, avoiding parallel 270 MB ZIP artifacts
+# and conserving the account's limited GitHub Actions storage.
+# Manually dispatched acceptance builds remain independent.
+concurrency:
+  group: pcasa-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 # Use the same verified metadata tool for catalog AND all real-WPF runs.
 env:
   PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
