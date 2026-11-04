@@ -703,7 +703,9 @@ public partial class MainWindow
             var checkedCount = Math.Max(_initialScanTaskChecked,
                 job?.Processed ?? 0);
             var stopping = _initialScanStopRequested;
-            rows.Add(new AutomaticScanTask(initialKey,
+            rows.Add(new AutomaticScanTask(
+                _activeScanFolderId is long id
+                    ? $"initial:{id}" : initialKey,
                 UiLanguage.T("Erstimport"), directory,
                 stopping
                     ? UiLanguage.T("Abbruch angefordert")
@@ -719,9 +721,34 @@ public partial class MainWindow
     // Full-root checks get a retry backoff, preventing a 30-second restart.
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
-        // Initial imports are already real scheduler tasks. Cancel their
-        // original token, retaining monitored_folders.initial_scan_pending
-        // and the scanner's per-directory durable file receipts.
+        // A queued or running first import is a SINGLE durable monitored-
+        // folder intent, not an ephemeral GUID job. Stopping it pauses the
+        // intent in SQLite; it does NOT discard any committed image cursor.
+        if (TryInitialTaskId(key, out var initialFolderId))
+        {
+            var held = await _scheduler.RunAsync(
+                $"taskmanager:first-import-hold:{Guid.NewGuid():N}",
+                SchedulerPriority.UserAction,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return _folderRepository.SetPendingFirstImportPaused(
+                        initialFolderId, true);
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            if (!held) return false;
+            _initialScanAttempted.Add(initialFolderId);
+            if (_initialScanActive &&
+                _activeScanFolderId == initialFolderId &&
+                _initialScanCancellation is
+                    { IsCancellationRequested: false } activeImport)
+            {
+                _initialScanStopRequested = true;
+                try { await activeImport.CancelAsync(); }
+                catch (ObjectDisposedException) { }
+            }
+            return true;
+        }
+        // Legacy invocation remains safe for any already-open window.
         if (key == _initialScanTaskKey && _initialScanActive &&
             _initialScanCancellation is
                 { IsCancellationRequested: false } initialCancellation)
