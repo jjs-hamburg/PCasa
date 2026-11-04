@@ -27,13 +27,18 @@ public partial class MainWindow
             !TryInitialTaskId(targetKey, out var target))
             return false;
 
-        var changed = await _scheduler.RunAsync(
+        var (changed, nextFolderId) = await _scheduler.RunAsync(
             $"taskmanager:first-import-reorder:{Guid.NewGuid():N}",
             SchedulerPriority.UserAction,
             token =>
             {
                 token.ThrowIfCancellationRequested();
-                return _folderRepository.MovePendingFirstImport(source, target);
+                var moved = _folderRepository.MovePendingFirstImport(source, target);
+                var first = moved
+                    ? _folderRepository.GetPendingFirstImportQueue()
+                        .FirstOrDefault(row => !row.Paused)?.FolderId
+                    : null;
+                return (moved, first);
             }, workKind: SchedulerWorkKind.CatalogRead);
         if (!changed) return false;
         // A direct user move is a new explicit request. It also overrides
@@ -50,9 +55,7 @@ public partial class MainWindow
             _initialScanCancellation is
                 { IsCancellationRequested: false } running)
         {
-            var first = _folderRepository.GetPendingFirstImportQueue()
-                .FirstOrDefault(row => !row.Paused);
-            if (first?.FolderId == source)
+            if (nextFolderId == source)
                 try { await running.CancelAsync(); }
                 catch (ObjectDisposedException) { }
         }
