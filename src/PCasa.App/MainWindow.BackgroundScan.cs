@@ -594,6 +594,17 @@ public partial class MainWindow
                         StringComparison.Ordinal) &&
                     job.State == SchedulerJobState.Running)
                 : null;
+            // Show the directory actually being visited, rather than
+            // merely the monitored root. During a scan of G:\Bilder the
+            // user needs to see that Camera Roll is currently being checked.
+            if (runningSnapshot?.CurrentPath is { Length: > 0 } currentPath)
+            {
+                var suffix = Path.GetExtension(currentPath);
+                path = suffix.Length is > 1 and <= 8 &&
+                    suffix.Skip(1).All(char.IsLetterOrDigit)
+                    ? Path.GetDirectoryName(currentPath) ?? path
+                    : currentPath;
+            }
             var checkedFiles = current && key == _backgroundLiveTaskKey
                 ? Math.Max(_backgroundLiveChecked,
                     runningSnapshot?.Processed ?? 0)
