@@ -1233,16 +1233,16 @@ internal static class Program
             Path.GetDirectoryName(sandbox.Images)!, "OfflineOrDelayedFirstImport");
         Directory.CreateDirectory(pendingPath);
         folders.Add(pendingPath);
-        var pending = folders.GetAll().Single(row =>
+        var firstImportPending = folders.GetAll().Single(row =>
             string.Equals(row.LocalPath, pendingPath,
                 StringComparison.OrdinalIgnoreCase));
-        if (!folders.GetPendingInitialScans().Any(row => row.Id == pending.Id))
+        if (!folders.GetPendingInitialScans().Any(row => row.Id == firstImportPending.Id))
             throw new Exception("Unfinished third root has no pending initial import.");
 
         var now = DateTime.UtcNow;
         var dueBefore = folders.GetDueRootReviewIds(now, TimeSpan.FromDays(30));
         if (!dueBefore.Contains(root.Id) || !dueBefore.Contains(other.Id) ||
-            dueBefore.Contains(pending.Id))
+            dueBefore.Contains(firstImportPending.Id))
             throw new Exception(
                 "Pending import on an unrelated root blocked already-imported review roots.");
 
