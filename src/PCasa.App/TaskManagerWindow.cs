@@ -33,6 +33,7 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<OriginalWriteFailureRepository.FailedFile, Task>? _discardFailedFile;
     private readonly Func<IReadOnlyList<AutomaticScanTask>>? _automaticScans;
     private readonly Func<string, Task<bool>>? _stopAutomaticScan;
+    private readonly Func<string>? _idleScanStatus;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
     private readonly ObservableCollection<TaskRow> _visible = new();
@@ -54,7 +55,8 @@ public sealed class TaskManagerWindow : Window
         Func<OriginalWriteFailureRepository.FailedFile, Task>? retryFailedFile = null,
         Func<OriginalWriteFailureRepository.FailedFile, Task>? discardFailedFile = null,
         Func<IReadOnlyList<AutomaticScanTask>>? automaticScans = null,
-        Func<string, Task<bool>>? stopAutomaticScan = null)
+        Func<string, Task<bool>>? stopAutomaticScan = null,
+        Func<string>? idleScanStatus = null)
     {
         _scheduler = scheduler;
         _database = database;
@@ -64,6 +66,7 @@ public sealed class TaskManagerWindow : Window
         _discardFailedFile = discardFailedFile;
         _automaticScans = automaticScans;
         _stopAutomaticScan = stopAutomaticScan;
+        _idleScanStatus = idleScanStatus;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
         MinWidth = 760; MinHeight = 330;
@@ -425,7 +428,9 @@ public sealed class TaskManagerWindow : Window
         _down.IsEnabled = !_acting && row is { Movable: true };
         _restart.IsEnabled = !_acting && row is { Retryable: true };
         _delete.IsEnabled = !_acting && row is { Deletable: true };
-        _detail.Text = row is null ? "" : row.Error is { Length: > 0 }
+        _detail.Text = row is null
+            ? _all.Count == 0 ? _idleScanStatus?.Invoke() ?? "" : ""
+            : row.Error is { Length: > 0 }
             ? UiLanguage.T("Fehler") + ": " + row.Error
             : row.Status == "Abgeschlossen"
                 ? UiLanguage.T("Abgeschlossen") : row.Directory;
