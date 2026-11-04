@@ -1415,15 +1415,22 @@ public partial class MainWindow
                         request.Kind, request.Recursive), scanResume, resumeGeneration);
                     scanResume = null;
                 }
-                catch
+                catch (Exception scanError)
                 {
-                    // Filesystem or source errors never erase unfinished
-                    // directory receipts. Back off the whole-root P4 cycle
-                    // rather than restarting a failed NAS scan every 30 sec.
+                    // A missing SMB drive is not an error that should
+                    // strand work for six hours. Re-probe a suspected
+                    // network I/O failure on the same 10-second source-gate
+                    // cadence; genuine non-I/O scanner failures keep the
+                    // longer cooldown to prevent a hot retry loop. In
+                    // neither case is the SQLite file cursor discarded.
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
                         resumeGeneration is long failedGeneration)
+                    {
+                        var delay = scanError is IOException or UnauthorizedAccessException
+                            ? TimeSpan.FromSeconds(10) : FailedRootReviewBackoff;
                         _folderRepository.DeferRootReview(folder.Id,
-                            failedGeneration, DateTime.UtcNow + FailedRootReviewBackoff);
+                            failedGeneration, DateTime.UtcNow + delay);
+                    }
                     scanResume?.Dispose();
                     scanResume = null;
                     request = request with { Resume = null, ResumeGeneration = null };
