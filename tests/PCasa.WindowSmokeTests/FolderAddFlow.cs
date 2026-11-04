@@ -127,7 +127,7 @@ internal static class FolderAddFlow
                     .GetValue(taskManager)!;
                 Until(window, () => taskGrid.Items.Cast<object>().Any(row =>
                     row.GetType().GetProperty("Title")?.GetValue(row) is string title &&
-                    title.Contains("Erstimport", StringComparison.Ordinal) &&
+                    title.Contains(UiLanguage.T("Erstimport"), StringComparison.Ordinal) &&
                     row.GetType().GetProperty("Status")?.GetValue(row) is "Läuft" &&
                     row.GetType().GetProperty("Directory")?.GetValue(row) is string path &&
                     (SamePath(path, initialRoot) ||
@@ -135,7 +135,7 @@ internal static class FolderAddFlow
                     "Taskmanager stayed EMPTY while the first import was actually running.");
                 var runningImport = taskGrid.Items.Cast<object>().First(row =>
                     row.GetType().GetProperty("Title")?.GetValue(row) is string title &&
-                    title.Contains("Erstimport", StringComparison.Ordinal));
+                    title.Contains(UiLanguage.T("Erstimport"), StringComparison.Ordinal));
                 if (runningImport.GetType().GetProperty("Deletable")
                         ?.GetValue(runningImport) is not true)
                     throw new Exception("Running automatic import has no safe Stop action.");
