@@ -278,8 +278,8 @@ internal static class TaskManagerFlow
                 Equals(button.Content, "Nach oben"));
             var moveDown = Descendants<Button>(manager).Single(button =>
                 Equals(button.Content, "Nach unten"));
-            if (!moveUp.IsEnabled || !moveDown.IsEnabled)
-                throw new Exception("Paused import cannot be moved in its queue.");
+            if (!moveUp.IsEnabled || moveDown.IsEnabled)
+                throw new Exception("Paused import move buttons do not reflect its actual queue neighbors.");
             moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
             Until(manager, () =>
             {

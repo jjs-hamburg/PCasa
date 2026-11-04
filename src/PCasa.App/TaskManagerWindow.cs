@@ -23,7 +23,8 @@ public sealed class TaskManagerWindow : Window
     private sealed record TaskRow(
         string Key, string Title, string Directory, string Progress,
         string Status, string? Error, int Priority, long Order,
-        bool Durable, bool Movable, bool Retryable, bool Deletable);
+        bool Durable, bool Movable, bool Retryable, bool Deletable,
+        SchedulerWorkKind WorkKind = SchedulerWorkKind.Catalog);
 
     private readonly PCasaScheduler _scheduler;
     private readonly DurablePackageJournal _journal;
@@ -319,6 +320,7 @@ public sealed class TaskManagerWindow : Window
     {
         var row = TaskAt(e.OriginalSource as DependencyObject);
         _dragOrigin = row is { Movable: true } &&
+            HasReorderPeer(row) &&
             (row.Durable || IsInitialImport(row.Key))
             ? e.GetPosition(_list) : null;
         _dragKey = _dragOrigin is not null ? row?.Key : null;
@@ -365,7 +367,8 @@ public sealed class TaskManagerWindow : Window
             target.Status is "Läuft" or "Wartet" or "Angehalten" &&
             target.Priority == source.Priority &&
             target.Key != source.Key &&
-            ((source.Durable && target.Durable) ||
+            ((source.Durable && target.Durable &&
+              SameSchedulerLane(source, target)) ||
              (IsInitialImport(source.Key) && IsInitialImport(target.Key) &&
               _moveAutomaticScan is not null))
                 ? DragDropEffects.Move : DragDropEffects.None;
@@ -395,6 +398,51 @@ public sealed class TaskManagerWindow : Window
 
     private static bool IsInitialImport(string key)
         => key.StartsWith("initial:", StringComparison.Ordinal);
+
+    // A task can move only inside the execution lane where its scheduler
+    // owner can actually change dispatch order. Independent lanes cannot
+    // be represented as an editable single serial queue.
+    private static bool SameSchedulerLane(TaskRow source, TaskRow target)
+    {
+        if (source.Priority != target.Priority) return false;
+        static string Lane(SchedulerWorkKind kind) => kind switch
+        {
+            SchedulerWorkKind.CatalogRead => "read",
+            SchedulerWorkKind.ViewerRead => "viewer",
+            SchedulerWorkKind.ThumbnailRead => "thumbnail",
+            SchedulerWorkKind.SourceProbe => "source-probe",
+            SchedulerWorkKind.InitialImport => "initial",
+            _ => "work"
+        };
+        return Lane(source.WorkKind) == Lane(target.WorkKind);
+    }
+
+    private TaskRow[] ReorderLane(TaskRow row)
+    {
+        if (IsInitialImport(row.Key))
+            return _all.Where(other => IsInitialImport(other.Key) &&
+                    other.Priority == row.Priority)
+                .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
+        if (row.Durable)
+            return _all.Where(other => other.Durable &&
+                    other.Status is "Läuft" or "Wartet" &&
+                    SameSchedulerLane(row, other))
+                .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
+        return [];
+    }
+
+    private bool HasReorderPeer(TaskRow row)
+        => ReorderLane(row).Length > 1;
+
+    private bool CanMove(TaskRow row, int direction)
+    {
+        if (!row.Movable || row.Status is "Läuft" or "Fehler" or "Abgeschlossen")
+            return false;
+        var lane = ReorderLane(row);
+        var index = Array.FindIndex(lane, other => other.Key == row.Key);
+        return index >= 0 && index + direction >= 0 &&
+            index + direction < lane.Length;
+    }
 
     private TaskRow? Selection => _list.SelectedItem as TaskRow;
 
@@ -442,8 +490,8 @@ public sealed class TaskManagerWindow : Window
     private void UpdateActions()
     {
         var row = Selection;
-        _up.IsEnabled = !_acting && row is { Movable: true };
-        _down.IsEnabled = !_acting && row is { Movable: true };
+        _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
+        _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
         _restart.IsEnabled = !_acting && row is { Retryable: true };
         _delete.IsEnabled = !_acting && row is { Deletable: true };
         const string moveLimits =
@@ -458,7 +506,14 @@ public sealed class TaskManagerWindow : Window
             : row.Error is { Length: > 0 }
             ? UiLanguage.T("Fehler") + ": " + row.Error
             : row.Status == "Abgeschlossen"
-                ? UiLanguage.T("Abgeschlossen") : row.Directory;
+                ? UiLanguage.T("Abgeschlossen")
+                : row.Status == "Läuft"
+                    ? UiLanguage.T("Dieser Auftrag läuft bereits; laufende Arbeit wird nicht durch Verschieben unterbrochen.")
+                : row.Movable && !HasReorderPeer(row)
+                    ? UiLanguage.T("Keine zweite Aufgabe in derselben Prioritäts- und Ausführungsgruppe zum Verschieben vorhanden.")
+                : !row.Movable && row.Status is "Wartet" or "Angehalten"
+                    ? UiLanguage.T("Dieser Auftrag wird von einem anderen Scheduler-Bereich verwaltet und lässt sich hier nicht verschieben.")
+                : row.Directory;
         _detail.ToolTip = row is null ? null :
             _detail.Text + Environment.NewLine + row.Directory;
     }
@@ -542,7 +597,7 @@ public sealed class TaskManagerWindow : Window
                     rows.Add(new TaskRow(record.Key, work, path, progress,
                         status, record.Error ?? snapshot?.Error,
                         (int)record.Priority, record.QueueOrder, true,
-                        movable, retryable, deletable));
+                        movable, retryable, deletable, record.WorkKind));
                 }
                 // Automatic discoveries and full-root reviews are REAL
                 // scanner requests, not transient maintenance probes.
@@ -815,11 +870,10 @@ public sealed class TaskManagerWindow : Window
     private void Move(int direction)
     {
         var row = Selection;
-        if (row is not { Movable: true }) return;
+        if (row is null || !CanMove(row, direction)) return;
         if (IsInitialImport(row.Key) && _moveAutomaticScan is not null)
         {
-            var lane = _all.Where(other => IsInitialImport(other.Key))
-                .OrderBy(other => other.Order).ToArray();
+            var lane = ReorderLane(row);
             var index = Array.FindIndex(lane, other => other.Key == row.Key);
             if (index < 0 || index + direction < 0 ||
                 index + direction >= lane.Length) return;
