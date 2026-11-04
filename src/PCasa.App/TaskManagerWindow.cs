@@ -773,6 +773,17 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is not { Movable: true }) return;
+        if (IsInitialImport(row.Key) && _moveAutomaticScan is not null)
+        {
+            var lane = _all.Where(other => IsInitialImport(other.Key))
+                .OrderBy(other => other.Order).ToArray();
+            var index = Array.FindIndex(lane, other => other.Key == row.Key);
+            if (index < 0 || index + direction < 0 ||
+                index + direction >= lane.Length) return;
+            _ = PerformAsync(row.Key, () =>
+                _moveAutomaticScan(row.Key, lane[index + direction].Key));
+            return;
+        }
         _ = PerformAsync(row.Key, () => Task.Run(() =>
         {
             if (!_scheduler.MoveDurableTask(row.Key, direction))
@@ -786,6 +797,11 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is not { Retryable: true }) return;
+        if (IsInitialImport(row.Key) && _resumeAutomaticScan is not null)
+        {
+            _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
+            return;
+        }
         if (_failedRows.TryGetValue(row.Key, out var failedFiles))
         {
             _ = PerformAsync(row.Key, async () =>
