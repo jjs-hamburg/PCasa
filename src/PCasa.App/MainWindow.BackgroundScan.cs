@@ -227,13 +227,18 @@ public partial class MainWindow
         _backgroundMonitorRefreshRunning = true;
         var monitor = _backgroundFolderMonitor;
         var enabled = _backgroundScanSettings.Enabled;
+        // Capture UI snapshot before entering the scheduled source worker.
+        // Only this single monitor owner detects offline -> available.
+        var wasOffline = _backgroundOfflineRootPaths.ToArray();
+        var initialAvailabilitySnapshot = _backgroundFirstMonitorSnapshot;
 
         try
         {
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, pendingInitialIds,
-                interruptedInventories, dueRootReviews, reviewRound) = await _scheduler.RunAsync(
+                interruptedInventories, dueRootReviews, reviewRound,
+                reconnectedFolderIds) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -244,6 +249,19 @@ public partial class MainWindow
                         folder => folder.Id,
                         folder => _folderRepository.GetExcludedPaths(folder.Id));
                     var states = monitor.Refresh(roots, enabled);
+                    // An SMB share may return before an old six-hour retry
+                    // window expires. Clear that deadline immediately after
+                    // confirming the ACTUAL monitored root exists; never
+                    // touch any scan receipt or manufacture a new scan key.
+                    var reconnected = roots.Where(folder =>
+                        states.TryGetValue(folder.Id, out var available) &&
+                        available && (initialAvailabilitySnapshot ||
+                            wasOffline.Any(path => string.Equals(path,
+                                folder.LocalPath,
+                                StringComparison.OrdinalIgnoreCase))))
+                        .Select(folder => folder.Id).ToArray();
+                    foreach (var recoveredId in reconnected)
+                        _folderRepository.ReleaseRootReviewRetryOnReconnect(recoveredId);
                     // Capture pending first imports in this SAME scheduled
                     // monitor snapshot, not by a second SQLite read on WPF.
                     var pending = _folderRepository.GetPendingInitialScans()
@@ -257,7 +275,8 @@ public partial class MainWindow
                     // Never schedule a new review from a WPF timer alone.
                     var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
                     var round = _folderRepository.GetReviewRoundStatus(DateTime.UtcNow);
-                    return (roots, states, rules, pending, inventories, due, round);
+                    return (roots, states, rules, pending, inventories, due,
+                        round, reconnected);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -265,6 +284,16 @@ public partial class MainWindow
             {
                 return;
             }
+
+            // The initial-import retry guard is session-only. After a
+            // confirmed reconnect it may be retried immediately; a
+            // deliberately paused first import stays paused in SQLite.
+            var retriedFirstImport = false;
+            foreach (var id in reconnectedFolderIds)
+                if (_initialScanAttempted.Remove(id))
+                    retriedFirstImport = true;
+            if (retriedFirstImport)
+                QueuePendingInitialScans();
 
             _backgroundExcludedPaths.Clear();
             foreach (var (folderId, excluded) in exclusions)
