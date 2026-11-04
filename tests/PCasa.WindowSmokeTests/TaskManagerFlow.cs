@@ -208,7 +208,10 @@ internal static class TaskManagerFlow
                 {
                     if (key == autoKey) Interlocked.Increment(ref stoppedAuto);
                     return Task.FromResult(key == autoKey);
-                });
+                },
+                idleScanStatus: null,
+                moveAutomaticScan: (_, _) => Task.FromResult(true),
+                resumeAutomaticScan: _ => Task.FromResult(true));
             manager.Show();
             Pump(manager);
             var checks = Descendants<CheckBox>(manager).ToArray();
