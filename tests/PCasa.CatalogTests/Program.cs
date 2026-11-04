@@ -1226,10 +1226,25 @@ internal static class Program
         if (!folders.CompleteInitialScan(other.Id, otherGeneration,
                 folders.GetScanEpoch(other.CanonicalPath)))
             throw new Exception("Second root did not finish its initial import.");
+        // A separate unfinished initial import is NOT a global barrier to
+        // idle verification of other fully imported roots. That import may
+        // be offline for days while those others remain reachable.
+        var pendingPath = Path.Combine(
+            Path.GetDirectoryName(sandbox.Images)!, "OfflineOrDelayedFirstImport");
+        Directory.CreateDirectory(pendingPath);
+        folders.Add(pendingPath);
+        var pending = folders.GetAll().Single(row =>
+            string.Equals(row.LocalPath, pendingPath,
+                StringComparison.OrdinalIgnoreCase));
+        if (!folders.GetPendingInitialScans().Any(row => row.Id == pending.Id))
+            throw new Exception("Unfinished third root has no pending initial import.");
+
         var now = DateTime.UtcNow;
         var dueBefore = folders.GetDueRootReviewIds(now, TimeSpan.FromDays(30));
-        if (!dueBefore.Contains(root.Id) || !dueBefore.Contains(other.Id))
-            throw new Exception("Unverified monitored roots were not eligible for idle review.");
+        if (!dueBefore.Contains(root.Id) || !dueBefore.Contains(other.Id) ||
+            dueBefore.Contains(pending.Id))
+            throw new Exception(
+                "Pending import on an unrelated root blocked already-imported review roots.");
 
         var key = $"background:inventory:{root.Id}:{generation}:RescanRoot:True:{root.LocalPath}";
         using var stop = new CancellationTokenSource();
