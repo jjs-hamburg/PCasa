@@ -31,6 +31,8 @@ public sealed class TaskManagerWindow : Window
     private readonly OriginalWriteFailureRepository _originalFailures;
     private readonly Func<OriginalWriteFailureRepository.FailedFile, Task>? _retryFailedFile;
     private readonly Func<OriginalWriteFailureRepository.FailedFile, Task>? _discardFailedFile;
+    private readonly Func<IReadOnlyList<AutomaticScanTask>>? _automaticScans;
+    private readonly Func<string, Task<bool>>? _stopAutomaticScan;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
     private readonly ObservableCollection<TaskRow> _visible = new();
@@ -50,7 +52,9 @@ public sealed class TaskManagerWindow : Window
 
     public TaskManagerWindow(PCasaScheduler scheduler, LocalDatabase database,
         Func<OriginalWriteFailureRepository.FailedFile, Task>? retryFailedFile = null,
-        Func<OriginalWriteFailureRepository.FailedFile, Task>? discardFailedFile = null)
+        Func<OriginalWriteFailureRepository.FailedFile, Task>? discardFailedFile = null,
+        Func<IReadOnlyList<AutomaticScanTask>>? automaticScans = null,
+        Func<string, Task<bool>>? stopAutomaticScan = null)
     {
         _scheduler = scheduler;
         _database = database;
@@ -58,6 +62,8 @@ public sealed class TaskManagerWindow : Window
         _originalFailures = new OriginalWriteFailureRepository(database);
         _retryFailedFile = retryFailedFile;
         _discardFailedFile = discardFailedFile;
+        _automaticScans = automaticScans;
+        _stopAutomaticScan = stopAutomaticScan;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
         MinWidth = 760; MinHeight = 330;
@@ -435,6 +441,11 @@ public sealed class TaskManagerWindow : Window
         {
             var showCompleted = _completed.IsChecked == true;
             var snapshots = _scheduler.Snapshot();
+            // MainWindow owns the existing watcher/scan dispatcher. Read its
+            // queue snapshot on the WPF dispatcher, before the background
+            // database read. The taskmanager does not create a second queue.
+            var automaticScans = _automaticScans?.Invoke() ??
+                Array.Empty<AutomaticScanTask>();
             var prepared = await Task.Run(() =>
             {
                 var active = _journal.Pending();
@@ -494,10 +505,18 @@ public sealed class TaskManagerWindow : Window
                         (int)record.Priority, record.QueueOrder, true,
                         movable, retryable, deletable));
                 }
-                // Transient scheduler snapshots (including historical failures,
-                // catalog/cache refresh and source probes) have NO user
-                // actions. They do not belong in a Taskmanager. We still
-                // consult the snapshots above for active durable progress.
+                // Automatic discoveries and full-root reviews are REAL
+                // scanner requests, not transient maintenance probes.
+                // They run under this scheduler and can be stopped through
+                // the original background owner without deleting catalog data.
+                foreach (var scan in automaticScans)
+                    rows.Add(new TaskRow(scan.Key, scan.Title,
+                        scan.Directory, scan.Progress, scan.Status,
+                        null, scan.Priority, scan.Order,
+                        false, false, false, _stopAutomaticScan is not null));
+
+                // Unrelated transient scheduler snapshots (historical source
+                // probes, cache refresh etc.) have no user action.
                 // Parked individual originals are real errors, but NOT
                 // additional scheduler tasks. Group by their original P0
                 // package and delegate Retry/Discard to the SAME existing
@@ -756,6 +775,9 @@ public sealed class TaskManagerWindow : Window
                 return true;
             });
         }
+        else if (row.Key.StartsWith("automatic:", StringComparison.Ordinal) &&
+                 _stopAutomaticScan is not null)
+            _ = PerformAsync(row.Key, () => _stopAutomaticScan(row.Key));
         else
             _ = PerformAsync(row.Key, () => Task.Run(() => _scheduler.DeleteDurableTaskAsync(row.Key)));
     }
