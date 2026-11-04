@@ -51,6 +51,10 @@ public partial class MainWindow
     private bool _backgroundMonitorRefreshRunning;
     private bool _backgroundMonitorRefreshRequested;
     private bool _backgroundMonitorClosing;
+    // Human-readable reason when Taskmanager has no actionable work.
+    // Updated only by the existing 30-second source/eligibility probe.
+    private string _backgroundIdleStatus =
+        "Status der automatischen Bestandsprüfung wird ermittelt";
     private string[] _backgroundOfflineRootPaths = Array.Empty<string>();
 
     private void BackgroundScan_WindowLoaded(object sender, RoutedEventArgs e)
@@ -277,6 +281,8 @@ public partial class MainWindow
 
             if (!enabled || _backgroundScanSettings?.Enabled != true)
             {
+                _backgroundIdleStatus =
+                    "Automatische Überwachung deaktiviert – keine Leerlaufprüfung";
                 _backgroundKnownFolderIds.Clear();
                 return;
             }
@@ -294,13 +300,34 @@ public partial class MainWindow
             var firstSnapshot = _backgroundFirstMonitorSnapshot;
             // Pick exactly one eligible root in persisted oldest-first order.
             // No backlog of thousands of independent repeat root scans.
-            var idleCandidate = !_backgroundWorkerRunning &&
-                _backgroundPending.Count == 0 && pendingInitialIds.Count == 0 &&
+            // An unfinished import on S: must NOT block a P4 check of G:
+            // forever when S: is unreachable. The scan itself runs through
+            // the SAME scheduler, and an actually active first import still
+            // has precedence. A different pending root is not a global lock.
+            var idleSlotFree = !_backgroundWorkerRunning &&
+                _backgroundPending.Count == 0 &&
+                !_initialScanActive && !_initialScanPumpRunning &&
                 !_manualContextScanActive && !_manualScanAllActive &&
-                !_manualFileTransferActive
+                !_manualFileTransferActive;
+            var reachableDue = dueRootReviews.Count(id =>
+                availability.TryGetValue(id, out var reachable) && reachable);
+            var idleCandidate = idleSlotFree
                 ? dueRootReviews.FirstOrDefault(id =>
                     availability.TryGetValue(id, out var reachable) && reachable)
                 : 0L;
+            _backgroundIdleStatus = dueRootReviews.Count == 0
+                ? pendingInitialIds.Count > 0
+                    ? $"{pendingInitialIds.Count} Erstimport(e) ausstehend; " +
+                      "keine Bestandsprüfung fällig"
+                    : "Keine Bestandsprüfung fällig (30 Tage Mindestabstand)"
+                : reachableDue == 0
+                    ? $"{dueRootReviews.Count} Bestandsprüfung(en) fällig; " +
+                      "Laufwerke derzeit nicht erreichbar"
+                    : !idleSlotFree
+                        ? $"{reachableDue} Bestandsprüfung(en) fällig; " +
+                          "warten auf andere Scanaufträge"
+                        : $"{reachableDue} Bestandsprüfung(en) fällig; " +
+                          "Leerlauf-Einplanung läuft";
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
@@ -340,7 +367,12 @@ public partial class MainWindow
                 var reconcile = (firstKnown && !firstSnapshot) ||
                     deferred || idleReviewDue;
                 if (pendingInitialIds.Count > 0 &&
-                    (restored.Length > 0 || reconcile))
+                    (restored.Length > 0 || reconcile) &&
+                    // A new eligible P4 cycle on ANOTHER root may run when
+                    // the first-import executor is idle. Keep the existing
+                    // deferral for restored/explicit re-enable inventories
+                    // until the original import batch is no longer active.
+                    !idleReviewDue)
                 {
                     _backgroundDeferredInventoryRoots.Add(folder.Id);
                     continue;
@@ -365,9 +397,17 @@ public partial class MainWindow
                 }
             }
             _backgroundFirstMonitorSnapshot = false;
+            if (idleCandidate == 0L && dueRootReviews.Count > 0 &&
+                reachableDue > 0 && idleSlotFree &&
+                _backgroundPending.Count == 0)
+                PCasaDiagnostics.WriteMessage("Scan.IdleQueue",
+                    "Eligible idle root did not enter the scan queue. " +
+                    $"Due={dueRootReviews.Count}; Reachable={reachableDue}; " +
+                    $"PendingInitial={pendingInitialIds.Count}.");
         }
         catch (Exception ex)
         {
+            _backgroundIdleStatus = "Leerlaufprüfung derzeit nicht ermittelbar";
             // Errors from an unavailable source must never crash Dispatcher.
             // Preserve a diagnostic without continually showing popup dialogs.
             PCasaDiagnostics.Write("RefreshBackgroundMonitor", ex);
