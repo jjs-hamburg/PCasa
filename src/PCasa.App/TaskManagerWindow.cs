@@ -530,12 +530,38 @@ public sealed class TaskManagerWindow : Window
                 // scanner requests, not transient maintenance probes.
                 // They run under this scheduler and can be stopped through
                 // the original background owner without deleting catalog data.
+                var firstImports = scanProgress.GetPendingFirstImportQueue();
+                var firstByKey = firstImports.ToDictionary(
+                    first => $"initial:{first.FolderId}", StringComparer.Ordinal);
+                var liveKeys = new HashSet<string>(
+                    automaticScans.Select(scan => scan.Key),
+                    StringComparer.Ordinal);
                 foreach (var scan in automaticScans)
+                {
+                    firstByKey.TryGetValue(scan.Key, out var first);
                     rows.Add(new TaskRow(scan.Key, scan.Title,
                         scan.Directory, scan.Progress, scan.Status,
-                        null, scan.Priority, scan.Order,
-                        false, false, false,
-                        _stopAutomaticScan is not null && scan.CanStop));
+                        null, scan.Priority, first?.QueueOrder ?? scan.Order,
+                        false, first is not null && _moveAutomaticScan is not null,
+                        false, _stopAutomaticScan is not null && scan.CanStop));
+                }
+
+                // The pending initial-import flag is a durable job from
+                // the moment the source was selected, NOT merely when
+                // the UI scan pump gets around to starting it. Paused
+                // imports remain visible without executing at startup.
+                foreach (var first in firstImports)
+                {
+                    var key = $"initial:{first.FolderId}";
+                    if (liveKeys.Contains(key)) continue;
+                    rows.Add(new TaskRow(key, UiLanguage.T("Erstimport"),
+                        first.Directory,
+                        first.Paused ? UiLanguage.T("Angehalten") : "–",
+                        "Wartet", null, 2, first.QueueOrder,
+                        false, _moveAutomaticScan is not null,
+                        first.Paused && _resumeAutomaticScan is not null,
+                        !first.Paused && _stopAutomaticScan is not null));
+                }
 
                 // Unrelated transient scheduler snapshots (historical source
                 // probes, cache refresh etc.) have no user action.
