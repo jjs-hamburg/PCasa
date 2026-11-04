@@ -132,6 +132,12 @@ internal static class TaskManagerFlow
                     Directory = preservedScanRoot,
                     MonitoredRootId = (long?)null
                 }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            // A live automatic P4 inventory is not a durable manual package.
+            // It MUST nevertheless appear whenever the progress window shows
+            // a scan, and have a real stop delegate back to the original owner.
+            const string autoKey =
+                @"automatic:9:RescanRoot:G:\onedrive\Bilder\Camera Roll";
+            var stoppedAuto = 0;
             manager = new PCasa.App.TaskManagerWindow(scheduler, database,
                 _ =>
                 {
@@ -142,6 +148,15 @@ internal static class TaskManagerFlow
                 {
                     Interlocked.Increment(ref discardedOriginals);
                     return Task.CompletedTask;
+                },
+                () => new[] { new PCasa.App.AutomaticScanTask(
+                    autoKey, "Bestand überprüfen",
+                    @"G:\onedrive\Bilder\Camera Roll",
+                    "1.234 geprüft", "Läuft", 4, 0) },
+                key =>
+                {
+                    if (key == autoKey) Interlocked.Increment(ref stoppedAuto);
+                    return Task.FromResult(key == autoKey);
                 });
             manager.Show();
             Pump(manager);
@@ -159,6 +174,30 @@ internal static class TaskManagerFlow
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "taskmanager:a"), "Queued task is absent from its live scheduler view.");
+            // The formerly EMPTY taskmanager during a live background scan
+            // is a regression. The row must have a real operation (Stop).
+            var automaticRow = grid.Items.Cast<object>().SingleOrDefault(item =>
+                item.GetType().GetProperty("Key")?.GetValue(item)?.ToString() == autoKey)
+                ?? throw new Exception(
+                    "Live automatic inventory is invisible while scanner is working.");
+            if (!string.Equals(
+                    automaticRow.GetType().GetProperty("Status")?.GetValue(automaticRow)
+                    as string, "Läuft", StringComparison.Ordinal) ||
+                !string.Equals(
+                    automaticRow.GetType().GetProperty("Directory")?.GetValue(automaticRow)
+                    as string, @"G:\onedrive\Bilder\Camera Roll", StringComparison.Ordinal) ||
+                !Equals(automaticRow.GetType().GetProperty("Deletable")?.GetValue(automaticRow),
+                    true))
+                throw new Exception(
+                    "Automatic inventory lost its real status, target or stop command.");
+            grid.SelectedItem = automaticRow;
+            Pump(manager);
+            var stopAction = Descendants<Button>(manager).Single(button =>
+                Equals(button.Content, "Löschen"));
+            if (!stopAction.IsEnabled)
+                throw new Exception("Automatic scan row has no working stop action.");
+            grid.SelectedItem = null;
+
             // A real but transient scheduler job occupies the manual lane.
             // It has no taskmanager commands and must never appear as a
             // misleading, unselectable row (nor should its history entries).
