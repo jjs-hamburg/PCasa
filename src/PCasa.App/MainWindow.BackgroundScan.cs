@@ -556,11 +556,11 @@ public partial class MainWindow
     // FileSystemWatcher debounce and execution batch.
     private IReadOnlyList<AutomaticScanTask> SnapshotAutomaticScans()
     {
-        if (!_backgroundScanInitialized ||
-            _backgroundScanSettings?.Enabled != true)
-            return Array.Empty<AutomaticScanTask>();
-
-        var latest = _scheduler.Snapshot()
+        // Initial imports are automatic even when the optional watcher is
+        // disabled. NEVER let the watcher preference hide a running first
+        // import from Taskmanager while its progress window is advancing.
+        var snapshots = _scheduler.Snapshot();
+        var latest = snapshots
             .Where(job => job.Key.StartsWith("background-scan:", StringComparison.Ordinal))
             .GroupBy(job => job.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
@@ -624,13 +624,50 @@ public partial class MainWindow
                 CanStop: !stopping));
         }
 
-        if (_backgroundInFlight is { } inFlight)
-            for (var i = _backgroundInFlightIndex; i < inFlight.Length; i++)
-                Add(inFlight[i], i == _backgroundInFlightIndex);
-        foreach (var task in _backgroundPending.Values
-                     .OrderBy(row => AutomaticTaskPriority(row.Kind))
-                     .ThenBy(row => row.Path, StringComparer.OrdinalIgnoreCase))
-            Add(task, false);
+        if (_backgroundScanInitialized &&
+            _backgroundScanSettings?.Enabled == true)
+        {
+            if (_backgroundInFlight is { } inFlight)
+                for (var i = _backgroundInFlightIndex; i < inFlight.Length; i++)
+                    Add(inFlight[i], i == _backgroundInFlightIndex);
+            foreach (var task in _backgroundPending.Values
+                         .OrderBy(row => AutomaticTaskPriority(row.Kind))
+                         .ThenBy(row => row.Path, StringComparer.OrdinalIgnoreCase))
+                Add(task, false);
+        }
+
+        // A pending Erstimport is *not* a FileSystemWatcher event. It uses
+        // the scheduler's dedicated InitialImport lane, and was omitted by
+        // every earlier Taskmanager query. Read its exact scheduler key and
+        // retain its root even if the transient snapshot was evicted while
+        // dozens of thumbnails were queued.
+        if (_initialScanActive &&
+            _initialScanTaskKey is { } initialKey &&
+            _initialScanTaskDirectory is { } initialRoot)
+        {
+            var job = snapshots.LastOrDefault(snapshot =>
+                snapshot.Key == initialKey &&
+                snapshot.WorkKind == SchedulerWorkKind.InitialImport);
+            var active = job?.State == SchedulerJobState.Running ||
+                (job is null && _initialScanWorkerStarted);
+            var current = job?.CurrentPath is { Length: > 0 } file
+                ? file : _initialScanTaskCurrentFile;
+            var directory = initialRoot;
+            if (!string.IsNullOrWhiteSpace(current) &&
+                !string.Equals(current, initialRoot,
+                    StringComparison.OrdinalIgnoreCase))
+                directory = Path.GetDirectoryName(current) ?? initialRoot;
+            var checkedCount = Math.Max(_initialScanTaskChecked,
+                job?.Processed ?? 0);
+            var stopping = _initialScanStopRequested;
+            rows.Add(new AutomaticScanTask(initialKey,
+                UiLanguage.T("Erstimport"), directory,
+                stopping
+                    ? UiLanguage.T("Abbruch angefordert")
+                    : UiLanguage.Format("{0:N0} geprüft", checkedCount),
+                active ? "Läuft" : "Wartet",
+                2, -1, CanStop: !stopping));
+        }
         return rows;
     }
 
@@ -639,6 +676,18 @@ public partial class MainWindow
     // Full-root checks get a retry backoff, preventing a 30-second restart.
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
+        // Initial imports are already real scheduler tasks. Cancel their
+        // original token, retaining monitored_folders.initial_scan_pending
+        // and the scanner's per-directory durable file receipts.
+        if (key == _initialScanTaskKey && _initialScanActive &&
+            _activeScanCancellation is
+                { IsCancellationRequested: false } initialCancellation)
+        {
+            _initialScanStopRequested = true;
+            try { await initialCancellation.CancelAsync(); }
+            catch (ObjectDisposedException) { }
+            return true;
+        }
         if (!key.StartsWith("automatic:", StringComparison.Ordinal))
             return false;
 
