@@ -572,7 +572,7 @@ public sealed class TaskManagerWindow : Window
                         null, 2, first.QueueOrder,
                         false, _moveAutomaticScan is not null,
                         first.Paused && _resumeAutomaticScan is not null,
-                        !first.Paused && _stopAutomaticScan is not null));
+                        _stopAutomaticScan is not null));
                 }
 
                 // Unrelated transient scheduler snapshots (historical source
@@ -859,14 +859,18 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is not { Deletable: true }) return;
-        var prompt = !row.Durable && !row.Key.StartsWith("failed-files:",
-                StringComparison.Ordinal)
+        var prompt = IsInitialImport(row.Key)
             ? UiLanguage.Format(
-                "Auftrag '{0}' stoppen? Der bestätigte Einlesefortschritt bleibt erhalten.",
+                "Scanauftrag '{0}' aus der Warteschlange löschen? Bereits eingelesene Fotos, Katalogeinträge und bestätigte Scanpositionen bleiben erhalten.",
                 row.Title)
-            : UiLanguage.Format(
-                "Auftrag '{0}' wirklich löschen? Bereits erfolgreich geschriebene Dateien werden nicht zurückgesetzt.",
-                row.Title);
+            : !row.Durable && !row.Key.StartsWith("failed-files:",
+                StringComparison.Ordinal)
+                ? UiLanguage.Format(
+                    "Auftrag '{0}' stoppen? Der bestätigte Einlesefortschritt bleibt erhalten.",
+                    row.Title)
+                : UiLanguage.Format(
+                    "Auftrag '{0}' wirklich löschen? Bereits erfolgreich geschriebene Dateien werden nicht zurückgesetzt.",
+                    row.Title);
         if (MessageBox.Show(this, prompt, UiLanguage.T("Task löschen"),
             MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
@@ -879,11 +883,9 @@ public sealed class TaskManagerWindow : Window
                 return true;
             });
         }
-        // Both file-watcher jobs ("automatic:...") AND initial imports
-        // ("catalog:complete-scan:...") are automatic, non-durable
-        // projections. The latter must never be passed to the durable
-        // manual-job deleter: it has no journal row and would silently do
-        // nothing while the scanner continues.
+        // Initial imports and watcher scans use the single original scan
+        // owner, never the durable manual-package deleter. For an initial
+        // import this delegate removes the queued intent even if held.
         else if (!row.Durable && _stopAutomaticScan is not null)
             _ = PerformAsync(row.Key, () => _stopAutomaticScan(row.Key));
         else

@@ -376,6 +376,65 @@ internal static class TaskManagerFlow
                 journal.Cancel(continuingKey);
             }
 
+            // Deleting an explicitly held import removes the persistent
+            // queue INTENT, never photos or the saved first-pass cursor.
+            // The manager must enable Delete even though the row is held;
+            // the row must disappear after the shared repository operation.
+            var heldView = new PCasa.App.TaskManagerWindow(scheduler, database,
+                stopAutomaticScan: key => Task.FromResult(
+                    key == $"initial:{initialA.FolderId}" &&
+                    firstRepo.DeletePendingFirstImport(initialA.FolderId)));
+            try
+            {
+                var source = firstRepo.GetSourceState(
+                    firstRepo.GetAll().Single(root =>
+                        root.Id == initialA.FolderId).CanonicalPath);
+                if (source is null || !firstRepo.SaveDirectoryFirstPass(
+                    initialA.FolderId, source.Value.Generation, firstA,
+                    "012345.jpg", completed: false))
+                    throw new Exception("Could not save partial import cursor.");
+
+                heldView.Show();
+                var heldGrid = Descendants<DataGrid>(heldView).Single();
+                Until(heldView, () => heldGrid.Items.Cast<object>().Any(item =>
+                    item.GetType().GetProperty("Key")?.GetValue(item)
+                    ?.ToString() == $"initial:{initialA.FolderId}"),
+                    "Paused import is missing before deletion.");
+                var held = heldGrid.Items.Cast<object>().Single(item =>
+                    item.GetType().GetProperty("Key")?.GetValue(item)
+                    ?.ToString() == $"initial:{initialA.FolderId}");
+                heldGrid.SelectedItem = held;
+                Pump(heldView);
+                if (!Descendants<Button>(heldView).Single(button =>
+                        Equals(button.Content, "Löschen")).IsEnabled)
+                    throw new Exception("Cannot delete an explicitly held import.");
+
+                if (!firstRepo.DeletePendingFirstImport(initialA.FolderId))
+                    throw new Exception("Deleting a held import did not remove intent.");
+                Until(heldView, () => heldGrid.Items.Cast<object>().All(item =>
+                    item.GetType().GetProperty("Key")?.GetValue(item)
+                    ?.ToString() != $"initial:{initialA.FolderId}"),
+                    "Deleted import remains in the manager.");
+                database.Initialize(); // simulate reopening the persistent catalog
+                if (new FolderRepository(database).GetPendingFirstImportQueue()
+                        .Any(row => row.FolderId == initialA.FolderId))
+                    throw new Exception("Deleted import returned after restart.");
+                var recovered = new FolderRepository(database)
+                    .GetDirectoryFirstPass(
+                        initialA.FolderId, source.Value.Generation, firstA);
+                if (!recovered.Cursors.TryGetValue(firstA, out var file) ||
+                    file != "012345.jpg")
+                    throw new Exception("Deleting an import erased confirmed progress.");
+                firstRepo.Add(firstA); // reselect must not recreate the deleted job
+                if (firstRepo.GetPendingFirstImportQueue()
+                    .Any(row => row.FolderId == initialA.FolderId))
+                    throw new Exception("Re-selecting root requeued deleted import.");
+                if (!firstRepo.GetPendingFirstImportQueue()
+                    .Any(row => row.FolderId == initialB.FolderId))
+                    throw new Exception("Deleting one root removed another import.");
+            }
+            finally { heldView.Close(); }
+
             // A freshly restored scan may have zero volatile progress while
             // its durable receipt already confirmed thousands of photos.
             // The compact floating presenter must use the SAME status and

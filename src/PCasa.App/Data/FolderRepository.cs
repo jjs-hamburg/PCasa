@@ -274,6 +274,28 @@ public sealed class FolderRepository
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    // Delete the queued import INTENT, not its verified work. A partially
+    // indexed folder remains monitored and its catalog, thumbnails and
+    // scan_directory_first_pass receipts remain intact for a future explicit
+    // full-root scan. This is different from CompleteInitialScan, which
+    // acknowledges a verified full traversal and removes old receipts.
+    public bool DeletePendingFirstImport(long folderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE monitored_folders
+               SET initial_scan_pending=0, initial_scan_paused=0
+             WHERE id=$id AND initial_scan_pending=1
+               AND EXISTS (
+                   SELECT 1 FROM scheduler_sources s
+                    WHERE s.canonical_path=monitored_folders.canonical_path
+                      AND s.desired_present=1);
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
     public bool MovePendingFirstImport(long folderId, long targetFolderId)
     {
         if (folderId == targetFolderId) return false;

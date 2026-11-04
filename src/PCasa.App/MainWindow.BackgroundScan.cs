@@ -763,32 +763,42 @@ public partial class MainWindow
     // Full-root checks get a retry backoff, preventing a 30-second restart.
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
-        // A queued or running first import is a SINGLE durable monitored-
-        // folder intent, not an ephemeral GUID job. Stopping it pauses the
-        // intent in SQLite; it does NOT discard any committed image cursor.
+        // Delete applies to BOTH waiting and explicitly held imports.
+        // It removes the persistent queue intent, never the catalog or
+        // committed first-pass receipts. A later explicit scan can resume
+        // those saved file/directory frontiers without recreating this task.
         if (TryInitialTaskId(key, out var initialFolderId))
         {
-            var held = await _scheduler.RunAsync(
-                $"taskmanager:first-import-hold:{Guid.NewGuid():N}",
-                SchedulerPriority.UserAction,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return _folderRepository.SetPendingFirstImportPaused(
-                        initialFolderId, true);
-                }, workKind: SchedulerWorkKind.CatalogRead);
-            if (!held) return false;
             _initialScanAttempted.Add(initialFolderId);
             if (_initialScanActive &&
                 _activeScanFolderId == initialFolderId &&
                 _initialScanCancellation is
                     { IsCancellationRequested: false } activeImport)
             {
+                // Request cancellation BEFORE dropping the persistent marker:
+                // the running worker must not commit further initial-import
+                // receipts after its intent is removed.
                 _initialScanStopRequested = true;
                 try { await activeImport.CancelAsync(); }
                 catch (ObjectDisposedException) { }
             }
-            return true;
+            var deleted = await _scheduler.RunAsync(
+                $"taskmanager:first-import-delete:{Guid.NewGuid():N}",
+                SchedulerPriority.UserAction,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return _folderRepository.DeletePendingFirstImport(initialFolderId);
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            if (deleted)
+            {
+                // Release any other pending work through the same scheduler
+                // owners. The deleted root is no longer a queued import.
+                QueuePendingInitialScans();
+                if (_backgroundScanInitialized && !_backgroundMonitorClosing)
+                    RefreshBackgroundMonitor();
+            }
+            return deleted;
         }
         // Legacy invocation remains safe for any already-open window.
         if (key == _initialScanTaskKey && _initialScanActive &&
