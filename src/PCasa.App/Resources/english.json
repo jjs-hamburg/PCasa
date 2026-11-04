@@ -1,4 +1,10 @@
 {
+  "Erstimport": "Initial import",
+  "Neue Fotos einsammeln": "Import new photos",
+  "Bestand überprüfen": "Verify catalog",
+  "Abbruch angefordert": "Stop requested",
+  "Datei einlesen": "Import file",
+  "Gelöschte Dateien abgleichen": "Reconcile removed files",
   " · {0:N0} Fehler": " · {0:N0} errors",
   " · Fehler: {0:N0}": " · errors: {0:N0}",
   "!  Fehler bei der Aktualisierung": "!  Update failed",
