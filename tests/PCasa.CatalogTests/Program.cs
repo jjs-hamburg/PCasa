@@ -1351,8 +1351,31 @@ internal static class Program
             recursive: true, durableScanKey: otherKey);
         if (finishedOther.Failed != 0)
             throw new Exception("Second root could not complete its round.");
+        // The third monitored root still has an uncompleted first import.
+        // It may be offline, but a brand-new review round must NOT restart
+        // the two completed roots while that root is still outstanding.
+        var beforeInitialFinishes = verified.GetDueRootReviewIds(DateTime.UtcNow);
+        if (beforeInitialFinishes.Count != 0 ||
+            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 1)
+            throw new Exception("Offline pending first import caused endless repeat scans.");
+        var pendingGeneration = folders.GetSourceState(
+            firstImportPending.CanonicalPath)!.Value.Generation;
+        if (!folders.CompleteInitialScan(firstImportPending.Id,
+                pendingGeneration,
+                folders.GetScanEpoch(firstImportPending.CanonicalPath)))
+            throw new Exception("Pending third root failed its initial import.");
+        var dueLastRoot = verified.GetDueRootReviewIds(DateTime.UtcNow);
+        if (dueLastRoot.Count != 1 || dueLastRoot[0] != firstImportPending.Id)
+            throw new Exception("Finished first import was not given its turn in the round.");
+        var pendingKey = $"background:inventory:{firstImportPending.Id}:{pendingGeneration}:RescanRoot:True:{firstImportPending.LocalPath}";
+        if (nextProcess.ScanDirectory(firstImportPending,
+                firstImportPending.LocalPath,
+                recursive: true, durableScanKey: pendingKey).Failed != 0)
+            throw new Exception("Third root could not finish its full review.");
         var nextRound = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (!nextRound.Contains(root.Id) || !nextRound.Contains(other.Id) ||
+        if (!nextRound.Contains(root.Id) ||
+            !nextRound.Contains(other.Id) ||
+            !nextRound.Contains(firstImportPending.Id) ||
             verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 2)
             throw new Exception("Next round did not start after ALL roots completed.");
 
