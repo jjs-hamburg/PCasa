@@ -79,6 +79,35 @@ internal static class TaskManagerFlow
             }
             finally { idle.Close(); }
 
+            // Every first-import intent exists before its scanner starts.
+            // Order and explicit Pause survive a restart, and the Taskmanager
+            // must show BOTH the active and waiting records.
+            var firstRepo = new FolderRepository(database);
+            var firstA = Path.Combine(dir, "InitialImport_A");
+            var firstB = Path.Combine(dir, "InitialImport_B");
+            Directory.CreateDirectory(firstA);
+            Directory.CreateDirectory(firstB);
+            firstRepo.Add(firstA);
+            firstRepo.Add(firstB);
+            var firstQueue = firstRepo.GetPendingFirstImportQueue();
+            if (firstQueue.Count != 2)
+                throw new Exception("Activated first-import roots were not durably queued.");
+            var initialA = firstQueue.Single(item =>
+                string.Equals(item.Directory, firstA, StringComparison.OrdinalIgnoreCase));
+            var initialB = firstQueue.Single(item =>
+                string.Equals(item.Directory, firstB, StringComparison.OrdinalIgnoreCase));
+            if (!firstRepo.MovePendingFirstImport(initialB.FolderId, initialA.FolderId) ||
+                !firstRepo.SetPendingFirstImportPaused(initialA.FolderId, true))
+                throw new Exception("First-import queue cannot be reordered/paused.");
+            database.Initialize();
+            var restoredFirstQueue = new FolderRepository(database).GetPendingFirstImportQueue();
+            if (restoredFirstQueue[0].FolderId != initialB.FolderId ||
+                !restoredFirstQueue.Single(item =>
+                    item.FolderId == initialA.FolderId).Paused ||
+                new FolderRepository(database).GetPendingInitialScans()
+                    .Any(item => item.Id == initialA.FolderId))
+                throw new Exception("Restart lost first-import order or resumed a held import.");
+
             // Occupy only the real manual lane. A newer P0 may ask it to
             // yield, but the blocking test step ignores cancellation until
             // released, just like non-interruptible native file I/O.
@@ -196,6 +225,23 @@ internal static class TaskManagerFlow
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
                     == "taskmanager:a"), "Queued task is absent from its live scheduler view.");
+            // A waiting first-import appears before ANY scanner callback.
+            var pendingRows = grid.Items.Cast<object>().Where(item =>
+                item.GetType().GetProperty("Key")?.GetValue(item) is string key &&
+                key.StartsWith("initial:", StringComparison.Ordinal)).ToArray();
+            if (pendingRows.Length != 2)
+                throw new Exception("Queued initial imports are invisible in Taskmanager.");
+            var pausedRow = pendingRows.Single(item =>
+                (string?)item.GetType().GetProperty("Key")?.GetValue(item) ==
+                $"initial:{initialA.FolderId}");
+            if ((string?)pausedRow.GetType().GetProperty("Status")?.GetValue(pausedRow)
+                    != "Wartet" ||
+                pausedRow.GetType().GetProperty("Retryable")?.GetValue(pausedRow)
+                    is not true ||
+                (string?)pendingRows[0].GetType().GetProperty("Key")
+                    ?.GetValue(pendingRows[0]) != $"initial:{initialB.FolderId}")
+                throw new Exception("Held first import lost its status or persisted dispatch order.");
+
             // The formerly EMPTY taskmanager during a live background scan
             // is a regression. The row must have a real operation (Stop).
             var automaticRow = grid.Items.Cast<object>().SingleOrDefault(item =>
@@ -229,6 +275,7 @@ internal static class TaskManagerFlow
                 displayedKeys.Any(key => key is not null &&
                     !key.StartsWith("taskmanager:", StringComparison.Ordinal) &&
                     !key.StartsWith("automatic:", StringComparison.Ordinal) &&
+                    !key.StartsWith("initial:", StringComparison.Ordinal) &&
                     !key.StartsWith("failed-files:", StringComparison.Ordinal)))
                 throw new Exception("Non-actionable scheduler history leaked into the taskmanager.");
             if (grid.RowStyle is null || grid.CellStyle is null ||
