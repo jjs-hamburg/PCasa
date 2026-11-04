@@ -14,8 +14,11 @@ public partial class MainWindow
     private TaskManagerWindow? _taskManagerWindow;
 
     private static bool TryInitialTaskId(string key, out long folderId)
-        => long.TryParse(key.AsSpan("initial:".Length), out folderId) &&
-            key.StartsWith("initial:", StringComparison.Ordinal);
+    {
+        folderId = 0;
+        return key.StartsWith("initial:", StringComparison.Ordinal) &&
+            long.TryParse(key.AsSpan("initial:".Length), out folderId);
+    }
 
     private async Task<bool> MoveAutomaticScanAsync(
         string sourceKey, string targetKey)
