@@ -34,6 +34,8 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<IReadOnlyList<AutomaticScanTask>>? _automaticScans;
     private readonly Func<string, Task<bool>>? _stopAutomaticScan;
     private readonly Func<string>? _idleScanStatus;
+    private readonly Func<string,string,Task<bool>>? _moveAutomaticScan;
+    private readonly Func<string,Task<bool>>? _resumeAutomaticScan;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
     private readonly ObservableCollection<TaskRow> _visible = new();
@@ -56,7 +58,9 @@ public sealed class TaskManagerWindow : Window
         Func<OriginalWriteFailureRepository.FailedFile, Task>? discardFailedFile = null,
         Func<IReadOnlyList<AutomaticScanTask>>? automaticScans = null,
         Func<string, Task<bool>>? stopAutomaticScan = null,
-        Func<string>? idleScanStatus = null)
+        Func<string>? idleScanStatus = null,
+        Func<string,string,Task<bool>>? moveAutomaticScan = null,
+        Func<string,Task<bool>>? resumeAutomaticScan = null)
     {
         _scheduler = scheduler;
         _database = database;
@@ -67,6 +71,8 @@ public sealed class TaskManagerWindow : Window
         _automaticScans = automaticScans;
         _stopAutomaticScan = stopAutomaticScan;
         _idleScanStatus = idleScanStatus;
+        _moveAutomaticScan = moveAutomaticScan;
+        _resumeAutomaticScan = resumeAutomaticScan;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
         MinWidth = 760; MinHeight = 330;
