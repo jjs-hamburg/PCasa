@@ -386,11 +386,38 @@ public sealed class LocalDatabase
                     source_generation INTEGER NOT NULL,
                     last_completed_utc TEXT,
                     retry_after_utc TEXT,
+                    completed_cycle INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(monitored_folder_id)
                         REFERENCES monitored_folders(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS scan_review_cycle (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    current_cycle INTEGER NOT NULL DEFAULT 1 CHECK(current_cycle>=1),
+                    started_utc TEXT NOT NULL
+                );
+                INSERT INTO scan_review_cycle (id,current_cycle,started_utc)
+                VALUES (1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                ON CONFLICT(id) DO NOTHING;
                 """;
             verified.ExecuteNonQuery();
+        }
+
+        // Migration of the earlier 30-day completion timestamps: adopt an
+        // already finished root into the first fair review round. This runs
+        // ONLY when upgrading the schema, not on every process restart;
+        // otherwise a later, unfinished cycle could be marked completed.
+        var firstReviewMigration =
+            !ColumnExists(connection, "scan_root_review", "completed_cycle");
+        EnsureColumn(connection, "scan_root_review", "completed_cycle",
+            "INTEGER NOT NULL DEFAULT 0");
+        if (firstReviewMigration)
+        {
+            using var migrated = connection.CreateCommand();
+            migrated.CommandText = """
+                UPDATE scan_root_review SET completed_cycle=1
+                 WHERE last_completed_utc IS NOT NULL;
+                """;
+            migrated.ExecuteNonQuery();
         }
 
         // Original write failures belong to one shared durable ledger, not
