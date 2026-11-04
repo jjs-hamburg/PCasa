@@ -28,7 +28,7 @@ public sealed class SourceAvailabilityGate
     {
         _probeRoot = probeRoot ?? Directory.Exists;
         _now = clock ?? (() => DateTimeOffset.UtcNow);
-        _offlineInterval = offlineInterval ?? TimeSpan.FromSeconds(30);
+        _offlineInterval = offlineInterval ?? TimeSpan.FromSeconds(10);
         _onlineInterval = onlineInterval ?? TimeSpan.FromSeconds(30);
         _failedFileProbeInterval = TimeSpan.FromSeconds(30);
     }
