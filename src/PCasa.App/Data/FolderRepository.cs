@@ -566,6 +566,28 @@ public sealed class FolderRepository
     // Unreachable/invalid roots must not be picked again every 30 seconds.
     // No source/image/scan receipt is cleared. Its saved cursor remains ready
     // when the next retry window arrives or the user explicitly requests it.
+    // Called only after the ONE source availability gate confirms that an
+    // offline monitored root is reachable again (or when a new process first
+    // sees it available). This releases a stale retry deadline without
+    // changing the review round, saved directory receipts or prior progress.
+    public bool ReleaseRootReviewRetryOnReconnect(long folderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scan_root_review SET retry_after_utc=NULL
+             WHERE monitored_folder_id=$id AND retry_after_utc IS NOT NULL
+               AND EXISTS (
+                   SELECT 1 FROM monitored_folders m
+                   JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                   WHERE m.id=$id AND s.desired_present=1
+                     AND s.generation=scan_root_review.source_generation
+               );
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
     public void DeferRootReview(long folderId, long generation,
         DateTime retryAfterUtc)
     {
