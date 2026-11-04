@@ -26,7 +26,9 @@ public partial class MainWindow
     // Only one complete P4 sweep is admitted at a time. A completed root
     // becomes due again after a minimum interval, never immediately after
     // its last image. Concrete watcher events remain higher priority.
-    private static readonly TimeSpan IdleRootReviewInterval = TimeSpan.FromDays(30);
+    // A review round has no wall-clock expiry. Only an unreachable/error
+    // source needs a retry backoff; a completed root is eligible again only
+    // after every other monitored root finishes the SAME round.
     private static readonly TimeSpan FailedRootReviewBackoff = TimeSpan.FromHours(6);
     private BackgroundFolderChangeKind? _backgroundActiveScanKind;
     private string? _backgroundActiveRootReviewPath;
@@ -224,7 +226,7 @@ public partial class MainWindow
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, pendingInitialIds,
-                interruptedInventories, dueRootReviews) = await _scheduler.RunAsync(
+                interruptedInventories, dueRootReviews, reviewRound) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -246,9 +248,9 @@ public partial class MainWindow
                     var inventories = _folderRepository.GetPendingAutomaticInventories();
                     // Read dates while already on the scheduled probe lane.
                     // Never schedule a new review from a WPF timer alone.
-                    var due = _folderRepository.GetDueRootReviewIds(
-                        DateTime.UtcNow, IdleRootReviewInterval);
-                    return (roots, states, rules, pending, inventories, due);
+                    var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
+                    var round = _folderRepository.GetReviewRoundStatus(DateTime.UtcNow);
+                    return (roots, states, rules, pending, inventories, due, round);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -315,19 +317,20 @@ public partial class MainWindow
                 ? dueRootReviews.FirstOrDefault(id =>
                     availability.TryGetValue(id, out var reachable) && reachable)
                 : 0L;
+            var roundText =
+                $"Prüfrunde {reviewRound.Round}: " +
+                $"{reviewRound.Completed}/{reviewRound.Eligible} Stammordner fertig";
             _backgroundIdleStatus = dueRootReviews.Count == 0
-                ? pendingInitialIds.Count > 0
-                    ? $"{pendingInitialIds.Count} Erstimport(e) ausstehend; " +
-                      "keine Bestandsprüfung fällig"
-                    : "Keine Bestandsprüfung fällig (30 Tage Mindestabstand)"
+                ? reviewRound.Eligible == 0
+                    ? $"{roundText} – zunächst Erstimporte abschließen"
+                    : reviewRound.Deferred > 0
+                        ? $"{roundText} – {reviewRound.Deferred} warten auf erneuten Versuch"
+                        : $"{roundText} – keine erreichbare Prüfung fällig"
                 : reachableDue == 0
-                    ? $"{dueRootReviews.Count} Bestandsprüfung(en) fällig; " +
-                      "Laufwerke derzeit nicht erreichbar"
+                    ? $"{roundText} – {dueRootReviews.Count} Prüfung(en) nicht erreichbar"
                     : !idleSlotFree
-                        ? $"{reachableDue} Bestandsprüfung(en) fällig; " +
-                          "warten auf andere Scanaufträge"
-                        : $"{reachableDue} Bestandsprüfung(en) fällig; " +
-                          "Leerlauf-Einplanung läuft";
+                        ? $"{roundText} – warten auf andere Scanaufträge"
+                        : $"{roundText} – nächster Ordner wird eingeplant";
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
