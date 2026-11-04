@@ -620,38 +620,43 @@ public partial class MainWindow
         if (!key.StartsWith("automatic:", StringComparison.Ordinal))
             return false;
 
+        // Prefer the currently executing request over a duplicate follow-up
+        // watcher event. One user action stops BOTH; otherwise an ongoing
+        // scan could appear to ignore the Taskmanager's Delete button.
+        if (_backgroundInFlight is { } inFlight)
+            for (var index = _backgroundInFlightIndex;
+                 index < inFlight.Length; index++)
+            {
+                var task = inFlight[index];
+                if (!string.Equals(AutomaticTaskKey(task), key,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (index == _backgroundInFlightIndex)
+                {
+                    if (key != _backgroundLiveTaskKey ||
+                        _backgroundCurrentScanCancellation is not
+                            { IsCancellationRequested: false } active)
+                        return false; // still a source probe, not cancelable scan
+                    _backgroundSuppressed.Add(key);
+                    if (_backgroundPending.Remove(key, out var followup))
+                        followup.Resume?.Dispose();
+                    try { await active.CancelAsync(); }
+                    catch (ObjectDisposedException) { }
+                    return true;
+                }
+
+                _backgroundSuppressed.Add(key);
+                if (_backgroundPending.Remove(key, out var pendingFollowup))
+                    pendingFollowup.Resume?.Dispose();
+                DeferStoppedRootReview(task);
+                return true;
+            }
+
         if (_backgroundPending.Remove(key, out var queued))
         {
             queued.Resume?.Dispose();
             DeferStoppedRootReview(queued);
             RefreshFolderStatusVisuals();
-            return true;
-        }
-        if (_backgroundInFlight is not { } inFlight)
-            return false;
-        for (var index = _backgroundInFlightIndex; index < inFlight.Length; index++)
-        {
-            var task = inFlight[index];
-            if (!string.Equals(AutomaticTaskKey(task), key,
-                    StringComparison.OrdinalIgnoreCase))
-                continue;
-            _backgroundSuppressed.Add(key);
-            if (index != _backgroundInFlightIndex)
-            {
-                // The existing worker has not begun this request. The next
-                // loop iteration skips it rather than creating a cancellation
-                // token or opening a source.
-                DeferStoppedRootReview(task);
-                return true;
-            }
-            if (key != _backgroundLiveTaskKey ||
-                _backgroundCurrentScanCancellation is not
-                    { IsCancellationRequested: false } active)
-            {
-                _backgroundSuppressed.Remove(key);
-                return false;
-            }
-            await active.CancelAsync();
             return true;
         }
         return false;
