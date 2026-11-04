@@ -1072,6 +1072,11 @@ public partial class MainWindow
                         continue;
                     }
                     ScanResult? scanResult = null;
+                    // One confirmed count belongs to the original
+                    // directory-inventory receipt, not to a newly allocated
+                    // WPF progress object or a new scheduler attempt.
+                    var inventoryKey =
+                        $"background:inventory:{folder.Id}:{sourceState.Value.Generation}:{request.Kind}:{request.Recursive}:{scanPath}";
                     // Discard only a genuinely obsolete cursor (removed
                     // source or changed inclusion/exclusion generation).
                     // Preemption itself never invalidates the iterator.
@@ -1082,6 +1087,11 @@ public partial class MainWindow
                         scanResume = null;
                     }
                     scanResume ??= new FolderScanner.ScanResumeState();
+                    if (request.Kind != BackgroundFolderChangeKind.ScanFile &&
+                        scanResume.CommittedFiles == 0)
+                        scanResume.ImageFilesSeen =
+                            _folderRepository.GetConfirmedRegularScanCount(inventoryKey);
+                    _backgroundLiveChecked = scanResume.ImageFilesSeen;
                     resumeGeneration = sourceState.Value.Generation;
                     request = request with
                     {
@@ -1121,8 +1131,7 @@ public partial class MainWindow
                                 : _folderScanner.ScanDirectory(
                                     folder, scanPath, request.Recursive,
                                     progress: scanProgress, token, scanResume,
-                                    durableScanKey:
-                                        $"background:inventory:{folder.Id}:{sourceState.Value.Generation}:{request.Kind}:{request.Recursive}:{scanPath}");
+                                    durableScanKey: inventoryKey);
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
