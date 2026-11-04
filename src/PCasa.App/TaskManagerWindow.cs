@@ -761,9 +761,14 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is not { Deletable: true }) return;
-        var prompt = UiLanguage.Format(
-            "Auftrag '{0}' wirklich löschen? Bereits erfolgreich geschriebene Dateien werden nicht zurückgesetzt.",
-            row.Title);
+        var prompt = !row.Durable && !row.Key.StartsWith("failed-files:",
+                StringComparison.Ordinal)
+            ? UiLanguage.Format(
+                "Auftrag '{0}' stoppen? Der bestätigte Einlesefortschritt bleibt erhalten.",
+                row.Title)
+            : UiLanguage.Format(
+                "Auftrag '{0}' wirklich löschen? Bereits erfolgreich geschriebene Dateien werden nicht zurückgesetzt.",
+                row.Title);
         if (MessageBox.Show(this, prompt, UiLanguage.T("Task löschen"),
             MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
@@ -776,8 +781,12 @@ public sealed class TaskManagerWindow : Window
                 return true;
             });
         }
-        else if (row.Key.StartsWith("automatic:", StringComparison.Ordinal) &&
-                 _stopAutomaticScan is not null)
+        // Both file-watcher jobs ("automatic:...") AND initial imports
+        // ("catalog:complete-scan:...") are automatic, non-durable
+        // projections. The latter must never be passed to the durable
+        // manual-job deleter: it has no journal row and would silently do
+        // nothing while the scanner continues.
+        else if (!row.Durable && _stopAutomaticScan is not null)
             _ = PerformAsync(row.Key, () => _stopAutomaticScan(row.Key));
         else
             _ = PerformAsync(row.Key, () => Task.Run(() => _scheduler.DeleteDurableTaskAsync(row.Key)));
