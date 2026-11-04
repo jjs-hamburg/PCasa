@@ -306,17 +306,73 @@ public sealed class FolderRepository
         long MonitoredFolderId, string ScanKey, string ScanRoot,
         long SourceGeneration);
 
-    // A full-root review is a bounded cycle, never a perpetual "start again"
-    // loop. Every source gets one turn, oldest/never-verified first; another
-    // cycle is only due after its minimum interval. Directory timestamps are
-    // kept independently for inspection and future subdirectory scheduling.
-    public IReadOnlyList<long> GetDueRootReviewIds(
-        DateTime utcNow, TimeSpan minimumInterval)
+    // There is ONE persistent review round across monitored roots. A root
+    // can finish at most once in that round. The next round begins only
+    // AFTER every eligible root has completed (or been removed). A failed
+    // or disconnected root is still unfinished and never silently skipped.
+    //
+    // The caller probes availability separately; this read never accesses
+    // NAS files and cannot consume a file cursor. The DB transaction makes
+    // round advancement atomic across restarts and concurrent completions.
+    public IReadOnlyList<long> GetDueRootReviewIds(DateTime utcNow)
     {
-        if (minimumInterval < TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(minimumInterval));
         using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        long cycle;
+        using (var readCycle = db.CreateCommand())
+        {
+            readCycle.Transaction = tx;
+            readCycle.CommandText = """
+                SELECT current_cycle FROM scan_review_cycle WHERE id=1;
+                """;
+            cycle = Convert.ToInt64(readCycle.ExecuteScalar());
+        }
+
+        long outstanding;
+        long eligible;
+        using (var scan = db.CreateCommand())
+        {
+            scan.Transaction = tx;
+            scan.CommandText = """
+                SELECT COUNT(*),
+                       COALESCE(SUM(CASE WHEN
+                           r.monitored_folder_id IS NULL OR
+                           r.source_generation != s.generation OR
+                           r.completed_cycle < $round
+                           THEN 1 ELSE 0 END),0)
+                  FROM monitored_folders m
+                  JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                  LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
+                 WHERE s.desired_present=1 AND m.initial_scan_pending=0;
+                """;
+            scan.Parameters.AddWithValue("$round", cycle);
+            using var reader = scan.ExecuteReader();
+            reader.Read();
+            eligible = reader.GetInt64(0);
+            outstanding = reader.GetInt64(1);
+        }
+
+        if (eligible > 0 && outstanding == 0)
+        {
+            // A COMPLETED round has an end. Advance once (persistently)
+            // rather than starting at the first root while another remains
+            // unfinished. No 30-day wall-clock condition is involved.
+            using var advance = db.CreateCommand();
+            advance.Transaction = tx;
+            advance.CommandText = """
+                UPDATE scan_review_cycle SET current_cycle=current_cycle+1,
+                    started_utc=$now WHERE id=1 AND current_cycle=$previous;
+                """;
+            advance.Parameters.AddWithValue("$now",
+                utcNow.ToUniversalTime().ToString("O"));
+            advance.Parameters.AddWithValue("$previous", cycle);
+            if (advance.ExecuteNonQuery() != 1)
+                throw new IOException("Review-round cursor changed unexpectedly.");
+            cycle++;
+        }
+
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             SELECT m.id
               FROM monitored_folders m
@@ -325,20 +381,53 @@ public sealed class FolderRepository
              WHERE s.desired_present=1 AND m.initial_scan_pending=0
                AND (r.monitored_folder_id IS NULL
                     OR r.source_generation != s.generation
-                    OR r.retry_after_utc IS NULL OR r.retry_after_utc <= $now)
+                    OR r.completed_cycle < $round)
                AND (r.monitored_folder_id IS NULL
                     OR r.source_generation != s.generation
-                    OR r.last_completed_utc IS NULL OR r.last_completed_utc <= $cutoff)
+                    OR r.retry_after_utc IS NULL
+                    OR r.retry_after_utc <= $now)
              ORDER BY COALESCE(r.last_completed_utc,'') ASC,
                       m.local_path COLLATE NOCASE ASC;
             """;
+        cmd.Parameters.AddWithValue("$round", cycle);
         cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
-        cmd.Parameters.AddWithValue("$cutoff",
-            (utcNow.ToUniversalTime() - minimumInterval).ToString("O"));
-        using var reader = cmd.ExecuteReader();
+        using var dueReader = cmd.ExecuteReader();
         var due = new List<long>();
-        while (reader.Read()) due.Add(reader.GetInt64(0));
+        while (dueReader.Read()) due.Add(dueReader.GetInt64(0));
+        dueReader.Close();
+        tx.Commit();
         return due;
+    }
+
+    public sealed record ReviewRoundStatus(long Round, int Eligible,
+        int Completed, int Deferred);
+
+    public ReviewRoundStatus GetReviewRoundStatus(DateTime utcNow)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT c.current_cycle,
+                   COUNT(m.id),
+                   COALESCE(SUM(CASE WHEN r.source_generation=s.generation
+                       AND r.completed_cycle>=c.current_cycle
+                       THEN 1 ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN r.source_generation=s.generation
+                       AND (r.completed_cycle<c.current_cycle)
+                       AND r.retry_after_utc>$now
+                       THEN 1 ELSE 0 END),0)
+              FROM scan_review_cycle c
+              LEFT JOIN monitored_folders m ON m.initial_scan_pending=0
+              LEFT JOIN scheduler_sources s
+                  ON s.canonical_path=m.canonical_path AND s.desired_present=1
+              LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
+             WHERE c.id=1 AND (m.id IS NULL OR s.canonical_path IS NOT NULL);
+            """;
+        cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
+        using var reader = cmd.ExecuteReader();
+        reader.Read();
+        return new ReviewRoundStatus(reader.GetInt64(0),
+            reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
     }
 
     public DateTime? GetLastCompletedRootReview(long monitoredFolderId)
@@ -397,6 +486,9 @@ public sealed class FolderRepository
                     WHEN scan_root_review.source_generation=excluded.source_generation
                     THEN scan_root_review.last_completed_utc ELSE NULL END,
                 source_generation=excluded.source_generation,
+                completed_cycle=CASE
+                    WHEN scan_root_review.source_generation=excluded.source_generation
+                    THEN scan_root_review.completed_cycle ELSE 0 END,
                 retry_after_utc=excluded.retry_after_utc;
             """;
         cmd.Parameters.AddWithValue("$id", folderId);
@@ -825,11 +917,13 @@ public sealed class FolderRepository
             verified.CommandText = """
                 INSERT INTO scan_root_review
                     (monitored_folder_id,source_generation,
-                     last_completed_utc,retry_after_utc)
-                VALUES ($id,$generation,$now,NULL)
+                     last_completed_utc,retry_after_utc,completed_cycle)
+                VALUES ($id,$generation,$now,NULL,
+                        (SELECT current_cycle FROM scan_review_cycle WHERE id=1))
                 ON CONFLICT(monitored_folder_id) DO UPDATE SET
                     source_generation=excluded.source_generation,
                     last_completed_utc=excluded.last_completed_utc,
+                    completed_cycle=excluded.completed_cycle,
                     retry_after_utc=NULL;
                 """;
             verified.Parameters.AddWithValue("$id", completedRoot.Value);
