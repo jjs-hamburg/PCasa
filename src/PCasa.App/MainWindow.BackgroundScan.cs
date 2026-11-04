@@ -86,7 +86,14 @@ public partial class MainWindow
             // Probe network availability periodically, never on Dispatcher.
             Interval = TimeSpan.FromSeconds(30)
         };
-        _backgroundMonitorRefreshTimer.Tick += (_, _) => RefreshBackgroundMonitor();
+        _backgroundMonitorRefreshTimer.Tick += (_, _) =>
+        {
+            // A dead SMB share can stall an OS probe for longer than the
+            // timer interval. Never stack probes while one is unfinished.
+            // Explicit settings changes are still coalesced separately.
+            if (!_backgroundMonitorRefreshRunning)
+                RefreshBackgroundMonitor();
+        };
         _backgroundMonitorRefreshTimer.Start();
 
         // Physical cache reclamation never delays removing a folder. The
@@ -275,6 +282,12 @@ public partial class MainWindow
                     offlineRoots, StringComparer.OrdinalIgnoreCase))
             {
                 _backgroundOfflineRootPaths = offlineRoots;
+                // Probe offline roots frequently but leave healthy roots at
+                // the lower-overhead normal cadence. Both checks run on the
+                // existing scheduler's SourceProbe lane, never on Dispatcher.
+                if (_backgroundMonitorRefreshTimer is not null)
+                    _backgroundMonitorRefreshTimer.Interval =
+                        TimeSpan.FromSeconds(offlineRoots.Length > 0 ? 10 : 30);
                 // Only touch WPF TreeViewItems when reachability actually changes.
                 // Iterating a large folder tree every 30 seconds would stutter.
                 ApplyFolderAvailabilityToTree();
