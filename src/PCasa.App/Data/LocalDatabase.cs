@@ -473,6 +473,8 @@ public sealed class LocalDatabase
                 """;
             firstImportMigration.ExecuteNonQuery();
         }
+        EnsureColumn(connection, "monitored_folders", "initial_scan_paused",
+            "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");
