@@ -109,6 +109,40 @@ internal static class FolderAddFlow
                 throw new Exception("Gallery catalog refresh destroyed the independent folder tree.");
             Console.WriteLine("PASS: First image and folder counter visible during blocked ongoing scan; tree identity preserved.");
 
+            // Previously the Taskmanager was EMPTY while this exact running
+            // initial import already displayed "Checking file" and had
+            // committed its first JPEG. The watcher is intentionally OFF in
+            // this test, so projecting only watcher events cannot pass.
+            var openTaskManager = typeof(PCasa.App.MainWindow).GetMethod(
+                "TaskManagerMenu_Click",
+                BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? throw new Exception("Taskmanager command is missing.");
+            openTaskManager.Invoke(window, new object[] { window, new RoutedEventArgs() });
+            var taskManager = Application.Current.Windows
+                .OfType<PCasa.App.TaskManagerWindow>().Single();
+            try
+            {
+                var taskGrid = (DataGrid)typeof(PCasa.App.TaskManagerWindow)
+                    .GetField("_list", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .GetValue(taskManager)!;
+                Until(window, () => taskGrid.Items.Cast<object>().Any(row =>
+                    row.GetType().GetProperty("Title")?.GetValue(row) is string title &&
+                    title.Contains("Erstimport", StringComparison.Ordinal) &&
+                    row.GetType().GetProperty("Status")?.GetValue(row) is "Läuft" &&
+                    row.GetType().GetProperty("Directory")?.GetValue(row) is string path &&
+                    (SamePath(path, initialRoot) ||
+                     SamePath(path, laterFolder))),
+                    "Taskmanager stayed EMPTY while the first import was actually running.");
+                var runningImport = taskGrid.Items.Cast<object>().First(row =>
+                    row.GetType().GetProperty("Title")?.GetValue(row) is string title &&
+                    title.Contains("Erstimport", StringComparison.Ordinal));
+                if (runningImport.GetType().GetProperty("Deletable")
+                        ?.GetValue(runningImport) is not true)
+                    throw new Exception("Running automatic import has no safe Stop action.");
+                Console.WriteLine("PASS: Taskmanager sees live initial import without watcher, with real directory and safe Stop.");
+            }
+            finally { taskManager.Close(); }
+
             releaseDelayedPhoto.Set();
             blockedFile.GetAwaiter().GetResult();
             Until(window, () =>
