@@ -306,6 +306,105 @@ public sealed class FolderRepository
         long MonitoredFolderId, string ScanKey, string ScanRoot,
         long SourceGeneration);
 
+    // A full-root review is a bounded cycle, never a perpetual "start again"
+    // loop. Every source gets one turn, oldest/never-verified first; another
+    // cycle is only due after its minimum interval. Directory timestamps are
+    // kept independently for inspection and future subdirectory scheduling.
+    public IReadOnlyList<long> GetDueRootReviewIds(
+        DateTime utcNow, TimeSpan minimumInterval)
+    {
+        if (minimumInterval < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(minimumInterval));
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.id
+              FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+              LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
+             WHERE s.desired_present=1 AND m.initial_scan_pending=0
+               AND (r.monitored_folder_id IS NULL
+                    OR r.source_generation != s.generation
+                    OR r.retry_after_utc IS NULL OR r.retry_after_utc <= $now)
+               AND (r.monitored_folder_id IS NULL
+                    OR r.source_generation != s.generation
+                    OR r.last_completed_utc IS NULL OR r.last_completed_utc <= $cutoff)
+             ORDER BY COALESCE(r.last_completed_utc,'') ASC,
+                      m.local_path COLLATE NOCASE ASC;
+            """;
+        cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
+        cmd.Parameters.AddWithValue("$cutoff",
+            (utcNow.ToUniversalTime() - minimumInterval).ToString("O"));
+        using var reader = cmd.ExecuteReader();
+        var due = new List<long>();
+        while (reader.Read()) due.Add(reader.GetInt64(0));
+        return due;
+    }
+
+    public DateTime? GetLastCompletedRootReview(long monitoredFolderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT last_completed_utc FROM scan_root_review
+             WHERE monitored_folder_id=$id;
+            """;
+        cmd.Parameters.AddWithValue("$id", monitoredFolderId);
+        var value = cmd.ExecuteScalar();
+        return value is string date &&
+            DateTime.TryParse(date, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed : null;
+    }
+
+    public IReadOnlyDictionary<string, DateTime> GetVerifiedDirectories(
+        long monitoredFolderId, long sourceGeneration)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT local_directory,verified_utc FROM scan_directory_verified
+             WHERE monitored_folder_id=$id AND source_generation=$generation;
+            """;
+        cmd.Parameters.AddWithValue("$id", monitoredFolderId);
+        cmd.Parameters.AddWithValue("$generation", sourceGeneration);
+        var rows = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            rows[reader.GetString(0)] = DateTime.Parse(reader.GetString(1),
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind);
+        return rows;
+    }
+
+    // Unreachable/invalid roots must not be picked again every 30 seconds.
+    // No source/image/scan receipt is cleared. Its saved cursor remains ready
+    // when the next retry window arrives or the user explicitly requests it.
+    public void DeferRootReview(long folderId, long generation,
+        DateTime retryAfterUtc)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO scan_root_review(monitored_folder_id,source_generation,
+                                         last_completed_utc,retry_after_utc)
+            SELECT m.id,$generation,NULL,$retry
+              FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+             WHERE m.id=$id AND s.desired_present=1 AND s.generation=$generation
+            ON CONFLICT(monitored_folder_id) DO UPDATE SET
+                last_completed_utc=CASE
+                    WHEN scan_root_review.source_generation=excluded.source_generation
+                    THEN scan_root_review.last_completed_utc ELSE NULL END,
+                source_generation=excluded.source_generation,
+                retry_after_utc=excluded.retry_after_utc;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$retry", retryAfterUtc.ToUniversalTime().ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
     // An unfinished automatic scan is a durable identity, not just a progress
     // counter. Startup must recover this exact key before considering a fresh
     // root inventory, otherwise a new request rechecks already committed files.
@@ -651,6 +750,37 @@ public sealed class FolderRepository
         receipt.Parameters.AddWithValue("$file", (object?)fileName ?? DBNull.Value);
         receipt.Parameters.AddWithValue("$completed", completed ? 1 : 0);
         receipt.ExecuteNonQuery();
+
+        // A directory timestamp is proof of a successfully enumerated
+        // directory only, never of a whole-root cycle. The same source/epoch
+        // fence and transaction guard both the checkpoint and timestamp.
+        if (completed && scanKey.StartsWith("background:inventory:",
+                StringComparison.Ordinal))
+        {
+            using var verified = connection.CreateCommand();
+            verified.Transaction = tx;
+            verified.CommandText = """
+                INSERT INTO scan_directory_verified
+                    (monitored_folder_id,local_directory,
+                     source_generation,verified_utc)
+                SELECT j.monitored_folder_id,$directory,j.source_generation,$now
+                  FROM scan_resume_jobs j
+                  JOIN monitored_folders m ON m.id=j.monitored_folder_id
+                  JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                 WHERE j.scan_key=$key AND j.source_generation=$generation
+                   AND j.scan_epoch=$epoch AND s.generation=$generation
+                   AND s.scan_epoch=$epoch AND s.desired_present=1
+                ON CONFLICT(monitored_folder_id,local_directory) DO UPDATE SET
+                    source_generation=excluded.source_generation,
+                    verified_utc=excluded.verified_utc;
+                """;
+            verified.Parameters.AddWithValue("$directory", directory);
+            verified.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            verified.Parameters.AddWithValue("$key", scanKey);
+            verified.Parameters.AddWithValue("$generation", generation);
+            verified.Parameters.AddWithValue("$epoch", epoch);
+            verified.ExecuteNonQuery();
+        }
         tx.Commit();
         return true;
     }
@@ -659,6 +789,55 @@ public sealed class FolderRepository
     {
         using var connection = _database.OpenConnection();
         using var tx = connection.BeginTransaction();
+        // Mark a *root-wide* cycle complete only after the caller has
+        // enumerated every included subdirectory and reached the scanner's
+        // normal success path. The directory receipt itself was written
+        // earlier, but is not proof that the subtree was finished.
+        long? completedRoot = null;
+        if (scanKey.StartsWith("background:inventory:", StringComparison.Ordinal) &&
+            scanKey.Contains(":RescanRoot:True:", StringComparison.Ordinal))
+        {
+            using var root = connection.CreateCommand();
+            root.Transaction = tx;
+            root.CommandText = """
+                SELECT j.monitored_folder_id,j.scan_root,m.local_path
+                  FROM scan_resume_jobs j
+                  JOIN monitored_folders m ON m.id=j.monitored_folder_id
+                  JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                 WHERE j.scan_key=$key AND j.source_generation=$generation
+                   AND j.scan_epoch=$epoch AND s.generation=$generation
+                   AND s.scan_epoch=$epoch AND s.desired_present=1;
+                """;
+            root.Parameters.AddWithValue("$key", scanKey);
+            root.Parameters.AddWithValue("$generation", generation);
+            root.Parameters.AddWithValue("$epoch", epoch);
+            using var reader = root.ExecuteReader();
+            if (reader.Read() &&
+                string.Equals(FolderExclusionRules.Normalize(reader.GetString(1)),
+                    FolderExclusionRules.Normalize(reader.GetString(2)),
+                    StringComparison.OrdinalIgnoreCase))
+                completedRoot = reader.GetInt64(0);
+        }
+        if (completedRoot is not null)
+        {
+            using var verified = connection.CreateCommand();
+            verified.Transaction = tx;
+            verified.CommandText = """
+                INSERT INTO scan_root_review
+                    (monitored_folder_id,source_generation,
+                     last_completed_utc,retry_after_utc)
+                VALUES ($id,$generation,$now,NULL)
+                ON CONFLICT(monitored_folder_id) DO UPDATE SET
+                    source_generation=excluded.source_generation,
+                    last_completed_utc=excluded.last_completed_utc,
+                    retry_after_utc=NULL;
+                """;
+            verified.Parameters.AddWithValue("$id", completedRoot.Value);
+            verified.Parameters.AddWithValue("$generation", generation);
+            verified.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            verified.ExecuteNonQuery();
+        }
+
         using var clear = connection.CreateCommand();
         clear.Transaction = tx;
         clear.CommandText = """
