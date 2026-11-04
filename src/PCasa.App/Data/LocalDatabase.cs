@@ -459,6 +459,20 @@ public sealed class LocalDatabase
                 """;
             migrate.ExecuteNonQuery();
         }
+        // Pending first imports are genuine, durable Tasks, not just a
+        // transient startup loop. Their user order survives restarts and
+        // does not change the confirmed per-directory scan receipts.
+        if (!ColumnExists(connection, "monitored_folders", "initial_scan_queue_order"))
+        {
+            EnsureColumn(connection, "monitored_folders", "initial_scan_queue_order",
+                "INTEGER NOT NULL DEFAULT 0");
+            using var firstImportMigration = connection.CreateCommand();
+            firstImportMigration.CommandText = """
+                UPDATE monitored_folders SET initial_scan_queue_order=id
+                 WHERE initial_scan_queue_order=0;
+                """;
+            firstImportMigration.ExecuteNonQuery();
+        }
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");
