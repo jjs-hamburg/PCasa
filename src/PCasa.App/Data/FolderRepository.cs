@@ -195,19 +195,10 @@ public sealed class FolderRepository
             source.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             source.ExecuteNonQuery();
         }
-        // Selecting an already-monitored root again is also an explicit
-        // request to read it, even if the old first-scan request was lost.
-        using (var pending = connection.CreateCommand())
-        {
-            pending.Transaction = transaction;
-            pending.CommandText = """
-                UPDATE monitored_folders SET initial_scan_pending = 1,
-                    initial_scan_paused=0
-                WHERE local_path = $path COLLATE NOCASE;
-                """;
-            pending.Parameters.AddWithValue("$path", classification.LocalPath);
-            pending.ExecuteNonQuery();
-        }
+        // Only genuinely NEW monitored roots start an import. The INSERT
+        // above already establishes its one pending marker. Selecting an
+        // existing root must never reopen a completed import or unpause a
+        // partially completed one. An explicit refresh uses the scan path.
         // Give a genuinely NEW pending root a stable tail slot. A manual
         // reordering of older first imports is never reset by this insert.
         // Both the source marker and queue position commit atomically.

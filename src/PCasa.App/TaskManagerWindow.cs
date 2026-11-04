@@ -402,7 +402,7 @@ public sealed class TaskManagerWindow : Window
         var filtered = _all.Where(row => row.Status switch
         {
             "Läuft" => _running.IsChecked == true,
-            "Wartet" => _waiting.IsChecked == true,
+            "Wartet" or "Angehalten" or "Nicht erreichbar" => _waiting.IsChecked == true,
             "Fehler" => _errors.IsChecked == true,
             "Abgeschlossen" => _completed.IsChecked == true,
             _ => false
@@ -478,6 +478,9 @@ public sealed class TaskManagerWindow : Window
                     .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).First());
                 var rows = new List<TaskRow>();
                 var scanProgress = new FolderRepository(_database);
+                var firstImports = scanProgress.GetPendingFirstImportQueue();
+                var continuedImports = new HashSet<string>(
+                    StringComparer.OrdinalIgnoreCase);
                 foreach (var record in active.Concat(done))
                 {
                     // Old transfer-reconcile-v1 records were temporary
@@ -493,8 +496,14 @@ public sealed class TaskManagerWindow : Window
                         _ when snapshot?.State == SchedulerJobState.Failed => "Fehler",
                         _ => "Wartet"
                     };
-                    var work = TaskCaption(record);
                     var path = DirectoryFor(record, snapshot?.CurrentPath);
+                    var continuingImport = record.State != "completed" &&
+                        AcknowledgesPendingImport(record) &&
+                        firstImports.Any(first => string.Equals(
+                            first.Directory, path, StringComparison.OrdinalIgnoreCase));
+                    if (continuingImport) continuedImports.Add(path);
+                    var work = continuingImport
+                        ? UiLanguage.T("Bilder einlesen") : TaskCaption(record);
                     var total = CountRecipeImages(record.Payload);
                     // One confirmed scan counter, read from the SAME durable
                     // receipt as the floating progress window. A queued job
@@ -530,7 +539,6 @@ public sealed class TaskManagerWindow : Window
                 // scanner requests, not transient maintenance probes.
                 // They run under this scheduler and can be stopped through
                 // the original background owner without deleting catalog data.
-                var firstImports = scanProgress.GetPendingFirstImportQueue();
                 var firstByKey = firstImports.ToDictionary(
                     first => $"initial:{first.FolderId}", StringComparer.Ordinal);
                 var liveKeys = new HashSet<string>(
@@ -553,11 +561,15 @@ public sealed class TaskManagerWindow : Window
                 foreach (var first in firstImports)
                 {
                     var key = $"initial:{first.FolderId}";
-                    if (liveKeys.Contains(key)) continue;
-                    rows.Add(new TaskRow(key, UiLanguage.T("Erstimport"),
-                        first.Directory,
-                        first.Paused ? UiLanguage.T("Angehalten") : "–",
-                        "Wartet", null, 2, first.QueueOrder,
+                    // One root, one import: a manually continued full-root
+                    // scan is the real active scheduler job. Do not show its
+                    // old pending marker as an unrelated second task.
+                    if (liveKeys.Contains(key) ||
+                        continuedImports.Contains(first.Directory)) continue;
+                    rows.Add(new TaskRow(key, UiLanguage.T("Bilder einlesen"),
+                        first.Directory, "–",
+                        first.Paused ? "Angehalten" : "Wartet",
+                        null, 2, first.QueueOrder,
                         false, _moveAutomaticScan is not null,
                         first.Paused && _resumeAutomaticScan is not null,
                         !first.Paused && _stopAutomaticScan is not null));
@@ -588,8 +600,17 @@ public sealed class TaskManagerWindow : Window
                         false, false, _retryFailedFile is not null,
                         _discardFailedFile is not null));
                 }
-                return (Rows: rows.OrderBy(row =>
-                        row.Status == "Abgeschlossen" ? 1 : 0)
+                // Actual execution first. A paused high-priority task
+                // cannot precede a running lower-priority task on screen.
+                return (Rows: rows.OrderBy(row => row.Status switch
+                    {
+                        "Läuft" => 0,
+                        "Wartet" => 1,
+                        "Angehalten" or "Nicht erreichbar" => 2,
+                        "Fehler" => 3,
+                        "Abgeschlossen" => 4,
+                        _ => 2
+                    })
                     .ThenBy(row => row.Priority)
                     .ThenBy(row => row.Order).ThenBy(row => row.Key)
                     .ToList(), Failed: failedGroups);
@@ -659,6 +680,20 @@ public sealed class TaskManagerWindow : Window
                 ? Path.GetDirectoryName(path) ?? path : path;
         }
         catch { return path; }
+    }
+
+    private static bool AcknowledgesPendingImport(DurablePackageRecord record)
+    {
+        if (record.Type != "manual-folder-scan-v1") return false;
+        try
+        {
+            using var json = JsonDocument.Parse(record.Payload);
+            var root = json.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                   root.TryGetProperty("AcknowledgeTargetedPending", out var flag) &&
+                   flag.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException) { return false; }
     }
 
     private static string? DirectoryFromRecipe(string recipe)

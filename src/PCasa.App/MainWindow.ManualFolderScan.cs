@@ -153,6 +153,32 @@ public partial class MainWindow
                         DisplayedExcludedPaths(owner.Id)))
                     throw new InvalidOperationException(
                         "Dieser Ordner muss zuerst im Ordnermanager ausgewählt werden.");
+
+                // A full-root manual request CONTINUES the same unfinished
+                // import, including its saved first-pass receipts. It is not
+                // a second import and retires the sole pending marker when
+                // the complete traversal succeeds. A child-only scan cannot
+                // acknowledge a whole-root import.
+                var importTarget = await _scheduler.RunAsync(
+                    $"catalog:manual-import-target:{Guid.NewGuid():N}",
+                    SchedulerPriority.ManualAction,
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var root = ResolveMonitoredFolder(directory);
+                        if (root is null) return (Id: (long?)null, Pending: false);
+                        var sameRoot = string.Equals(
+                            FolderExclusionRules.Normalize(directory),
+                            FolderExclusionRules.Normalize(root.LocalPath),
+                            StringComparison.OrdinalIgnoreCase);
+                        var pending = sameRoot && _folderRepository
+                            .GetPendingFirstImportQueue()
+                            .Any(row => row.FolderId == root.Id);
+                        return (Id: (long?)root.Id, Pending: pending);
+                    }, cancellationToken: cancellation.Token,
+                    workKind: SchedulerWorkKind.CatalogRead);
+                expectedRootId = importTarget.Id;
+                acknowledgeTargetedPending = importTarget.Pending;
             }
 
             scanActive = true;

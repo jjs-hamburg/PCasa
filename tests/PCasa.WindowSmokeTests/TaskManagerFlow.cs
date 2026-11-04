@@ -89,6 +89,24 @@ internal static class TaskManagerFlow
             Directory.CreateDirectory(firstB);
             firstRepo.Add(firstA);
             firstRepo.Add(firstB);
+            // Re-selecting a completed root is not a second import.
+            var finishedPath = Path.Combine(dir, "AlreadyImported");
+            Directory.CreateDirectory(finishedPath);
+            firstRepo.Add(finishedPath);
+            var finishedFolder = firstRepo.GetAll().Single(f =>
+                string.Equals(f.LocalPath, finishedPath,
+                    StringComparison.OrdinalIgnoreCase));
+            var finishedSource = firstRepo.GetSourceState(
+                finishedFolder.CanonicalPath);
+            if (finishedSource is null ||
+                !firstRepo.CompleteInitialScan(
+                    finishedFolder.Id, finishedSource.Value.Generation))
+                throw new Exception("Cannot acknowledge a completed import.");
+            firstRepo.Add(finishedPath);
+            if (firstRepo.GetPendingFirstImportQueue().Any(f =>
+                    f.FolderId == finishedFolder.Id))
+                throw new Exception("Re-selecting a completed root reopened its import.");
+
             var firstQueue = firstRepo.GetPendingFirstImportQueue();
             if (firstQueue.Count != 2)
                 throw new Exception("Activated first-import roots were not durably queued.");
@@ -99,6 +117,8 @@ internal static class TaskManagerFlow
             if (!firstRepo.MovePendingFirstImport(initialB.FolderId, initialA.FolderId) ||
                 !firstRepo.SetPendingFirstImportPaused(initialA.FolderId, true))
                 throw new Exception("First-import queue cannot be reordered/paused.");
+            // Re-selecting an unfinished root must retain pause and rank.
+            firstRepo.Add(firstA);
             database.Initialize();
             var restoredFirstQueue = new FolderRepository(database).GetPendingFirstImportQueue();
             if (restoredFirstQueue[0].FolderId != initialB.FolderId ||
@@ -238,7 +258,7 @@ internal static class TaskManagerFlow
                 (string?)item.GetType().GetProperty("Key")?.GetValue(item) ==
                 $"initial:{initialA.FolderId}");
             if ((string?)pausedRow.GetType().GetProperty("Status")?.GetValue(pausedRow)
-                    != "Wartet" ||
+                    != "Angehalten" ||
                 pausedRow.GetType().GetProperty("Retryable")?.GetValue(pausedRow)
                     is not true ||
                 (string?)pendingRows[0].GetType().GetProperty("Key")
@@ -261,6 +281,10 @@ internal static class TaskManagerFlow
                     true))
                 throw new Exception(
                     "Automatic inventory lost its real status, target or stop command.");
+            if (grid.Items.Cast<object>().First().GetType()
+                    .GetProperty("Key")?.GetValue(grid.Items.Cast<object>().First())
+                    ?.ToString() != autoKey)
+                throw new Exception("Running task is below a waiting or paused task.");
             grid.SelectedItem = automaticRow;
             Pump(manager);
             var stopAction = Descendants<Button>(manager).Single(button =>
@@ -316,6 +340,41 @@ internal static class TaskManagerFlow
             manager.Close();
             manager = null;
             journal.Cancel("taskmanager:path-check");
+
+            // A manually requested full-root scan is a continuation of the
+            // pending import, never a second task tile for the same root.
+            const string continuingKey = "taskmanager:continuing-import";
+            journal.Put(continuingKey, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = firstA,
+                    MonitoredRootId = (long?)initialA.FolderId,
+                    AcknowledgeTargetedPending = true
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            var continuedView = new PCasa.App.TaskManagerWindow(scheduler, database);
+            try
+            {
+                continuedView.Show();
+                Until(continuedView, () => Descendants<DataGrid>(continuedView)
+                    .Single().Items.Cast<object>().Any(row =>
+                        row.GetType().GetProperty("Key")?.GetValue(row)
+                        ?.ToString() == continuingKey),
+                    "Continued import does not appear in the taskmanager.");
+                var tasks = Descendants<DataGrid>(continuedView).Single()
+                    .Items.Cast<object>().ToArray();
+                if (tasks.Any(row =>
+                        row.GetType().GetProperty("Key")?.GetValue(row)
+                        ?.ToString() == $"initial:{initialA.FolderId}") ||
+                    tasks.Count(row => string.Equals(
+                        row.GetType().GetProperty("Directory")?.GetValue(row)
+                            as string, firstA, StringComparison.OrdinalIgnoreCase)) != 1)
+                    throw new Exception("A single import appears as two separate tasks.");
+            }
+            finally
+            {
+                continuedView.Close();
+                journal.Cancel(continuingKey);
+            }
 
             // A freshly restored scan may have zero volatile progress while
             // its durable receipt already confirmed thousands of photos.
