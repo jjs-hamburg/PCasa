@@ -128,6 +128,8 @@ public sealed class TaskManagerWindow : Window
         AddColumn("Fortschritt", nameof(TaskRow.Progress), new DataGridLength(92));
         AddColumn("Status", nameof(TaskRow.Status), new DataGridLength(92));
         _list.SelectionChanged += (_, _) => UpdateActions();
+        // Reordering changes the scheduler's persisted dispatch sequence,
+        // never merely the DataGrid's visual sort order.
         _list.AllowDrop = true;
         _list.PreviewMouseLeftButtonDown += TaskMouseDown;
         _list.PreviewMouseMove += TaskMouseMove;
@@ -360,7 +362,7 @@ public sealed class TaskManagerWindow : Window
         var source = _all.FirstOrDefault(row => row.Key == key);
         e.Effects = !_acting && source is { Movable: true } &&
             target is not null &&
-            target.Status is "Läuft" or "Wartet" &&
+            target.Status is "Läuft" or "Wartet" or "Angehalten" &&
             target.Priority == source.Priority &&
             target.Key != source.Key &&
             ((source.Durable && target.Durable) ||
@@ -444,6 +446,13 @@ public sealed class TaskManagerWindow : Window
         _down.IsEnabled = !_acting && row is { Movable: true };
         _restart.IsEnabled = !_acting && row is { Retryable: true };
         _delete.IsEnabled = !_acting && row is { Deletable: true };
+        const string moveLimits =
+            "Verschieben ist nur zwischen Aufträgen derselben " +
+            "Prioritäts- und Ausführungsgruppe möglich. " +
+            "Laufende Arbeiten und abgeschlossene Schreibschritte werden nicht umsortiert.";
+        _up.ToolTip = _down.ToolTip = UiLanguage.T(moveLimits);
+        ToolTipService.SetShowOnDisabled(_up, true);
+        ToolTipService.SetShowOnDisabled(_down, true);
         _detail.Text = row is null
             ? _all.Count == 0 ? _idleScanStatus?.Invoke() ?? "" : ""
             : row.Error is { Length: > 0 }
@@ -605,11 +614,10 @@ public sealed class TaskManagerWindow : Window
                 return (Rows: rows.OrderBy(row => row.Status switch
                     {
                         "Läuft" => 0,
-                        "Wartet" => 1,
-                        "Angehalten" or "Nicht erreichbar" => 2,
-                        "Fehler" => 3,
-                        "Abgeschlossen" => 4,
-                        _ => 2
+                        "Wartet" or "Angehalten" or "Nicht erreichbar" => 1,
+                        "Fehler" => 2,
+                        "Abgeschlossen" => 3,
+                        _ => 1
                     })
                     .ThenBy(row => row.Priority)
                     .ThenBy(row => row.Order).ThenBy(row => row.Key)

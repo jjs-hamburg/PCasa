@@ -230,7 +230,10 @@ internal static class TaskManagerFlow
                     return Task.FromResult(key == autoKey);
                 },
                 idleScanStatus: null,
-                moveAutomaticScan: (_, _) => Task.FromResult(true),
+                moveAutomaticScan: (source, target) => Task.FromResult(
+                    firstRepo.MovePendingFirstImport(
+                        long.Parse(source.AsSpan("initial:".Length)),
+                        long.Parse(target.AsSpan("initial:".Length)))),
                 resumeAutomaticScan: _ => Task.FromResult(true));
             manager.Show();
             Pump(manager);
@@ -264,6 +267,38 @@ internal static class TaskManagerFlow
                 (string?)pendingRows[0].GetType().GetProperty("Key")
                     ?.GetValue(pendingRows[0]) != $"initial:{initialB.FolderId}")
                 throw new Exception("Held first import lost its status or persisted dispatch order.");
+
+            // An explicitly paused import is STILL a position in its
+            // persistent P2 queue. Up/down must change its real dispatch
+            // rank and the visual order, even while it remains held.
+            // Status-group sorting previously hid a successful move.
+            grid.SelectedItem = pausedRow;
+            Pump(manager);
+            var moveUp = Descendants<Button>(manager).Single(button =>
+                Equals(button.Content, "Nach oben"));
+            var moveDown = Descendants<Button>(manager).Single(button =>
+                Equals(button.Content, "Nach unten"));
+            if (!moveUp.IsEnabled || !moveDown.IsEnabled)
+                throw new Exception("Paused import cannot be moved in its queue.");
+            moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
+            Until(manager, () =>
+            {
+                var importKeys = grid.Items.Cast<object>()
+                    .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
+                    .Where(key => key is not null && key.StartsWith("initial:", StringComparison.Ordinal))
+                    .ToArray();
+                return importKeys.SequenceEqual(new[] {
+                    $"initial:{initialA.FolderId}", $"initial:{initialB.FolderId}" });
+            }, "Moving a held first import did not update visible queue order.");
+            if (firstRepo.GetPendingFirstImportQueue()[0].FolderId != initialA.FolderId)
+                throw new Exception("Move up changed only the visible order, not SQLite.");
+            // Return to original persisted order for the subsequent tests.
+            Until(manager, () => moveDown.IsEnabled,
+                "Down control is disabled after a successful move.");
+            moveDown.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveDown));
+            Until(manager, () =>
+                firstRepo.GetPendingFirstImportQueue()[0].FolderId == initialB.FolderId,
+                "Move down failed to persist the original order.");
 
             // The formerly EMPTY taskmanager during a live background scan
             // is a regression. The row must have a real operation (Stop).
