@@ -1397,9 +1397,14 @@ internal static class Program
             throw new Exception("NAS retry was not deferred before reconnect.");
         var currentRound = verified.GetReviewRoundStatus(now);
         if (!verified.ReleaseRootReviewRetryOnReconnect(root.Id) ||
-            verified.GetReviewRoundStatus(now) != currentRound ||
             !verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
-            throw new Exception("Confirmed NAS return did not release retry without resetting the round.");
+            throw new Exception("Confirmed NAS return did not release the old retry deadline.");
+        var reconnectedRound = verified.GetReviewRoundStatus(now);
+        if (reconnectedRound.Round != currentRound.Round ||
+            reconnectedRound.Eligible != currentRound.Eligible ||
+            reconnectedRound.Completed != currentRound.Completed ||
+            reconnectedRound.Deferred >= currentRound.Deferred)
+            throw new Exception("Reconnecting unexpectedly reset round progress, or retained its deferral.");
         if (verified.ReleaseRootReviewRetryOnReconnect(root.Id))
             throw new Exception("Idempotent reconnect released an already-cleared retry.");
 
