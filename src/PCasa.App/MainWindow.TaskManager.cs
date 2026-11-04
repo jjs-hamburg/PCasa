@@ -5,7 +5,7 @@ namespace PCasa.App;
 
 // Read-only projection of the existing automatic scan queue and current
 // scheduler execution. The taskmanager never owns a second scanner or queue.
-internal sealed record AutomaticScanTask(
+public sealed record AutomaticScanTask(
     string Key, string Title, string Directory, string Progress,
     string Status, int Priority, long Order);
 
