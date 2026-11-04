@@ -364,6 +364,35 @@ public sealed class LocalDatabase
             firstPass.ExecuteNonQuery();
         }
 
+        // One persistent completion timestamp per physical subdirectory.
+        // A directory is recorded ONLY after its complete, generation-fenced
+        // inventory; a root-wide cycle is finished separately, after all
+        // descendants have been enumerated. Never infer completeness from
+        // "last visited" or from a scan that is still running.
+        using (var verified = connection.CreateCommand())
+        {
+            verified.CommandText = """
+                CREATE TABLE IF NOT EXISTS scan_directory_verified (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_directory TEXT NOT NULL COLLATE NOCASE,
+                    source_generation INTEGER NOT NULL,
+                    verified_utc TEXT NOT NULL,
+                    PRIMARY KEY(monitored_folder_id,local_directory),
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS scan_root_review (
+                    monitored_folder_id INTEGER PRIMARY KEY,
+                    source_generation INTEGER NOT NULL,
+                    last_completed_utc TEXT,
+                    retry_after_utc TEXT,
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+                """;
+            verified.ExecuteNonQuery();
+        }
+
         // Original write failures belong to one shared durable ledger, not
         // separate GPS and tag queues. Create the table during DB setup so
         // direct repository callers (tests/CLI) also support supersession.
