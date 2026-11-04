@@ -680,7 +680,7 @@ public partial class MainWindow
         // original token, retaining monitored_folders.initial_scan_pending
         // and the scanner's per-directory durable file receipts.
         if (key == _initialScanTaskKey && _initialScanActive &&
-            _activeScanCancellation is
+            _initialScanCancellation is
                 { IsCancellationRequested: false } initialCancellation)
         {
             _initialScanStopRequested = true;
