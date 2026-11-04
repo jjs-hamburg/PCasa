@@ -36,6 +36,11 @@ public partial class MainWindow
                 return _folderRepository.MovePendingFirstImport(source, target);
             }, workKind: SchedulerWorkKind.CatalogRead);
         if (!changed) return false;
+        // A direct user move is a new explicit request. It also overrides
+        // the session-only guard for an earlier failed automatic attempt;
+        // otherwise moving the task would change its visible rank but not
+        // actually cause the scanner to execute it.
+        _initialScanAttempted.Remove(source);
 
         // A newly promoted first import must actually overtake a running
         // older import. Yield at the scanner's normal cancellation boundary;
