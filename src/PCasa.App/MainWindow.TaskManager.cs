@@ -22,7 +22,8 @@ public partial class MainWindow
         }
         var manager = new TaskManagerWindow(_scheduler, _database,
             RetryOriginalWriteAsync, DiscardOriginalWriteAsync,
-            SnapshotAutomaticScans, StopAutomaticScanAsync)
+            SnapshotAutomaticScans, StopAutomaticScanAsync,
+            () => _backgroundIdleStatus)
         {
             Owner = this
         };
