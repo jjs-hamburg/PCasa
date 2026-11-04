@@ -57,6 +57,27 @@ internal static class TaskManagerFlow
             scheduler.RegisterDurablePackageType("taskmanager-test-v1", Make);
             scheduler.RecoverDurablePackages();
 
+            // An empty taskmanager must state WHY the scheduler has no
+            // actionable work: the periodic 30-day review may legitimately
+            // not be due, or a source may be offline. Never display a blank
+            // surface that makes a stalled scanner indistinguishable from
+            // a completed maintenance cycle.
+            using (var idle = new PCasa.App.TaskManagerWindow(scheduler, database,
+                idleScanStatus: () =>
+                    "Keine Bestandsprüfung fällig (30 Tage Mindestabstand)"))
+            {
+                idle.Show();
+                var statusField = typeof(PCasa.App.TaskManagerWindow)
+                    .GetField("_detail",
+                        System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance)!;
+                var idleStatus = (TextBlock)statusField.GetValue(idle)!;
+                Until(idle, () => idleStatus.Text.Contains(
+                    "Keine Bestandsprüfung fällig", StringComparison.Ordinal),
+                    "Empty Taskmanager did not disclose whether idle review is due.");
+                idle.Close();
+            }
+
             // Occupy only the real manual lane. A newer P0 may ask it to
             // yield, but the blocking test step ignores cancellation until
             // released, just like non-interruptible native file I/O.
