@@ -449,6 +449,28 @@ internal static class Program
                 throw new Exception("A missing file disabled a reachable share.");
         if (sProbes != 3)
             throw new Exception("One hundred errors repeated the network root probe.");
+
+        // Production defaults must rediscover a returning NAS within the
+        // 10-second offline cadence. All files sharing S: reuse one gate.
+        var quickNow = now;
+        var quickCalls = 0;
+        var quickOnline = false;
+        var quick = new SourceAvailabilityGate(_ =>
+        {
+            quickCalls++;
+            return quickOnline;
+        }, () => quickNow);
+        if (quick.CanAccess(@"S:\Archive\one.jpg") || quickCalls != 1)
+            throw new Exception("Default gate did not detect the offline source.");
+        quickOnline = true;
+        quickNow += TimeSpan.FromSeconds(9);
+        if (quick.CanAccess(@"S:\Archive\two.jpg") || quickCalls != 1)
+            throw new Exception("Default NAS probe repeated before ten seconds.");
+        quickNow += TimeSpan.FromSeconds(1);
+        if (!quick.CanAccess(@"S:\Archive\three.jpg") || quickCalls != 2)
+            throw new Exception("Default gate delayed confirmed NAS recovery.");
+        if (!quick.CanAccess(@"S:\Archive\four.jpg") || quickCalls != 2)
+            throw new Exception("Healthy NAS was probed separately for each image.");
     }
 
     private static void LegacyTagRecoveryMigrationPreservesIntents()
@@ -1345,6 +1367,18 @@ internal static class Program
         if (!new FolderRepository(db).GetDueRootReviewIds(
                 now.AddHours(7)).Contains(root.Id))
             throw new Exception("Deferred incomplete root was lost across restart.");
+        // A confirmed NAS reconnect overrides the OLD deadline immediately.
+        // The completed round and each saved file receipt must not change.
+        verified.DeferRootReview(root.Id, generation, now.AddHours(10));
+        if (verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
+            throw new Exception("NAS retry was not deferred before reconnect.");
+        var currentRound = verified.GetReviewRoundStatus(now);
+        if (!verified.ReleaseRootReviewRetryOnReconnect(root.Id) ||
+            verified.GetReviewRoundStatus(now) != currentRound ||
+            !verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
+            throw new Exception("Confirmed NAS return did not release retry without resetting the round.");
+        if (verified.ReleaseRootReviewRetryOnReconnect(root.Id))
+            throw new Exception("Idempotent reconnect released an already-cleared retry.");
 
         // The completed inventory releases its checkpoint. A genuinely
         // NEW complete inventory must visit the whole directory and may
