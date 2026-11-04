@@ -316,7 +316,8 @@ public sealed class TaskManagerWindow : Window
     private void TaskMouseDown(object sender, MouseButtonEventArgs e)
     {
         var row = TaskAt(e.OriginalSource as DependencyObject);
-        _dragOrigin = row is { Movable: true, Durable: true }
+        _dragOrigin = row is { Movable: true } &&
+            (row.Durable || IsInitialImport(row.Key))
             ? e.GetPosition(_list) : null;
         _dragKey = _dragOrigin is not null ? row?.Key : null;
     }
@@ -357,11 +358,14 @@ public sealed class TaskManagerWindow : Window
             ? e.Data.GetData(TaskDragFormat) as string : null;
         var target = TaskAt(e.OriginalSource as DependencyObject);
         var source = _all.FirstOrDefault(row => row.Key == key);
-        e.Effects = !_acting && source is { Movable: true, Durable: true } &&
-            target is { Durable: true } &&
+        e.Effects = !_acting && source is { Movable: true } &&
+            target is not null &&
             target.Status is "Läuft" or "Wartet" &&
             target.Priority == source.Priority &&
-            target.Key != source.Key
+            target.Key != source.Key &&
+            ((source.Durable && target.Durable) ||
+             (IsInitialImport(source.Key) && IsInitialImport(target.Key) &&
+              _moveAutomaticScan is not null))
                 ? DragDropEffects.Move : DragDropEffects.None;
         e.Handled = true;
     }
@@ -374,15 +378,21 @@ public sealed class TaskManagerWindow : Window
         var target = TaskAt(e.OriginalSource as DependencyObject);
         if (key is null || target is null) return;
         var targetKey = target.Key;
-        _ = PerformAsync(key, () => Task.Run(() =>
-        {
-            if (!_scheduler.MoveDurableTaskTo(key, targetKey))
-                throw new InvalidOperationException(
-                    "Die Reihenfolge konnte nicht geändert werden. " +
-                    "Der Auftrag ist nicht mehr wartend oder gehört zu einer anderen Ausführungsgruppe.");
-            return true;
-        }));
+        if (IsInitialImport(key) && _moveAutomaticScan is not null)
+            _ = PerformAsync(key, () => _moveAutomaticScan(key, targetKey));
+        else
+            _ = PerformAsync(key, () => Task.Run(() =>
+            {
+                if (!_scheduler.MoveDurableTaskTo(key, targetKey))
+                    throw new InvalidOperationException(
+                        "Die Reihenfolge konnte nicht geändert werden. " +
+                        "Der Auftrag ist nicht mehr wartend oder gehört zu einer anderen Ausführungsgruppe.");
+                return true;
+            }));
     }
+
+    private static bool IsInitialImport(string key)
+        => key.StartsWith("initial:", StringComparison.Ordinal);
 
     private TaskRow? Selection => _list.SelectedItem as TaskRow;
 
