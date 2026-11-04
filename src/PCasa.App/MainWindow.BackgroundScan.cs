@@ -1036,14 +1036,15 @@ public partial class MainWindow
                     // checks existing photos or finds zero new files.
                     // The scanner is already executing when this callback
                     // arrives, so it is not a speculative queued indicator.
+                    string? schedulerScanKey = null;
                     IProgress<ScanProgress> scanProgress = new Progress<ScanProgress>(value =>
                     {
                         if (!acceptsScanProgress || _manualFileTransferActive) return;
                         _backgroundLiveChecked = value.ImageFilesSeen;
-                        _scheduler.ReportProgress(
-                            $"background-scan:{folder.Id}:{_folderRepository.GetSourceState(folder.CanonicalPath)?.Generation}:{scanPath}",
-                            AutomaticTaskTitle(request.Kind), value.ImageFilesSeen,
-                            0, value.CurrentFile);
+                        if (schedulerScanKey is not null)
+                            _scheduler.ReportProgress(schedulerScanKey,
+                                AutomaticTaskTitle(request.Kind), value.ImageFilesSeen,
+                                0, value.CurrentFile);
                         // The same scheduler snapshot drives both the small
                         // progress window and the taskmanager live row.
                         activityWindow ??= AcquireProgressPresenter(backgroundPresenterOwner);
@@ -1089,7 +1090,7 @@ public partial class MainWindow
                         PCasaDiagnostics.WriteMessage("Scan.RootStart",
                             $"Folder={folder.LocalPath}; Generation={sourceState.Value.Generation}; " +
                             $"ResumeInMemory={scanResume.ImageFilesSeen}; Kind={request.Kind}");
-                    var schedulerScanKey =
+                    schedulerScanKey =
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}";
                     await _scheduler.EnqueueAsync(
                         schedulerScanKey,
