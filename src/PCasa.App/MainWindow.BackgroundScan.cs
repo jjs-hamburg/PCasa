@@ -578,7 +578,11 @@ public partial class MainWindow
             if (task.Kind is BackgroundFolderChangeKind.RecoverCache or
                 BackgroundFolderChangeKind.RemovePath) return;
             var key = AutomaticTaskKey(task);
-            if (_backgroundSuppressed.Contains(key) || !keys.Add(key)) return;
+            var stopping = _backgroundSuppressed.Contains(key);
+            // A non-interruptible SMB operation may continue briefly after
+            // Stop was requested. Keep that live task visible until it
+            // actually exits, rather than recreating the empty-manager bug.
+            if ((stopping && !current) || !keys.Add(key)) return;
             var path = task.Kind == BackgroundFolderChangeKind.ScanFile
                 ? Path.GetDirectoryName(task.Path) ?? task.Path : task.Path;
             // The in-flight scheduler snapshot, not merely a queued WPF
@@ -596,14 +600,17 @@ public partial class MainWindow
                 : task.Resume?.CommittedFiles ?? 0;
             // Cursor receipts remain durable after a restart even when the
             // current in-memory enumerator has not produced its first file.
-            var progress = checkedFiles > 0
-                ? UiLanguage.Format("{0:N0} geprüft", checkedFiles)
-                : "–";
+            var progress = stopping
+                ? UiLanguage.T("Abbruch angefordert")
+                : checkedFiles > 0
+                    ? UiLanguage.Format("{0:N0} geprüft", checkedFiles)
+                    : "–";
             rows.Add(new AutomaticScanTask(key,
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
                 progress,
                 runningSnapshot is not null ? "Läuft" : "Wartet",
-                AutomaticTaskPriority(task.Kind), rank++));
+                AutomaticTaskPriority(task.Kind), rank++,
+                CanStop: !stopping));
         }
 
         if (_backgroundInFlight is { } inFlight)
