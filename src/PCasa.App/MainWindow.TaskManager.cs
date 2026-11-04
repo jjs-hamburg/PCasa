@@ -3,6 +3,12 @@ using PCasa.App.Services;
 
 namespace PCasa.App;
 
+// Read-only projection of the existing automatic scan queue and current
+// scheduler execution. The taskmanager never owns a second scanner or queue.
+internal sealed record AutomaticScanTask(
+    string Key, string Title, string Directory, string Progress,
+    string Status, int Priority, long Order);
+
 public partial class MainWindow
 {
     private TaskManagerWindow? _taskManagerWindow;
@@ -15,7 +21,8 @@ public partial class MainWindow
             return;
         }
         var manager = new TaskManagerWindow(_scheduler, _database,
-            RetryOriginalWriteAsync, DiscardOriginalWriteAsync)
+            RetryOriginalWriteAsync, DiscardOriginalWriteAsync,
+            SnapshotAutomaticScans, StopAutomaticScanAsync)
         {
             Owner = this
         };
