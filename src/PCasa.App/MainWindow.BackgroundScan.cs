@@ -21,6 +21,10 @@ public partial class MainWindow
     private static readonly TimeSpan IdleRootReviewInterval = TimeSpan.FromDays(30);
     private static readonly TimeSpan FailedRootReviewBackoff = TimeSpan.FromHours(6);
     private BackgroundFolderChangeKind? _backgroundActiveScanKind;
+    private string? _backgroundActiveRootReviewPath;
+    private readonly Dictionary<string, int> _backgroundRootReviewYields =
+        new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxNewFileYieldsPerRootReview = 3;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
 
     private BackgroundFolderMonitor? _backgroundFolderMonitor;
@@ -598,11 +602,22 @@ public partial class MainWindow
         // scanner retains its live enumerator and persisted directory cursor
         // and is placed back behind the newly discovered P3 work.
         if (_backgroundActiveScanKind == BackgroundFolderChangeKind.RescanRoot &&
+            _backgroundActiveRootReviewPath is string rootReview &&
             change.Kind is BackgroundFolderChangeKind.ScanFile or
                 BackgroundFolderChangeKind.ScanDirectory)
         {
-            if (_backgroundCurrentScanCancellation is { IsCancellationRequested: false } running)
+            // Fairness: a steady stream of new photos must not keep
+            // interrupting the SAME P4 root forever. Yield to the first
+            // three concrete discovery bursts, then finish this root before
+            // processing further queued watcher events.
+            var yields = _backgroundRootReviewYields.GetValueOrDefault(rootReview);
+            if (yields < MaxNewFileYieldsPerRootReview &&
+                _backgroundCurrentScanCancellation is
+                    { IsCancellationRequested: false } running)
+            {
+                _backgroundRootReviewYields[rootReview] = yields + 1;
                 _ = running.CancelAsync();
+            }
         }
         _cacheMaintenanceCancellation?.Cancel();
         _backgroundDebounceTimer?.Stop();
@@ -856,6 +871,9 @@ public partial class MainWindow
 
                 var acceptsScanProgress = true;
                 _backgroundActiveScanKind = request.Kind;
+                _backgroundActiveRootReviewPath =
+                    request.Kind == BackgroundFolderChangeKind.RescanRoot
+                        ? scanPath : null;
                 try
                 {
                     // Every active NAS scan is visible, even if it only
@@ -941,6 +959,8 @@ public partial class MainWindow
                         scanCancellation.Token,
                         workKind: SchedulerWorkKind.CatalogScan);
                     var result = scanResult ?? throw new OperationCanceledException();
+                    if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
+                        _backgroundRootReviewYields.Remove(scanPath);
                     scanResume.Dispose();
                     scanResume = null;
                     var followup = request.NeedsFollowup;
@@ -1023,6 +1043,7 @@ public partial class MainWindow
                 finally
                 {
                     _backgroundActiveScanKind = null;
+                    _backgroundActiveRootReviewPath = null;
                     acceptsScanProgress = false;
                     activityWindow?.EndScanPhase(scanOwner);
                     RestoreWaitingManualPresentationAfterScan();
