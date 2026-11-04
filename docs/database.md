@@ -57,10 +57,13 @@ Eine gemeinsame Serverdatenbank und die Verteilung der Thumbnails sind **noch ni
 ## Datenbankverwaltung (Optionen → Datenbankverwaltung)
 
 Die fünf Funktionen sind Informationen, Sichern, Wiederherstellen, Optimieren
-und Zurücksetzen. Jede mutierende Datenbankoperation wird erst nach dem
-kontrollierten Beenden des Hauptprozesses in einem gesonderten PCasa-Prozess
-ausgeführt. Dieser wartet auf das vollständige Ende des vorherigen Prozesses,
-damit keine SQLite- oder Schedulerarbeit weiterläuft.
+und Zurücksetzen. **Sichern** arbeitet bei geöffneter PCasa-Oberfläche:
+SQLite erzeugt einen konsistenten WAL-Snapshot; die Vorschaudateien werden
+währenddessen unter dem vorhandenen Cache-Sperrmechanismus archiviert.
+PCasa wird für eine reine Sicherung nicht beendet. Die mutierenden
+Operationen Wiederherstellen, Optimieren und Zurücksetzen laufen dagegen
+erst nach dem kontrollierten Beenden des Hauptprozesses in einem gesonderten
+Wartungsprozess.
 
 - Sichern: ZIP mit konsistentem SQLite-Snapshot, lokalen Vorschaudaten
   (thumbnails und browse-cache) und Versionsmanifest. Keine Originalbilder

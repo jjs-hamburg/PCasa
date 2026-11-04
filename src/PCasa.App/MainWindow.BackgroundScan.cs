@@ -11,6 +11,10 @@ public partial class MainWindow
 {
     private readonly Dictionary<string, PendingBackgroundScan> _backgroundPending =
         new(StringComparer.OrdinalIgnoreCase);
+    // The ONE background scan dispatcher uses the same durable P4 ranks
+    // that Taskmanager displays. No independent visual priority queue.
+    private readonly Dictionary<long, long> _backgroundReviewOrder = new();
+    private bool _backgroundOrderChanged;
     // These are references into the already existing one-batch scan dispatcher;
     // they expose its real waiting tasks without spawning extra operations.
     private PendingBackgroundScan[]? _backgroundInFlight;
@@ -284,6 +288,12 @@ public partial class MainWindow
             {
                 return;
             }
+
+            // The order is owned by scan_root_review in SQLite. Capture
+            // its already committed sequence from the one monitor probe.
+            _backgroundReviewOrder.Clear();
+            for (var i = 0; i < dueRootReviews.Count; i++)
+                _backgroundReviewOrder[dueRootReviews[i]] = i + 1L;
 
             // The initial-import retry guard is session-only. After a
             // confirmed reconnect it may be retried immediately; a
@@ -705,7 +715,10 @@ public partial class MainWindow
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
                 progress,
                 runningSnapshot is not null ? "Läuft" : "Wartet",
-                AutomaticTaskPriority(task.Kind), rank++,
+                AutomaticTaskPriority(task.Kind),
+                task.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                _backgroundReviewOrder.TryGetValue(task.MonitoredFolderId, out var reviewRank)
+                    ? reviewRank : rank++,
                 CanStop: !stopping));
         }
 
@@ -717,6 +730,10 @@ public partial class MainWindow
                     Add(inFlight[i], i == _backgroundInFlightIndex);
             foreach (var task in _backgroundPending.Values
                          .OrderBy(row => AutomaticTaskPriority(row.Kind))
+                         .ThenBy(row => row.Kind == BackgroundFolderChangeKind.RescanRoot
+                             ? _backgroundReviewOrder.GetValueOrDefault(
+                                 row.MonitoredFolderId, long.MaxValue)
+                             : long.MaxValue)
                          .ThenBy(row => row.Path, StringComparer.OrdinalIgnoreCase))
                 Add(task, false);
         }
@@ -1010,6 +1027,10 @@ public partial class MainWindow
                 BackgroundFolderChangeKind.RescanRoot => 3,
                 _ => 4
             })
+            .ThenBy(request => request.Kind == BackgroundFolderChangeKind.RescanRoot
+                ? _backgroundReviewOrder.GetValueOrDefault(
+                    request.MonitoredFolderId, long.MaxValue)
+                : long.MaxValue)
             .ThenBy(request => request.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         _backgroundPending.Clear();
@@ -1031,6 +1052,12 @@ public partial class MainWindow
             for (; nextRequestIndex < requests.Length; nextRequestIndex++)
             {
                 _backgroundInFlightIndex = nextRequestIndex;
+                // A user can change queued P4 order while an earlier
+                // automatic request is blocked behind a manual task.
+                // Rebuild from the same persisted ranks, not the old array.
+                if (_backgroundOrderChanged)
+                    throw new OperationCanceledException(
+                        "Taskmanager changed the pending root-review order.");
                 var request = requests[nextRequestIndex];
                 var taskKey = AutomaticTaskKey(request);
                 if (_backgroundSuppressed.Remove(taskKey))
@@ -1206,6 +1233,9 @@ public partial class MainWindow
                     scanResume?.Dispose();
                     continue;
                 }
+                if (_backgroundOrderChanged)
+                    throw new OperationCanceledException(
+                        "Taskmanager changed the pending root-review order.");
                 // Directory.Exists can outlive cancellation on a dead NAS.
                 // A manual request that arrived during the probe must still
                 // supersede this background request before it gets scheduled.
@@ -1377,6 +1407,18 @@ public partial class MainWindow
                 }
                 catch (OperationCanceledException)
                 {
+                    if (_backgroundOrderChanged)
+                    {
+                        // Requeue the SAME unfinished scanner + receipts
+                        // in the outer finally, then sort by durable P4 rank.
+                        requests[nextRequestIndex] = request with
+                        {
+                            Resume = scanResume,
+                            ResumeGeneration = resumeGeneration
+                        };
+                        scanResume = null;
+                        throw;
+                    }
                     // A user explicitly stopped this automatic task. Keep
                     // committed SQLite scan receipts but do not requeue
                     // the same request immediately after cancellation.
@@ -1525,6 +1567,8 @@ public partial class MainWindow
                 _activeScanFolderId = null;
             }
             _backgroundCurrentScanCancellation = null;
+            var reordered = _backgroundOrderChanged;
+            _backgroundOrderChanged = false;
             _backgroundInFlight = null;
             _backgroundInFlightIndex = 0;
             _backgroundSuppressed.Clear();
@@ -1534,7 +1578,7 @@ public partial class MainWindow
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
-            if (_manualContextScanActive || _manualScanAllActive ||
+            if (reordered || _manualContextScanActive || _manualScanAllActive ||
                 _manualFileTransferActive || _folderRemovalPending)
             {
                 foreach (var remaining in requests.Skip(nextRequestIndex))

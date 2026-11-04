@@ -157,6 +157,13 @@ public sealed class DatabaseMaintenance
         var temporaryArchive = fullDestination + ".part-" + Guid.NewGuid().ToString("N");
         try
         {
+            // The main application remains open during read-only backups.
+            // Existing cache compaction and scan publication own this lock,
+            // so no pack referenced by the SQLite snapshot can disappear
+            // during archival. No second scheduler or background writer is
+            // created by database management.
+            lock (CatalogRemovalService.CacheLock)
+            {
             // SQLite online backup creates one consistent standalone image,
             // including data that may previously have been in the WAL.
             var snapshot = Path.Combine(work, CatalogName);
@@ -190,6 +197,7 @@ public sealed class DatabaseMaintenance
                     }));
                 AddFolder(zip, "thumbnails");
                 AddFolder(zip, "browse-cache");
+            }
             }
             // Never destroy an older successful backup because this attempt
             // failed. The complete .part archive is published in one rename.

@@ -410,6 +410,11 @@ public sealed class LocalDatabase
             !ColumnExists(connection, "scan_root_review", "completed_cycle");
         EnsureColumn(connection, "scan_root_review", "completed_cycle",
             "INTEGER NOT NULL DEFAULT 0");
+        // A user's Taskmanager order for complete-root reviews survives
+        // restart and is shared by the same existing P4 scan dispatcher.
+        // Zero means no explicit position has been assigned yet.
+        EnsureColumn(connection, "scan_root_review", "queue_order",
+            "INTEGER NOT NULL DEFAULT 0");
         if (firstReviewMigration)
         {
             using var migrated = connection.CreateCommand();

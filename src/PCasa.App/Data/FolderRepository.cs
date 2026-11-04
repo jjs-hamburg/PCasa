@@ -534,7 +534,9 @@ public sealed class FolderRepository
                     OR r.source_generation != s.generation
                     OR r.retry_after_utc IS NULL
                     OR r.retry_after_utc <= $now)
-             ORDER BY COALESCE(r.last_completed_utc,'') ASC,
+             ORDER BY CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
+                      r.queue_order ASC,
+                      COALESCE(r.last_completed_utc,'') ASC,
                       m.local_path COLLATE NOCASE ASC;
             """;
         cmd.Parameters.AddWithValue("$round", cycle);
@@ -545,6 +547,91 @@ public sealed class FolderRepository
         dueReader.Close();
         tx.Commit();
         return due;
+    }
+
+    // Stable order of the one existing P4 root-review dispatcher. This
+    // query intentionally does not advance the global review round: showing
+    // or reordering Taskmanager rows must not manufacture scan work.
+    public IReadOnlyList<long> GetRootReviewQueueOrder()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.id FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+              LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
+             WHERE s.desired_present=1 AND m.initial_scan_pending=0
+             ORDER BY CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
+                      r.queue_order ASC,
+                      COALESCE(r.last_completed_utc,'') ASC,
+                      m.local_path COLLATE NOCASE ASC;
+            """;
+        var result = new List<long>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) result.Add(reader.GetInt64(0));
+        return result;
+    }
+
+    // A manual Taskmanager move is a persistent order mutation, not a
+    // duplicate scheduled scan. Keep every root's relative order intact,
+    // and only promote within the P4 root-review class; P0 original writes
+    // remain protected by the single scheduler priority rules.
+    public bool MoveRootReview(long sourceId, long targetId)
+    {
+        if (sourceId == targetId) return false;
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        var ordered = new List<long>();
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT m.id FROM monitored_folders m
+                  JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                  LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
+                 WHERE s.desired_present=1 AND m.initial_scan_pending=0
+                 ORDER BY CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
+                          r.queue_order ASC,
+                          COALESCE(r.last_completed_utc,'') ASC,
+                          m.local_path COLLATE NOCASE ASC;
+                """;
+            using var reader = read.ExecuteReader();
+            while (reader.Read()) ordered.Add(reader.GetInt64(0));
+        }
+        var from = ordered.IndexOf(sourceId);
+        var to = ordered.IndexOf(targetId);
+        if (from < 0 || to < 0) return false;
+        ordered.RemoveAt(from);
+        // Drag target means its final slot, in either direction.
+        var index = ordered.IndexOf(targetId);
+        ordered.Insert(from < to ? index + 1 : index, sourceId);
+
+        // Assign compact monotonic orders even when old rows had no rank.
+        // The UPSERT changes only queue_order on existing scan receipts:
+        // progress, retry timestamps, cycle completion and generation
+        // always remain intact.
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            using var write = db.CreateCommand();
+            write.Transaction = tx;
+            write.CommandText = """
+                INSERT INTO scan_root_review
+                    (monitored_folder_id,source_generation,queue_order)
+                SELECT m.id,s.generation,$order
+                  FROM monitored_folders m
+                  JOIN scheduler_sources s
+                    ON s.canonical_path=m.canonical_path
+                 WHERE m.id=$id AND s.desired_present=1
+                ON CONFLICT(monitored_folder_id) DO UPDATE SET
+                    queue_order=excluded.queue_order;
+                """;
+            write.Parameters.AddWithValue("$id", ordered[i]);
+            write.Parameters.AddWithValue("$order", i + 1L);
+            if (write.ExecuteNonQuery() != 1)
+                throw new IOException("Root review order could not be persisted.");
+        }
+        tx.Commit();
+        return true;
     }
 
     public sealed record ReviewRoundStatus(long Round, int Eligible,

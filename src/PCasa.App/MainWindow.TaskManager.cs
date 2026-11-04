@@ -20,9 +20,84 @@ public partial class MainWindow
             long.TryParse(key.AsSpan("initial:".Length), out folderId);
     }
 
+    private static bool TryRootReviewTaskId(string key, out long folderId)
+    {
+        folderId = 0;
+        if (!key.StartsWith("automatic:", StringComparison.Ordinal))
+            return false;
+        var rest = key.AsSpan("automatic:".Length);
+        var delimiter = rest.IndexOf(':');
+        return delimiter > 0 &&
+            long.TryParse(rest[..delimiter], out folderId) &&
+            rest[(delimiter + 1)..].StartsWith(
+                "RescanRoot:", StringComparison.Ordinal);
+    }
+
     private async Task<bool> MoveAutomaticScanAsync(
         string sourceKey, string targetKey)
     {
+        // The two Verify-catalog rows represent different monitored roots
+        // of the SAME P4 review queue. Persist their order in SQLite, and
+        // update the ONE existing background scan dispatcher immediately.
+        if (TryRootReviewTaskId(sourceKey, out var sourceRoot) &&
+            TryRootReviewTaskId(targetKey, out var targetRoot))
+        {
+            var (moved, ordered) = await _scheduler.RunAsync(
+                $"taskmanager:review-reorder:{Guid.NewGuid():N}",
+                SchedulerPriority.UserAction,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    var ok = _folderRepository.MoveRootReview(sourceRoot, targetRoot);
+                    return (ok, ok ? _folderRepository.GetRootReviewQueueOrder()
+                        : Array.Empty<long>());
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            if (!moved) return false;
+
+            _backgroundReviewOrder.Clear();
+            for (var index = 0; index < ordered.Count; index++)
+                _backgroundReviewOrder[ordered[index]] = index + 1L;
+
+            if (_backgroundInFlight is { } inFlight &&
+                _backgroundInFlightIndex < inFlight.Length)
+            {
+                if (inFlight[_backgroundInFlightIndex].Kind ==
+                        BackgroundFolderChangeKind.RescanRoot)
+                {
+                    // The current review may be waiting in the scheduler
+                    // behind a manual scan. Cancel its queued attempt and
+                    // requeue ALL remaining requests with their confirmed
+                    // file/directory cursors, in the persisted new order.
+                    _backgroundOrderChanged = true;
+                    if (_backgroundCurrentScanCancellation is
+                        { IsCancellationRequested: false } active)
+                        try { await active.CancelAsync(); }
+                        catch (ObjectDisposedException) { }
+                }
+                else
+                {
+                    // A running P3 concrete discovery is untouchable.
+                    // Reorder only requests that have not been started.
+                    var start = _backgroundInFlightIndex + 1;
+                    var reordered = inFlight.Skip(start)
+                        .OrderBy(request => request.Kind ==
+                                BackgroundFolderChangeKind.RescanRoot ? 1 : 0)
+                        .ThenBy(request => request.Kind ==
+                                BackgroundFolderChangeKind.RescanRoot
+                                ? _backgroundReviewOrder.GetValueOrDefault(
+                                    request.MonitoredFolderId, long.MaxValue)
+                                : long.MaxValue)
+                        .ThenBy(request => request.Path,
+                            StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    Array.Copy(reordered, 0, inFlight, start, reordered.Length);
+                }
+            }
+            if (_backgroundPending.Count > 0 && !_backgroundWorkerRunning)
+                _backgroundDebounceTimer?.Start();
+            return true;
+        }
+
         if (!TryInitialTaskId(sourceKey, out var source) ||
             !TryInitialTaskId(targetKey, out var target))
             return false;

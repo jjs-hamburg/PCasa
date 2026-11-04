@@ -106,6 +106,22 @@ internal static class TaskManagerFlow
             if (firstRepo.GetPendingFirstImportQueue().Any(f =>
                     f.FolderId == finishedFolder.Id))
                 throw new Exception("Re-selecting a completed root reopened its import.");
+            var secondReviewedPath = Path.Combine(dir, "AlreadyReviewedB");
+            Directory.CreateDirectory(secondReviewedPath);
+            firstRepo.Add(secondReviewedPath);
+            var reviewedB = firstRepo.GetAll().Single(f =>
+                string.Equals(f.LocalPath, secondReviewedPath,
+                    StringComparison.OrdinalIgnoreCase));
+            var reviewedSourceB = firstRepo.GetSourceState(reviewedB.CanonicalPath);
+            if (reviewedSourceB is null ||
+                !firstRepo.CompleteInitialScan(
+                    reviewedB.Id, reviewedSourceB.Value.Generation))
+                throw new Exception("Cannot prepare second reviewed root.");
+            var reviewOneKey = $"automatic:{finishedFolder.Id}:RescanRoot:{finishedPath}";
+            var reviewTwoKey = $"automatic:{reviewedB.Id}:RescanRoot:{secondReviewedPath}";
+            if (!firstRepo.GetRootReviewQueueOrder().Contains(finishedFolder.Id) ||
+                !firstRepo.GetRootReviewQueueOrder().Contains(reviewedB.Id))
+                throw new Exception("Review roots absent from persistent order.");
 
             var firstQueue = firstRepo.GetPendingFirstImportQueue();
             if (firstQueue.Count != 2)
@@ -220,10 +236,24 @@ internal static class TaskManagerFlow
                     Interlocked.Increment(ref discardedOriginals);
                     return Task.CompletedTask;
                 },
-                () => new[] { new PCasa.App.AutomaticScanTask(
-                    autoKey, "Bestand überprüfen",
-                    @"G:\onedrive\Bilder\Camera Roll",
-                    "1.234 geprüft", "Läuft", 4, 0) },
+                () =>
+                {
+                    var ordered = firstRepo.GetRootReviewQueueOrder().ToList();
+                    return new[] {
+                        new PCasa.App.AutomaticScanTask(
+                            autoKey, "Bestand überprüfen",
+                            @"G:\onedrive\Bilder\Camera Roll",
+                            "1.234 geprüft", "Läuft", 4, 0),
+                        new PCasa.App.AutomaticScanTask(
+                            reviewOneKey, "Bestand überprüfen",
+                            finishedPath, "–", "Wartet", 4,
+                            ordered.IndexOf(finishedFolder.Id) + 1L),
+                        new PCasa.App.AutomaticScanTask(
+                            reviewTwoKey, "Bestand überprüfen",
+                            secondReviewedPath, "–", "Wartet", 4,
+                            ordered.IndexOf(reviewedB.Id) + 1L)
+                    };
+                },
                 key =>
                 {
                     if (key == autoKey) Interlocked.Increment(ref stoppedAuto);
@@ -231,9 +261,13 @@ internal static class TaskManagerFlow
                 },
                 idleScanStatus: null,
                 moveAutomaticScan: (source, target) => Task.FromResult(
-                    firstRepo.MovePendingFirstImport(
-                        long.Parse(source.AsSpan("initial:".Length)),
-                        long.Parse(target.AsSpan("initial:".Length)))),
+                    source.StartsWith("initial:", StringComparison.Ordinal)
+                        ? firstRepo.MovePendingFirstImport(
+                            long.Parse(source.AsSpan("initial:".Length)),
+                            long.Parse(target.AsSpan("initial:".Length)))
+                        : firstRepo.MoveRootReview(
+                            long.Parse(source.Split(':')[1]),
+                            long.Parse(target.Split(':')[1]))),
                 resumeAutomaticScan: _ => Task.FromResult(true));
             manager.Show();
             Pump(manager);
@@ -299,6 +333,42 @@ internal static class TaskManagerFlow
             Until(manager, () =>
                 firstRepo.GetPendingFirstImportQueue()[0].FolderId == initialB.FolderId,
                 "Move down failed to persist the original order.");
+
+            // A running manual scan and TWO waiting P4 root reviews:
+            // selecting the lower P4 job must enable Move up and store the
+            // real change, not merely alter a synthetic visual row order.
+            var reviewRows = grid.Items.Cast<object>()
+                .Where(item => item.GetType().GetProperty("Key")?.GetValue(item)
+                    is string key && (key == reviewOneKey || key == reviewTwoKey))
+                .ToArray();
+            if (reviewRows.Length != 2)
+                throw new Exception("Two separate waiting P4 reviews are missing.");
+            var originalReviews = reviewRows.Select(item =>
+                item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()).ToArray();
+            grid.SelectedItem = reviewRows[1];
+            Pump(manager);
+            if (!moveUp.IsEnabled || moveDown.IsEnabled)
+                throw new Exception("Waiting P4 reordering buttons are disabled.");
+            moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
+            Until(manager, () => grid.Items.Cast<object>()
+                .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
+                .Where(key => key == reviewOneKey || key == reviewTwoKey)
+                .SequenceEqual(originalReviews.Reverse()),
+                "P4 task move changed neither visible order nor queue.");
+            var expectedFirst = originalReviews[1] == reviewOneKey
+                ? finishedFolder.Id : reviewedB.Id;
+            var otherReview = expectedFirst == finishedFolder.Id
+                ? reviewedB.Id : finishedFolder.Id;
+            var storedReviewOrder = firstRepo.GetRootReviewQueueOrder().ToList();
+            if (storedReviewOrder.IndexOf(expectedFirst) >=
+                storedReviewOrder.IndexOf(otherReview))
+                throw new Exception("P4 move did not persist in SQLite.");
+            database.Initialize();
+            var reopenedReviews = new FolderRepository(database)
+                .GetRootReviewQueueOrder().ToList();
+            if (reopenedReviews.IndexOf(expectedFirst) >=
+                reopenedReviews.IndexOf(otherReview))
+                throw new Exception("P4 order was lost after SQLite reopen.");
 
             // The formerly EMPTY taskmanager during a live background scan
             // is a regression. The row must have a real operation (Stop).

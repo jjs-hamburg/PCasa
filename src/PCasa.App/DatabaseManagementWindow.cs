@@ -16,6 +16,8 @@ public sealed class DatabaseManagementWindow : Window
     private readonly Func<DatabaseMaintenance.Request, bool> _startMaintenance;
     private readonly TextBlock _status;
     private bool _busy;
+    private bool _backupBusy;
+    private Grid? _operationButtons;
 
     public DatabaseManagementWindow(DatabaseMaintenance maintenance,
         Func<DatabaseMaintenance.Request, bool> startMaintenance)
@@ -47,6 +49,7 @@ public sealed class DatabaseManagementWindow : Window
         };
         root.Children.Add(_status);
         var buttons = new Grid { Margin = new Thickness(0, 4, 0, 6) };
+        _operationButtons = buttons;
         buttons.ColumnDefinitions.Add(new ColumnDefinition());
         buttons.ColumnDefinitions.Add(new ColumnDefinition());
         var left = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
@@ -78,6 +81,12 @@ public sealed class DatabaseManagementWindow : Window
         footer.Children.Add(close);
         root.Children.Add(footer);
         Loaded += async (_, _) => await RefreshInfoAsync();
+        Closing += (_, args) =>
+        {
+            // Keep the visible status window alive until the SQLite snapshot
+            // and corresponding cache archive have been completely published.
+            if (_backupBusy) args.Cancel = true;
+        };
     }
 
     private static void Add(Panel parent, string label, Action action)
@@ -123,8 +132,9 @@ public sealed class DatabaseManagementWindow : Window
             Close();
     }
 
-    private void Backup()
+    private async void Backup()
     {
+        if (_busy) return;
         var picker = new SaveFileDialog
         {
             Title = UiLanguage.T("PCasa-Datenbank sichern"),
@@ -134,7 +144,41 @@ public sealed class DatabaseManagementWindow : Window
             OverwritePrompt = true
         };
         if (picker.ShowDialog(this) != true) return;
-        Begin(new DatabaseMaintenance.Request("backup", picker.FileName, [], 0));
+        await BackupToAsync(picker.FileName);
+    }
+
+    // A backup is READ-ONLY and runs with PCasa open. The SQLite online
+    // backup and thumbnail archive share the existing cache lock, so the
+    // referenced thumbnail packs cannot be compacted away mid-snapshot.
+    // Restore/reset still require the separate offline maintenance process.
+    internal async Task BackupToAsync(string destination)
+    {
+        if (_busy) return;
+        _busy = _backupBusy = true;
+        if (_operationButtons is not null) _operationButtons.IsEnabled = false;
+        _status.Text = UiLanguage.T(
+            "Sicherung läuft: Datenbank und Vorschaudaten werden konsistent gespeichert …");
+        try
+        {
+            await Task.Run(() => _maintenance.Backup(destination));
+            _status.Text = UiLanguage.T("Sicherung erfolgreich erstellt: ") + destination;
+            MessageBox.Show(this, UiLanguage.T("Sicherung erfolgreich erstellt.") +
+                Environment.NewLine + destination,
+                UiLanguage.T("Datenbank sichern"),
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _status.Text = UiLanguage.T("Sicherung fehlgeschlagen: ") + ex.Message;
+            MessageBox.Show(this, ex.Message,
+                UiLanguage.T("Datenbank sichern"),
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _busy = _backupBusy = false;
+            if (_operationButtons is not null) _operationButtons.IsEnabled = true;
+        }
     }
 
     private async void Restore()

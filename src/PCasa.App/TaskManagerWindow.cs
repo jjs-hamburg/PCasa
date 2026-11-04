@@ -321,7 +321,8 @@ public sealed class TaskManagerWindow : Window
         var row = TaskAt(e.OriginalSource as DependencyObject);
         _dragOrigin = row is { Movable: true } &&
             HasReorderPeer(row) &&
-            (row.Durable || IsInitialImport(row.Key))
+            (row.Durable || IsInitialImport(row.Key) ||
+             IsRootReview(row.Key))
             ? e.GetPosition(_list) : null;
         _dragKey = _dragOrigin is not null ? row?.Key : null;
     }
@@ -370,6 +371,8 @@ public sealed class TaskManagerWindow : Window
             ((source.Durable && target.Durable &&
               SameSchedulerLane(source, target)) ||
              (IsInitialImport(source.Key) && IsInitialImport(target.Key) &&
+              _moveAutomaticScan is not null) ||
+             (IsRootReview(source.Key) && IsRootReview(target.Key) &&
               _moveAutomaticScan is not null))
                 ? DragDropEffects.Move : DragDropEffects.None;
         e.Handled = true;
@@ -383,7 +386,8 @@ public sealed class TaskManagerWindow : Window
         var target = TaskAt(e.OriginalSource as DependencyObject);
         if (key is null || target is null) return;
         var targetKey = target.Key;
-        if (IsInitialImport(key) && _moveAutomaticScan is not null)
+        if ((IsInitialImport(key) || IsRootReview(key)) &&
+            _moveAutomaticScan is not null)
             _ = PerformAsync(key, () => _moveAutomaticScan(key, targetKey));
         else
             _ = PerformAsync(key, () => Task.Run(() =>
@@ -398,6 +402,10 @@ public sealed class TaskManagerWindow : Window
 
     private static bool IsInitialImport(string key)
         => key.StartsWith("initial:", StringComparison.Ordinal);
+
+    private static bool IsRootReview(string key)
+        => key.StartsWith("automatic:", StringComparison.Ordinal) &&
+           key.Contains(":RescanRoot:", StringComparison.Ordinal);
 
     // A task can move only inside the execution lane where its scheduler
     // owner can actually change dispatch order. Independent lanes cannot
@@ -422,6 +430,11 @@ public sealed class TaskManagerWindow : Window
         if (IsInitialImport(row.Key))
             return _all.Where(other => IsInitialImport(other.Key) &&
                     other.Priority == row.Priority)
+                .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
+        if (IsRootReview(row.Key))
+            return _all.Where(other => IsRootReview(other.Key) &&
+                    other.Priority == row.Priority &&
+                    other.Status == "Wartet")
                 .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
         if (row.Durable)
             return _all.Where(other => other.Durable &&
@@ -614,7 +627,10 @@ public sealed class TaskManagerWindow : Window
                     rows.Add(new TaskRow(scan.Key, scan.Title,
                         scan.Directory, scan.Progress, scan.Status,
                         null, scan.Priority, first?.QueueOrder ?? scan.Order,
-                        false, first is not null && _moveAutomaticScan is not null,
+                        false, _moveAutomaticScan is not null &&
+                            ((first is not null) ||
+                             (scan.Priority == 4 && IsRootReview(scan.Key) &&
+                              scan.Status == "Wartet")),
                         false, _stopAutomaticScan is not null && scan.CanStop));
                 }
 
@@ -871,7 +887,8 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is null || !CanMove(row, direction)) return;
-        if (IsInitialImport(row.Key) && _moveAutomaticScan is not null)
+        if ((IsInitialImport(row.Key) || IsRootReview(row.Key)) &&
+            _moveAutomaticScan is not null)
         {
             var lane = ReorderLane(row);
             var index = Array.FindIndex(lane, other => other.Key == row.Key);
