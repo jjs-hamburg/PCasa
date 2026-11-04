@@ -449,7 +449,23 @@ public sealed class FolderRepository
             outstanding = reader.GetInt64(1);
         }
 
-        if (eligible > 0 && outstanding == 0)
+        // An offline, unfinished first import may not prevent verification
+        // of other sources, but it still belongs to the library's round.
+        // Once those other roots finish, do not spin a second round while
+        // that original import remains unresolved.
+        long pendingFirstImports;
+        using (var pending = db.CreateCommand())
+        {
+            pending.Transaction = tx;
+            pending.CommandText = """
+                SELECT COUNT(*) FROM monitored_folders m
+                JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                WHERE m.initial_scan_pending=1 AND s.desired_present=1;
+                """;
+            pendingFirstImports = Convert.ToInt64(pending.ExecuteScalar());
+        }
+
+        if (eligible > 0 && outstanding == 0 && pendingFirstImports == 0)
         {
             // A COMPLETED round has an end. Advance once (persistently)
             // rather than starting at the first root while another remains
