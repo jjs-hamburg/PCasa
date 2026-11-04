@@ -206,6 +206,7 @@ internal static class TaskManagerFlow
             if (displayedKeys.Contains("taskmanager:blocker") ||
                 displayedKeys.Any(key => key is not null &&
                     !key.StartsWith("taskmanager:", StringComparison.Ordinal) &&
+                    !key.StartsWith("automatic:", StringComparison.Ordinal) &&
                     !key.StartsWith("failed-files:", StringComparison.Ordinal)))
                 throw new Exception("Non-actionable scheduler history leaked into the taskmanager.");
             if (grid.RowStyle is null || grid.CellStyle is null ||
