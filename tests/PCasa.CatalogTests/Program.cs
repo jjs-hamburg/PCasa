@@ -1212,6 +1212,25 @@ internal static class Program
         if (!folders.CompleteInitialScan(root.Id, generation,
                 folders.GetScanEpoch(root.CanonicalPath)))
             throw new Exception("Test root was not marked as previously imported.");
+
+        // Two monitored roots must have a fair full-pass order. A completed
+        // root is NOT due again until its interval expires, so a slow second
+        // root cannot starve behind endless repeats of the first.
+        var otherPath = Path.Combine(
+            Path.GetDirectoryName(sandbox.Images)!, "OtherPictures");
+        Directory.CreateDirectory(otherPath);
+        folders.Add(otherPath);
+        var other = folders.GetAll().Single(row =>
+            string.Equals(row.LocalPath, otherPath, StringComparison.OrdinalIgnoreCase));
+        var otherGeneration = folders.GetSourceState(other.CanonicalPath)!.Value.Generation;
+        if (!folders.CompleteInitialScan(other.Id, otherGeneration,
+                folders.GetScanEpoch(other.CanonicalPath)))
+            throw new Exception("Second root did not finish its initial import.");
+        var now = DateTime.UtcNow;
+        var dueBefore = folders.GetDueRootReviewIds(now, TimeSpan.FromDays(30));
+        if (!dueBefore.Contains(root.Id) || !dueBefore.Contains(other.Id))
+            throw new Exception("Unverified monitored roots were not eligible for idle review.");
+
         var key = $"background:inventory:{root.Id}:{generation}:RescanRoot:True:{root.LocalPath}";
         using var stop = new CancellationTokenSource();
         var interrupted = false;
@@ -1236,6 +1255,8 @@ internal static class Program
             !saved.Cursors.TryGetValue(directory, out var fileName) ||
             fileName != "photo-0000.jpg")
             throw new Exception("Automatic inventory did not persist its last committed file.");
+        if (folders.GetLastCompletedRootReview(root.Id) is not null)
+            throw new Exception("An interrupted root scan was incorrectly marked complete.");
         // Both the taskmanager and floating progress presenter must use the
         // same immutable, confirmed number immediately after a restart.
         if (folders.GetConfirmedRegularScanCount(key) != 1 ||
@@ -1263,6 +1284,33 @@ internal static class Program
             throw new Exception("Resumed partial inventory deleted an unseen earlier image.");
         if (new FolderRepository(db).GetConfirmedRegularScanCount(key) != 0)
             throw new Exception("Completed scan left an obsolete progress counter.");
+        var verified = new FolderRepository(db);
+        if (verified.GetLastCompletedRootReview(root.Id) is not DateTime finished ||
+            finished < now ||
+            !verified.GetVerifiedDirectories(root.Id, generation)
+                .ContainsKey(directory))
+            throw new Exception("Completed full scan failed to record its root and directory dates.");
+        var nextDue = verified.GetDueRootReviewIds(
+            DateTime.UtcNow.AddDays(1), TimeSpan.FromDays(30));
+        if (nextDue.Contains(root.Id) || !nextDue.Contains(other.Id))
+            throw new Exception("Completed root was immediately requeued before an unverified root.");
+        // Simulate a later interval without altering the OS clock.
+        var monthLater = verified.GetDueRootReviewIds(
+            DateTime.UtcNow.AddDays(31), TimeSpan.FromDays(30));
+        if (monthLater.Count < 2 || monthLater[0] != other.Id ||
+            !monthLater.Contains(root.Id))
+            throw new Exception("Idle root cycle was not fair or the interval never elapsed.");
+
+        // An offline/error-prone root must retain its cursor but back off,
+        // including after an application restart.
+        verified.DeferRootReview(root.Id, generation, DateTime.UtcNow.AddDays(33));
+        if (verified.GetDueRootReviewIds(
+                DateTime.UtcNow.AddDays(32), TimeSpan.FromDays(30)).Contains(root.Id))
+            throw new Exception("Failed idle review was retried during its backoff.");
+        db.Initialize();
+        if (!new FolderRepository(db).GetDueRootReviewIds(
+                DateTime.UtcNow.AddDays(34), TimeSpan.FromDays(30)).Contains(root.Id))
+            throw new Exception("Idle review backoff or completion was not restart-safe.");
 
         // The completed inventory releases its checkpoint. A genuinely
         // NEW complete inventory must visit the whole directory and may
