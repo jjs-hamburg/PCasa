@@ -15,6 +15,12 @@ public partial class MainWindow
     private readonly HashSet<long> _backgroundDeferredInventoryRoots = new();
     private readonly HashSet<long> _gpsSourceAuditedRoots = new();
     private bool _backgroundFirstMonitorSnapshot = true;
+    // Only one complete P4 sweep is admitted at a time. A completed root
+    // becomes due again after a minimum interval, never immediately after
+    // its last image. Concrete watcher events remain higher priority.
+    private static readonly TimeSpan IdleRootReviewInterval = TimeSpan.FromDays(30);
+    private static readonly TimeSpan FailedRootReviewBackoff = TimeSpan.FromHours(6);
+    private BackgroundFolderChangeKind? _backgroundActiveScanKind;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
 
     private BackgroundFolderMonitor? _backgroundFolderMonitor;
@@ -202,7 +208,7 @@ public partial class MainWindow
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, pendingInitialIds,
-                interruptedInventories) = await _scheduler.RunAsync(
+                interruptedInventories, dueRootReviews) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -222,7 +228,11 @@ public partial class MainWindow
                     // continue an unfinished automatic scan, not manufacture
                     // another root scan with a different checkpoint key.
                     var inventories = _folderRepository.GetPendingAutomaticInventories();
-                    return (roots, states, rules, pending, inventories);
+                    // Read dates while already on the scheduled probe lane.
+                    // Never schedule a new review from a WPF timer alone.
+                    var due = _folderRepository.GetDueRootReviewIds(
+                        DateTime.UtcNow, IdleRootReviewInterval);
+                    return (roots, states, rules, pending, inventories, due);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -270,6 +280,15 @@ public partial class MainWindow
             // Concrete watcher events or an explicit monitoring re-enable
             // justify reconciliation. Offline/online transitions DO NOT.
             var firstSnapshot = _backgroundFirstMonitorSnapshot;
+            // Pick exactly one eligible root in persisted oldest-first order.
+            // No backlog of thousands of independent repeat root scans.
+            var idleCandidate = !_backgroundWorkerRunning &&
+                _backgroundPending.Count == 0 && pendingInitialIds.Count == 0 &&
+                !_manualContextScanActive && !_manualScanAllActive &&
+                !_manualFileTransferActive
+                ? dueRootReviews.FirstOrDefault(id =>
+                    availability.TryGetValue(id, out var reachable) && reachable)
+                : 0L;
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
@@ -292,7 +311,8 @@ public partial class MainWindow
                     _ = AuditGpsSourceIdentityAsync(folder.Id);
 
                 var deferred = _backgroundDeferredInventoryRoots.Contains(folder.Id);
-                if (!firstKnown && !deferred)
+                var idleReviewDue = folder.Id == idleCandidate;
+                if (!firstKnown && !deferred && !idleReviewDue)
                     continue;
 
                 // Resume real interrupted inventory receipts without inventing
@@ -305,7 +325,8 @@ public partial class MainWindow
                     .Cast<BackgroundFolderChange>()
                     .ToArray();
 
-                var reconcile = (firstKnown && !firstSnapshot) || deferred;
+                var reconcile = (firstKnown && !firstSnapshot) ||
+                    deferred || idleReviewDue;
                 if (pendingInitialIds.Count > 0 &&
                     (restored.Length > 0 || reconcile))
                 {
@@ -325,6 +346,10 @@ public partial class MainWindow
                         folder.Id, folder.LocalPath,
                         BackgroundFolderChangeKind.RescanRoot,
                         Recursive: true));
+                    // A newly queued cycle is not followed by a second one
+                    // before the first has completed. Watcher events retain
+                    // their own higher placement in the same scheduler.
+                    if (idleReviewDue) idleCandidate = 0;
                 }
             }
             _backgroundFirstMonitorSnapshot = false;
@@ -568,9 +593,17 @@ public partial class MainWindow
                     : normalized, "Pending", change.Recursive);
         }
 
-        // Queue the notification behind the active scanner's durable cursor.
-        // Canceling a live root inventory here races with recovered imports
-        // and relocation receipts; the scheduler alone owns its yield.
+        // A newly copied file/directory must not wait days for a full P4
+        // inventory to finish. Yield only the idle root review; the existing
+        // scanner retains its live enumerator and persisted directory cursor
+        // and is placed back behind the newly discovered P3 work.
+        if (_backgroundActiveScanKind == BackgroundFolderChangeKind.RescanRoot &&
+            change.Kind is BackgroundFolderChangeKind.ScanFile or
+                BackgroundFolderChangeKind.ScanDirectory)
+        {
+            if (_backgroundCurrentScanCancellation is { IsCancellationRequested: false } running)
+                _ = running.CancelAsync();
+        }
         _cacheMaintenanceCancellation?.Cancel();
         _backgroundDebounceTimer?.Stop();
         _backgroundDebounceTimer?.Start();
@@ -822,6 +855,7 @@ public partial class MainWindow
                 _activeScanFolderId = folder.Id;
 
                 var acceptsScanProgress = true;
+                _backgroundActiveScanKind = request.Kind;
                 try
                 {
                     // Every active NAS scan is visible, even if it only
@@ -966,6 +1000,13 @@ public partial class MainWindow
                 }
                 catch
                 {
+                    // Filesystem or source errors never erase unfinished
+                    // directory receipts. Back off the whole-root P4 cycle
+                    // rather than restarting a failed NAS scan every 30 sec.
+                    if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                        resumeGeneration is long failedGeneration)
+                        _folderRepository.DeferRootReview(folder.Id,
+                            failedGeneration, DateTime.UtcNow + FailedRootReviewBackoff);
                     scanResume?.Dispose();
                     scanResume = null;
                     request = request with { Resume = null, ResumeGeneration = null };
@@ -981,6 +1022,7 @@ public partial class MainWindow
                 }
                 finally
                 {
+                    _backgroundActiveScanKind = null;
                     acceptsScanProgress = false;
                     activityWindow?.EndScanPhase(scanOwner);
                     RestoreWaitingManualPresentationAfterScan();
