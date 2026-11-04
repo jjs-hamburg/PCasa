@@ -979,9 +979,11 @@ public sealed class TaskManagerWindow : Window
         try
         {
             await action();
+            // ApplyFilters already preserves the currently selected task
+            // by its stable key. Do NOT forcibly reselect the task whose
+            // action just completed: another row may have been clicked
+            // while an asynchronous SQLite update was in flight.
             await RefreshAsyncAfterAction();
-            _list.SelectedItem = _list.Items.Cast<TaskRow>()
-                .FirstOrDefault(item => item.Key == key);
         }
         catch (Exception ex)
         {

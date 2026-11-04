@@ -500,5 +500,10 @@
   "Verschieben ist nur zwischen Aufträgen derselben Prioritäts- und Ausführungsgruppe möglich. Laufende Arbeiten und abgeschlossene Schreibschritte werden nicht umsortiert.": "Tasks can only be reordered within the same priority and execution group. Running jobs and completed write steps are not reordered.",
   "Dieser Auftrag läuft bereits; laufende Arbeit wird nicht durch Verschieben unterbrochen.": "This task is already running; reordering cannot interrupt work in progress.",
   "Keine zweite Aufgabe in derselben Prioritäts- und Ausführungsgruppe zum Verschieben vorhanden.": "No other task in the same priority and execution group is available for reordering.",
-  "Dieser Auftrag wird von einem anderen Scheduler-Bereich verwaltet und lässt sich hier nicht verschieben.": "This task is managed by another scheduler lane and cannot be reordered here."
+  "Dieser Auftrag wird von einem anderen Scheduler-Bereich verwaltet und lässt sich hier nicht verschieben.": "This task is managed by another scheduler lane and cannot be reordered here.",
+  "Sicherung läuft: Datenbank und Vorschaudaten werden konsistent gespeichert …": "Backup in progress: saving a consistent database and thumbnail snapshot…",
+  "Sicherung erfolgreich erstellt: ": "Backup created successfully: ",
+  "Sicherung erfolgreich erstellt.": "Backup created successfully.",
+  "Sicherung fehlgeschlagen: ": "Backup failed: ",
+  "Datenbank sichern": "Back up database"
 }

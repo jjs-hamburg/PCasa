@@ -106,6 +106,7 @@ public sealed class DatabaseManagementWindow : Window
         try
         {
             var summary = await Task.Run(_maintenance.ReadSummary);
+            if (_backupBusy) return; // An older info read must not erase the live backup status.
             _status.Text = UiLanguage.Format(
                 "Datenbank: {0}\nFotos: {1:N0}    Überwachte Verzeichnisse: {2:N0}\n" +
                 "Datenbankgröße: {3:N1} MB    Vorschaudaten: {4:N1} MB\n" +
@@ -117,8 +118,9 @@ public sealed class DatabaseManagementWindow : Window
         }
         catch (Exception ex)
         {
-            _status.Text = UiLanguage.T("Datenbankinformationen nicht verfügbar: ") +
-                           ex.Message;
+            if (!_backupBusy)
+                _status.Text = UiLanguage.T("Datenbankinformationen nicht verfügbar: ") +
+                               ex.Message;
         }
     }
 

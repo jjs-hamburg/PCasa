@@ -260,21 +260,14 @@ internal static class TaskManagerFlow
                     return Task.FromResult(key == autoKey);
                 },
                 idleScanStatus: null,
-                moveAutomaticScan: (source, target) =>
-                {
-                    var result = source.StartsWith("initial:", StringComparison.Ordinal)
+                moveAutomaticScan: (source, target) => Task.FromResult(
+                    source.StartsWith("initial:", StringComparison.Ordinal)
                         ? firstRepo.MovePendingFirstImport(
                             long.Parse(source.AsSpan("initial:".Length)),
                             long.Parse(target.AsSpan("initial:".Length)))
                         : firstRepo.MoveRootReview(
                             long.Parse(source.Split(':')[1]),
-                            long.Parse(target.Split(':')[1]));
-                    if (source.StartsWith("automatic:", StringComparison.Ordinal))
-                        Console.WriteLine("DIAG P4 move: from=" + source +
-                            " to=" + target + " changed=" + result +
-                            " ranks=" + string.Join(",", firstRepo.GetRootReviewQueueOrder()));
-                    return Task.FromResult(result);
-                },
+                            long.Parse(target.Split(':')[1]))),
                 resumeAutomaticScan: _ => Task.FromResult(true));
             manager.Show();
             Pump(manager);
@@ -337,9 +330,13 @@ internal static class TaskManagerFlow
             Until(manager, () => moveDown.IsEnabled,
                 "Down control is disabled after a successful move.");
             moveDown.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveDown));
+            var actingField = typeof(PCasa.App.TaskManagerWindow).GetField(
+                "_acting", System.Reflection.BindingFlags.NonPublic |
+                           System.Reflection.BindingFlags.Instance)!;
             Until(manager, () =>
-                firstRepo.GetPendingFirstImportQueue()[0].FolderId == initialB.FolderId,
-                "Move down failed to persist the original order.");
+                firstRepo.GetPendingFirstImportQueue()[0].FolderId == initialB.FolderId &&
+                !(bool)actingField.GetValue(manager)!,
+                "Move down did not finish its UI refresh and persisted order.");
 
             // A running manual scan and TWO waiting P4 root reviews:
             // selecting the lower P4 job must enable Move up and store the
@@ -352,35 +349,23 @@ internal static class TaskManagerFlow
                 throw new Exception("Two separate waiting P4 reviews are missing.");
             var originalReviews = reviewRows.Select(item =>
                 item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()).ToArray();
-            grid.SelectedItem = reviewRows[1];
+            var selectedReviewKey = (string)reviewRows[1].GetType()
+                .GetProperty("Key")!.GetValue(reviewRows[1])!;
+            grid.SelectedItem = grid.Items.Cast<object>().Single(item =>
+                Equals(item.GetType().GetProperty("Key")?.GetValue(item),
+                    selectedReviewKey));
             Pump(manager);
+            if (!Equals(grid.SelectedItem?.GetType().GetProperty("Key")
+                    ?.GetValue(grid.SelectedItem), selectedReviewKey))
+                throw new Exception("Selecting P4 task was reset by stale async refresh.");
             if (!moveUp.IsEnabled || moveDown.IsEnabled)
                 throw new Exception("Waiting P4 reordering buttons are disabled.");
-            Console.WriteLine("DIAG P4 initial: " +
-                string.Join(",", originalReviews) + " ranks=" +
-                string.Join(",", firstRepo.GetRootReviewQueueOrder()));
             moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
-            try
-            {
-                Until(manager, () => grid.Items.Cast<object>()
-                    .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
-                    .Where(key => key == reviewOneKey || key == reviewTwoKey)
-                    .SequenceEqual(originalReviews.Reverse()),
-                    "P4 task move changed neither visible order nor queue.");
-            }
-            catch
-            {
-                Console.Error.WriteLine("DIAG P4 after timeout: DB=" +
-                    string.Join(",", firstRepo.GetRootReviewQueueOrder()) +
-                    " UI=" + string.Join(",",
-                        grid.Items.Cast<object>()
-                            .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
-                            .Where(key => key == reviewOneKey || key == reviewTwoKey)) +
-                    " selected=" +
-                    (grid.SelectedItem?.GetType().GetProperty("Key")
-                        ?.GetValue(grid.SelectedItem)?.ToString() ?? "<null>"));
-                throw;
-            }
+            Until(manager, () => grid.Items.Cast<object>()
+                .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
+                .Where(key => key == reviewOneKey || key == reviewTwoKey)
+                .SequenceEqual(originalReviews.Reverse()),
+                "P4 move did not update visible task order.");
             var expectedFirst = originalReviews[1] == reviewOneKey
                 ? finishedFolder.Id : reviewedB.Id;
             var otherReview = expectedFirst == finishedFolder.Id
