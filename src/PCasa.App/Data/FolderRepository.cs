@@ -207,26 +207,104 @@ public sealed class FolderRepository
             pending.Parameters.AddWithValue("$path", classification.LocalPath);
             pending.ExecuteNonQuery();
         }
+        // Give a genuinely NEW pending root a stable tail slot. A manual
+        // reordering of older first imports is never reset by this insert.
+        // Both the source marker and queue position commit atomically.
+        if (inserted > 0)
+        {
+            using var rank = connection.CreateCommand();
+            rank.Transaction = transaction;
+            rank.CommandText = """
+                UPDATE monitored_folders
+                   SET initial_scan_queue_order=(
+                       SELECT MAX(CASE WHEN initial_scan_queue_order>0
+                              THEN initial_scan_queue_order ELSE id END)+1
+                         FROM monitored_folders)
+                 WHERE local_path=$path COLLATE NOCASE;
+                """;
+            rank.Parameters.AddWithValue("$path", classification.LocalPath);
+            rank.ExecuteNonQuery();
+        }
         transaction.Commit();
     }
 
-    // A durable first-import request survives cancellation, app restart and
-    // a temporarily unreachable SMB share. It is not conditional on the
-    // optional background folder watcher being enabled.
+    public sealed record PendingFirstImport(long FolderId, string Directory,
+        long QueueOrder);
+
+    public IReadOnlyList<PendingFirstImport> GetPendingFirstImportQueue()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.id,m.local_path,
+                   CASE WHEN m.initial_scan_queue_order > 0
+                        THEN m.initial_scan_queue_order ELSE m.id END
+              FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+             WHERE m.initial_scan_pending=1 AND s.desired_present=1
+             ORDER BY 3 ASC,m.id ASC;
+            """;
+        var pending = new List<PendingFirstImport>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            pending.Add(new PendingFirstImport(reader.GetInt64(0),
+                reader.GetString(1), reader.GetInt64(2)));
+        return pending;
+    }
+
+    // The initial-import pump reads the SAME persistent dispatch order
+    // that Taskmanager changes. Completed roots disappear when their
+    // initial_scan_pending flag is acknowledged by the scanner.
     public IReadOnlyList<MonitoredFolder> GetPendingInitialScans()
     {
-        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        using (var connection = _database.OpenConnection())
-        using (var command = connection.CreateCommand())
+        var byId = GetAll().ToDictionary(folder => folder.Id);
+        return GetPendingFirstImportQueue()
+            .Where(row => byId.ContainsKey(row.FolderId))
+            .Select(row => byId[row.FolderId])
+            .ToArray();
+    }
+
+    public bool MovePendingFirstImport(long folderId, long targetFolderId)
+    {
+        if (folderId == targetFolderId) return false;
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        var ordered = new List<long>();
+        using (var cmd = db.CreateCommand())
         {
-            command.CommandText = """
-                SELECT local_path FROM monitored_folders
-                WHERE initial_scan_pending = 1;
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                SELECT m.id FROM monitored_folders m
+                JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                WHERE m.initial_scan_pending=1 AND s.desired_present=1
+                ORDER BY CASE WHEN m.initial_scan_queue_order>0
+                         THEN m.initial_scan_queue_order ELSE m.id END,m.id;
                 """;
-            using var reader = command.ExecuteReader();
-            while (reader.Read()) paths.Add(reader.GetString(0));
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) ordered.Add(reader.GetInt64(0));
         }
-        return GetAll().Where(folder => paths.Contains(folder.LocalPath)).ToArray();
+        var oldIndex = ordered.IndexOf(folderId);
+        var newIndex = ordered.IndexOf(targetFolderId);
+        if (oldIndex < 0 || newIndex < 0) return false;
+        ordered.RemoveAt(oldIndex);
+        ordered.Insert(newIndex, folderId);
+        using var update = db.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText = """
+            UPDATE monitored_folders SET initial_scan_queue_order=$rank
+             WHERE id=$id AND initial_scan_pending=1;
+            """;
+        var idParam = update.Parameters.Add("$id", SqliteType.Integer);
+        var rankParam = update.Parameters.Add("$rank", SqliteType.Integer);
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            idParam.Value = ordered[i];
+            rankParam.Value = i + 1L;
+            if (update.ExecuteNonQuery() != 1)
+                throw new IOException("First-import queue changed during reorder.");
+        }
+        tx.Commit();
+        return true;
     }
 
     // A checkpoint is valid only for the same source membership and scan epoch.
