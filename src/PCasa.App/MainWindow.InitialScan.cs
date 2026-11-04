@@ -20,6 +20,7 @@ public partial class MainWindow
     private int _initialScanTaskChecked;
     private bool _initialScanWorkerStarted;
     private bool _initialScanStopRequested;
+    private CancellationTokenSource? _initialScanCancellation;
 
     private void QueuePendingInitialScans()
     {
@@ -88,6 +89,7 @@ public partial class MainWindow
     private async Task RunPendingInitialScanAsync(MonitoredFolder folder)
     {
         using var cancellation = new CancellationTokenSource();
+        _initialScanCancellation = cancellation;
         // Reuse the job identity as the Scheduler's actual InitialImport
         // operation. The Taskmanager and the progress presenter describe the
         // SAME job, not two artificially synchronized representations.
@@ -233,6 +235,8 @@ public partial class MainWindow
             _initialScanTaskChecked = 0;
             _initialScanWorkerStarted = false;
             _initialScanStopRequested = false;
+            if (ReferenceEquals(_initialScanCancellation, cancellation))
+                _initialScanCancellation = null;
             _manualScanRunning = _manualContextScanActive || _manualScanAllActive;
             _manualFolderScanWaiting = _manualScanRunning;
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
