@@ -513,7 +513,8 @@ public sealed class TaskManagerWindow : Window
                     rows.Add(new TaskRow(scan.Key, scan.Title,
                         scan.Directory, scan.Progress, scan.Status,
                         null, scan.Priority, scan.Order,
-                        false, false, false, _stopAutomaticScan is not null));
+                        false, false, false,
+                        _stopAutomaticScan is not null && scan.CanStop));
 
                 // Unrelated transient scheduler snapshots (historical source
                 // probes, cache refresh etc.) have no user action.
