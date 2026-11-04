@@ -530,6 +530,10 @@
                                   Click="TaskManagerMenu_Click"/>
                         <MenuItem Header="{loc:Tr Key='Schreibfehler'}"
                                   Click="WriteErrorsMenu_Click"/>
+                        <Separator/>
+                        <MenuItem x:Name="DatabaseManagementMenuItem"
+                                  Header="{loc:Tr Key='Datenbankverwaltung...'}"
+                                  Click="DatabaseManagementMenu_Click"/>
                     </MenuItem>
                 </Menu>
             </Border>

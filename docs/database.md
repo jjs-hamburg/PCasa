@@ -52,3 +52,34 @@ Bei Tag-Schreibjobs kann die Fortschrittsanzeige auf den bereits vorhandenen **l
 ## Mehrclient-Datenbank
 
 Eine gemeinsame Serverdatenbank und die Verteilung der Thumbnails sind **noch nicht realisiert**. Die dafür gedachten Felder, z. B. `server_sync_enabled` in `monitored_folders`, stellen **keine** funktionierende Synchronisierung dar. Siehe [Synchronisierungskonzept](sync.md).
+
+
+## Datenbankverwaltung (Optionen → Datenbankverwaltung)
+
+Die fünf Funktionen sind Informationen, Sichern, Wiederherstellen, Optimieren
+und Zurücksetzen. Jede mutierende Datenbankoperation wird erst nach dem
+kontrollierten Beenden des Hauptprozesses in einem gesonderten PCasa-Prozess
+ausgeführt. Dieser wartet auf das vollständige Ende des vorherigen Prozesses,
+damit keine SQLite- oder Schedulerarbeit weiterläuft.
+
+- Sichern: ZIP mit konsistentem SQLite-Snapshot, lokalen Vorschaudaten
+  (thumbnails und browse-cache) und Versionsmanifest. Keine Originalbilder
+  und keine persönlichen Programmeinstellungen.
+- Wiederherstellen: Alle überwachten Stammordner aus der Sicherung können
+  einzeln ausgewählt bzw. ausgeschlossen werden; Zielpfade werden nur über
+  den Windows-Ordnerdialog gewählt. Katalog- und Unterordnerpfade werden
+  zusammen angepasst; Überschneidungen oder doppelte Zielpfade werden
+  zurückgewiesen. Fehlende Laufwerke sind keine Löschanweisung.
+- Alle alten Jobs, Transferabsichten, Fehler und Scan-Cursor aus der
+  Sicherung werden verworfen. Der vorhandene Katalog bleibt für ausgewählte
+  Wurzeln erhalten. Noch nicht in Originaldateien bestätigte Metadaten
+  werden beim anschließenden Scan gezielt neu eingelesen.
+- Optimieren: SQLite-Integritätsprüfung, Checkpoint und VACUUM.
+- Zurücksetzen: Neue leere lokale Datenbank, leere Vorschaudaten.
+  Programmeinstellungen bleiben erhalten; zwei ausdrückliche Bestätigungen.
+
+Die Wiederherstellung erfolgt zuerst in einer geprüften lokalen Arbeitskopie.
+Erst nach erfolgreicher Integritäts- und Pfadprüfung werden aktive Datenbank
+und Cache-Dateien zusammen ausgetauscht. Im Fehlerfall wird der vorherige
+Zustand wiederhergestellt. Originalfotodateien werden durch keine der
+Datenbankverwaltungsfunktionen kopiert, gelöscht oder verändert.

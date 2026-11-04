@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Windows;
@@ -55,6 +56,51 @@ public partial class App : Application
     // ordinary MainWindow, scheduler or monitored-folder background jobs.
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Length >= 3 &&
+            string.Equals(e.Args[0], "--database-maintenance",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // No MainWindow, scheduler, native GPS browser or thumbnail writer
+            // exists in this process. Wait for the old process to fully exit
+            // BEFORE opening or replacing its WAL-backed catalog.
+            StartupUri = null;
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            base.OnStartup(e);
+            var path = e.Args[1];
+            var parentPid = int.TryParse(e.Args[2], out var parsed) ? parsed : 0;
+            _ = Task.Run(() =>
+                DatabaseMaintenance.RunRequest(path, parentPid))
+                .ContinueWith(task => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    var succeeded = task.IsCompletedSuccessfully;
+                    var message = succeeded
+                        ? task.Result
+                        : task.Exception?.GetBaseException().Message ??
+                          "Die Datenbankwartung ist fehlgeschlagen.";
+                    MessageBox.Show(message,
+                        "PCasa – Datenbankverwaltung", MessageBoxButton.OK,
+                        succeeded ? MessageBoxImage.Information :
+                                    MessageBoxImage.Error);
+                    try
+                    {
+                        // The process starts anew with a fresh scheduler,
+                        // SQLite pool and gallery projection.
+                        if (Environment.ProcessPath is string executable)
+                            Process.Start(new ProcessStartInfo(executable) {
+                                WorkingDirectory = AppContext.BaseDirectory,
+                                UseShellExecute = true
+                            })?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("PCasa konnte nicht automatisch erneut gestartet werden: " +
+                            ex.Message, "PCasa", MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
+                    }
+                    Shutdown(succeeded ? 0 : 1);
+                })), TaskScheduler.Default);
+            return;
+        }
         if (e.Args.Length == 0 || !string.Equals(e.Args[0],
             "--jpeg-benchmark", StringComparison.OrdinalIgnoreCase))
         {

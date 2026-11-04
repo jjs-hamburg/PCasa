@@ -194,10 +194,140 @@ internal static class Program
         Run("New watcher work survives an in-progress scan", PendingScanWorkSurvivesCompletion, failures);
         Run("Folder activity propagates upward only and green checks require verified scans",
             FolderStatusDistinguishesVerifiedAndRunning, failures);
+        Run("Database backup/restore remaps selected roots, discards jobs, preserves cached bytes and safely resets",
+            DatabaseMaintenanceRoundTrip, failures);
         if (ExclusionTestScheduler.IsValueCreated)
             ExclusionTestScheduler.Value.DisposeAsync().AsTask().GetAwaiter().GetResult();
         Console.WriteLine($"RESULT: catalog regression suite complete, {failures.Count} failed");
         return failures.Count == 0 ? 0 : 1;
+    }
+
+    private static void DatabaseMaintenanceRoundTrip()
+    {
+        var folder = Path.Combine(Path.GetTempPath(),
+            "PCasa-DatabaseMaintenance-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var data = Path.Combine(folder, "data");
+            var first = Path.Combine(folder, "PhotosA");
+            var second = Path.Combine(folder, "PhotosB");
+            var remapped = Path.Combine(folder, "AfterRestore");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+            Directory.CreateDirectory(remapped);
+            Directory.CreateDirectory(data);
+            var original = Path.Combine(first, "photo.jpg");
+            File.WriteAllBytes(original, [1, 3, 5, 7]); // never touched by PCasa maintenance
+            var cacheDir = Path.Combine(data, "thumbnails");
+            var packs = Path.Combine(data, "browse-cache");
+            Directory.CreateDirectory(cacheDir);
+            Directory.CreateDirectory(packs);
+            File.WriteAllBytes(Path.Combine(cacheDir, "saved.jpg"), [2, 4, 6]);
+            File.WriteAllBytes(Path.Combine(packs, "pack.bin"), [5, 4, 3, 2]);
+            File.WriteAllText(Path.Combine(data, "appearance.json"), "KEEP-SETTINGS");
+
+            var catalog = new LocalDatabase(Path.Combine(data, "pcasa.db"));
+            catalog.Initialize();
+            var roots = new FolderRepository(catalog);
+            roots.Add(first);
+            roots.Add(second);
+            var a = roots.GetAll().Single(x => string.Equals(
+                x.LocalPath, first, StringComparison.OrdinalIgnoreCase));
+            var b = roots.GetAll().Single(x => string.Equals(
+                x.LocalPath, second, StringComparison.OrdinalIgnoreCase));
+            using (var connection = catalog.OpenConnection())
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = """
+                    INSERT INTO photo_folders(monitored_folder_id,local_path,canonical_path,display_name,indexed_utc)
+                    VALUES($root,$local,$canonical,'PhotosA','2026-11-04T00:00:00Z');
+                    INSERT INTO images(folder_id,photo_folder_id,local_path,canonical_path,file_name,extension,file_size,
+                        modified_utc_ticks,width,height,thumbnail_path,indexed_utc)
+                    VALUES($root,(SELECT id FROM photo_folders WHERE monitored_folder_id=$root),
+                        $image,$image,'photo.jpg','.jpg',4,12345,1,1,$thumb,'2026-11-04T00:00:00Z');
+                    INSERT INTO pending_tag_edits(image_id,tag,desired_present,revision,updated_utc)
+                    VALUES((SELECT id FROM images),'unfinished',1,1,'2026-11-04T00:00:00Z');
+                    INSERT INTO original_write_failures(kind,image_id,package_key,file_path,attempts,last_error,last_attempt_utc)
+                    VALUES('tags',(SELECT id FROM images),'old-job',$image,1,'offline','2026-11-04T00:00:00Z');
+                    """;
+                cmd.Parameters.AddWithValue("$root", a.Id);
+                cmd.Parameters.AddWithValue("$local", first);
+                cmd.Parameters.AddWithValue("$canonical", a.CanonicalPath);
+                cmd.Parameters.AddWithValue("$image", original);
+                cmd.Parameters.AddWithValue("$thumb", Path.Combine(cacheDir, "saved.jpg"));
+                cmd.ExecuteNonQuery();
+            }
+
+            var work = new DatabaseMaintenance(data);
+            var archive = Path.Combine(folder, "backup.pcasa.zip");
+            work.Backup(archive);
+            var listed = work.InspectBackup(archive);
+            if (listed.Count != 2)
+                throw new Exception("Backup did not retain both monitored roots.");
+            if (!File.Exists(archive) || new FileInfo(archive).Length < 100)
+                throw new Exception("Backup archive was not published.");
+
+            // A contradictory mapping must be rejected BEFORE replacing the
+            // active database, including when two roots resolve to one path.
+            var collision = listed.Select(x => new DatabaseMaintenance.FolderChoice(
+                x.Id, x.LocalPath, x.CanonicalPath, remapped, true)).ToArray();
+            var rejected = false;
+            try { work.Restore(archive, collision); }
+            catch (InvalidDataException) { rejected = true; }
+            if (!rejected || work.ReadSummary().Roots != 2)
+                throw new Exception("Invalid remapping modified the live catalog.");
+
+            var choices = listed.Select(x => new DatabaseMaintenance.FolderChoice(
+                x.Id, x.LocalPath, x.CanonicalPath,
+                x.Id == a.Id ? remapped : x.LocalPath,
+                x.Id == a.Id)).ToArray();
+            work.Restore(archive, choices);
+            var summary = work.ReadSummary();
+            if (summary.Images != 1 || summary.Roots != 1 ||
+                summary.OpenWrites != 0 || summary.OpenTasks != 0)
+                throw new Exception("Restore lost indexed photos or retained pending work.");
+
+            using (var restored = catalog.OpenConnection())
+            using (var query = restored.CreateCommand())
+            {
+                query.CommandText =
+                    "SELECT local_path,canonical_path,modified_utc_ticks,thumbnail_path FROM images LIMIT 1;";
+                using var reader = query.ExecuteReader();
+                if (!reader.Read() ||
+                    !string.Equals(reader.GetString(0),
+                        Path.Combine(remapped, "photo.jpg"),
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(reader.GetString(1),
+                        Path.Combine(remapped, "photo.jpg"),
+                        StringComparison.OrdinalIgnoreCase) ||
+                    reader.GetInt64(2) != 0 ||
+                    !string.Equals(reader.GetString(3),
+                        Path.Combine(cacheDir, "saved.jpg"),
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Path remap or deferred metadata refresh was incorrect.");
+            }
+            if (!File.ReadAllBytes(Path.Combine(cacheDir, "saved.jpg"))
+                    .SequenceEqual(new byte[] { 2, 4, 6 }) ||
+                !File.ReadAllBytes(Path.Combine(packs, "pack.bin"))
+                    .SequenceEqual(new byte[] { 5, 4, 3, 2 }) ||
+                !File.ReadAllBytes(original).SequenceEqual(new byte[] { 1, 3, 5, 7 }))
+                throw new Exception("Restore changed original image or damaged cached bytes.");
+
+            work.Optimize();
+            work.Reset();
+            var empty = work.ReadSummary();
+            if (empty.Images != 0 || empty.Roots != 0 || empty.OpenTasks != 0 ||
+                empty.CacheBytes != 0 ||
+                File.ReadAllText(Path.Combine(data, "appearance.json")) != "KEEP-SETTINGS" ||
+                !File.ReadAllBytes(original).SequenceEqual(new byte[] { 1, 3, 5, 7 }))
+                throw new Exception("Reset touched originals/settings or retained catalog data.");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
     }
 
     private static void DurablePackageRejectsDynamicSteps()
