@@ -79,7 +79,11 @@ public sealed class DatabaseMaintenance
                     reader.GetString(2)));
             return folders;
         }
-        finally { DeleteWorkDir(temp); }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteWorkDir(temp);
+        }
     }
 
     public static string SaveRequest(Request request)
@@ -170,6 +174,10 @@ public sealed class DatabaseMaintenance
                 source.BackupDatabase(target);
             }
             using (var verified = OpenReadOnly(snapshot)) VerifyIntegrity(verified);
+            // Microsoft.Data.Sqlite pools disposed connections by default.
+            // A pooled destination handle blocks ZipFile.CreateEntryFromFile
+            // on Windows, even though the backup transaction has finished.
+            SqliteConnection.ClearAllPools();
             using (var zip = ZipFile.Open(temporaryArchive, ZipArchiveMode.Create))
             {
                 zip.CreateEntryFromFile(snapshot, CatalogName,
