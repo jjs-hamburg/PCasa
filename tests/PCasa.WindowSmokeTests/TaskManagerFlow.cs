@@ -260,14 +260,21 @@ internal static class TaskManagerFlow
                     return Task.FromResult(key == autoKey);
                 },
                 idleScanStatus: null,
-                moveAutomaticScan: (source, target) => Task.FromResult(
-                    source.StartsWith("initial:", StringComparison.Ordinal)
+                moveAutomaticScan: (source, target) =>
+                {
+                    var result = source.StartsWith("initial:", StringComparison.Ordinal)
                         ? firstRepo.MovePendingFirstImport(
                             long.Parse(source.AsSpan("initial:".Length)),
                             long.Parse(target.AsSpan("initial:".Length)))
                         : firstRepo.MoveRootReview(
                             long.Parse(source.Split(':')[1]),
-                            long.Parse(target.Split(':')[1]))),
+                            long.Parse(target.Split(':')[1]));
+                    if (source.StartsWith("automatic:", StringComparison.Ordinal))
+                        Console.WriteLine("DIAG P4 move: from=" + source +
+                            " to=" + target + " changed=" + result +
+                            " ranks=" + string.Join(",", firstRepo.GetRootReviewQueueOrder()));
+                    return Task.FromResult(result);
+                },
                 resumeAutomaticScan: _ => Task.FromResult(true));
             manager.Show();
             Pump(manager);
@@ -349,12 +356,31 @@ internal static class TaskManagerFlow
             Pump(manager);
             if (!moveUp.IsEnabled || moveDown.IsEnabled)
                 throw new Exception("Waiting P4 reordering buttons are disabled.");
+            Console.WriteLine("DIAG P4 initial: " +
+                string.Join(",", originalReviews) + " ranks=" +
+                string.Join(",", firstRepo.GetRootReviewQueueOrder()));
             moveUp.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, moveUp));
-            Until(manager, () => grid.Items.Cast<object>()
-                .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
-                .Where(key => key == reviewOneKey || key == reviewTwoKey)
-                .SequenceEqual(originalReviews.Reverse()),
-                "P4 task move changed neither visible order nor queue.");
+            try
+            {
+                Until(manager, () => grid.Items.Cast<object>()
+                    .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
+                    .Where(key => key == reviewOneKey || key == reviewTwoKey)
+                    .SequenceEqual(originalReviews.Reverse()),
+                    "P4 task move changed neither visible order nor queue.");
+            }
+            catch
+            {
+                Console.Error.WriteLine("DIAG P4 after timeout: DB=" +
+                    string.Join(",", firstRepo.GetRootReviewQueueOrder()) +
+                    " UI=" + string.Join(",",
+                        grid.Items.Cast<object>()
+                            .Select(item => item.GetType().GetProperty("Key")?.GetValue(item)?.ToString())
+                            .Where(key => key == reviewOneKey || key == reviewTwoKey)) +
+                    " selected=" +
+                    (grid.SelectedItem?.GetType().GetProperty("Key")
+                        ?.GetValue(grid.SelectedItem)?.ToString() ?? "<null>"));
+                throw;
+            }
             var expectedFirst = originalReviews[1] == reviewOneKey
                 ? finishedFolder.Id : reviewedB.Id;
             var otherReview = expectedFirst == finishedFolder.Id
@@ -690,7 +716,12 @@ internal static class TaskManagerFlow
             manager?.Close();
             if (scheduler is not null)
             {
-                try { Task.Run(async () => await scheduler.DisposeAsync()).GetAwaiter().GetResult(); }
+                try
+                {
+                    var cleanup = Task.Run(async () => await scheduler.DisposeAsync());
+                    if (!cleanup.Wait(TimeSpan.FromSeconds(5)))
+                        Console.Error.WriteLine("DIAG: scheduler disposal still running after failure.");
+                }
                 catch (Exception ex) { Console.Error.WriteLine(ex); }
             }
             SqliteConnection.ClearAllPools();
