@@ -11,6 +11,15 @@ public partial class MainWindow
     private readonly HashSet<long> _initialScanAttempted = new();
     private bool _initialScanPumpRunning;
     private bool _initialScanActive;
+    // The source's pending-first-import marker lives in SQLite. These are
+    // only live presentation/cancellation details of its ONE scanner job;
+    // no independent task queue is introduced.
+    private string? _initialScanTaskKey;
+    private string? _initialScanTaskDirectory;
+    private string? _initialScanTaskCurrentFile;
+    private int _initialScanTaskChecked;
+    private bool _initialScanWorkerStarted;
+    private bool _initialScanStopRequested;
 
     private void QueuePendingInitialScans()
     {
@@ -79,6 +88,17 @@ public partial class MainWindow
     private async Task RunPendingInitialScanAsync(MonitoredFolder folder)
     {
         using var cancellation = new CancellationTokenSource();
+        // Reuse the job identity as the Scheduler's actual InitialImport
+        // operation. The Taskmanager and the progress presenter describe the
+        // SAME job, not two artificially synchronized representations.
+        var scanKey =
+            $"catalog:complete-scan:{Guid.NewGuid():N}:{folder.LocalPath}";
+        _initialScanTaskKey = scanKey;
+        _initialScanTaskDirectory = folder.LocalPath;
+        _initialScanTaskCurrentFile = null;
+        _initialScanTaskChecked = 0;
+        _initialScanWorkerStarted = false;
+        _initialScanStopRequested = false;
         _manualFolderScanWaiting = true;
         _initialScanActive = true;
         _manualScanRunning = true;
@@ -109,7 +129,12 @@ public partial class MainWindow
             var workerStarted = false;
             var progress = new Progress<ScanProgress>(scan =>
             {
-                if (_manualFileTransferActive || !scanActive) return;
+                if (_manualFileTransferActive || !scanActive ||
+                    _initialScanTaskKey != scanKey) return;
+                _initialScanTaskChecked = Math.Max(
+                    _initialScanTaskChecked, scan.ImageFilesSeen);
+                _initialScanTaskCurrentFile = scan.CurrentFile;
+                _initialScanWorkerStarted = true;
                 if (scan.VerifiedDirectoryPath is { Length: > 0 } verifiedDirectory)
                 {
                     TrackFolderActivity(verifiedDirectory, "Ready");
@@ -145,7 +170,7 @@ public partial class MainWindow
             var result = await ScheduleCompleteFolderScanAsync(
                 folder.LocalPath, SchedulerPriority.Background,
                 progress, cancellation.Token, folder.Id,
-                requirePendingInitialImport: true);
+                requirePendingInitialImport: true, operationKey: scanKey);
 
             scanActive = false;
             TrackFolderActivity(folder.LocalPath,
@@ -165,8 +190,20 @@ public partial class MainWindow
             // supersede the old first-import inventory. Re-arm this request
             // for the existing pump if its durable pending marker survives;
             // GetPendingInitialScans prevents retries of removed/completed roots.
-            _initialScanAttempted.Remove(folder.Id);
-            StatusText.Text = $"Einlesen unterbrochen: {folder.LocalPath} · wird später fortgesetzt";
+            if (_initialScanStopRequested)
+            {
+                // Explicit Stop: do not spin up the same root again in this
+                // session. The persisted initial_scan_pending marker and all
+                // confirmed file receipts remain available at next restart
+                // or for an explicit user-requested scan.
+                _initialScanAttempted.Add(folder.Id);
+                StatusText.Text = $"Erstimport gestoppt: {folder.LocalPath}";
+            }
+            else
+            {
+                _initialScanAttempted.Remove(folder.Id);
+                StatusText.Text = $"Einlesen unterbrochen: {folder.LocalPath} · wird später fortgesetzt";
+            }
             TrackFolderActivity(folder.LocalPath, "Pending", recursive: true);
         }
         catch (Exception ex)
@@ -190,6 +227,12 @@ public partial class MainWindow
                 _activeScanFolderId = null;
             }
             _initialScanActive = false;
+            _initialScanTaskKey = null;
+            _initialScanTaskDirectory = null;
+            _initialScanTaskCurrentFile = null;
+            _initialScanTaskChecked = 0;
+            _initialScanWorkerStarted = false;
+            _initialScanStopRequested = false;
             _manualScanRunning = _manualContextScanActive || _manualScanAllActive;
             _manualFolderScanWaiting = _manualScanRunning;
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
