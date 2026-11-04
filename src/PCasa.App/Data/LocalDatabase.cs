@@ -475,6 +475,11 @@ public sealed class LocalDatabase
         }
         EnsureColumn(connection, "monitored_folders", "initial_scan_paused",
             "INTEGER NOT NULL DEFAULT 0");
+        // A user can remove a partially completed import from the task queue
+        // without claiming that the source was fully imported. This durable
+        // tombstone survives restart and never touches saved scan cursors.
+        EnsureColumn(connection, "monitored_folders", "initial_scan_deleted",
+            "INTEGER NOT NULL DEFAULT 0");
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");

@@ -171,9 +171,11 @@ public partial class MainWindow
                             FolderExclusionRules.Normalize(directory),
                             FolderExclusionRules.Normalize(root.LocalPath),
                             StringComparison.OrdinalIgnoreCase);
-                        var pending = sameRoot && _folderRepository
-                            .GetPendingFirstImportQueue()
-                            .Any(row => row.FolderId == root.Id);
+                        // The import may have been removed from the automatic
+                        // queue, but remains genuinely incomplete. An explicit
+                        // full-root scan can still finish that SAME import.
+                        var pending = sameRoot &&
+                            _folderRepository.HasIncompleteImport(root.Id);
                         return (Id: (long?)root.Id, Pending: pending);
                     }, cancellationToken: cancellation.Token,
                     workKind: SchedulerWorkKind.CatalogRead);

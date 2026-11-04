@@ -234,7 +234,8 @@ public sealed class FolderRepository
                    m.initial_scan_paused
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-             WHERE m.initial_scan_pending=1 AND s.desired_present=1
+             WHERE m.initial_scan_pending=1 AND m.initial_scan_deleted=0
+               AND s.desired_present=1
              ORDER BY 3 ASC,m.id ASC;
             """;
         var pending = new List<PendingFirstImport>();
@@ -267,26 +268,27 @@ public sealed class FolderRepository
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             UPDATE monitored_folders SET initial_scan_paused=$paused
-             WHERE id=$id AND initial_scan_pending=1;
+             WHERE id=$id AND initial_scan_pending=1
+               AND initial_scan_deleted=0;
             """;
         cmd.Parameters.AddWithValue("$id", folderId);
         cmd.Parameters.AddWithValue("$paused", paused ? 1 : 0);
         return cmd.ExecuteNonQuery() == 1;
     }
 
-    // Delete the queued import INTENT, not its verified work. A partially
-    // indexed folder remains monitored and its catalog, thumbnails and
-    // scan_directory_first_pass receipts remain intact for a future explicit
-    // full-root scan. This is different from CompleteInitialScan, which
-    // acknowledges a verified full traversal and removes old receipts.
+    // Remove this import from the task queue without claiming the first
+    // import finished. The incomplete source state survives permanently,
+    // while a durable deleted marker suppresses automatic redispatch.
+    // Catalog images, thumbnails and confirmed file cursors are untouched.
     public bool DeletePendingFirstImport(long folderId)
     {
         using var db = _database.OpenConnection();
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             UPDATE monitored_folders
-               SET initial_scan_pending=0, initial_scan_paused=0
+               SET initial_scan_deleted=1, initial_scan_paused=0
              WHERE id=$id AND initial_scan_pending=1
+               AND initial_scan_deleted=0
                AND EXISTS (
                    SELECT 1 FROM scheduler_sources s
                     WHERE s.canonical_path=monitored_folders.canonical_path
@@ -294,6 +296,24 @@ public sealed class FolderRepository
             """;
         cmd.Parameters.AddWithValue("$id", folderId);
         return cmd.ExecuteNonQuery() == 1;
+    }
+
+    // A manually requested complete root scan can continue and acknowledge
+    // the same import even after its automatic task has been deleted.
+    // Task-list visibility and completion state are different properties.
+    public bool HasIncompleteImport(long folderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM monitored_folders m
+                JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+                WHERE m.id=$id AND m.initial_scan_pending=1
+                  AND s.desired_present=1);
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
     }
 
     public bool MovePendingFirstImport(long folderId, long targetFolderId)
@@ -308,7 +328,8 @@ public sealed class FolderRepository
             cmd.CommandText = """
                 SELECT m.id FROM monitored_folders m
                 JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-                WHERE m.initial_scan_pending=1 AND s.desired_present=1
+                WHERE m.initial_scan_pending=1
+                  AND m.initial_scan_deleted=0 AND s.desired_present=1
                 ORDER BY CASE WHEN m.initial_scan_queue_order>0
                          THEN m.initial_scan_queue_order ELSE m.id END,m.id;
                 """;
@@ -473,7 +494,8 @@ public sealed class FolderRepository
             pending.CommandText = """
                 SELECT COUNT(*) FROM monitored_folders m
                 JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-                WHERE m.initial_scan_pending=1 AND s.desired_present=1;
+                WHERE m.initial_scan_pending=1
+                  AND m.initial_scan_deleted=0 AND s.desired_present=1;
                 """;
             pendingFirstImports = Convert.ToInt64(pending.ExecuteScalar());
         }
@@ -1171,7 +1193,9 @@ public sealed class FolderRepository
         using var update = connection.CreateCommand();
         update.Transaction = transaction;
         update.CommandText = """
-            UPDATE monitored_folders SET initial_scan_pending = 0
+            UPDATE monitored_folders
+               SET initial_scan_pending=0, initial_scan_deleted=0,
+                   initial_scan_paused=0
             WHERE id = $id AND initial_scan_pending = 1
               AND EXISTS (
                   SELECT 1 FROM scheduler_sources s

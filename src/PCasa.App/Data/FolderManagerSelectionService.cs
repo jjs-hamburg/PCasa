@@ -456,7 +456,9 @@ public sealed class FolderManagerSelectionService
             // Persist the reimport obligation. It survives restart and is not
             // dependent on whether the background watcher is enabled.
             using var pending = Command(connection, transaction, """
-                UPDATE monitored_folders SET initial_scan_pending=1 WHERE id=$id;
+                UPDATE monitored_folders
+                   SET initial_scan_pending=1, initial_scan_deleted=0,
+                       initial_scan_paused=0 WHERE id=$id;
                 """);
             pending.Parameters.AddWithValue("$id", folderId);
             pending.ExecuteNonQuery();

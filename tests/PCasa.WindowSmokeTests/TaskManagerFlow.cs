@@ -416,12 +416,21 @@ internal static class TaskManagerFlow
                     ?.ToString() != $"initial:{initialA.FolderId}"),
                     "Deleted import remains in the manager.");
                 database.Initialize(); // simulate reopening the persistent catalog
-                if (new FolderRepository(database).GetPendingFirstImportQueue()
-                        .Any(row => row.FolderId == initialA.FolderId))
+                var reopened = new FolderRepository(database);
+                if (reopened.GetPendingFirstImportQueue()
+                        .Any(row => row.FolderId == initialA.FolderId) ||
+                    reopened.GetPendingInitialScans()
+                        .Any(row => row.Id == initialA.FolderId))
                     throw new Exception("Deleted import returned after restart.");
-                var recovered = new FolderRepository(database)
-                    .GetDirectoryFirstPass(
-                        initialA.FolderId, source.Value.Generation, firstA);
+                if (!reopened.HasIncompleteImport(initialA.FolderId))
+                    throw new Exception(
+                        "Deleting a task incorrectly marked its import completed.");
+                if (reopened.GetDueRootReviewIds(DateTime.UtcNow)
+                        .Contains(initialA.FolderId))
+                    throw new Exception(
+                        "Deleted import was immediately requeued as a P4 review.");
+                var recovered = reopened.GetDirectoryFirstPass(
+                    initialA.FolderId, source.Value.Generation, firstA);
                 if (!recovered.Cursors.TryGetValue(firstA, out var file) ||
                     file != "012345.jpg")
                     throw new Exception("Deleting an import erased confirmed progress.");
@@ -432,6 +441,13 @@ internal static class TaskManagerFlow
                 if (!firstRepo.GetPendingFirstImportQueue()
                     .Any(row => row.FolderId == initialB.FolderId))
                     throw new Exception("Deleting one root removed another import.");
+                // Only an explicitly completed full-root scan may now
+                // acknowledge the still-incomplete source, and that must
+                // clear its deletion marker for future activation.
+                if (!firstRepo.CompleteInitialScan(
+                        initialA.FolderId, source.Value.Generation) ||
+                    firstRepo.HasIncompleteImport(initialA.FolderId))
+                    throw new Exception("Explicit completion failed after deletion.");
             }
             finally { heldView.Close(); }
 
