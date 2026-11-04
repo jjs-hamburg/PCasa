@@ -1213,9 +1213,9 @@ internal static class Program
                 folders.GetScanEpoch(root.CanonicalPath)))
             throw new Exception("Test root was not marked as previously imported.");
 
-        // Two monitored roots must have a fair full-pass order. A completed
-        // root is NOT due again until its interval expires, so a slow second
-        // root cannot starve behind endless repeats of the first.
+        // Two monitored roots must have a fair, persisted round order.
+        // The root that finishes first cannot start over while the other
+        // root has not yet reached the end, regardless of elapsed days.
         var otherPath = Path.Combine(
             Path.GetDirectoryName(sandbox.Images)!, "OtherPictures");
         Directory.CreateDirectory(otherPath);
@@ -1240,7 +1240,7 @@ internal static class Program
             throw new Exception("Unfinished third root has no pending initial import.");
 
         var now = DateTime.UtcNow;
-        var dueBefore = folders.GetDueRootReviewIds(now, TimeSpan.FromDays(30));
+        var dueBefore = folders.GetDueRootReviewIds(now);
         if (!dueBefore.Contains(root.Id) || !dueBefore.Contains(other.Id) ||
             dueBefore.Contains(firstImportPending.Id))
             throw new Exception(
@@ -1305,27 +1305,46 @@ internal static class Program
             !verified.GetVerifiedDirectories(root.Id, generation)
                 .ContainsKey(directory))
             throw new Exception("Completed full scan failed to record its root and directory dates.");
-        var nextDue = verified.GetDueRootReviewIds(
-            DateTime.UtcNow.AddDays(1), TimeSpan.FromDays(30));
+        var nextDue = verified.GetDueRootReviewIds(DateTime.UtcNow);
         if (nextDue.Contains(root.Id) || !nextDue.Contains(other.Id))
-            throw new Exception("Completed root was immediately requeued before an unverified root.");
-        // Simulate a later interval without altering the OS clock.
-        var monthLater = verified.GetDueRootReviewIds(
-            DateTime.UtcNow.AddDays(31), TimeSpan.FromDays(30));
-        if (monthLater.Count < 2 || monthLater[0] != other.Id ||
-            !monthLater.Contains(root.Id))
-            throw new Exception("Idle root cycle was not fair or the interval never elapsed.");
+            throw new Exception("Completed root restarted before another root finished.");
+        // Even a year later, no time-based rule may restart root while
+        // the other monitored folder is still unfinished.
+        var yearLater = verified.GetDueRootReviewIds(now.AddYears(1));
+        if (yearLater.Contains(root.Id) || !yearLater.Contains(other.Id))
+            throw new Exception("Elapsed time incorrectly reset an unfinished review round.");
+        var roundBeforeRestart = verified.GetReviewRoundStatus(DateTime.UtcNow);
+        if (roundBeforeRestart.Round != 1 ||
+            roundBeforeRestart.Eligible != 2 ||
+            roundBeforeRestart.Completed != 1)
+            throw new Exception("Whole-library round completion was not recorded.");
+        db.Initialize();
+        var restoredRound = new FolderRepository(db).GetReviewRoundStatus(DateTime.UtcNow);
+        if (restoredRound != roundBeforeRestart)
+            throw new Exception("Restart lost the already-completed root's round membership.");
 
-        // An offline/error-prone root must retain its cursor but back off,
-        // including after an application restart.
-        verified.DeferRootReview(root.Id, generation, DateTime.UtcNow.AddDays(33));
-        if (verified.GetDueRootReviewIds(
-                DateTime.UtcNow.AddDays(32), TimeSpan.FromDays(30)).Contains(root.Id))
-            throw new Exception("Failed idle review was retried during its backoff.");
+        // Finish the second root. Only now may a new review round begin.
+        var otherKey = $"background:inventory:{other.Id}:{otherGeneration}:RescanRoot:True:{other.LocalPath}";
+        var finishedOther = nextProcess.ScanDirectory(other, other.LocalPath,
+            recursive: true, durableScanKey: otherKey);
+        if (finishedOther.Failed != 0)
+            throw new Exception("Second root could not complete its round.");
+        var nextRound = verified.GetDueRootReviewIds(DateTime.UtcNow);
+        if (!nextRound.Contains(root.Id) || !nextRound.Contains(other.Id) ||
+            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 2)
+            throw new Exception("Next round did not start after ALL roots completed.");
+
+        // Unreachable root: retain its round membership and cursor and
+        // suppress retries until the saved backoff expires. Other eligible
+        // roots are still allowed to work during that interval.
+        verified.DeferRootReview(root.Id, generation, now.AddHours(6));
+        var beforeRetry = verified.GetDueRootReviewIds(now.AddHours(1));
+        if (beforeRetry.Contains(root.Id) || !beforeRetry.Contains(other.Id))
+            throw new Exception("Deferred source delayed another root or retried immediately.");
         db.Initialize();
         if (!new FolderRepository(db).GetDueRootReviewIds(
-                DateTime.UtcNow.AddDays(34), TimeSpan.FromDays(30)).Contains(root.Id))
-            throw new Exception("Idle review backoff or completion was not restart-safe.");
+                now.AddHours(7)).Contains(root.Id))
+            throw new Exception("Deferred incomplete root was lost across restart.");
 
         // The completed inventory releases its checkpoint. A genuinely
         // NEW complete inventory must visit the whole directory and may
