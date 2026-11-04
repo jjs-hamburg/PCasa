@@ -201,7 +201,8 @@ public sealed class FolderRepository
         {
             pending.Transaction = transaction;
             pending.CommandText = """
-                UPDATE monitored_folders SET initial_scan_pending = 1
+                UPDATE monitored_folders SET initial_scan_pending = 1,
+                    initial_scan_paused=0
                 WHERE local_path = $path COLLATE NOCASE;
                 """;
             pending.Parameters.AddWithValue("$path", classification.LocalPath);
@@ -229,7 +230,7 @@ public sealed class FolderRepository
     }
 
     public sealed record PendingFirstImport(long FolderId, string Directory,
-        long QueueOrder);
+        long QueueOrder, bool Paused);
 
     public IReadOnlyList<PendingFirstImport> GetPendingFirstImportQueue()
     {
@@ -238,7 +239,8 @@ public sealed class FolderRepository
         cmd.CommandText = """
             SELECT m.id,m.local_path,
                    CASE WHEN m.initial_scan_queue_order > 0
-                        THEN m.initial_scan_queue_order ELSE m.id END
+                        THEN m.initial_scan_queue_order ELSE m.id END,
+                   m.initial_scan_paused
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
              WHERE m.initial_scan_pending=1 AND s.desired_present=1
@@ -248,7 +250,8 @@ public sealed class FolderRepository
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             pending.Add(new PendingFirstImport(reader.GetInt64(0),
-                reader.GetString(1), reader.GetInt64(2)));
+                reader.GetString(1), reader.GetInt64(2),
+                reader.GetInt64(3) != 0));
         return pending;
     }
 
@@ -259,9 +262,25 @@ public sealed class FolderRepository
     {
         var byId = GetAll().ToDictionary(folder => folder.Id);
         return GetPendingFirstImportQueue()
-            .Where(row => byId.ContainsKey(row.FolderId))
+            .Where(row => !row.Paused && byId.ContainsKey(row.FolderId))
             .Select(row => byId[row.FolderId])
             .ToArray();
+    }
+
+    // A held first-import remains pending and retains every committed
+    // file receipt. It is visible in Taskmanager until the user resumes it;
+    // future process starts must not silently restart an explicitly held job.
+    public bool SetPendingFirstImportPaused(long folderId, bool paused)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE monitored_folders SET initial_scan_paused=$paused
+             WHERE id=$id AND initial_scan_pending=1;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$paused", paused ? 1 : 0);
+        return cmd.ExecuteNonQuery() == 1;
     }
 
     public bool MovePendingFirstImport(long folderId, long targetFolderId)
