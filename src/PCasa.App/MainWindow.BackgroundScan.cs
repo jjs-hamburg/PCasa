@@ -572,7 +572,11 @@ public partial class MainWindow
 
         void Add(PendingBackgroundScan task, bool current)
         {
-            if (task.Kind == BackgroundFolderChangeKind.RecoverCache) return;
+            // Cache rebuilds and catalogue-only removals have no scanner
+            // cursor and are not directly interruptible. They are not
+            // actionable scan tasks and must not be misleading UI rows.
+            if (task.Kind is BackgroundFolderChangeKind.RecoverCache or
+                BackgroundFolderChangeKind.RemovePath) return;
             var key = AutomaticTaskKey(task);
             if (_backgroundSuppressed.Contains(key) || !keys.Add(key)) return;
             var path = task.Kind == BackgroundFolderChangeKind.ScanFile
@@ -633,15 +637,19 @@ public partial class MainWindow
                     continue;
                 if (index == _backgroundInFlightIndex)
                 {
-                    if (key != _backgroundLiveTaskKey ||
-                        _backgroundCurrentScanCancellation is not
-                            { IsCancellationRequested: false } active)
-                        return false; // still a source probe, not cancelable scan
                     _backgroundSuppressed.Add(key);
                     if (_backgroundPending.Remove(key, out var followup))
                         followup.Resume?.Dispose();
-                    try { await active.CancelAsync(); }
-                    catch (ObjectDisposedException) { }
+                    // The current source may still be in its network
+                    // reachability probe. In that case the worker will
+                    // acknowledge the stop BEFORE starting the scanner.
+                    if (key == _backgroundLiveTaskKey &&
+                        _backgroundCurrentScanCancellation is
+                            { IsCancellationRequested: false } active)
+                    {
+                        try { await active.CancelAsync(); }
+                        catch (ObjectDisposedException) { }
+                    }
                     return true;
                 }
 
@@ -1037,6 +1045,20 @@ public partial class MainWindow
                         ? scanPath : null;
                 try
                 {
+                    // A Stop request may arrive during the preceding SMB
+                    // source probe. Honor it here before touching an image;
+                    // the scanner's committed SQLite cursor remains intact.
+                    if (_backgroundSuppressed.Remove(taskKey))
+                    {
+                        scanResume?.Dispose();
+                        scanResume = null;
+                        requests[nextRequestIndex] = request with
+                        {
+                            Resume = null, ResumeGeneration = null
+                        };
+                        DeferStoppedRootReview(request);
+                        continue;
+                    }
                     // Every active NAS scan is visible, even if it only
                     // checks existing photos or finds zero new files.
                     // The scanner is already executing when this callback
