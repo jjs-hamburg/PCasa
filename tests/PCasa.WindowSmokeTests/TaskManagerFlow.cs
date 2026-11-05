@@ -710,9 +710,15 @@ internal static class TaskManagerFlow
             stageRelease.TrySetResult();
             UntilBackground(() => scanStarted.Task.IsCompleted,
                 "Newest durable scan did not enter the running state.");
-            if (!scheduler.MoveDurableTaskTo(
-                "taskmanager:promoted", "taskmanager:scan-running"))
-                throw new Exception("Could not promote queued scan above running P0 peer.");
+            if (!scheduler.MoveTaskGlobally(
+                "taskmanager:promoted", "taskmanager:scan-running",
+                [
+                    new SchedulerTaskOrderItem(
+                        "taskmanager:scan-running", SchedulerPriority.ManualAction),
+                    new SchedulerTaskOrderItem(
+                        "taskmanager:promoted", SchedulerPriority.ManualAction)
+                ]))
+                throw new Exception("Global scheduler could not move a P0 mutation ahead of a running manual scan.");
             UntilBackground(() => Task.WhenAll(promoted, runningScan).IsCompleted,
                 "Promoted task did not preempt the running same-priority scan.");
             Task.WhenAll(promoted, runningScan).GetAwaiter().GetResult();
