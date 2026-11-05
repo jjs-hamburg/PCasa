@@ -44,6 +44,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // First imports can wait on a particular NAS/file lock without
     // blocking reconciliation of unrelated, already-imported roots.
     private const int LaneInitialImport = 10;
+    // Manual folder inventories may block inside SMB I/O. They must not
+    // occupy the P0 original-file mutation executor (GPS, tags, transfers).
+    // This is capacity within the SAME scheduler, not a second task queue.
+    private const int LaneManualScan = 11;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
     private SchedulerTaskOrderStore? _taskOrderStore;
@@ -73,19 +77,19 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly List<WorkItem> _pending = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, 11).Select(_ => new SemaphoreSlim(0)).ToArray();
+        Enumerable.Range(0, LaneManualScan + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
     // Track the dedicated first-import executor as well. Otherwise an
     // already-running initial scan never receives the scheduler's yield
     // cancellation when a new manual P0 package arrives.
     private readonly WorkItem?[] _runningPriorityJobs =
-        new WorkItem?[LaneInitialImport + 1];
+        new WorkItem?[LaneManualScan + 1];
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
     private int _catalogInteractiveRunning;
     private int _manualSourceProbeRunning;
     private WorkItem? _runningManualSourceProbe;
     private readonly CancellationTokenSource?[] _runningYield =
-        new CancellationTokenSource?[LaneInitialImport + 1];
+        new CancellationTokenSource?[LaneManualScan + 1];
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
     private long _nextId;
@@ -166,6 +170,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             Task.Run(() => RunAsync(LaneUserAction)),
             // A manually requested scan must not wait for blocked initial SMB I/O.
             Task.Run(() => RunAsync(LaneManual)),
+            Task.Run(() => RunAsync(LaneManualScan)),
             Task.Run(() => RunAsync(LaneInteractive)),
             Task.Run(() => RunAsync(LaneViewer)),
             Task.Run(() => RunAsync(LaneViewer)),
@@ -670,6 +675,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             SchedulerWorkKind.CatalogRead => LaneCatalogRead,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
             SchedulerWorkKind.InitialImport => LaneInitialImport,
+            SchedulerWorkKind.CatalogScan when priority == SchedulerPriority.ManualAction =>
+                LaneManualScan,
             SchedulerWorkKind.SourceProbe => priority switch
             {
                 SchedulerPriority.ManualAction => LaneManualSourceProbe,
@@ -1044,7 +1051,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                  priority == SchedulerPriority.ManualAction))
             {
                 foreach (var lane in new[] { LaneBackground, LaneUserAction,
-                             LaneManual, LaneInitialImport })
+                             LaneManual, LaneManualScan, LaneInitialImport })
                 {
                     var active = _runningPriorityJobs[lane];
                     // An incoming user file mutation supersedes a longer
@@ -1207,7 +1214,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
                         {
                             if (lane == LaneUserAction) _catalogForegroundRunning++;
-                            if (lane == LaneManual)
+                            if (lane is LaneManual or LaneManualScan)
                             {
                                 _catalogForegroundRunning++;
                                 _catalogManualRunning++;
@@ -1223,7 +1230,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             _manualSourceProbeRunning++;
                             _runningManualSourceProbe = item;
                         }
-                        if (lane <= LaneManual || lane == LaneInitialImport)
+                        if (lane <= LaneManual || lane is LaneInitialImport or LaneManualScan)
                         {
                             yieldRequest = new CancellationTokenSource();
                             _runningPriorityJobs[lane] = item;
@@ -1303,7 +1310,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 for (var wake=0;wake<_signals.Length;wake++)
                                     if (_pending.Any(w => LaneFor(w.Priority,w.Kind)==wake))
                                         _signals[wake].Release();
-                            if ((lane <= LaneManual || lane == LaneInitialImport) &&
+                            if ((lane <= LaneManual || lane is LaneInitialImport or LaneManualScan) &&
                                 ReferenceEquals(_runningPriorityJobs[lane], item))
                             {
                                 _runningPriorityJobs[lane] = null;
@@ -1318,7 +1325,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
                             {
                                 if (lane == LaneUserAction) _catalogForegroundRunning--;
-                                if (lane == LaneManual)
+                                if (lane is LaneManual or LaneManualScan)
                                 {
                                     _catalogForegroundRunning--;
                                     _catalogManualRunning--;
@@ -1335,6 +1342,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             {
                                 if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManual))
                                     _signals[LaneManual].Release();
+                                if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManualScan))
+                                    _signals[LaneManualScan].Release();
                                 if (_catalogInteractiveRunning == 0 &&
                                     _catalogManualRunning == 0 &&
                                     !HasManualSourceProbeUnsafe() &&
