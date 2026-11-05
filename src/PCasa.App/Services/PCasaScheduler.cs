@@ -49,6 +49,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private SchedulerTaskOrderStore? _taskOrderStore;
     private readonly Dictionary<string,long> _userDispatchOrder =
         new(StringComparer.Ordinal);
+    private readonly Dictionary<string,SchedulerPriority> _userPriorityOverrides =
+        new(StringComparer.Ordinal);
     private readonly Dictionary<string,string> _taskAliases =
         new(StringComparer.Ordinal);
     // The owner of external source intents listens and reorders its
@@ -191,8 +193,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
         _taskOrderStore = new SchedulerTaskOrderStore(database);
-        foreach (var (key, order) in _taskOrderStore.ReadAll())
-            _userDispatchOrder[key] = order;
+        foreach (var (key, placement) in _taskOrderStore.ReadAll())
+        {
+            _userDispatchOrder[key] = placement.Order;
+            if (placement.PriorityOverride is SchedulerPriority chosen)
+                _userPriorityOverrides[key] = chosen;
+        }
     }
 
     // The Taskmanager observes the scheduler's ONE user-defined order.
@@ -205,7 +211,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             return _userDispatchOrder.TryGetValue(key, out var order)
-                ? (SchedulerPriority.ManualAction, order)
+                ? (_userPriorityOverrides.GetValueOrDefault(key, defaultPriority),
+                    order)
                 : (defaultPriority, defaultOrder);
         }
     }
@@ -229,7 +236,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // contain all ACTIVE accepted tasks, including ones hidden by filters.
     // The store is the only durable place for user-selected dispatch order.
     public bool MoveTaskGlobally(string key, string targetKey,
-        IReadOnlyList<string> acceptedTaskKeys)
+        IReadOnlyList<SchedulerTaskOrderItem> acceptedTaskKeys)
     {
         var store = _taskOrderStore ??
             throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
@@ -240,14 +247,22 @@ public sealed class PCasaScheduler : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             var order = store.Reorder(acceptedTaskKeys, key, targetKey);
             if (order is null) return false;
-            foreach (var (id, position) in order)
-                _userDispatchOrder[id] = position;
+            foreach (var (id, placement) in order)
+            {
+                _userDispatchOrder[id] = placement.Order;
+                if (placement.PriorityOverride is SchedulerPriority chosen)
+                    _userPriorityOverrides[id] = chosen;
+                else
+                    _userPriorityOverrides.Remove(id);
+            }
             foreach (var work in _pending)
             {
                 if (!_userDispatchOrder.TryGetValue(
                     TaskIdentityUnsafe(work.Key), out var position))
                     continue;
-                work.Priority = SchedulerPriority.ManualAction;
+                if (_userPriorityOverrides.TryGetValue(
+                        TaskIdentityUnsafe(work.Key), out var chosen))
+                    work.Priority = chosen;
                 work.QueueOrder = position;
                 SetStateUnsafe(work, SchedulerJobState.Queued);
                 changed.Add(work);
@@ -259,7 +274,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 if (active is null ||
                     !_userDispatchOrder.TryGetValue(TaskIdentityUnsafe(active.Key),
                         out var position)) continue;
-                active.Priority = SchedulerPriority.ManualAction;
+                if (_userPriorityOverrides.TryGetValue(
+                        TaskIdentityUnsafe(active.Key), out var chosen))
+                    active.Priority = chosen;
                 active.QueueOrder = position;
                 SetStateUnsafe(active, active.YieldRequested
                     ? SchedulerJobState.YieldRequested : SchedulerJobState.Running);
@@ -930,8 +947,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
             else
             {
-                if (_userDispatchOrder.TryGetValue(identity, out var userRank))
-                    priority = SchedulerPriority.ManualAction;
+                if (_userPriorityOverrides.TryGetValue(identity, out var selectedPriority))
+                    priority = selectedPriority;
                 var item = new WorkItem(++_nextId, key, priority, workKind,
                     operation, isCurrent, cancellationToken)
                 {
@@ -1021,7 +1038,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 // independent and responsive.
                 var persistedManualPending =
                     (lane is LaneBackground or LaneInitialImport or LaneUserAction) &&
-                    _durableJournal?.HasPendingManualActions() == true;
+                    _durableJournal?.HasPendingEffectiveManualActions() == true;
                 WorkItem? item;
                 CancellationTokenSource? yieldRequest = null;
                 lock (_gate)
@@ -1099,6 +1116,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // above P0 must not be blocked by its old class. Still
                     // respect any running catalog write's safe boundary.
                     if (lane == LaneInitialImport && candidateHasPosition &&
+                        _userPriorityOverrides.TryGetValue(
+                            TaskIdentityUnsafe(candidate!.Key), out var initialOverride) &&
+                        initialOverride == SchedulerPriority.ManualAction &&
                         !waitingForEarlierOrdered &&
                         _catalogForegroundRunning == 0 &&
                         !HasManualSourceProbeUnsafe())

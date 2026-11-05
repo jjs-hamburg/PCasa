@@ -149,20 +149,20 @@ internal static class GlobalTaskOrderFlow
                 "Move down was a no-op.");
             var all = VisibleKeys(grid);
             var firstKey = all[0];
-            if (!scheduler.MoveTaskGlobally(reviewKey,firstKey,all))
+            if (!scheduler.MoveTaskGlobally(reviewKey,firstKey,VisibleOrders(grid)))
                 throw new Exception("Cross-type scheduler move rejected a root review above P0.");
             AwaitWithPump(() => VisibleKeys(grid).FirstOrDefault() == reviewKey,
                 "Scheduler rank change did not refresh the Taskmanager.");
             var persisted = new SchedulerTaskOrderStore(database).ReadAll();
-            if (!persisted.TryGetValue(reviewKey, out var reviewRank) ||
-                persisted[firstKey] <= reviewRank)
+            if (!persisted.TryGetValue(reviewKey, out var reviewStored) ||
+                persisted[firstKey].Order <= reviewStored.Order)
                 throw new Exception("Global order did not persist in SQLite.");
             // The original executor alias receives the SAME rank when
             // admitted, not a second watcher task created by Taskmanager.
             var placement = scheduler.EffectiveTaskPlacement(
                 reviewKey, SchedulerPriority.Idle, 90);
             if (placement.Priority != SchedulerPriority.ManualAction ||
-                placement.QueueOrder != reviewRank)
+                placement.QueueOrder != reviewStored.Order)
                 throw new Exception("Physical scanner did not inherit user-selected rank.");
 
             releaseFactory.Set();
@@ -213,6 +213,14 @@ internal static class GlobalTaskOrderFlow
     private static string[] VisibleKeys(DataGrid grid) =>
         grid.Items.Cast<object>().Select(RowKey)
             .Where(key => key is not null).Select(key => key!).ToArray();
+
+    private static SchedulerTaskOrderItem[] VisibleOrders(DataGrid grid) =>
+        grid.Items.Cast<object>().Where(item => RowKey(item) is not null)
+            .Select(item => new SchedulerTaskOrderItem(
+                RowKey(item)!,
+                (SchedulerPriority)(int)(item.GetType()
+                    .GetProperty("Priority")?.GetValue(item) ?? 4)))
+            .ToArray();
 
     private static IEnumerable<T> Descendants<T>(DependencyObject root)
         where T : DependencyObject

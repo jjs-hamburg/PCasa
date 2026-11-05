@@ -3,6 +3,12 @@ using PCasa.App.Data;
 
 namespace PCasa.App.Services;
 
+public sealed record SchedulerTaskOrderItem(string Key,
+    SchedulerPriority Priority);
+
+public sealed record SchedulerStoredTaskOrder(
+    long Order, SchedulerPriority? PriorityOverride);
+
 /// <summary>
 /// The scheduler's single durable user-defined dispatch sequence. Taskmanager
 /// never owns a second ranking table. An explicit mouse/button move overrides
@@ -22,35 +28,63 @@ public sealed class SchedulerTaskOrderStore
             CREATE TABLE IF NOT EXISTS scheduler_task_order (
                 task_key TEXT PRIMARY KEY,
                 dispatch_order INTEGER NOT NULL,
+                priority_override INTEGER NULL,
                 updated_utc TEXT NOT NULL
             );
             """;
         cmd.ExecuteNonQuery();
+        // Additive migration: existing saved user ranks from the previous
+        // preview release must not automatically promote every root to P0.
+        using var schema = db.CreateCommand();
+        schema.CommandText = "PRAGMA table_info(scheduler_task_order);";
+        var hasPriority = false;
+        using (var reader = schema.ExecuteReader())
+            while (reader.Read())
+                if (reader.GetString(1) == "priority_override")
+                    hasPriority = true;
+        if (!hasPriority)
+        {
+            using var migrate = db.CreateCommand();
+            migrate.CommandText =
+                "ALTER TABLE scheduler_task_order ADD COLUMN priority_override INTEGER NULL;";
+            migrate.ExecuteNonQuery();
+        }
     }
 
-    public IReadOnlyDictionary<string, long> ReadAll()
+    public IReadOnlyDictionary<string, SchedulerStoredTaskOrder> ReadAll()
     {
         using var db = _database.OpenConnection();
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
-            SELECT task_key,dispatch_order FROM scheduler_task_order;
+            SELECT task_key,dispatch_order,priority_override
+              FROM scheduler_task_order;
             """;
         using var reader = cmd.ExecuteReader();
-        var rows = new Dictionary<string,long>(StringComparer.Ordinal);
-        while (reader.Read()) rows.Add(reader.GetString(0),reader.GetInt64(1));
+        var rows = new Dictionary<string,SchedulerStoredTaskOrder>(
+            StringComparer.Ordinal);
+        while (reader.Read())
+            rows.Add(reader.GetString(0),
+                new SchedulerStoredTaskOrder(
+                    reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null :
+                        (SchedulerPriority)reader.GetInt32(2)));
         return rows;
     }
 
     // The complete accepted task list is supplied by the scheduler view.
     // It must be UNFILTERED; hidden state filters never change priorities.
     // All ranks are committed in ONE SQLite transaction.
-    public IReadOnlyDictionary<string,long>? Reorder(
-        IReadOnlyList<string> orderedKeys, string movedKey, string targetKey)
+    public IReadOnlyDictionary<string,SchedulerStoredTaskOrder>? Reorder(
+        IReadOnlyList<SchedulerTaskOrderItem> orderedItems,
+        string movedKey, string targetKey)
     {
         if (movedKey == targetKey) return null;
-        if (orderedKeys.Count != orderedKeys.Distinct(StringComparer.Ordinal).Count())
+        if (orderedItems.Count != orderedItems.Select(x=>x.Key)
+                .Distinct(StringComparer.Ordinal).Count())
             throw new InvalidOperationException("Doppelte Auftragsidentitäten.");
-        var list = orderedKeys.ToList();
+        var list = orderedItems.Select(item => item.Key).ToList();
+        var priorities = orderedItems.ToDictionary(
+            item => item.Key, item => item.Priority, StringComparer.Ordinal);
         var source = list.IndexOf(movedKey);
         var destination = list.IndexOf(targetKey);
         if (source < 0 || destination < 0)
@@ -62,24 +96,50 @@ public sealed class SchedulerTaskOrderStore
         list.Insert(source < destination ? newTarget + 1 : newTarget, movedKey);
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
-        var changed = new Dictionary<string,long>(StringComparer.Ordinal);
+        var existingOverrides = new Dictionary<string,SchedulerPriority>(
+            StringComparer.Ordinal);
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT task_key,priority_override FROM scheduler_task_order
+                WHERE priority_override IS NOT NULL;
+                """;
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+                existingOverrides.Add(reader.GetString(0),
+                    (SchedulerPriority)reader.GetInt32(1));
+        }
+        // Only the MOVED job adopts the target's effective priority.
+        // Other P4 scans must NOT become manual P0 work simply because
+        // the user rearranged two unrelated GPS jobs.
+        existingOverrides[movedKey] = priorities[targetKey];
+        var changed =
+            new Dictionary<string,SchedulerStoredTaskOrder>(StringComparer.Ordinal);
         for (var i=0; i<list.Count; i++)
         {
             var rank = (long)(i + 1);
             using var cmd = db.CreateCommand();
             cmd.Transaction = tx;
             cmd.CommandText = """
-                INSERT INTO scheduler_task_order(task_key,dispatch_order,updated_utc)
-                VALUES ($key,$rank,$when)
+                INSERT INTO scheduler_task_order
+                    (task_key,dispatch_order,priority_override,updated_utc)
+                VALUES ($key,$rank,$priority,$when)
                 ON CONFLICT(task_key) DO UPDATE SET
                     dispatch_order=excluded.dispatch_order,
+                    priority_override=excluded.priority_override,
                     updated_utc=excluded.updated_utc;
                 """;
             cmd.Parameters.AddWithValue("$key",list[i]);
             cmd.Parameters.AddWithValue("$rank",rank);
+            cmd.Parameters.AddWithValue("$priority",
+                existingOverrides.TryGetValue(list[i],out var priority)
+                    ? (object)(int)priority : DBNull.Value);
             cmd.Parameters.AddWithValue("$when",DateTimeOffset.UtcNow.ToString("O"));
             cmd.ExecuteNonQuery();
-            changed.Add(list[i],rank);
+            changed.Add(list[i],new SchedulerStoredTaskOrder(
+                rank,existingOverrides.TryGetValue(list[i],out var effective)
+                    ? effective : null));
         }
         tx.Commit();
         return changed;

@@ -38,7 +38,7 @@ public partial class MainWindow
     // owner notifications for the existing physical scanner cursors, not
     // a second Taskmanager queue or a reordered copy of the rows.
     private async Task<bool> MoveGlobalTaskAsync(string key, string targetKey,
-        IReadOnlyList<string> allAcceptedKeys)
+        IReadOnlyList<SchedulerTaskOrderItem> allAcceptedKeys)
     {
         var moved = await Task.Run(() =>
             _scheduler.MoveTaskGlobally(key, targetKey, allAcceptedKeys));
@@ -79,12 +79,23 @@ public partial class MainWindow
 
         // The scan owner must admit the same queued watcher intents after
         // a user order change. Do not issue a second full-root inventory.
-        if (allAcceptedKeys.Any(TryIsRootReview))
+        if (allAcceptedKeys.Any(item => TryIsRootReview(item.Key)))
         {
-            foreach (var rootKey in allAcceptedKeys.Where(TryIsRootReview))
-                if (TryRootReviewTaskId(rootKey, out var rootId))
+            foreach (var item in allAcceptedKeys.Where(item =>
+                TryIsRootReview(item.Key)))
+            {
+                if (!TryRootReviewTaskId(item.Key, out var rootId)) continue;
+                var effective = _scheduler.EffectiveTaskPlacement(
+                    item.Key, item.Priority, long.MaxValue).Priority;
+                if (effective < SchedulerPriority.Idle)
                     _backgroundUrgentReviews.Add(rootId);
-            if (TryRootReviewTaskId(key, out _))
+                else
+                    _backgroundUrgentReviews.Remove(rootId);
+            }
+            if (TryRootReviewTaskId(key, out _) &&
+                _scheduler.EffectiveTaskPlacement(
+                    key, SchedulerPriority.Idle, long.MaxValue).Priority <
+                    SchedulerPriority.Idle)
                 await StartAutomaticScanNowAsync(key);
             if (_backgroundInFlight is { Length: > 0 })
             {

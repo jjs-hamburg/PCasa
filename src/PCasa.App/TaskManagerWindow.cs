@@ -38,7 +38,7 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<string,string,Task<bool>>? _moveAutomaticScan;
     private readonly Func<string,Task<bool>>? _resumeAutomaticScan;
     private readonly Func<string,Task<bool>>? _startAutomaticNow;
-    private readonly Func<string,string,IReadOnlyList<string>,Task<bool>>?
+    private readonly Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
         _moveGlobalTask;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
@@ -67,7 +67,7 @@ public sealed class TaskManagerWindow : Window
         Func<string,string,Task<bool>>? moveAutomaticScan = null,
         Func<string,Task<bool>>? resumeAutomaticScan = null,
         Func<string,Task<bool>>? startAutomaticNow = null,
-        Func<string,string,IReadOnlyList<string>,Task<bool>>?
+        Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
             moveGlobalTask = null)
     {
         _scheduler = scheduler;
@@ -436,7 +436,8 @@ public sealed class TaskManagerWindow : Window
         if (_moveGlobalTask is not null)
         {
             var ordered = _all.Where(row => row.Status != "Abgeschlossen")
-                .Select(row => row.Key).ToArray();
+                .Select(row => new SchedulerTaskOrderItem(
+                    row.Key, (SchedulerPriority)row.Priority)).ToArray();
             _ = PerformAsync(key, () => _moveGlobalTask(key, targetKey, ordered));
             return;
         }
@@ -1016,7 +1017,8 @@ public sealed class TaskManagerWindow : Window
             var all = _all.Where(item => item.Status != "Abgeschlossen").ToArray();
             var index = Array.FindIndex(all, item => item.Key == row.Key);
             var neighbor = all[index + direction];
-            var accepted = all.Select(item => item.Key).ToArray();
+            var accepted = all.Select(item => new SchedulerTaskOrderItem(
+                item.Key, (SchedulerPriority)item.Priority)).ToArray();
             _ = PerformAsync(row.Key, () =>
                 _moveGlobalTask(row.Key, neighbor.Key, accepted));
             return;

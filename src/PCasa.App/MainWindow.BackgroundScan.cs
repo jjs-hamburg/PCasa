@@ -309,7 +309,7 @@ public partial class MainWindow
                 var visibleKey = $"automatic:{root.Id}:RescanRoot:{root.LocalPath}";
                 if (_scheduler.EffectiveTaskPlacement(
                         visibleKey, SchedulerPriority.Idle, long.MaxValue)
-                    .Priority == SchedulerPriority.ManualAction)
+                    .Priority < SchedulerPriority.Idle)
                     _backgroundUrgentReviews.Add(root.Id);
             }
 
@@ -386,13 +386,29 @@ public partial class MainWindow
             // A user-promoted P2 review is an explicit request, not idle
             // maintenance. Admit it immediately even when a manual P0 scan
             // is running: the SAME scheduler enforces P0 before P2 execution.
-            var urgentCandidate = dueRootReviews.FirstOrDefault(id =>
+            // The admission order is the scheduler's effective user order
+            // even before a review has a physical scan WorkItem. A P4
+            // review moved above another P4 review must be admitted first.
+            var sourceById = folders.ToDictionary(root => root.Id);
+            var orderedReviews = dueRootReviews
+                .Where(sourceById.ContainsKey)
+                .OrderBy(id => _scheduler.EffectiveTaskPlacement(
+                    $"automatic:{id}:RescanRoot:{sourceById[id].LocalPath}",
+                    SchedulerPriority.Idle,
+                    _backgroundReviewOrder.GetValueOrDefault(id, long.MaxValue)
+                ).Priority)
+                .ThenBy(id => _scheduler.EffectiveTaskPlacement(
+                    $"automatic:{id}:RescanRoot:{sourceById[id].LocalPath}",
+                    SchedulerPriority.Idle,
+                    _backgroundReviewOrder.GetValueOrDefault(id, long.MaxValue)
+                ).QueueOrder).ToArray();
+            var urgentCandidate = orderedReviews.FirstOrDefault(id =>
                 _backgroundUrgentReviews.Contains(id) &&
                 availability.TryGetValue(id, out var urgentReachable) &&
                 urgentReachable);
             var idleCandidate = urgentCandidate != 0 ? urgentCandidate :
                 idleSlotFree
-                    ? dueRootReviews.FirstOrDefault(id =>
+                    ? orderedReviews.FirstOrDefault(id =>
                         availability.TryGetValue(id, out var reachable) && reachable)
                     : 0L;
             var roundText =
@@ -1060,24 +1076,33 @@ public partial class MainWindow
         }
 
         var requests = _backgroundPending.Values
-            // A concrete file discovery must never queue behind the
-            // startup full-root verification. Both use this same scanner.
-            .OrderBy(request =>
-                request.Kind == BackgroundFolderChangeKind.RescanRoot &&
-                _backgroundUrgentReviews.Contains(request.MonitoredFolderId)
-                    ? -1 : request.Kind switch
+            .Select(request =>
             {
-                BackgroundFolderChangeKind.RemovePath => 0,
-                BackgroundFolderChangeKind.ScanFile => 1,
-                BackgroundFolderChangeKind.ScanDirectory => 2,
-                BackgroundFolderChangeKind.RescanRoot => 3,
-                _ => 4
+                var defaultPriority = request.Kind ==
+                    BackgroundFolderChangeKind.RescanRoot
+                    ? _backgroundUrgentReviews.Contains(request.MonitoredFolderId)
+                        ? SchedulerPriority.UserAction : SchedulerPriority.Idle
+                    : SchedulerPriority.Background;
+                var defaultOrder = request.Kind ==
+                    BackgroundFolderChangeKind.RescanRoot
+                    ? _backgroundReviewOrder.GetValueOrDefault(
+                        request.MonitoredFolderId, long.MaxValue)
+                    : request.Kind switch
+                    {
+                        BackgroundFolderChangeKind.RemovePath => 0,
+                        BackgroundFolderChangeKind.ScanFile => 1,
+                        BackgroundFolderChangeKind.ScanDirectory => 2,
+                        _ => 3
+                    };
+                return (Request: request, Placement:
+                    _scheduler.EffectiveTaskPlacement(
+                        AutomaticTaskKey(request), defaultPriority, defaultOrder));
             })
-            .ThenBy(request => request.Kind == BackgroundFolderChangeKind.RescanRoot
-                ? _backgroundReviewOrder.GetValueOrDefault(
-                    request.MonitoredFolderId, long.MaxValue)
-                : long.MaxValue)
-            .ThenBy(request => request.Path, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(item => item.Placement.Priority)
+            .ThenBy(item => item.Placement.QueueOrder)
+            .ThenBy(item => item.Request.Path,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(item => item.Request)
             .ToArray();
         _backgroundPending.Clear();
         _backgroundInFlight = requests;

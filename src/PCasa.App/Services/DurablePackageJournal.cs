@@ -440,6 +440,25 @@ public sealed class DurablePackageJournal
         return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
     }
 
+    // Global Taskmanager moves may explicitly demote an old P0 package.
+    // The background guard must obey the same scheduler-owned effective
+    // priority; testing the original package priority would deadlock a
+    // user-demoted P0 job behind itself.
+    public bool HasPendingEffectiveManualActions()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM scheduler_packages p
+                LEFT JOIN scheduler_task_order o ON o.task_key=p.package_key
+                WHERE COALESCE(o.priority_override,p.priority)=0
+                  AND p.state IN ('queued','running')
+            );
+            """;
+        return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+    }
+
     // A failed attempt is not a finished or canceled user action. The
     // next attempt is durable, bounded, and owned by the existing scheduler.
     // Backoff stops a permanently unavailable NAS monopolizing the worker.
