@@ -459,7 +459,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             {
                 _restoringDurablePackages = false;
                 // Workers may have consumed signals during recovery.
-                foreach (var lane in new[] { LaneManual, LaneManualSourceProbe })
+                foreach (var lane in new[] { LaneManual, LaneManualScan, LaneManualSourceProbe })
                     if (_pending.Any(p => LaneFor(p.Priority, p.Kind) == lane))
                         _signals[lane].Release();
             }
@@ -667,6 +667,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     _signals[lane].Release();
         }
     }
+
+    // All P0 worker capacities compare the SAME ranks, including during
+    // startup recovery. A separate execution lane never implies a queue.
+    private static bool ManualPrecedes(WorkItem first, WorkItem second)
+        => first.Priority < second.Priority ||
+           (first.Priority == second.Priority &&
+            (first.QueueOrder < second.QueueOrder ||
+             (first.QueueOrder == second.QueueOrder && first.Id < second.Id)));
 
     private static int LaneFor(SchedulerPriority priority, SchedulerWorkKind kind)
         => kind switch
@@ -1150,6 +1158,22 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             .ThenBy(x => x.QueueOrder)
                             .ThenBy(x => x.Id)
                             .FirstOrDefault();
+                    // LIFO is a GLOBAL scheduler decision, not a side effect
+                    // of which physical capacity happens to be free first.
+                    // A blocked older NAS scan must yield to a newer P0 write,
+                    // but an older write must not bypass a newer scan during
+                    // durable recovery or after a manual user reorder.
+                    var waitForEarlierManual = candidate is not null &&
+                        candidate.Priority == SchedulerPriority.ManualAction &&
+                        lane is LaneManual or LaneManualScan or LaneManualSourceProbe &&
+                        (_pending.Any(other => !ReferenceEquals(other, candidate) &&
+                            other.Priority == SchedulerPriority.ManualAction &&
+                            ManualPrecedes(other, candidate)) ||
+                         _runningPriorityJobs.Any(active => active is not null &&
+                            active.Priority == SchedulerPriority.ManualAction &&
+                            ManualPrecedes(active, candidate)) ||
+                         (_runningManualSourceProbe is { } probe &&
+                            ManualPrecedes(probe, candidate)));
                     // Manual source probes have a separate executor so blocked
                     // SMB calls do not freeze the manual catalog worker. Yet an
                     // older yielded manual package must NOT resume while a
@@ -1204,8 +1228,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         blockedByHigherPriority = false;
                     item = blockedByHigherPriority || newerManualProbe ||
                         blockedByNativeDrag || waitingForEarlierOrdered ||
+                        waitForEarlierManual ||
                         (_restoringDurablePackages &&
-                         lane is LaneManual or LaneManualSourceProbe)
+                         lane is LaneManual or LaneManualScan or LaneManualSourceProbe)
                         ? null : candidate;
                     if (item is not null)
                     {
