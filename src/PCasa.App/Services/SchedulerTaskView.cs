@@ -197,13 +197,30 @@ public sealed class SchedulerTaskView
                 // write-error actions used by the error dialog.
                 var failedGroups = _originalFailures.Unresolved()
                     .GroupBy(issue => issue.PackageKey, StringComparer.Ordinal)
-                    .ToDictionary(group => "failed-files:" + group.Key,
+                    .ToDictionary(group => group.Key,
                         group => (IReadOnlyList<OriginalWriteFailureRepository.FailedFile>)
                             group.ToArray(), StringComparer.Ordinal);
                 foreach (var (key, failures) in failedGroups)
                 {
                     if (!_canRetryFailed && !_canDiscardFailed)
                         continue; // no control is available in this window
+                    var existingIndex = rows.FindIndex(item =>
+                        string.Equals(item.Key, key, StringComparison.Ordinal));
+                    if (existingIndex >= 0)
+                    {
+                        // The original durable package IS the failed-file owner.
+                        // Never show a second synthetic task for its error rows.
+                        var original = rows[existingIndex];
+                        if (original.Status == "Abgeschlossen")
+                            rows[existingIndex] = original with
+                            {
+                                Status = "Fehler",
+                                Retryable = _canRetryFailed,
+                                Deletable = _canDiscardFailed,
+                                Error = failures[0].Error
+                            };
+                        continue;
+                    }
                     var first = failures[0];
                     var task = first.Kind == OriginalWriteFailureRepository.Gps
                         ? UiLanguage.T("GPS schreiben") : UiLanguage.T("Tags schreiben");
