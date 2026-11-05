@@ -332,9 +332,20 @@ public partial class MainWindow
             Task completion;
             try
             {
-                completion = _scheduler.EnqueueDurableRecipeAsync(
-                    key, "gps-edit-v2", payload,
-                    SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+                var admissionWatch = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    completion = _scheduler.EnqueueDurableRecipeAsync(
+                        key, "gps-edit-v2", payload,
+                        SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+                }
+                finally
+                {
+                    admissionWatch.Stop();
+                    PCasaDiagnostics.WriteMessage("GPS.Edit.Admission",
+                        $"Key={key}; Targets={ids.Length}; Mode={mode}; " +
+                        $"AdmissionMs={admissionWatch.ElapsedMilliseconds}");
+                }
                 PCasaDiagnostics.WriteMessage("GPS.Edit.Accepted",
                     $"Key={key}; Targets={ids.Length}; Mode={mode}; Priority=P0");
                 // The journal row is committed synchronously: notify the

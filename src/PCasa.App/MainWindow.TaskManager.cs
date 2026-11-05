@@ -72,9 +72,15 @@ public partial class MainWindow
             }
         }
 
-        // The scan owner must admit the same queued watcher intents after
-        // a user order change. Do not issue a second full-root inventory.
-        if (allAcceptedKeys.Any(item => TryIsRootReview(item.Key)))
+        // Every automatic scan (including ScanFile/"Import file") belongs
+        // to the SAME scan owner. Previously only full-root reviews received
+        // the reorder notification, so moving a waiting ScanFile above other
+        // work changed its displayed rank without changing the in-flight
+        // batch. This does NOT create or duplicate any scanner work.
+        var changesAutomaticOrder =
+            key.StartsWith("automatic:", StringComparison.Ordinal) ||
+            targetKey.StartsWith("automatic:", StringComparison.Ordinal);
+        if (changesAutomaticOrder)
         {
             foreach (var item in allAcceptedKeys.Where(item =>
                 TryIsRootReview(item.Key)))

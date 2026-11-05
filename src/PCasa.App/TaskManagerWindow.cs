@@ -45,6 +45,7 @@ public sealed class TaskManagerWindow : Window
     private bool _reading;
     private bool _acting;
     private bool _refreshRequested;
+    private long _lastProgressRefreshTick;
     private Point? _dragOrigin;
     private string? _dragKey;
     private const string TaskDragFormat = "PCasa.TaskManager.TaskKey";
@@ -199,7 +200,22 @@ public sealed class TaskManagerWindow : Window
         UpdateActions();
     }
 
-    private void SchedulerProgressChanged(SchedulerJobSnapshot _) => RequestRefresh();
+    private void SchedulerProgressChanged(SchedulerJobSnapshot snapshot)
+    {
+        // A large scan reports progress many times per second. Re-reading
+        // the journal, all import receipts and the error ledger on EVERY
+        // progress event saturated SQLite and delayed new GPS admission
+        // rows. Acceptance and user changes still trigger immediate reads;
+        // only repeated progress snapshots are coalesced here.
+        var now = Environment.TickCount64;
+        if (snapshot.State is SchedulerJobState.Completed or
+            SchedulerJobState.Canceled or SchedulerJobState.Failed ||
+            now - Interlocked.Read(ref _lastProgressRefreshTick) >= 250)
+        {
+            Interlocked.Exchange(ref _lastProgressRefreshTick, now);
+            RequestRefresh();
+        }
+    }
 
     // On accepting a durable manual job the journal entry already exists.
     // This is an immediate read of scheduler state, not a new WPF queue.
