@@ -278,6 +278,7 @@ public sealed class ImageTagRepository
             update.ExecuteNonQuery();
         }
         transaction.Commit();
+        ownMutation.Confirm(newSize, newTicks);
         }
     }
 
@@ -535,6 +536,8 @@ public sealed class ImageTagRepository
             var iptc = sourceKeywords.Iptc.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var fieldsDiffer = !xmp.SetEquals(target) ||
                 (ext != ".arw" && !iptc.SetEquals(target));
+            using var ownMutation = changed || fieldsDiffer
+                ? OriginalFileMutationReceipts.Begin(path) : null;
             if (changed || fieldsDiffer)
             {
                 token.ThrowIfCancellationRequested();
@@ -607,6 +610,7 @@ public sealed class ImageTagRepository
                 }
             }
             tx.Commit();
+            ownMutation?.Confirm(newSize, newTicks);
         }
     }
 
