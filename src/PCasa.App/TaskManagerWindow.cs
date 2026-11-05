@@ -749,8 +749,7 @@ public sealed class TaskManagerWindow : Window
             ? UiLanguage.Format(
                 "Scanauftrag '{0}' aus der Warteschlange löschen? Bereits eingelesene Fotos, Katalogeinträge und bestätigte Scanpositionen bleiben erhalten.",
                 row.Title)
-            : !row.Durable && !row.Key.StartsWith("failed-files:",
-                StringComparison.Ordinal)
+            : !row.Durable && !_failedRows.ContainsKey(row.Key)
                 ? UiLanguage.Format(
                     "Auftrag '{0}' stoppen? Der bestätigte Einlesefortschritt bleibt erhalten.",
                     row.Title)
