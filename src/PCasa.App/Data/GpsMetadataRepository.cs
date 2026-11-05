@@ -100,6 +100,7 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 EditMode.Remove => alreadyHasGps,
                 _ => throw new InvalidDataException("Unbekannter GPS-Auftrag.")
             };
+            using var ownMutation = shouldWrite ? OriginalFileMutationReceipts.Begin(path) : null;
             if (shouldWrite)
             {
                 token.ThrowIfCancellationRequested();
