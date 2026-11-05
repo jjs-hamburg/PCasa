@@ -347,13 +347,22 @@ internal static class GlobalTaskOrderFlow
             TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
-            var scan = engine.EnqueueAsync("regression:blocked-manual-nas",
-                SchedulerPriority.ManualAction, async _ =>
+            engine.RegisterDurablePackageType("test-manual-nas-scan-v1",
+                (key, _) =>
                 {
-                    scanEntered.TrySetResult();
-                    // Simulates one uninterruptible synchronous SMB call.
-                    await releaseScan.Task;
-                }, workKind: SchedulerWorkKind.CatalogScan);
+                    var pkg = new SchedulerTaskPackage(key);
+                    pkg.AddStep(async _ =>
+                    {
+                        scanEntered.TrySetResult();
+                        // Simulates one uninterruptible synchronous SMB call.
+                        await releaseScan.Task;
+                    });
+                    return pkg;
+                });
+            var scan = engine.EnqueueDurableRecipeAsync(
+                "catalog:scan:regression-blocked-manual-nas",
+                "test-manual-nas-scan-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
             AwaitWithPump(() => scanEntered.Task.IsCompleted,
                 "Manual NAS scan did not occupy its execution capacity.");
             engine.RegisterDurablePackageType("gps-edit-v2", (key, _) =>
