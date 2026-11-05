@@ -44,6 +44,31 @@ internal static class GlobalTaskOrderFlow
             AwaitWithPump(() => started.Task.IsCompleted,
                 "Manual P0 worker did not start.");
 
+            // Control-plane changes cannot be enqueued behind the P0
+            // worker being reprioritized. This was why a clicked P4
+            // review could stay "waiting" long after its button was used.
+            var priorityRoot = Path.Combine(root, "PendingReview");
+            Directory.CreateDirectory(priorityRoot);
+            var folderRepo = new FolderRepository(database);
+            folderRepo.Add(priorityRoot);
+            var monitored = folderRepo.GetAll().Single(folder =>
+                string.Equals(folder.LocalPath, priorityRoot,
+                    StringComparison.OrdinalIgnoreCase));
+            var sourceState = folderRepo.GetSourceState(monitored.CanonicalPath);
+            if (sourceState is null ||
+                !folderRepo.CompleteInitialScan(
+                    monitored.Id, sourceState.Value.Generation))
+                throw new Exception("Could not prepare reviewed source.");
+            var priorityWatch = Stopwatch.StartNew();
+            var promoted = scheduler.ChangeTaskIntent(() =>
+                folderRepo.RequestRootReviewNow(monitored.Id));
+            priorityWatch.Stop();
+            if (!promoted || priorityWatch.Elapsed > TimeSpan.FromMilliseconds(500) ||
+                !folderRepo.GetUrgentRootReviewIds().Contains(monitored.Id) ||
+                blocker.IsCompleted)
+                throw new Exception(
+                    "P4 promotion was blocked by the busy P0 worker.");
+
             var factoryEntered = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             SchedulerTaskPackage GpsRecipe(string key, string _)

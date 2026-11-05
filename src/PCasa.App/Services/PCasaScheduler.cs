@@ -364,6 +364,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return true;
     }
 
+    // Control-plane changes must not wait in the WORK queue that they are
+    // changing. The scheduler serializes the mutation under its existing
+    // gate; SQLite persists the actual owner intent in the same operation.
+    // Call from Task.Run when invoked by WPF so disk contention never
+    // stalls the click handler. No second execution queue is created.
+    public T ChangeTaskIntent<T>(Func<T> mutation)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return mutation();
+        }
+    }
+
     public bool HasActiveDurablePackageType(string type)
         => _durableJournal?.Pending().Any(p => p.Type == type) == true;
 

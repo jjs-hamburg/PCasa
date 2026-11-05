@@ -56,15 +56,10 @@ public partial class MainWindow
 
         if (TryInitialTaskId(key, out var importId))
         {
-            var unpaused = await _scheduler.RunAsync(
-                $"taskmanager:global-import-resume:{Guid.NewGuid():N}",
-                SchedulerPriority.UserAction,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return _folderRepository.SetPendingFirstImportPaused(
-                        importId, false);
-                }, workKind: SchedulerWorkKind.CatalogRead);
+            var unpaused = await Task.Run(() =>
+                _scheduler.ChangeTaskIntent(() =>
+                    _folderRepository.SetPendingFirstImportPaused(
+                        importId, false)));
             if (unpaused)
             {
                 _initialScanAttempted.Remove(importId);
@@ -227,14 +222,12 @@ public partial class MainWindow
     private async Task<bool> StartAutomaticScanNowAsync(string key)
     {
         if (!TryRootReviewTaskId(key, out var rootId)) return false;
-        var promoted = await _scheduler.RunAsync(
-            $"taskmanager:review-promote:{Guid.NewGuid():N}",
-            SchedulerPriority.UserAction,
-            token =>
-            {
-                token.ThrowIfCancellationRequested();
-                return _folderRepository.RequestRootReviewNow(rootId);
-            }, workKind: SchedulerWorkKind.CatalogRead);
+        // This is a scheduler CONTROL-plane mutation. Waiting for an
+        // additional P2 worker here would defeat the user's attempt to
+        // move a P4 scan ahead of the currently busy work queue.
+        var promoted = await Task.Run(() =>
+            _scheduler.ChangeTaskIntent(() =>
+                _folderRepository.RequestRootReviewNow(rootId)));
         if (!promoted) return false;
         _backgroundUrgentReviews.Add(rootId);
 
