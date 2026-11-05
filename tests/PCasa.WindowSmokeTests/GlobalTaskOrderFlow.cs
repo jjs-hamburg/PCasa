@@ -227,6 +227,7 @@ internal static class GlobalTaskOrderFlow
                         string.Join(" -> ", executed));
             }
             AssertDefaultP0AndBackgroundSafety(root);
+            AssertReorderNeverWaitsForNetworkCancellation();
             Console.WriteLine("PASS: GPS accepted before eligibility, visible in TM; " +
                 "free cross-priority up/down and real persisted execution order.");
             Console.WriteLine("PASS: Default P0 LIFO and background isolation unchanged.");
@@ -324,6 +325,38 @@ internal static class GlobalTaskOrderFlow
             if (!cleanup.Wait(TimeSpan.FromSeconds(5)))
                 throw new TimeoutException("Safety scheduler shutdown stalled.");
         }
+    }
+
+    // Scanner cancellation callbacks may be blocked in native SMB I/O.
+    // The Taskmanager must release its buttons after the scheduler rank is
+    // persisted, not after waiting for those callbacks to finish.
+    private static void AssertReorderNeverWaitsForNetworkCancellation()
+    {
+        var method = typeof(PCasa.App.MainWindow).GetMethod(
+            "RequestTaskManagerYield",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("No asynchronous scan-yield notification.");
+        using var cancellation = new CancellationTokenSource();
+        using var callbackStarted = new ManualResetEventSlim(false);
+        using var releaseCallback = new ManualResetEventSlim(false);
+        using var registration = cancellation.Token.Register(() =>
+        {
+            callbackStarted.Set();
+            if (!releaseCallback.Wait(TimeSpan.FromSeconds(8)))
+                throw new TimeoutException("Test cancellation callback never released.");
+        });
+        var watch = Stopwatch.StartNew();
+        try
+        {
+            method.Invoke(null, new object[] { cancellation });
+            watch.Stop();
+            if (watch.Elapsed > TimeSpan.FromMilliseconds(300))
+                throw new Exception("Taskmanager blocks on network cancellation callbacks.");
+            if (!callbackStarted.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Scan yield cancellation was never requested.");
+        }
+        finally { releaseCallback.Set(); }
     }
 
     private static string? RowKey(object item) =>

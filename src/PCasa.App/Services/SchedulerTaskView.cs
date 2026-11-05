@@ -54,6 +54,10 @@ public sealed class SchedulerTaskView
                 var done = showCompleted
                     ? _journal.RecentCompleted()
                     : Array.Empty<DurablePackageRecord>();
+                // Resolve paths for all newly accepted GPS/tag packages with
+                // bounded SQL batches. A per-package SQLite connection here
+                // made the Taskmanager unresponsive with thousands of jobs.
+                var imagePaths = LoadFirstImagePaths(active.Concat(done));
                 var latest = snapshots
                     .GroupBy(s => s.Key, StringComparer.Ordinal)
                     .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).First());
@@ -77,7 +81,7 @@ public sealed class SchedulerTaskView
                         _ when snapshot?.State == SchedulerJobState.Failed => "Fehler",
                         _ => "Wartet"
                     };
-                    var path = DirectoryFor(record, snapshot?.CurrentPath);
+                    var path = DirectoryFor(record, snapshot?.CurrentPath, imagePaths);
                     var continuingImport = record.State != "completed" &&
                         AcknowledgesPendingImport(record) &&
                         firstImports.Any(first => string.Equals(
@@ -228,7 +232,33 @@ public sealed class SchedulerTaskView
                 return new SchedulerTaskViewResult(positioned.ToList(), failedGroups);
     }
 
-    private string DirectoryFor(DurablePackageRecord item, string? currentPath)
+    private IReadOnlyDictionary<long,string> LoadFirstImagePaths(
+        IEnumerable<DurablePackageRecord> records)
+    {
+        var ids = records
+            .Where(item => !_initialDirectoryByKey.ContainsKey(item.Key))
+            .Select(item => FirstImageId(item.Payload))
+            .Where(id => id > 0).Distinct().ToArray();
+        var result = new Dictionary<long,string>();
+        if (ids.Length == 0) return result;
+        using var db = _database.OpenConnection();
+        foreach (var chunk in ids.Chunk(300))
+        {
+            using var cmd = db.CreateCommand();
+            var names = chunk.Select((_, index) => "$i" + index).ToArray();
+            cmd.CommandText = "SELECT id,local_path FROM images WHERE id IN (" +
+                string.Join(",", names) + ");";
+            for (var i=0; i<chunk.Length; i++)
+                cmd.Parameters.AddWithValue(names[i], chunk[i]);
+            using var rows = cmd.ExecuteReader();
+            while (rows.Read())
+                result[rows.GetInt64(0)] = rows.GetString(1);
+        }
+        return result;
+    }
+
+    private string DirectoryFor(DurablePackageRecord item,
+        string? currentPath, IReadOnlyDictionary<long,string> imagePaths)
     {
         // The authoritative root of a manual scan is immutable in the
         // durable recipe. A yield/restart clears CurrentPath by design; it
@@ -252,14 +282,7 @@ public sealed class SchedulerTaskView
         if (path is null)
         {
             var id = FirstImageId(item.Payload);
-            if (id > 0)
-            {
-                using var db = _database.OpenConnection();
-                using var cmd = db.CreateCommand();
-                cmd.CommandText = "SELECT local_path FROM images WHERE id=$id;";
-                cmd.Parameters.AddWithValue("$id", id);
-                path = cmd.ExecuteScalar() as string;
-            }
+            if (id > 0) imagePaths.TryGetValue(id, out path);
         }
         var dir = CurrentDirectory(path);
         if (dir.Length > 0)

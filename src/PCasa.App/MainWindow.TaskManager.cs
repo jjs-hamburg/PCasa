@@ -33,6 +33,43 @@ public partial class MainWindow
                 "RescanRoot:", StringComparison.Ordinal);
     }
 
+    // A UI reorder acknowledges the durable scheduler decision immediately.
+    // Waiting for a NAS scanner's cancellation callbacks here kept the
+    // Taskmanager's _acting flag raised and disabled EVERY action button,
+    // even though the new rank was already committed to SQLite.
+    private static void RequestTaskManagerYield(CancellationTokenSource cancellation)
+    {
+        if (cancellation.IsCancellationRequested) return;
+        try
+        {
+            _ = cancellation.CancelAsync().ContinueWith(task =>
+            {
+                if (task.Exception is not null)
+                    PCasaDiagnostics.Write("Taskmanager.Yield", task.Exception);
+            }, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task ObserveTaskManagerOwnerUpdateAsync(Task<bool> action)
+    {
+        try
+        {
+            if (!await action && !Dispatcher.HasShutdownStarted)
+                StatusText.Text = UiLanguage.T(
+                    "Taskmanager: Auftrag konnte nicht aktiviert werden.");
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Taskmanager.OwnerReorder", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                StatusText.Text = UiLanguage.T(
+                    "Taskmanager: Auftrag konnte nicht aktiviert werden.") +
+                    " " + ex.Message;
+        }
+    }
+
     // The ONE scheduler owns priority and relative dispatch order for
     // every active task key, independent of original work type. These are
     // owner notifications for the existing physical scanner cursors, not
@@ -66,8 +103,7 @@ public partial class MainWindow
                 if (_initialScanActive && _activeScanFolderId != importId &&
                     _initialScanCancellation is
                         { IsCancellationRequested: false } running)
-                    try { await running.CancelAsync(); }
-                    catch (ObjectDisposedException) { }
+                    RequestTaskManagerYield(running);
                 QueuePendingInitialScans();
             }
         }
@@ -97,14 +133,14 @@ public partial class MainWindow
                 _scheduler.EffectiveTaskPlacement(
                     key, SchedulerPriority.Idle, long.MaxValue).Priority <
                     SchedulerPriority.Idle)
-                await StartAutomaticScanNowAsync(key);
+                _ = ObserveTaskManagerOwnerUpdateAsync(
+                    StartAutomaticScanNowAsync(key));
             if (_backgroundInFlight is { Length: > 0 })
             {
                 _backgroundOrderChanged = true;
                 if (_backgroundCurrentScanCancellation is
                     { IsCancellationRequested: false } active)
-                    try { await active.CancelAsync(); }
-                    catch (ObjectDisposedException) { }
+                    RequestTaskManagerYield(active);
             }
             if (_backgroundScanInitialized && !_backgroundMonitorClosing)
                 RefreshBackgroundMonitor();
@@ -263,8 +299,7 @@ public partial class MainWindow
             _backgroundOrderChanged = true;
             if (_backgroundCurrentScanCancellation is
                 { IsCancellationRequested: false } running)
-                try { await running.CancelAsync(); }
-                catch (ObjectDisposedException) { }
+                RequestTaskManagerYield(running);
         }
         _backgroundDebounceTimer?.Stop();
         _backgroundDebounceTimer?.Start();
