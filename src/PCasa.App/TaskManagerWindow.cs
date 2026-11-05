@@ -507,9 +507,9 @@ public sealed class TaskManagerWindow : Window
         {
             if (row.Status == "Abgeschlossen") return false;
             var all = _all.Where(item => item.Status != "Abgeschlossen").ToArray();
-            var index = Array.FindIndex(all, item => item.Key == row.Key);
-            return index >= 0 && index + direction >= 0 &&
-                index + direction < all.Length;
+            var globalIndex = Array.FindIndex(all, item => item.Key == row.Key);
+            return globalIndex >= 0 && globalIndex + direction >= 0 &&
+                globalIndex + direction < all.Length;
         }
         if (!row.Movable || row.Status is "Läuft" or "Fehler" or "Abgeschlossen")
             return false;
