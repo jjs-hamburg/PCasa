@@ -227,6 +227,7 @@ internal static class GlobalTaskOrderFlow
                         string.Join(" -> ", executed));
             }
             AssertDefaultP0AndBackgroundSafety(root);
+            AssertBlockedManualScanCannotStarveGps(root);
             AssertReorderNeverWaitsForNetworkCancellation();
             Console.WriteLine("PASS: GPS accepted before eligibility, visible in TM; " +
                 "free cross-priority up/down and real persisted execution order.");
@@ -324,6 +325,66 @@ internal static class GlobalTaskOrderFlow
             var cleanup = Task.Run(async () => await engine.DisposeAsync());
             if (!cleanup.Wait(TimeSpan.FromSeconds(5)))
                 throw new TimeoutException("Safety scheduler shutdown stalled.");
+        }
+    }
+
+    // A NAS inventory may be stuck inside non-cancellable SMB I/O. A newly
+    // accepted P0 original-file mutation must begin on its own scheduler
+    // capacity WITHOUT waiting for that inventory's cancellation callback.
+    // Both requests still belong to the same scheduler and durable journal.
+    private static void AssertBlockedManualScanCannotStarveGps(string parent)
+    {
+        var database = new LocalDatabase(Path.Combine(parent, "blocked-manual-scan.db"));
+        database.Initialize();
+        var engine = new PCasaScheduler();
+        engine.EnableDurablePackages(database);
+        var scanEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseScan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var gpsStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var scan = engine.EnqueueAsync("regression:blocked-manual-nas",
+                SchedulerPriority.ManualAction, async _ =>
+                {
+                    scanEntered.TrySetResult();
+                    // Simulates one uninterruptible synchronous SMB call.
+                    await releaseScan.Task;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            AwaitWithPump(() => scanEntered.Task.IsCompleted,
+                "Manual NAS scan did not occupy its execution capacity.");
+            engine.RegisterDurablePackageType("gps-edit-v2", (key, _) =>
+            {
+                var pkg = new SchedulerTaskPackage(key);
+                pkg.AddStep(token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    gpsStarted.TrySetResult();
+                    return Task.CompletedTask;
+                });
+                return pkg;
+            });
+            var gps = engine.EnqueueDurableRecipeAsync(
+                "gps:edit:regression-blocked-nas", "gps-edit-v2", "{}",
+                SchedulerPriority.ManualAction);
+            AwaitWithPump(() => gpsStarted.Task.IsCompleted || gps.IsFaulted,
+                "New GPS P0 package is starved by an uninterruptible manual NAS scan.");
+            if (gps.IsFaulted) gps.GetAwaiter().GetResult();
+            if (!gpsStarted.Task.IsCompleted || scan.IsCompleted)
+                throw new Exception("GPS did not run independently of the blocked scan.");
+            releaseScan.TrySetResult();
+            AwaitWithPump(() => Task.WhenAll(scan, gps).IsCompleted,
+                "Manual NAS scan did not finish after release.");
+            Task.WhenAll(scan, gps).GetAwaiter().GetResult();
+        }
+        finally
+        {
+            releaseScan.TrySetResult();
+            var cleanup = Task.Run(async () => await engine.DisposeAsync());
+            if (!cleanup.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException("Blocked-scan scheduler cleanup stalled.");
         }
     }
 
