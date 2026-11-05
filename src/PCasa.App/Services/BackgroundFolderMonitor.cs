@@ -181,6 +181,9 @@ public sealed class BackgroundFolderMonitor : IDisposable
         {
             return;
         }
+        // An acknowledged original mutation is already part of its parent
+        // GPS/tag package, not a new independent scan request.
+        if (OriginalFileMutationReceipts.IsOwnedNotification(path)) return;
 
         Raise(new BackgroundFolderChange(
             state.Folder.Id,
