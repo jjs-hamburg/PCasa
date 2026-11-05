@@ -52,7 +52,7 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                       SELECT 1 FROM scheduler_packages newer
                       JOIN scheduler_packages original
                         ON original.package_key=$key
-                     WHERE newer.package_type='gps-edit-v1'
+                     WHERE newer.package_type IN ('gps-edit-v1','gps-edit-v2')
                        AND newer.sequence > original.sequence
                        AND newer.state NOT IN ('canceled','failed')
                        AND EXISTS (
