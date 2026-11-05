@@ -287,7 +287,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             var firstWaiting = _pending
                 .Where(w => _userDispatchOrder.ContainsKey(
                     TaskIdentityUnsafe(w.Key)))
-                .OrderBy(w => w.QueueOrder).FirstOrDefault();
+                .OrderBy(w => w.Priority)
+                .ThenBy(w => w.QueueOrder).FirstOrDefault();
             if (firstWaiting is not null)
             {
                 for (var lane=0;lane<_runningPriorityJobs.Length;lane++)
@@ -296,8 +297,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     if (active is null ||
                         !_userDispatchOrder.TryGetValue(
                             TaskIdentityUnsafe(active.Key), out var activeOrder) ||
-                        activeOrder <= firstWaiting.QueueOrder ||
-                        active.YieldRequested) continue;
+                        active.YieldRequested ||
+                        active.Priority < firstWaiting.Priority ||
+                        (active.Priority == firstWaiting.Priority &&
+                         activeOrder <= firstWaiting.QueueOrder)) continue;
                     active.YieldRequested = true;
                     SetStateUnsafe(active,SchedulerJobState.YieldRequested);
                     changed.Add(active);
@@ -998,7 +1001,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         _userDispatchOrder.TryGetValue(identity, out var incomingRank) &&
                         _userDispatchOrder.TryGetValue(
                             TaskIdentityUnsafe(active?.Key ?? ""), out var currentRank) &&
-                        incomingRank < currentRank;
+                        active is not null &&
+                        (priority < active.Priority ||
+                         (priority == active.Priority &&
+                          incomingRank < currentRank));
                     if (active is not null &&
                         (outranksByExplicitOrder ||
                          (!_userDispatchOrder.ContainsKey(identity) &&
@@ -1095,7 +1101,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var earliestOrdered = _pending
                         .Where(x => _userDispatchOrder.ContainsKey(
                             TaskIdentityUnsafe(x.Key)))
-                        .OrderBy(x => x.QueueOrder).FirstOrDefault();
+                        .OrderBy(x => x.Priority)
+                        .ThenBy(x => x.QueueOrder).FirstOrDefault();
                     long candidateRank = long.MaxValue;
                     var candidateHasPosition = candidate is not null &&
                         _userDispatchOrder.TryGetValue(
@@ -1110,7 +1117,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                              _userDispatchOrder.TryGetValue(
                                  TaskIdentityUnsafe(active.Key),
                                  out var runningRank) &&
-                             runningRank < candidateRank));
+                             (active.Priority < candidate!.Priority ||
+                              (active.Priority == candidate.Priority &&
+                               runningRank < candidateRank))));
                     // The original blanket P0 database guard is only a
                     // DEFAULT-priority rule. A user-promoted initial import
                     // above P0 must not be blocked by its old class. Still
