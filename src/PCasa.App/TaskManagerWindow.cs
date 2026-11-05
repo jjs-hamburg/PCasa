@@ -792,20 +792,17 @@ public sealed class TaskManagerWindow : Window
                 // One effective order comes from the scheduler. The display
                 // does not invent a separate status-first queue: moving a
                 // waiting task above a running one must be VISIBLE at once.
-                var positioned = rows.Select(row =>
-                {
-                    var placement = _scheduler.EffectiveTaskPlacement(
-                        row.Key, (SchedulerPriority)row.Priority, row.Order);
-                    return row with {
-                        Priority = (int)placement.Priority,
-                        Order = placement.QueueOrder
-                    };
-                }).OrderBy(row => row.Status == "Abgeschlossen" ? 1 : 0)
-                  .ThenBy(row => row.Priority)
-                  .ThenBy(row => row.Order)
-                  .ThenBy(row => row.Key)
-                  .ToList();
-                return (Rows: positioned, Failed: failedGroups);
+                var positioned = _scheduler.OrderTaskView(
+                    rows, row => row.Key,
+                    row => (SchedulerPriority)row.Priority,
+                    row => row.Order,
+                    row => row.Status == "Abgeschlossen",
+                    (row, priority, order) => row with
+                    {
+                        Priority = (int)priority,
+                        Order = order
+                    });
+                return (Rows: positioned.ToList(), Failed: failedGroups);
             });
             if (!IsLoaded || Dispatcher.HasShutdownStarted) return;
             _all = prepared.Rows;

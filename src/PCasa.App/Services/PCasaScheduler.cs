@@ -217,6 +217,45 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
+    // A presenter supplies ONLY descriptive metadata supplied by task
+    // owners. The scheduler is the sole authority for effective priority,
+    // persisted user order and the global dispatch sequence. This avoids
+    // an independent Taskmanager sort algorithm drifting away from the
+    // worker queue. Hidden status-filter rows still contribute to moves.
+    public IReadOnlyList<T> OrderTaskView<T>(
+        IEnumerable<T> source,
+        Func<T,string> key,
+        Func<T,SchedulerPriority> defaultPriority,
+        Func<T,long> defaultOrder,
+        Func<T,bool> completed,
+        Func<T,SchedulerPriority,long,T> withPlacement)
+    {
+        lock (_gate)
+        {
+            return source.Select(item =>
+            {
+                var identity = key(item);
+                var priority = defaultPriority(item);
+                var order = defaultOrder(item);
+                if (_userDispatchOrder.TryGetValue(identity, out var customOrder))
+                {
+                    order = customOrder;
+                    if (_userPriorityOverrides.TryGetValue(identity,
+                        out var customPriority))
+                        priority = customPriority;
+                }
+                return (Value: withPlacement(item, priority, order),
+                    Completed: completed(item), Priority: priority,
+                    Order: order, Key: identity);
+            }).OrderBy(item => item.Completed ? 1 : 0)
+                .ThenBy(item => item.Priority)
+                .ThenBy(item => item.Order)
+                .ThenBy(item => item.Key, StringComparer.Ordinal)
+                .Select(item => item.Value)
+                .ToArray();
+        }
+    }
+
     public void RegisterTaskAlias(string executorKey, string visibleTaskKey)
     {
         lock (_gate)
