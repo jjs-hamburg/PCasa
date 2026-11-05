@@ -198,6 +198,9 @@ public sealed class BackgroundFolderMonitor : IDisposable
         {
             return;
         }
+        // A native metadata writer may atomically replace the original.
+        // Its temporary deletion is owned by the same durable package.
+        if (OriginalFileMutationReceipts.IsOwnedNotification(path)) return;
 
         Raise(new BackgroundFolderChange(
             state.Folder.Id,
@@ -218,6 +221,10 @@ public sealed class BackgroundFolderMonitor : IDisposable
         {
             return;
         }
+        // Metadata writers may rename a temporary file over the original.
+        // Neither half of that replacement is a new source task.
+        if (OriginalFileMutationReceipts.IsOwnedNotification(e.OldFullPath) ||
+            OriginalFileMutationReceipts.IsOwnedNotification(e.FullPath)) return;
 
         Raise(new BackgroundFolderChange(
             state.Folder.Id,
