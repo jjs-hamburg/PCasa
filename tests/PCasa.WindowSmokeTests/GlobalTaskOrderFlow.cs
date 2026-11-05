@@ -226,8 +226,10 @@ internal static class GlobalTaskOrderFlow
                     throw new Exception("Executor ignored global order: " +
                         string.Join(" -> ", executed));
             }
+            AssertDefaultP0AndBackgroundSafety(root);
             Console.WriteLine("PASS: GPS accepted before eligibility, visible in TM; " +
                 "free cross-priority up/down and real persisted execution order.");
+            Console.WriteLine("PASS: Default P0 LIFO and background isolation unchanged.");
             return 0;
         }
         catch (Exception ex)
@@ -254,6 +256,73 @@ internal static class GlobalTaskOrderFlow
             try { Directory.Delete(root, recursive: true); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    // Exercise ORIGINAL scheduler behavior on an isolated new instance.
+    // A presentation refactor must never change P0 manual LIFO, cancel a
+    // committed operation, or let a P4 background scan block manual writes.
+    private static void AssertDefaultP0AndBackgroundSafety(string parent)
+    {
+        var database = new LocalDatabase(Path.Combine(parent, "baseline.db"));
+        database.Initialize();
+        var engine = new PCasaScheduler();
+        engine.EnableDurablePackages(database);
+        var started = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var executed = new List<string>();
+        var gate = new object();
+        try
+        {
+            var blocker = engine.EnqueueAsync("baseline:running-manual",
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                    token.ThrowIfCancellationRequested();
+                }, workKind: SchedulerWorkKind.Catalog);
+            AwaitWithPump(() => started.Task.IsCompleted,
+                "Default manual P0 lane did not start.");
+            var old = engine.EnqueueAsync("baseline:old-manual",
+                SchedulerPriority.ManualAction, token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    lock (gate) executed.Add("old");
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.Catalog);
+            var newer = engine.EnqueueAsync("baseline:new-manual",
+                SchedulerPriority.ManualAction, token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    lock (gate) executed.Add("new");
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.Catalog);
+            var background = engine.EnqueueAsync("baseline:background",
+                SchedulerPriority.Idle, token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    lock (gate) executed.Add("background");
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            release.TrySetResult();
+            AwaitWithPump(() => Task.WhenAll(old, newer, background, blocker).IsCompleted,
+                "Existing P0/background worker lanes stalled.");
+            Task.WhenAll(old, newer, background, blocker).GetAwaiter().GetResult();
+            lock (gate)
+            {
+                if (!executed.SequenceEqual(new[] { "new", "old", "background" }))
+                    throw new Exception("Default scheduler dispatch regression: " +
+                        string.Join(" -> ", executed));
+            }
+        }
+        finally
+        {
+            release.TrySetResult();
+            var cleanup = Task.Run(async () => await engine.DisposeAsync());
+            if (!cleanup.Wait(TimeSpan.FromSeconds(5)))
+                throw new TimeoutException("Safety scheduler shutdown stalled.");
         }
     }
 

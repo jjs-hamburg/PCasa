@@ -225,9 +225,26 @@ public partial class MainWindow
         if (GpsFilmstripList.SelectedItems.Count != 1 ||
             GpsFilmstripList.SelectedItem is not GpsFilmstripEntry source ||
             _selectedImageIds.Count == 0)
+        {
+            const string reason = "GPS-Kopie nicht gestartet: Genau eine GPS-Quelle und mindestens ein Galerieziel erforderlich.";
+            GpsEditStatus.Text = UiLanguage.T(reason);
+            StatusText.Text = UiLanguage.T(reason);
+            PCasaDiagnostics.WriteMessage("GPS.Filmstrip.Rejected",
+                $"Sources={GpsFilmstripList.SelectedItems.Count}; Targets={_selectedImageIds.Count}");
             return;
+        }
         var point = _gpsPoints.FirstOrDefault(p => p.Id == source.Id);
-        if (point is null) return;
+        if (point is null)
+        {
+            const string reason = "GPS-Kopie nicht gestartet: Quellenkoordinaten sind nicht mehr verfügbar.";
+            GpsEditStatus.Text = UiLanguage.T(reason);
+            StatusText.Text = UiLanguage.T(reason);
+            PCasaDiagnostics.WriteMessage("GPS.Filmstrip.Rejected",
+                $"SourceId={source.Id}; Targets={_selectedImageIds.Count}; GPS point not present");
+            return;
+        }
+        PCasaDiagnostics.WriteMessage("GPS.Filmstrip.Requested",
+            $"SourceId={source.Id}; Targets={_selectedImageIds.Count}");
         _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Replace,
             (point.Lat, point.Lon));
     }

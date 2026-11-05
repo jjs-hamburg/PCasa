@@ -524,5 +524,10 @@
   "Datenbanksicherung abgeschlossen: ": "Database backup completed: ",
   "Datenbanksicherung erfolgreich abgeschlossen.": "Database backup completed successfully.",
   "Datenbanksicherung abgebrochen.": "Database backup canceled.",
-  "Datenbanksicherung fehlgeschlagen.": "Database backup failed."
+  "Datenbanksicherung fehlgeschlagen.": "Database backup failed.",
+  "Läuft; Änderungen der Reihenfolge werden am nächsten sicheren Übergabepunkt wirksam.": "Running; changes to the queue order take effect at the next safe checkpoint.",
+  "GPS-Kopie nicht gestartet: Genau eine GPS-Quelle und mindestens ein Galerieziel erforderlich.": "GPS copy not started: select exactly one GPS source and at least one gallery target.",
+  "GPS-Kopie nicht gestartet: Quellenkoordinaten sind nicht mehr verfügbar.": "GPS copy not started: source coordinates are no longer available.",
+  "GPS-Auftrag nicht angenommen: Keine Zielfotos ausgewählt.": "GPS request not accepted: no target photos selected.",
+  "GPS-Auftrag konnte nicht eingereiht werden: ": "Could not queue GPS request: "
 }

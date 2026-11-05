@@ -589,6 +589,13 @@ public sealed class TaskManagerWindow : Window
             ? UiLanguage.T("Fehler") + ": " + row.Error
             : row.Status == "Abgeschlossen"
                 ? UiLanguage.T("Abgeschlossen")
+                : _moveGlobalTask is not null
+                    // A global move is always available for non-edge rows.
+                    // The old lane-specific explanation is not applicable
+                    // when the single scheduler owns every task position.
+                    ? row.Status == "Läuft"
+                        ? UiLanguage.T("Läuft; Änderungen der Reihenfolge werden am nächsten sicheren Übergabepunkt wirksam.")
+                        : row.Directory
                 : row.Status == "Läuft"
                     ? UiLanguage.T("Dieser Auftrag läuft bereits; laufende Arbeit wird nicht durch Verschieben unterbrochen.")
                 : row.Movable && !HasReorderPeer(row) &&

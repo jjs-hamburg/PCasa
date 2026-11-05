@@ -300,11 +300,21 @@ public partial class MainWindow
         // but they own independent selections. Never mutate one to reuse
         // the other's writing path.
         var ids = (explicitTargetIds ?? _selectedImageIds).Distinct().ToArray();
-        if (ids.Length == 0) return Task.CompletedTask;
+        if (ids.Length == 0)
+        {
+            const string reason = "GPS-Auftrag nicht angenommen: Keine Zielfotos ausgewählt.";
+            GpsEditStatus.Text = UiLanguage.T(reason);
+            StatusText.Text = UiLanguage.T(reason);
+            PCasaDiagnostics.WriteMessage("GPS.Edit.Rejected", "No targets selected");
+            return Task.CompletedTask;
+        }
         var coordinates = coordinatesOverride ?? _gpsDraft;
         if (mode != GpsMetadataRepository.EditMode.Remove && coordinates is null)
         {
             GpsEditStatus.Text = UiLanguage.T("Zuerst einen Ort suchen oder auf die Karte klicken.");
+            StatusText.Text = GpsEditStatus.Text;
+            PCasaDiagnostics.WriteMessage("GPS.Edit.Rejected",
+                $"Missing coordinates; TargetCount={ids.Length}; Mode={mode}");
             return Task.CompletedTask;
         }
         try
@@ -325,6 +335,8 @@ public partial class MainWindow
                 completion = _scheduler.EnqueueDurableRecipeAsync(
                     key, "gps-edit-v2", payload,
                     SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+                PCasaDiagnostics.WriteMessage("GPS.Edit.Accepted",
+                    $"Key={key}; Targets={ids.Length}; Mode={mode}; Priority=P0");
                 // The journal row is committed synchronously: notify the
                 // Taskmanager before the worker prepares its many file steps.
                 _taskManagerWindow?.RequestRefresh();
@@ -346,6 +358,8 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("GPS.Edit.Queue", ex);
             GpsEditStatus.Text = ex.Message;
+            StatusText.Text = UiLanguage.T("GPS-Auftrag konnte nicht eingereiht werden: ") +
+                ex.Message;
         }
         return Task.CompletedTask;
     }
