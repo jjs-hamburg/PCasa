@@ -420,7 +420,7 @@ public sealed class TaskManagerWindow : Window
                (IsInitialImport(source.Key) && IsInitialImport(target.Key) &&
                 _moveAutomaticScan is not null) ||
                (IsRootReview(source.Key) && IsRootReview(target.Key) &&
-                _moveAutomaticScan is not null)))
+                _moveAutomaticScan is not null))))
                 ? DragDropEffects.Move : DragDropEffects.None;
         e.Handled = true;
     }
