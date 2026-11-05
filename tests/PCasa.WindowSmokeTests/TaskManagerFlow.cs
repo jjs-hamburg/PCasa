@@ -476,11 +476,11 @@ internal static class TaskManagerFlow
                 throw new Exception("Queued manual scan lost the directory in its recipe.");
             Until(manager, () => grid.Items.Cast<object>().Any(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
-                    == "failed-files:taskmanager:failed-original"),
+                    == "taskmanager:failed-original"),
                 "Permanent original-file errors are missing from the taskmanager.");
             grid.SelectedItem = grid.Items.Cast<object>().First(item =>
                 item.GetType().GetProperty("Key")?.GetValue(item)?.ToString()
-                == "failed-files:taskmanager:failed-original");
+                == "taskmanager:failed-original");
             Pump(manager);
             var retry = Descendants<Button>(manager).Single(button =>
                 Equals(button.Content, "Neu starten"));
