@@ -4431,6 +4431,32 @@ internal static class Program
             throw new Exception(
                 "A deferred GPS write has no visible file in Schreibfehler review.");
 
+        // GPS v2 has a durable validation step at cursor 0. A failure
+        // there must NOT be reported against an arbitrary photograph.
+        // Once validation commits, cursor 1 is the FIRST original file.
+        const string v2Preparation = "gps:edit:v2-preparation";
+        const string v2Writer = "gps:edit:v2-write";
+        const string twoImages =
+            "{\"ImageIds\":[319,320],\"Latitude\":11,\"Longitude\":21,\"Mode\":1}";
+        journal.Put(v2Preparation, "gps-edit-v2", twoImages,
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.Defer(v2Preparation, 0, "GPS validation rejected format",
+            TimeSpan.FromMinutes(1));
+        if (restored.DeferredGpsSteps().Any(item =>
+                item.PackageKey == v2Preparation))
+            throw new Exception("GPS v2 preparation error attributed to a photo.");
+        journal.Put(v2Writer, "gps-edit-v2", twoImages,
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.Defer(v2Writer, 1, "GPS first file write interrupted",
+            TimeSpan.FromMinutes(1));
+        var projectedV2 = restored.DeferredGpsSteps();
+        if (projectedV2.Count(item =>
+                item.PackageKey == v2Writer && item.ImageId == 319) != 1 ||
+            projectedV2.Any(item => item.PackageKey == v2Writer &&
+                item.ImageId == 320))
+            throw new Exception(
+                "Deferred GPS v2 offset points to the wrong original photo.");
+
         restored.RecordFailure(OriginalWriteFailureRepository.Gps,
             current,319L,new IOException("Newer GPS write failed"),permanent:true);
         restored.ClearIfOwned(OriginalWriteFailureRepository.Gps,319L,original);

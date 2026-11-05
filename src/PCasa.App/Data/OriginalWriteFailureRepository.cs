@@ -216,9 +216,9 @@ public sealed class OriginalWriteFailureRepository
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT p.package_key,p.payload_json,p.completed_steps,p.error,
-                   p.updated_utc
+                   p.updated_utc,p.package_type
             FROM scheduler_packages p
-            WHERE p.package_type='gps-edit-v1'
+            WHERE p.package_type IN ('gps-edit-v1','gps-edit-v2')
               AND p.state='deferred' AND p.error IS NOT NULL;
             """;
         using var reader = cmd.ExecuteReader();
@@ -233,7 +233,13 @@ public sealed class OriginalWriteFailureRepository
             {
                 using var json = System.Text.Json.JsonDocument.Parse(reader.GetString(1));
                 var ids = json.RootElement.GetProperty("ImageIds");
-                var cursor = reader.GetInt32(2);
+                // v2 step zero is validation/transactional error cleanup,
+                // whereas v1 starts at the first original file. Never
+                // associate a failed v2 preparation step with the wrong
+                // photograph; show file-specific errors only once writing
+                // has actually begun.
+                var cursor = reader.GetInt32(2) -
+                    (reader.GetString(5) == "gps-edit-v2" ? 1 : 0);
                 if (cursor < 0 || cursor >= ids.GetArrayLength()) continue;
                 deferred.Add((reader.GetString(0), ids[cursor].GetInt64(),
                     error, reader.GetString(4)));
