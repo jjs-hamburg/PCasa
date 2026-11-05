@@ -46,6 +46,23 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private const int LaneInitialImport = 10;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
+    private SchedulerTaskOrderStore? _taskOrderStore;
+    private readonly Dictionary<string,long> _userDispatchOrder =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string,string> _taskAliases =
+        new(StringComparer.Ordinal);
+    // The owner of external source intents listens and reorders its
+    // EXISTING scan cursor. No parallel queue or cloned scan work.
+    public event Action? TaskOrderChanged;
+    // A committed durable intent must be visible before factory creation,
+    // P0 eligibility checks, or the first filesystem operation.
+    public event Action? TaskAccepted;
+
+    private void NotifyTaskAccepted()
+    {
+        try { TaskAccepted?.Invoke(); }
+        catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.TaskAccepted", ex); }
+    }
     private readonly HashSet<Task> _durableCompletions = new();
     private bool _restoringDurablePackages;
     private Task? _deferredRetryWorker;
@@ -173,6 +190,119 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
+        _taskOrderStore = new SchedulerTaskOrderStore(database);
+        foreach (var (key, order) in _taskOrderStore.ReadAll())
+            _userDispatchOrder[key] = order;
+    }
+
+    // The Taskmanager observes the scheduler's ONE user-defined order.
+    // Default priority/queue order is used until the user first rearranges
+    // an active item. A newly created manual P0 job therefore still starts
+    // ahead of untouched automatic P4 requests.
+    public (SchedulerPriority Priority, long QueueOrder) EffectiveTaskPlacement(
+        string key, SchedulerPriority defaultPriority, long defaultOrder)
+    {
+        lock (_gate)
+        {
+            return _userDispatchOrder.TryGetValue(key, out var order)
+                ? (SchedulerPriority.ManualAction, order)
+                : (defaultPriority, defaultOrder);
+        }
+    }
+
+    public void RegisterTaskAlias(string executorKey, string visibleTaskKey)
+    {
+        lock (_gate)
+            _taskAliases[executorKey] = visibleTaskKey;
+    }
+
+    public void UnregisterTaskAlias(string executorKey)
+    {
+        lock (_gate) _taskAliases.Remove(executorKey);
+    }
+
+    private string TaskIdentityUnsafe(string executorKey) =>
+        _taskAliases.TryGetValue(executorKey, out var identity)
+            ? identity : executorKey;
+
+    // No job-type, original-priority or lane restriction. The list must
+    // contain all ACTIVE accepted tasks, including ones hidden by filters.
+    // The store is the only durable place for user-selected dispatch order.
+    public bool MoveTaskGlobally(string key, string targetKey,
+        IReadOnlyList<string> acceptedTaskKeys)
+    {
+        var store = _taskOrderStore ??
+            throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
+        List<CancellationTokenSource> yields = [];
+        List<WorkItem> changed = [];
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var order = store.Reorder(acceptedTaskKeys, key, targetKey);
+            if (order is null) return false;
+            foreach (var (id, position) in order)
+                _userDispatchOrder[id] = position;
+            foreach (var work in _pending)
+            {
+                if (!_userDispatchOrder.TryGetValue(
+                    TaskIdentityUnsafe(work.Key), out var position))
+                    continue;
+                work.Priority = SchedulerPriority.ManualAction;
+                work.QueueOrder = position;
+                SetStateUnsafe(work, SchedulerJobState.Queued);
+                changed.Add(work);
+            }
+            // Keep the exact rank on live workers as well. A yielded file
+            // must reenter the same global position after its safe checkpoint.
+            foreach (var active in _runningPriorityJobs)
+            {
+                if (active is null ||
+                    !_userDispatchOrder.TryGetValue(TaskIdentityUnsafe(active.Key),
+                        out var position)) continue;
+                active.Priority = SchedulerPriority.ManualAction;
+                active.QueueOrder = position;
+                SetStateUnsafe(active, active.YieldRequested
+                    ? SchedulerJobState.YieldRequested : SchedulerJobState.Running);
+                changed.Add(active);
+            }
+            // A running file mutation remains atomic; the worker yields at
+            // the next checkpoint if any accepted waiting task moved ahead.
+            var firstWaiting = _pending
+                .Where(w => _userDispatchOrder.ContainsKey(
+                    TaskIdentityUnsafe(w.Key)))
+                .OrderBy(w => w.QueueOrder).FirstOrDefault();
+            if (firstWaiting is not null)
+            {
+                for (var lane=0;lane<_runningPriorityJobs.Length;lane++)
+                {
+                    var active = _runningPriorityJobs[lane];
+                    if (active is null ||
+                        !_userDispatchOrder.TryGetValue(
+                            TaskIdentityUnsafe(active.Key), out var activeOrder) ||
+                        activeOrder <= firstWaiting.QueueOrder ||
+                        active.YieldRequested) continue;
+                    active.YieldRequested = true;
+                    SetStateUnsafe(active,SchedulerJobState.YieldRequested);
+                    changed.Add(active);
+                    if (_runningYield[lane] is { } token)
+                        yields.Add(token);
+                }
+            }
+            for (var lane=0;lane<_signals.Length;lane++)
+            {
+                // All pending work is still owned by the same scheduler.
+                // Signal every newly eligible worker after a global move.
+                if (_pending.Any(w => LaneFor(w.Priority,w.Kind)==lane))
+                    _signals[lane].Release();
+            }
+        }
+        foreach (var work in changed) PublishState(work);
+        foreach (var cancellation in yields)
+            try { _ = cancellation.CancelAsync(); }
+            catch (ObjectDisposedException) { }
+        try { TaskOrderChanged?.Invoke(); }
+        catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.TaskOrderChanged", ex); }
+        return true;
     }
 
     public bool HasActiveDurablePackageType(string type)
@@ -336,8 +466,48 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var record = journal.Put(package.Key, type, payload, priority, workKind);
         if (record.State is "completed" or "failed" or "canceled")
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
+        NotifyTaskAccepted();
         package.RestoreCursor(record.CompletedSteps);
         return TrackDurableCompletion(QueueDurableExisting(package, record, cancellationToken));
+    }
+
+    // Register immutable intent synchronously. Building thousands of GPS
+    // file steps happens AFTER the journal commit, off the WPF click thread.
+    // A crash in between is handled by the normal durable recovery factory.
+    // This only prepares a recipe: the ONE scheduler still dispatches and
+    // executes every file step through its existing lanes and checkpoints.
+    public Task EnqueueDurableRecipeAsync(string key, string type,
+        string payload, SchedulerPriority priority,
+        SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
+        CancellationToken cancellationToken = default)
+    {
+        var journal = _durableJournal ??
+            throw new InvalidOperationException("Paketjournal nicht aktiviert.");
+        if (!_packageFactories.TryGetValue(type, out var factory))
+            throw new InvalidOperationException(
+                "Pakettyp ohne Wiederherstellungsfabrik: " + type);
+        var record = journal.Put(key, type, payload, priority, workKind);
+        if (record.State is "completed" or "failed" or "canceled")
+            throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
+        NotifyTaskAccepted();
+        var completion = Task.Run(async () =>
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var package = factory(record.Key, record.Payload);
+                package.RestoreCursor(record.CompletedSteps);
+                await QueueDurableExisting(package, record, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Never leave an unconstructable accepted intent invisible.
+                journal.Defer(record.Key, record.CompletedSteps, ex.Message);
+                throw;
+            }
+        }, CancellationToken.None);
+        return TrackDurableCompletion(completion);
     }
 
     // Durable ledger commits are part of scheduler shutdown, not detached
@@ -743,6 +913,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            var identity = TaskIdentityUnsafe(key);
             var existing = _pending.FirstOrDefault(x =>
                 x.Kind == workKind && x.Key == key &&
                 !x.CancellationToken.IsCancellationRequested);
@@ -759,6 +930,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
             else
             {
+                if (_userDispatchOrder.TryGetValue(identity, out var userRank))
+                    priority = SchedulerPriority.ManualAction;
                 var item = new WorkItem(++_nextId, key, priority, workKind,
                     operation, isCurrent, cancellationToken)
                 {
@@ -766,8 +939,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // must never be buried behind the old durable ledger's
                     // large historical sequence values. Durable ranks remain
                     // authoritative relative to each other.
-                    QueueOrder = queueOrder ?? (priority == SchedulerPriority.ManualAction
-                        ? (long.MinValue / 2) - _nextId : _nextId)
+                    QueueOrder = _userDispatchOrder.TryGetValue(identity, out var acceptedRank)
+                        ? acceptedRank
+                        : queueOrder ?? (priority == SchedulerPriority.ManualAction
+                            ? (long.MinValue / 2) - _nextId : _nextId)
                 };
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
@@ -802,9 +977,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe &&
                         active?.Priority == SchedulerPriority.ManualAction &&
                         active.Kind == SchedulerWorkKind.CatalogScan;
+                    var outranksByExplicitOrder =
+                        _userDispatchOrder.TryGetValue(identity, out var incomingRank) &&
+                        _userDispatchOrder.TryGetValue(
+                            TaskIdentityUnsafe(active?.Key ?? ""), out var currentRank) &&
+                        incomingRank < currentRank;
                     if (active is not null &&
-                        (priority < active.Priority || supersedesManualScan ||
-                         supersedesOlderManual) &&
+                        (outranksByExplicitOrder ||
+                         (!_userDispatchOrder.ContainsKey(identity) &&
+                          (priority < active.Priority || supersedesManualScan ||
+                           supersedesOlderManual))) &&
                         !active.YieldRequested)
                     {
                         active.YieldRequested = true;
@@ -888,8 +1070,41 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var blockedByNativeDrag = _nativeDragInteractionCount > 0 &&
                         lane is LaneBackground or LaneInitialImport or
                             LaneUserAction or LaneSourceProbe;
+                    // User-positioned tasks form a global scheduler order,
+                    // regardless of their original execution lane. Only the
+                    // first accepted queued position is eligible to start;
+                    // this gate preserves physical worker isolation without
+                    // letting a later background job overtake it.
+                    var earliestOrdered = _pending
+                        .Where(x => _userDispatchOrder.ContainsKey(
+                            TaskIdentityUnsafe(x.Key)))
+                        .OrderBy(x => x.QueueOrder).FirstOrDefault();
+                    long candidateRank = long.MaxValue;
+                    var candidateHasPosition = candidate is not null &&
+                        _userDispatchOrder.TryGetValue(
+                            TaskIdentityUnsafe(candidate.Key),
+                            out candidateRank);
+                    var waitingForEarlierOrdered =
+                        candidateHasPosition &&
+                        ((earliestOrdered is not null &&
+                          !ReferenceEquals(candidate, earliestOrdered)) ||
+                         _runningPriorityJobs.Any(active =>
+                             active is not null &&
+                             _userDispatchOrder.TryGetValue(
+                                 TaskIdentityUnsafe(active.Key),
+                                 out var runningRank) &&
+                             runningRank < candidateRank));
+                    // The original blanket P0 database guard is only a
+                    // DEFAULT-priority rule. A user-promoted initial import
+                    // above P0 must not be blocked by its old class. Still
+                    // respect any running catalog write's safe boundary.
+                    if (lane == LaneInitialImport && candidateHasPosition &&
+                        !waitingForEarlierOrdered &&
+                        _catalogForegroundRunning == 0 &&
+                        !HasManualSourceProbeUnsafe())
+                        blockedByHigherPriority = false;
                     item = blockedByHigherPriority || newerManualProbe ||
-                        blockedByNativeDrag ||
+                        blockedByNativeDrag || waitingForEarlierOrdered ||
                         (_restoringDurablePackages &&
                          lane is LaneManual or LaneManualSourceProbe)
                         ? null : candidate;
@@ -989,6 +1204,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     {
                         lock (_gate)
                         {
+                            // A global move can strand an earlier rank on a
+                            // different worker. Wake all pending executors
+                            // when its predecessor finishes or yields.
+                            if (_userDispatchOrder.Count > 0)
+                                for (var wake=0;wake<_signals.Length;wake++)
+                                    if (_pending.Any(w => LaneFor(w.Priority,w.Kind)==wake))
+                                        _signals[wake].Release();
                             if ((lane <= LaneManual || lane == LaneInitialImport) &&
                                 ReferenceEquals(_runningPriorityJobs[lane], item))
                             {

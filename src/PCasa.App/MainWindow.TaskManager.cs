@@ -33,6 +33,78 @@ public partial class MainWindow
                 "RescanRoot:", StringComparison.Ordinal);
     }
 
+    // The ONE scheduler owns priority and relative dispatch order for
+    // every active task key, independent of original work type. These are
+    // owner notifications for the existing physical scanner cursors, not
+    // a second Taskmanager queue or a reordered copy of the rows.
+    private async Task<bool> MoveGlobalTaskAsync(string key, string targetKey,
+        IReadOnlyList<string> allAcceptedKeys)
+    {
+        var moved = await Task.Run(() =>
+            _scheduler.MoveTaskGlobally(key, targetKey, allAcceptedKeys));
+        if (!moved) return false;
+
+        // A parked original mutation may now be ahead of other jobs, but
+        // needs its actual deferred recipe restarted before it can run.
+        // Never implicitly replay an already completed write.
+        if (key.StartsWith("gps:edit:", StringComparison.Ordinal) ||
+            key.StartsWith("tags:", StringComparison.Ordinal))
+        {
+            // Already-queued steps were reordered inside the scheduler.
+            // Explicit Retry remains the way to unpark failed originals.
+        }
+
+        if (TryInitialTaskId(key, out var importId))
+        {
+            var unpaused = await _scheduler.RunAsync(
+                $"taskmanager:global-import-resume:{Guid.NewGuid():N}",
+                SchedulerPriority.UserAction,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return _folderRepository.SetPendingFirstImportPaused(
+                        importId, false);
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            if (unpaused)
+            {
+                _initialScanAttempted.Remove(importId);
+                if (_initialScanActive && _activeScanFolderId != importId &&
+                    _initialScanCancellation is
+                        { IsCancellationRequested: false } running)
+                    try { await running.CancelAsync(); }
+                    catch (ObjectDisposedException) { }
+                QueuePendingInitialScans();
+            }
+        }
+
+        // The scan owner must admit the same queued watcher intents after
+        // a user order change. Do not issue a second full-root inventory.
+        if (allAcceptedKeys.Any(TryIsRootReview))
+        {
+            foreach (var rootKey in allAcceptedKeys.Where(TryIsRootReview))
+                if (TryRootReviewTaskId(rootKey, out var rootId))
+                    _backgroundUrgentReviews.Add(rootId);
+            if (TryRootReviewTaskId(key, out _))
+                await StartAutomaticScanNowAsync(key);
+            if (_backgroundInFlight is { Length: > 0 })
+            {
+                _backgroundOrderChanged = true;
+                if (_backgroundCurrentScanCancellation is
+                    { IsCancellationRequested: false } active)
+                    try { await active.CancelAsync(); }
+                    catch (ObjectDisposedException) { }
+            }
+            if (_backgroundScanInitialized && !_backgroundMonitorClosing)
+                RefreshBackgroundMonitor();
+            _backgroundDebounceTimer?.Start();
+        }
+        _taskManagerWindow?.RequestRefresh();
+        return true;
+    }
+
+    private static bool TryIsRootReview(string key)
+        => TryRootReviewTaskId(key, out _);
+
     private async Task<bool> MoveAutomaticScanAsync(
         string sourceKey, string targetKey)
     {
@@ -221,7 +293,7 @@ public partial class MainWindow
             SnapshotAutomaticScans, StopAutomaticScanAsync,
             () => _backgroundIdleStatus,
             MoveAutomaticScanAsync, ResumeAutomaticScanAsync,
-            StartAutomaticScanNowAsync)
+            StartAutomaticScanNowAsync, MoveGlobalTaskAsync)
         {
             Owner = this
         };

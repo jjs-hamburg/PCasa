@@ -56,7 +56,18 @@ public partial class MainWindow
                     {
                         token.ThrowIfCancellationRequested();
                         return _folderRepository.GetPendingInitialScans()
-                            .FirstOrDefault(folder => !attempted.Contains(folder.Id));
+                            .Where(folder => !attempted.Contains(folder.Id))
+                            .Select((folder, index) => new
+                            {
+                                Folder = folder,
+                                Place = _scheduler.EffectiveTaskPlacement(
+                                    $"initial:{folder.Id}",
+                                    SchedulerPriority.UserAction, index)
+                            })
+                            .OrderBy(x => x.Place.Priority)
+                            .ThenBy(x => x.Place.QueueOrder)
+                            .Select(x => x.Folder)
+                            .FirstOrDefault();
                     }, workKind: SchedulerWorkKind.CatalogRead);
                 if (_folderRemovalPending || _folderManagerOpen ||
                     _manualFileTransferActive || Dispatcher.HasShutdownStarted)
@@ -169,10 +180,19 @@ public partial class MainWindow
             scanActive = true;
             PCasaDiagnostics.WriteMessage("Scan.InitialImport",
                 $"Resume pending first-import for monitored folder: {folder.LocalPath}");
-            var result = await ScheduleCompleteFolderScanAsync(
-                folder.LocalPath, SchedulerPriority.Background,
-                progress, cancellation.Token, folder.Id,
-                requirePendingInitialImport: true, operationKey: scanKey);
+            _scheduler.RegisterTaskAlias(scanKey, $"initial:{folder.Id}");
+            ScanResult result;
+            try
+            {
+                result = await ScheduleCompleteFolderScanAsync(
+                    folder.LocalPath, SchedulerPriority.Background,
+                    progress, cancellation.Token, folder.Id,
+                    requirePendingInitialImport: true, operationKey: scanKey);
+            }
+            finally
+            {
+                _scheduler.UnregisterTaskAlias(scanKey);
+            }
 
             scanActive = false;
             TrackFolderActivity(folder.LocalPath,

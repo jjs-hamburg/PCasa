@@ -291,7 +291,7 @@ public partial class MainWindow
     private void GpsRemove_Click(object sender, RoutedEventArgs e)
         => _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Remove);
 
-    private async Task CommitGpsEditAsync(GpsMetadataRepository.EditMode mode,
+    private Task CommitGpsEditAsync(GpsMetadataRepository.EditMode mode,
         (double Lat, double Lon)? coordinatesOverride = null,
         IReadOnlyCollection<long>? explicitTargetIds = null)
     {
@@ -299,82 +299,37 @@ public partial class MainWindow
         // but they own independent selections. Never mutate one to reuse
         // the other's writing path.
         var ids = (explicitTargetIds ?? _selectedImageIds).Distinct().ToArray();
-        if (ids.Length == 0) return;
+        if (ids.Length == 0) return Task.CompletedTask;
         var coordinates = coordinatesOverride ?? _gpsDraft;
         if (mode != GpsMetadataRepository.EditMode.Remove && coordinates is null)
         {
             GpsEditStatus.Text = UiLanguage.T("Zuerst einen Ort suchen oder auf die Karte klicken.");
-            return;
+            return Task.CompletedTask;
         }
         try
         {
-            // Even the short eligibility check is part of the foreground
-            // MANUAL GPS action, not a lower-priority interactive read. Use
-            // the existing P0 catalog lane so a running NAS scan yields
-            // immediately, BEFORE the durable writer is queued. It still
-            // rejects unsupported originals without sidecars or retries.
-            var unsupported = await _scheduler.RunAsync(
-                "gps:validate:" + Guid.NewGuid().ToString("N"),
-                SchedulerPriority.ManualAction,
-                token =>
-                {
-                    var failures = new List<string>();
-                    using var db = _database.OpenConnection();
-                    foreach (var chunk in ids.Chunk(300))
-                    {
-                        token.ThrowIfCancellationRequested();
-                        using var cmd = db.CreateCommand();
-                        var parameters = chunk.Select((id,i) => "$i" + i).ToArray();
-                        cmd.CommandText = "SELECT local_path FROM images WHERE id IN (" +
-                            string.Join(",", parameters) + ")";
-                        for (var i=0;i<chunk.Length;i++)
-                            cmd.Parameters.AddWithValue(parameters[i], chunk[i]);
-                        using var rows = cmd.ExecuteReader();
-                        while (rows.Read())
-                        {
-                            var path = rows.GetString(0);
-                            var ext = Path.GetExtension(path).ToLowerInvariant();
-                            if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"
-                                or ".dng" or ".nef" or ".arw" or ".cr2"))
-                                failures.Add(Path.GetFileName(path) + " (" + ext + ")");
-                        }
-                    }
-                    return failures;
-                }, workKind: SchedulerWorkKind.Catalog);
-            if (unsupported.Count > 0)
-            {
-                MessageBox.Show(this,
-                    UiLanguage.T("Keine Sidecars: GPS-Direktschreiben für diese Formate nicht freigegeben:") +
-                    "\n" + string.Join("\n", unsupported.Take(12)) +
-                    (unsupported.Count > 12 ? "\n…" : ""),
-                    "GPS", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+            // The durable GPS write must be ACCEPTED before any catalog
+            // validation or old-error cleanup. A blocked NAS scan must never
+            // delay the appearance of this P0 intent in Taskmanager.
+            // Eligibility and error cleanup now belong to the v2 recipe.
             var request = new GpsEditRecipe(ids, coordinates?.Lat,
                 coordinates?.Lon, mode);
             var key = "gps:edit:" + Guid.NewGuid().ToString("N");
             var payload = JsonSerializer.Serialize(request);
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", ids.Length);
-            // Retire old errors before a new worker can begin. If accepting
-            // the durable recipe fails, restore the old errors in the ledger.
-            var writeErrors = _originalWriteFailures;
-            var previousErrors = writeErrors.Unresolved()
-                .Where(error => error.Kind == OriginalWriteFailureRepository.Gps &&
-                                ids.Contains(error.ImageId)).ToArray();
-            foreach (var imageId in ids)
-                writeErrors.Clear(OriginalWriteFailureRepository.Gps, imageId);
             Task completion;
             try
             {
-                completion = _scheduler.EnqueueDurablePackageAsync(
-                    BuildGpsEditPackage(key, payload), "gps-edit-v1", payload,
-                    SchedulerPriority.ManualAction);
+                completion = _scheduler.EnqueueDurableRecipeAsync(
+                    key, "gps-edit-v2", payload,
+                    SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+                // The journal row is committed synchronously: notify the
+                // Taskmanager before the worker prepares its many file steps.
+                _taskManagerWindow?.RequestRefresh();
             }
             catch
             {
-                foreach (var oldError in previousErrors)
-                    writeErrors.RecordFailure(oldError.Kind, oldError.PackageKey,
-                        oldError.ImageId, new IOException(oldError.Error), permanent: true);
+                EndVisibleManualOperation(key);
                 throw;
             }
             StatusText.Text = UiLanguage.Format(
@@ -390,9 +345,20 @@ public partial class MainWindow
             PCasaDiagnostics.Write("GPS.Edit.Queue", ex);
             GpsEditStatus.Text = ex.Message;
         }
+        return Task.CompletedTask;
     }
 
+    // The v1 factory stays unchanged for old persisted jobs; v2 reserves a
+    // step zero for validation and batched failure-ledger reconciliation.
+    // A crash can replay that idempotent step without losing any photo intent.
+    private SchedulerTaskPackage BuildGpsEditPackageV2(string key, string payload)
+        => BuildGpsEditPackageCore(key, payload, validateBeforeWriting: true);
+
     private SchedulerTaskPackage BuildGpsEditPackage(string key, string payload)
+        => BuildGpsEditPackageCore(key, payload, validateBeforeWriting: false);
+
+    private SchedulerTaskPackage BuildGpsEditPackageCore(string key, string payload,
+        bool validateBeforeWriting)
     {
         var request = JsonSerializer.Deserialize<GpsEditRecipe>(payload)
             ?? throw new InvalidDataException("GPS-Paket enthält ungültige Daten.");
@@ -405,6 +371,44 @@ public partial class MainWindow
                lat is < -90 or > 90 || lon is < -180 or > 180)))
             throw new InvalidDataException("GPS-Auftrag enthält ungültige Koordinaten.");
         var package = new SchedulerTaskPackage(key);
+        if (validateBeforeWriting)
+        {
+            package.AddStep(token =>
+            {
+                var unsupported = new List<string>();
+                using (var db = _database.OpenConnection())
+                {
+                    foreach (var chunk in request.ImageIds.Chunk(300))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        using var cmd = db.CreateCommand();
+                        var parameters = chunk.Select((_, i) => "$i" + i).ToArray();
+                        cmd.CommandText = "SELECT local_path FROM images WHERE id IN (" +
+                            string.Join(",", parameters) + ")";
+                        for (var i = 0; i < chunk.Length; i++)
+                            cmd.Parameters.AddWithValue(parameters[i], chunk[i]);
+                        using var rows = cmd.ExecuteReader();
+                        while (rows.Read())
+                        {
+                            var path = rows.GetString(0);
+                            var ext = Path.GetExtension(path).ToLowerInvariant();
+                            if (ext is not (".jpg" or ".jpeg" or ".tif" or ".tiff"
+                                or ".dng" or ".nef" or ".arw" or ".cr2"))
+                                unsupported.Add(Path.GetFileName(path) + " (" + ext + ")");
+                        }
+                    }
+                }
+                if (unsupported.Count > 0)
+                    throw new InvalidDataException(
+                        "Keine Sidecars: GPS-Direktschreiben für diese Formate nicht freigegeben:\n" +
+                        string.Join("\n", unsupported.Take(12)));
+                _originalWriteFailures.ClearMany(
+                    OriginalWriteFailureRepository.Gps, request.ImageIds, token);
+                _scheduler.ReportProgress(key, "GPS-Auftrag geprüft",
+                    0, request.ImageIds.Length);
+                return Task.CompletedTask;
+            });
+        }
         for (var i = 0; i < request.ImageIds.Length; i++)
         {
             var id = request.ImageIds[i];

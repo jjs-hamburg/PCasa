@@ -301,6 +301,17 @@ public partial class MainWindow
             _backgroundUrgentReviews.Clear();
             foreach (var id in urgentReviews)
                 _backgroundUrgentReviews.Add(id);
+            // A user-moved review retains its global scheduler position
+            // after restart, even if the old idle review window has not
+            // elapsed. Reuse the existing monitor request and cursor.
+            foreach (var root in folders)
+            {
+                var visibleKey = $"automatic:{root.Id}:RescanRoot:{root.LocalPath}";
+                if (_scheduler.EffectiveTaskPlacement(
+                        visibleKey, SchedulerPriority.Idle, long.MaxValue)
+                    .Priority == SchedulerPriority.ManualAction)
+                    _backgroundUrgentReviews.Add(root.Id);
+            }
 
             // The initial-import retry guard is session-only. After a
             // confirmed reconnect it may be retried immediately; a
@@ -1386,6 +1397,12 @@ public partial class MainWindow
                             $"ResumeInMemory={scanResume.ImageFilesSeen}; Kind={request.Kind}");
                     schedulerScanKey =
                         $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}";
+                    // The watcher cursor and Taskmanager row share ONE
+                    // scheduler identity. The global user order applies
+                    // to this existing execution, not a new scan.
+                    _scheduler.RegisterTaskAlias(schedulerScanKey, taskKey);
+                    try
+                    {
                     await _scheduler.EnqueueAsync(
                         schedulerScanKey,
                         // A startup root verification is idle work (P4),
@@ -1419,6 +1436,11 @@ public partial class MainWindow
                             folder.CanonicalPath, sourceState.Value.Generation, true),
                         scanCancellation.Token,
                         workKind: SchedulerWorkKind.CatalogScan);
+                    }
+                    finally
+                    {
+                        _scheduler.UnregisterTaskAlias(schedulerScanKey);
+                    }
                     var result = scanResult ?? throw new OperationCanceledException();
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                     {

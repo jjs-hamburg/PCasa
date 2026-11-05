@@ -452,7 +452,7 @@ public sealed class DatabaseMaintenance
         // Purge all recovered work BEFORE any path remapping; never replay a
         // pre-restore mutation against a different physical photo.
         foreach (var table in new[] {
-            "scheduler_packages", "file_transfer_intents",
+            "scheduler_task_order", "scheduler_packages", "file_transfer_intents",
             "original_write_failures", "pending_tag_edits",
             "scan_resume_directories", "scan_resume_jobs",
             "initial_scan_directories", "initial_scan_file_cursors",

@@ -39,6 +39,8 @@ internal static class Program
             return GalleryFileOperationFlow.Run();
         if (args.Contains("--taskmanager", StringComparer.OrdinalIgnoreCase))
             return TaskManagerFlow.Run();
+        if (args.Contains("--taskmanager-global", StringComparer.OrdinalIgnoreCase))
+            return GlobalTaskOrderFlow.Run();
 
         PCasa.App.MainWindow? window = null;
         try

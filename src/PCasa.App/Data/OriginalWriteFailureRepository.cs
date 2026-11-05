@@ -135,6 +135,33 @@ public sealed class OriginalWriteFailureRepository
         cmd.ExecuteNonQuery();
     }
 
+    // The accepted GPS package owns this cleanup, never the UI click.
+    // Clear all affected old failures atomically in bounded SQLite batches,
+    // rather than opening one connection per selected image on the WPF thread.
+    public void ClearMany(string kind, IReadOnlyList<long> imageIds,
+        CancellationToken token = default)
+    {
+        if (imageIds.Count == 0) return;
+        using var db = database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        foreach (var batch in imageIds.Distinct().Chunk(400))
+        {
+            token.ThrowIfCancellationRequested();
+            using var cmd = db.CreateCommand();
+            cmd.Transaction = tx;
+            var parameters = batch.Select((_, i) => "$id" + i).ToArray();
+            cmd.CommandText = "DELETE FROM original_write_failures " +
+                "WHERE kind=$kind AND image_id IN (" +
+                string.Join(",", parameters) + ")";
+            cmd.Parameters.AddWithValue("$kind", kind);
+            for (var i = 0; i < batch.Length; i++)
+                cmd.Parameters.AddWithValue(parameters[i], batch[i]);
+            cmd.ExecuteNonQuery();
+        }
+        token.ThrowIfCancellationRequested();
+        tx.Commit();
+    }
+
     // A superseded older GPS package may finish AFTER a newer package
     // already failed. It must never clear the newer package's error.
     public void ClearIfOwned(string kind, long imageId, string packageKey)

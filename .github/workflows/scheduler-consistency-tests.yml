@@ -97,6 +97,12 @@ jobs:
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager
 
+      - name: Verify global task ordering across P0, P4, GPS recipe admission and WPF buttons
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager-global
+
       - name: Publish self-contained Windows x64 acceptance package
         shell: pwsh
         run: |
