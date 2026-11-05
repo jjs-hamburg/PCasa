@@ -114,6 +114,26 @@ internal static class GlobalTaskOrderFlow
             if (gps.IsCompleted)
                 throw new Exception("Blocked GPS factory should not have completed yet.");
 
+            // The screenshot showed 'Import file' while a GPS copy was
+            // missing. These are separate scheduler identities, NOT two
+            // labels for one job. Verify the real projection before changing
+            // any previously working executor or scan scheduling behavior.
+            var scanFile = new PCasa.App.AutomaticScanTask(
+                @"automatic:12:ScanFile:C:\\TestRoot\\sample.jpg",
+                "Datei einlesen", @"C:\\TestRoot", "–", "Wartet", 3, 50);
+            var view = scheduler.CreateTaskView(database,
+                canMoveAutomatic: true, canResumeAutomatic: true,
+                canStopAutomatic: true, canRetryFailed: true,
+                canDiscardFailed: true);
+            var projected = view.Snapshot([scanFile], includeCompleted: false);
+            if (projected.Rows.Count(x => x.Key == "gps:edit:filmstrip") != 1 ||
+                projected.Rows.Single(x => x.Key == "gps:edit:filmstrip").Title
+                    != "GPS schreiben" ||
+                projected.Rows.Count(x => x.Key == scanFile.Key) != 1 ||
+                projected.Rows.Single(x => x.Key == scanFile.Key).Title
+                    != "Datei einlesen")
+                throw new Exception("Unified projection confused GPS with ScanFile.");
+
             var tags = scheduler.EnqueueDurablePackageAsync(
                 WriteRecipe("tag:edit:waiting", "{}"),
                 "global-write-test", "{}", SchedulerPriority.ManualAction);

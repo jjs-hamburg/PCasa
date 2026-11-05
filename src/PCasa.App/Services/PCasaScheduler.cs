@@ -920,6 +920,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return true;
     }
 
+    // The scheduler owns the read-only unified task projection. It does
+    // not introduce an executor, queue, or additional source of dispatch
+    // truth; durable and scanner owners merely supply their existing intents.
+    public SchedulerTaskView CreateTaskView(LocalDatabase database,
+        bool canMoveAutomatic, bool canResumeAutomatic,
+        bool canStopAutomatic, bool canRetryFailed, bool canDiscardFailed)
+        => new(this, database, canMoveAutomatic, canResumeAutomatic,
+            canStopAutomatic, canRetryFailed, canDiscardFailed);
+
     public IReadOnlyList<SchedulerJobSnapshot> Snapshot()
     {
         lock (_gate) return _history.ToArray();
