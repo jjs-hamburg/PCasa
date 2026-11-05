@@ -210,6 +210,7 @@ public sealed class ImageTagRepository
         if (!changed) return;
         if (!remove) original.Add(tag);
         cancellationToken.ThrowIfCancellationRequested();
+        using var ownMutation = OriginalFileMutationReceipts.Begin(path);
         if (!JpegMetadataOriginalWriter.TryWriteTags(path, original,
                 session, cancellationToken))
             session.Write(path, original, cancellationToken);
