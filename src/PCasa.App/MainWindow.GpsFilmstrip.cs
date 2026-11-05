@@ -243,10 +243,11 @@ public partial class MainWindow
                 $"SourceId={source.Id}; Targets={_selectedImageIds.Count}; GPS point not present");
             return;
         }
+        var operationKey = "gps:edit:" + Guid.NewGuid().ToString("N");
         PCasaDiagnostics.WriteMessage("GPS.Filmstrip.Requested",
-            $"SourceId={source.Id}; Targets={_selectedImageIds.Count}");
+            $"Key={operationKey}; SourceId={source.Id}; Targets={_selectedImageIds.Count}");
         _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Replace,
-            (point.Lat, point.Lon));
+            (point.Lat, point.Lon), operationKey: operationKey);
     }
 
     private void GpsFilmstripRemoveGps_Click(object sender, RoutedEventArgs e)
