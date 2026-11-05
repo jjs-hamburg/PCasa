@@ -71,13 +71,13 @@ internal static class GlobalTaskOrderFlow
                 });
                 return pkg;
             }
-            scheduler.RegisterDurablePackageType("gps-edit-v2-test", GpsRecipe);
+            scheduler.RegisterDurablePackageType("gps-edit-v2", GpsRecipe);
             scheduler.RegisterDurablePackageType("global-write-test", WriteRecipe);
             var acceptedSignals = 0;
             scheduler.TaskAccepted += () => Interlocked.Increment(ref acceptedSignals);
             var watch = Stopwatch.StartNew();
             var gps = scheduler.EnqueueDurableRecipeAsync(
-                "gps:edit:filmstrip", "gps-edit-v2-test", "{}",
+                "gps:edit:filmstrip", "gps-edit-v2", "{}",
                 SchedulerPriority.ManualAction);
             watch.Stop();
             if (watch.Elapsed > TimeSpan.FromMilliseconds(500) ||
@@ -120,6 +120,11 @@ internal static class GlobalTaskOrderFlow
                 grid.Items.Cast<object>().Any(item => RowKey(item) == "gps:edit:filmstrip") &&
                 grid.Items.Cast<object>().Any(item => RowKey(item) == reviewKey),
                 "GPS or queued root review is invisible before factory completion.");
+            var gpsRow = grid.Items.Cast<object>().Single(item =>
+                RowKey(item) == "gps:edit:filmstrip");
+            if (!Equals(gpsRow.GetType().GetProperty("Title")?.GetValue(gpsRow),
+                    "GPS schreiben"))
+                throw new Exception("Accepted GPS v2 shows a technical recipe instead of a task title.");
             var initial = VisibleKeys(grid);
             var reviewIndex = Array.IndexOf(initial, reviewKey);
             if (reviewIndex < 1)

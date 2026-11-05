@@ -16,7 +16,8 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private sealed record GpsEditRecipe(long[] ImageIds, double? Latitude,
-        double? Longitude, GpsMetadataRepository.EditMode Mode);
+        double? Longitude, GpsMetadataRepository.EditMode Mode,
+        string? AcceptedUtc = null);
     private sealed record PlaceHit(string Name, double Lat, double Lon)
     {
         public override string ToString() => Name;
@@ -313,7 +314,8 @@ public partial class MainWindow
             // delay the appearance of this P0 intent in Taskmanager.
             // Eligibility and error cleanup now belong to the v2 recipe.
             var request = new GpsEditRecipe(ids, coordinates?.Lat,
-                coordinates?.Lon, mode);
+                coordinates?.Lon, mode,
+                DateTimeOffset.UtcNow.ToString("O"));
             var key = "gps:edit:" + Guid.NewGuid().ToString("N");
             var payload = JsonSerializer.Serialize(request);
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", ids.Length);
@@ -402,8 +404,12 @@ public partial class MainWindow
                     throw new InvalidDataException(
                         "Keine Sidecars: GPS-Direktschreiben für diese Formate nicht freigegeben:\n" +
                         string.Join("\n", unsupported.Take(12)));
+                // A newer GPS job may have failed after THIS package was
+                // accepted. Never discard the newer failure when an older
+                // accepted package eventually reaches its preparation step.
                 _originalWriteFailures.ClearMany(
-                    OriginalWriteFailureRepository.Gps, request.ImageIds, token);
+                    OriginalWriteFailureRepository.Gps, request.ImageIds,
+                    token, request.AcceptedUtc);
                 _scheduler.ReportProgress(key, "GPS-Auftrag geprüft",
                     0, request.ImageIds.Length);
                 return Task.CompletedTask;

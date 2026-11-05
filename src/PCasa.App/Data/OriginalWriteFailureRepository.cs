@@ -139,7 +139,7 @@ public sealed class OriginalWriteFailureRepository
     // Clear all affected old failures atomically in bounded SQLite batches,
     // rather than opening one connection per selected image on the WPF thread.
     public void ClearMany(string kind, IReadOnlyList<long> imageIds,
-        CancellationToken token = default)
+        CancellationToken token = default, string? acceptedBeforeUtc = null)
     {
         if (imageIds.Count == 0) return;
         using var db = database.OpenConnection();
@@ -152,8 +152,11 @@ public sealed class OriginalWriteFailureRepository
             var parameters = batch.Select((_, i) => "$id" + i).ToArray();
             cmd.CommandText = "DELETE FROM original_write_failures " +
                 "WHERE kind=$kind AND image_id IN (" +
-                string.Join(",", parameters) + ")";
+                string.Join(",", parameters) + ")" +
+                " AND ($before IS NULL OR last_attempt_utc <= $before)";
             cmd.Parameters.AddWithValue("$kind", kind);
+            cmd.Parameters.AddWithValue("$before",
+                (object?)acceptedBeforeUtc ?? DBNull.Value);
             for (var i = 0; i < batch.Length; i++)
                 cmd.Parameters.AddWithValue(parameters[i], batch[i]);
             cmd.ExecuteNonQuery();

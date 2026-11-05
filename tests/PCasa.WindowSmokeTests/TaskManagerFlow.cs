@@ -422,10 +422,23 @@ internal static class TaskManagerFlow
                     true))
                 throw new Exception(
                     "Automatic inventory lost its real status, target or stop command.");
-            if (grid.Items.Cast<object>().First().GetType()
-                    .GetProperty("Key")?.GetValue(grid.Items.Cast<object>().First())
-                    ?.ToString() != autoKey)
-                throw new Exception("Running task is below a waiting or paused task.");
+            // A user-selected global execution order is NOT sorted by
+            // running/waiting status. Running scans may appear after a
+            // promoted queued task; the status column still says "Läuft".
+            var visibleOrder = grid.Items.Cast<object>()
+                .Where(item => item.GetType().GetProperty("Status")
+                    ?.GetValue(item)?.ToString() != "Abgeschlossen").ToArray();
+            var schedulerOrder = visibleOrder
+                .OrderBy(item => (int)item.GetType().GetProperty("Priority")!
+                    .GetValue(item)!)
+                .ThenBy(item => (long)item.GetType().GetProperty("Order")!
+                    .GetValue(item)!)
+                .ThenBy(item => item.GetType().GetProperty("Key")!
+                    .GetValue(item)!.ToString())
+                .ToArray();
+            if (!visibleOrder.SequenceEqual(schedulerOrder))
+                throw new Exception(
+                    "Taskmanager invented a status-first order instead of scheduler order.");
             grid.SelectedItem = automaticRow;
             Pump(manager);
             var stopAction = Descendants<Button>(manager).Single(button =>

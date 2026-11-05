@@ -507,10 +507,15 @@ public sealed class TaskManagerWindow : Window
         if (_moveGlobalTask is not null)
         {
             if (row.Status == "Abgeschlossen") return false;
-            var all = _all.Where(item => item.Status != "Abgeschlossen").ToArray();
-            var globalIndex = Array.FindIndex(all, item => item.Key == row.Key);
+            // Buttons operate on the FILTERED visible neighbors, not on
+            // hidden task rows. The scheduler still receives the complete
+            // unfiltered accepted order so invisible tasks keep their rank.
+            var visible = _visible.Where(item =>
+                item.Status != "Abgeschlossen").ToArray();
+            var globalIndex = Array.FindIndex(
+                visible, item => item.Key == row.Key);
             return globalIndex >= 0 && globalIndex + direction >= 0 &&
-                globalIndex + direction < all.Length;
+                globalIndex + direction < visible.Length;
         }
         if (!row.Movable || row.Status is "Läuft" or "Fehler" or "Abgeschlossen")
             return false;
@@ -976,7 +981,7 @@ public sealed class TaskManagerWindow : Window
     private static string TaskCaption(DurablePackageRecord item)
         => item.Type switch
         {
-            "gps-edit-v1" => item.Payload.Contains("\"Mode\":2", StringComparison.Ordinal)
+            "gps-edit-v1" or "gps-edit-v2" => item.Payload.Contains("\"Mode\":2", StringComparison.Ordinal)
                 ? UiLanguage.T("GPS entfernen") : UiLanguage.T("GPS schreiben"),
             "tag-edit-v1" or "tag-edit-v2" => UiLanguage.T("Tags schreiben"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
@@ -1014,11 +1019,13 @@ public sealed class TaskManagerWindow : Window
         if (row is null || !CanMove(row, direction)) return;
         if (_moveGlobalTask is not null)
         {
-            var all = _all.Where(item => item.Status != "Abgeschlossen").ToArray();
-            var index = Array.FindIndex(all, item => item.Key == row.Key);
-            var neighbor = all[index + direction];
-            var accepted = all.Select(item => new SchedulerTaskOrderItem(
-                item.Key, (SchedulerPriority)item.Priority)).ToArray();
+            var visible = _visible.Where(item =>
+                item.Status != "Abgeschlossen").ToArray();
+            var index = Array.FindIndex(visible, item => item.Key == row.Key);
+            var neighbor = visible[index + direction];
+            var accepted = _all.Where(item => item.Status != "Abgeschlossen")
+                .Select(item => new SchedulerTaskOrderItem(
+                    item.Key, (SchedulerPriority)item.Priority)).ToArray();
             _ = PerformAsync(row.Key, () =>
                 _moveGlobalTask(row.Key, neighbor.Key, accepted));
             return;
