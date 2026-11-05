@@ -294,7 +294,8 @@ public partial class MainWindow
 
     private Task CommitGpsEditAsync(GpsMetadataRepository.EditMode mode,
         (double Lat, double Lon)? coordinatesOverride = null,
-        IReadOnlyCollection<long>? explicitTargetIds = null)
+        IReadOnlyCollection<long>? explicitTargetIds = null,
+        string? operationKey = null)
     {
         // Gallery and GPS Filmstrip may initiate the SAME durable P0 writer,
         // but they own independent selections. Never mutate one to reuse
@@ -326,7 +327,7 @@ public partial class MainWindow
             var request = new GpsEditRecipe(ids, coordinates?.Lat,
                 coordinates?.Lon, mode,
                 DateTimeOffset.UtcNow.ToString("O"));
-            var key = "gps:edit:" + Guid.NewGuid().ToString("N");
+            var key = operationKey ?? "gps:edit:" + Guid.NewGuid().ToString("N");
             var payload = JsonSerializer.Serialize(request);
             BeginVisibleManualOperation(key, "GPS in Originaldateien schreiben", ids.Length);
             Task completion;
@@ -447,6 +448,13 @@ public partial class MainWindow
             package.AddStep(token =>
             {
                 string? path = null;
+                System.Diagnostics.Stopwatch? firstOriginalWatch = null;
+                if (completed == 1)
+                {
+                    firstOriginalWatch = System.Diagnostics.Stopwatch.StartNew();
+                    PCasaDiagnostics.WriteMessage("GPS.Edit.FirstOriginal.Start",
+                        $"Key={key}; ImageId={id}");
+                }
                 var success = TryWriteOriginal(
                     OriginalWriteFailureRepository.Gps, key, id,
                     GetOriginalImagePath(id), token,
@@ -460,6 +468,13 @@ public partial class MainWindow
                                 "GPS in Originaldateien schreiben",
                                 completed - 1, request.ImageIds.Length, current);
                         }, packageKey: key));
+                if (firstOriginalWatch is not null)
+                {
+                    firstOriginalWatch.Stop();
+                    PCasaDiagnostics.WriteMessage("GPS.Edit.FirstOriginal.End",
+                        $"Key={key}; ImageId={id}; Success={success}; " +
+                        $"DurationMs={firstOriginalWatch.ElapsedMilliseconds}");
+                }
                 if (success)
                 {
                     // TryWriteOriginal also treats superseded/no-op steps as
