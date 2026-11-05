@@ -138,6 +138,58 @@ public partial class MainWindow
         return true;
     }
 
+    // "Jetzt ausführen" promotes the ORIGINAL queued root review from P4
+    // to the scheduler's P2 user-action lane. P0 tag/GPS writes and manual
+    // scans still win; no second scanner or duplicate inventory is created.
+    private async Task<bool> StartAutomaticScanNowAsync(string key)
+    {
+        if (!TryRootReviewTaskId(key, out var rootId)) return false;
+        var promoted = await _scheduler.RunAsync(
+            $"taskmanager:review-promote:{Guid.NewGuid():N}",
+            SchedulerPriority.UserAction,
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return _folderRepository.RequestRootReviewNow(rootId);
+            }, workKind: SchedulerWorkKind.CatalogRead);
+        if (!promoted) return false;
+        _backgroundUrgentReviews.Add(rootId);
+
+        // Reuse the SAME queued watcher intent and existing live iterator.
+        // Never create another task for an already queued or running review.
+        var queued = _backgroundPending.Values.Any(task =>
+            task.MonitoredFolderId == rootId &&
+            task.Kind == BackgroundFolderChangeKind.RescanRoot);
+        var inFlight = _backgroundInFlight is { } batch &&
+            batch.Skip(_backgroundInFlightIndex).Any(task =>
+                task.MonitoredFolderId == rootId &&
+                task.Kind == BackgroundFolderChangeKind.RescanRoot);
+        if (!queued && !inFlight)
+        {
+            var root = _folderRepository.GetAll()
+                .FirstOrDefault(item => item.Id == rootId);
+            if (root is not null)
+                QueueBackgroundChange(new BackgroundFolderChange(
+                    root.Id, root.LocalPath,
+                    BackgroundFolderChangeKind.RescanRoot, true));
+        }
+        if (inFlight)
+        {
+            // A different root currently owns the scan attempt. Yield it
+            // cooperatively and requeue its confirmed cursor behind the P2
+            // promotion; do not interrupt a completed file write.
+            _backgroundOrderChanged = true;
+            if (_backgroundCurrentScanCancellation is
+                { IsCancellationRequested: false } running)
+                try { await running.CancelAsync(); }
+                catch (ObjectDisposedException) { }
+        }
+        _backgroundDebounceTimer?.Stop();
+        _backgroundDebounceTimer?.Start();
+        _taskManagerWindow?.RequestRefresh();
+        return true;
+    }
+
     private async Task<bool> ResumeAutomaticScanAsync(string key)
     {
         if (!TryInitialTaskId(key, out var folderId)) return false;
@@ -168,7 +220,8 @@ public partial class MainWindow
             RetryOriginalWriteAsync, DiscardOriginalWriteAsync,
             SnapshotAutomaticScans, StopAutomaticScanAsync,
             () => _backgroundIdleStatus,
-            MoveAutomaticScanAsync, ResumeAutomaticScanAsync)
+            MoveAutomaticScanAsync, ResumeAutomaticScanAsync,
+            StartAutomaticScanNowAsync)
         {
             Owner = this
         };

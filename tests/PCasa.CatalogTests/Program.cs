@@ -261,7 +261,17 @@ internal static class Program
 
             var work = new DatabaseMaintenance(data);
             var archive = Path.Combine(folder, "backup.pcasa.zip");
-            work.Backup(archive);
+            var progressEvents = new List<DatabaseBackupProgress>();
+            work.Backup(archive, new InlineProgress<DatabaseBackupProgress>(
+                value => progressEvents.Add(value)));
+            if (progressEvents.Count < 3 ||
+                !progressEvents.Any(x => x.Phase == "SQLite-Sicherung erstellen") ||
+                !progressEvents.Any(x => x.Phase == "Datenbank archivieren") ||
+                !progressEvents.Any(x => x.Phase == "Vorschaudaten archivieren") ||
+                progressEvents[^1].Phase != "Sicherung abgeschlossen" ||
+                progressEvents[^1].TotalBytes <= 0 ||
+                progressEvents[^1].ProcessedBytes != progressEvents[^1].TotalBytes)
+                throw new Exception("Backup does not publish real staged byte/file progress.");
             var listed = work.InspectBackup(archive);
             if (listed.Count != 2)
                 throw new Exception("Backup did not retain both monitored roots.");

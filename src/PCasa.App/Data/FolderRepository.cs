@@ -534,7 +534,8 @@ public sealed class FolderRepository
                     OR r.source_generation != s.generation
                     OR r.retry_after_utc IS NULL
                     OR r.retry_after_utc <= $now)
-             ORDER BY CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
+             ORDER BY COALESCE(r.requested_priority,4) ASC,
+                      CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
                       r.queue_order ASC,
                       COALESCE(r.last_completed_utc,'') ASC,
                       m.local_path COLLATE NOCASE ASC;
@@ -561,7 +562,8 @@ public sealed class FolderRepository
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
               LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
              WHERE s.desired_present=1 AND m.initial_scan_pending=0
-             ORDER BY CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
+             ORDER BY COALESCE(r.requested_priority,4) ASC,
+                      CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
                       r.queue_order ASC,
                       COALESCE(r.last_completed_utc,'') ASC,
                       m.local_path COLLATE NOCASE ASC;
@@ -632,6 +634,44 @@ public sealed class FolderRepository
         }
         tx.Commit();
         return true;
+    }
+
+    // Promotion is an edit of the ONE existing root-review intent, not
+    // a second scan. The durable receipt survives restart and preserves
+    // the source's confirmed inventory cursor.
+    public bool RequestRootReviewNow(long folderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO scan_root_review
+                (monitored_folder_id,source_generation,requested_priority,retry_after_utc)
+            SELECT m.id,s.generation,2,NULL
+              FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+             WHERE m.id=$id AND m.initial_scan_pending=0 AND s.desired_present=1
+            ON CONFLICT(monitored_folder_id) DO UPDATE SET
+                requested_priority=2,retry_after_utc=NULL;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
+    public IReadOnlySet<long> GetUrgentRootReviewIds()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.id FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+              JOIN scan_root_review r ON r.monitored_folder_id=m.id
+             WHERE s.desired_present=1 AND m.initial_scan_pending=0
+               AND r.requested_priority=2;
+            """;
+        var ids = new HashSet<long>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids;
     }
 
     public sealed record ReviewRoundStatus(long Round, int Eligible,
@@ -1181,7 +1221,8 @@ public sealed class FolderRepository
                     source_generation=excluded.source_generation,
                     last_completed_utc=excluded.last_completed_utc,
                     completed_cycle=excluded.completed_cycle,
-                    retry_after_utc=NULL;
+                    retry_after_utc=NULL,
+                    requested_priority=4;
                 """;
             verified.Parameters.AddWithValue("$id", completedRoot.Value);
             verified.Parameters.AddWithValue("$generation", generation);

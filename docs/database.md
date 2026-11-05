@@ -86,3 +86,30 @@ Erst nach erfolgreicher Integritäts- und Pfadprüfung werden aktive Datenbank
 und Cache-Dateien zusammen ausgetauscht. Im Fehlerfall wird der vorherige
 Zustand wiederhergestellt. Originalfotodateien werden durch keine der
 Datenbankverwaltungsfunktionen kopiert, gelöscht oder verändert.
+
+## Bedienung der Datenbanksicherung und des Taskmanagers
+
+Die Sicherung ist ein P2-Auftrag im bestehenden Scheduler. Der kompakte
+Datenbankdialog darf direkt nach der Auftragserteilung geschlossen werden.
+Die vorhandene, ausblendbare PCasa-Fortschrittsanzeige zeigt das aktuelle
+Arbeitsstadium, die übertragenen unkomprimierten MB, die Dateizahl und
+den gerade archivierten Cachepfad. Sie wird nach der Sicherung freigegeben.
+Während der Momentaufnahme bleibt der Pack-/Index-Bestand unter der
+vorhandenen Cache-Sperre unverändert; die zeitaufwendige ZIP-Komprimierung
+erfolgt anschließend aus einer lokalen Arbeitskopie ohne diese Sperre.
+Abbruch und unvollständige ZIP-Dateien werden bereinigt.
+
+Ein manueller Scan eines bereits überwachten Ordners wird **vor** der
+eigentlichen Quellenprüfung als dauerhaftes Paket in der gemeinsamen
+Scheduler-Warteschlange registriert; der Taskmanager kann es daher ohne
+Wartezeit auf die erste eingelesene Datei zeigen. Die Sicherheit der
+Quellen- und Generationenkontrolle bleibt in der Scan-Ausführung.
+
+Eine wartende vollständige Hintergrundprüfung lässt sich mit
+**Jetzt ausführen** oder durch **Nach oben** an der Spitze ihrer
+P4-Prüfgruppe in den P2-Benutzermodus vorziehen. Es bleibt derselbe
+Scanauftrag mit denselben bestätigten Dateicursorn; die Entscheidung
+wird in `scan_root_review.requested_priority` für einen Neustart gespeichert.
+Manuelle P0-Schreib- und Scanaufträge werden nicht überholt. Nach
+erfolgreichem vollständigem Review wird die Priorität auf P4 zurückgesetzt.
+Der Taskmanager führt keine eigene Ausführungswarteschlange.

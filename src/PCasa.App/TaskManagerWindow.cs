@@ -37,6 +37,7 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<string>? _idleScanStatus;
     private readonly Func<string,string,Task<bool>>? _moveAutomaticScan;
     private readonly Func<string,Task<bool>>? _resumeAutomaticScan;
+    private readonly Func<string,Task<bool>>? _startAutomaticNow;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
     private readonly ObservableCollection<TaskRow> _visible = new();
@@ -45,11 +46,12 @@ public sealed class TaskManagerWindow : Window
     private readonly CheckBox _running = new(), _waiting = new(),
         _errors = new(), _completed = new();
     private readonly Button _up = new(), _down = new(),
-        _restart = new(), _delete = new();
+        _startNow = new(), _restart = new(), _delete = new();
     private readonly TextBlock _detail = new();
     private List<TaskRow> _all = [];
     private bool _reading;
     private bool _acting;
+    private bool _refreshRequested;
     private Point? _dragOrigin;
     private string? _dragKey;
     private const string TaskDragFormat = "PCasa.TaskManager.TaskKey";
@@ -61,7 +63,8 @@ public sealed class TaskManagerWindow : Window
         Func<string, Task<bool>>? stopAutomaticScan = null,
         Func<string>? idleScanStatus = null,
         Func<string,string,Task<bool>>? moveAutomaticScan = null,
-        Func<string,Task<bool>>? resumeAutomaticScan = null)
+        Func<string,Task<bool>>? resumeAutomaticScan = null,
+        Func<string,Task<bool>>? startAutomaticNow = null)
     {
         _scheduler = scheduler;
         _database = database;
@@ -74,6 +77,7 @@ public sealed class TaskManagerWindow : Window
         _idleScanStatus = idleScanStatus;
         _moveAutomaticScan = moveAutomaticScan;
         _resumeAutomaticScan = resumeAutomaticScan;
+        _startAutomaticNow = startAutomaticNow;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
         MinWidth = 760; MinHeight = 330;
@@ -159,6 +163,7 @@ public sealed class TaskManagerWindow : Window
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         Button(_up, "Nach oben", () => Move(-1), actions);
         Button(_down, "Nach unten", () => Move(1), actions);
+        Button(_startNow, "Jetzt ausführen", StartNow, actions);
         Button(_restart, "Neu starten", Restart, actions);
         Button(_delete, "Löschen", Delete, actions);
         var close = new Button
@@ -178,10 +183,29 @@ public sealed class TaskManagerWindow : Window
         {
             Interval = TimeSpan.FromMilliseconds(850)
         };
-        _refreshTimer.Tick += (_, _) => _ = RefreshAsync();
-        Loaded += (_, _) => { _refreshTimer.Start(); _ = RefreshAsync(); };
+        _refreshTimer.Tick += (_, _) => RequestRefresh();
+        Loaded += (_, _) => { _refreshTimer.Start(); RequestRefresh(); };
         Closed += (_, _) => _refreshTimer.Stop();
         UpdateActions();
+    }
+
+    // On accepting a durable manual job the journal entry already exists.
+    // This is an immediate read of scheduler state, not a new WPF queue.
+    public void RequestRefresh()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted)
+                _ = Dispatcher.BeginInvoke(new Action(RequestRefresh));
+            return;
+        }
+        if (!IsLoaded || Dispatcher.HasShutdownStarted) return;
+        if (_reading || _acting)
+        {
+            _refreshRequested = true;
+            return;
+        }
+        _ = RefreshAsync();
     }
 
     private static Border Frame(UIElement child)
@@ -453,8 +477,13 @@ public sealed class TaskManagerWindow : Window
             return false;
         var lane = ReorderLane(row);
         var index = Array.FindIndex(lane, other => other.Key == row.Key);
-        return index >= 0 && index + direction >= 0 &&
-            index + direction < lane.Length;
+        if (index >= 0 && index + direction >= 0 &&
+            index + direction < lane.Length) return true;
+        // At the top of its own P4 queue, an explicit Up gesture promotes
+        // the SAME review to P2. P0 manual writing remains protected.
+        return direction == -1 && IsRootReview(row.Key) &&
+            row.Priority == 4 && _startAutomaticNow is not null &&
+            index == 0;
     }
 
     private TaskRow? Selection => _list.SelectedItem as TaskRow;
@@ -505,6 +534,9 @@ public sealed class TaskManagerWindow : Window
         var row = Selection;
         _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
         _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
+        _startNow.IsEnabled = !_acting && row is
+            { Priority: 4, Status: "Wartet" } &&
+            IsRootReview(row.Key) && _startAutomaticNow is not null;
         _restart.IsEnabled = !_acting && row is { Retryable: true };
         _delete.IsEnabled = !_acting && row is { Deletable: true };
         const string moveLimits =
@@ -522,6 +554,10 @@ public sealed class TaskManagerWindow : Window
                 ? UiLanguage.T("Abgeschlossen")
                 : row.Status == "Läuft"
                     ? UiLanguage.T("Dieser Auftrag läuft bereits; laufende Arbeit wird nicht durch Verschieben unterbrochen.")
+                : row.Movable && !HasReorderPeer(row) &&
+                    IsRootReview(row.Key) && row.Priority == 4 &&
+                    _startAutomaticNow is not null
+                    ? UiLanguage.T("Mit „Jetzt ausführen“ oder „Nach oben“ diese Prüfung bei nächster Gelegenheit vorziehen.")
                 : row.Movable && !HasReorderPeer(row)
                     ? UiLanguage.T("Keine zweite Aufgabe in derselben Prioritäts- und Ausführungsgruppe zum Verschieben vorhanden.")
                 : !row.Movable && row.Status is "Wartet" or "Angehalten"
@@ -634,6 +670,32 @@ public sealed class TaskManagerWindow : Window
                         false, _stopAutomaticScan is not null && scan.CanStop));
                 }
 
+                // An in-process database backup is a real scheduler
+                // job; show its queued/running lifecycle directly from
+                // scheduler snapshots. No duplicate UI task is created.
+                foreach (var backup in latest.Values.Where(job =>
+                    job.Key.StartsWith("database:backup:", StringComparison.Ordinal) &&
+                    job.State is SchedulerJobState.Queued or
+                        SchedulerJobState.Running or SchedulerJobState.YieldRequested))
+                {
+                    var destination = backup.Key.Length >
+                        "database:backup:".Length + 33
+                        ? backup.Key[("database:backup:".Length + 33)..]
+                        : "–";
+                    var fileProgress = backup.Total > 0
+                        ? UiLanguage.Format("{0:N0}/{1:N0} Dateien",
+                            backup.Processed, backup.Total)
+                        : "–";
+                    rows.Add(new TaskRow(backup.Key,
+                        UiLanguage.T("Datenbank sichern"), destination,
+                        fileProgress,
+                        backup.State == SchedulerJobState.Running
+                            ? "Läuft" : "Wartet",
+                        backup.Error, (int)backup.Priority, backup.Id,
+                        false, false, false, _stopAutomaticScan is not null,
+                        backup.WorkKind));
+                }
+
                 // The pending initial-import flag is a durable job from
                 // the moment the source was selected, NOT merely when
                 // the UI scan pump gets around to starting it. Paused
@@ -704,7 +766,16 @@ public sealed class TaskManagerWindow : Window
             _detail.Text = ex.Message;
             PCasaDiagnostics.Write("Taskmanager.Read", ex);
         }
-        finally { _reading = false; }
+        finally
+        {
+            _reading = false;
+            if (_refreshRequested && !_acting && IsLoaded &&
+                !Dispatcher.HasShutdownStarted)
+            {
+                _refreshRequested = false;
+                RequestRefresh();
+            }
+        }
     }
 
     private string DirectoryFor(DurablePackageRecord item, string? currentPath)
@@ -883,10 +954,25 @@ public sealed class TaskManagerWindow : Window
             _ => UiLanguage.T("Hintergrundarbeit")
         };
 
+    private void StartNow()
+    {
+        var row = Selection;
+        if (row is not { Priority: 4, Status: "Wartet" } ||
+            !IsRootReview(row.Key) || _startAutomaticNow is null) return;
+        _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
+    }
+
     private void Move(int direction)
     {
         var row = Selection;
         if (row is null || !CanMove(row, direction)) return;
+        if (direction == -1 && IsRootReview(row.Key) &&
+            ReorderLane(row).FirstOrDefault()?.Key == row.Key &&
+            row.Priority == 4 && _startAutomaticNow is not null)
+        {
+            _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
+            return;
+        }
         if ((IsInitialImport(row.Key) || IsRootReview(row.Key)) &&
             _moveAutomaticScan is not null)
         {

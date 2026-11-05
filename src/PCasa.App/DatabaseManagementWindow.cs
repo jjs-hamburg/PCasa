@@ -14,16 +14,19 @@ public sealed class DatabaseManagementWindow : Window
 {
     private readonly DatabaseMaintenance _maintenance;
     private readonly Func<DatabaseMaintenance.Request, bool> _startMaintenance;
+    private readonly Func<string,bool>? _startBackup;
     private readonly TextBlock _status;
     private bool _busy;
     private bool _backupBusy;
     private Grid? _operationButtons;
 
     public DatabaseManagementWindow(DatabaseMaintenance maintenance,
-        Func<DatabaseMaintenance.Request, bool> startMaintenance)
+        Func<DatabaseMaintenance.Request, bool> startMaintenance,
+        Func<string,bool>? startBackup = null)
     {
         _maintenance = maintenance;
         _startMaintenance = startMaintenance;
+        _startBackup = startBackup;
         Title = "PCasa – " + UiLanguage.T("Datenbankverwaltung");
         Width = 720;
         MinWidth = 640;
@@ -156,6 +159,15 @@ public sealed class DatabaseManagementWindow : Window
     internal async Task BackupToAsync(string destination)
     {
         if (_busy) return;
+        if (_startBackup is not null)
+        {
+            // The owner registers the job in the ONE scheduler, then this
+            // dialog closes. The existing shared progress presenter remains
+            // visible (or user-hidden) for the entire backup lifetime.
+            if (_startBackup(destination)) Close();
+            return;
+        }
+        // Keep the standalone fallback for callers without a MainWindow.
         _busy = _backupBusy = true;
         if (_operationButtons is not null) _operationButtons.IsEnabled = false;
         _status.Text = UiLanguage.T(

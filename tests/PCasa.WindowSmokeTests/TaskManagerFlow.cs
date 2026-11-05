@@ -268,7 +268,10 @@ internal static class TaskManagerFlow
                         : firstRepo.MoveRootReview(
                             long.Parse(source.Split(':')[1]),
                             long.Parse(target.Split(':')[1]))),
-                resumeAutomaticScan: _ => Task.FromResult(true));
+                resumeAutomaticScan: _ => Task.FromResult(true),
+                startAutomaticNow: key => Task.FromResult(
+                    firstRepo.RequestRootReviewNow(
+                        long.Parse(key.Split(':')[1]))));
             manager.Show();
             Pump(manager);
             var checks = Descendants<CheckBox>(manager).ToArray();
@@ -380,6 +383,28 @@ internal static class TaskManagerFlow
             if (reopenedReviews.IndexOf(expectedFirst) >=
                 reopenedReviews.IndexOf(otherReview))
                 throw new Exception("P4 order was lost after SQLite reopen.");
+
+            // A waiting root review may be explicitly requested NOW. The
+            // action edits the same durable review receipt (P4 -> P2) and
+            // must not create a second scan job or overtake P0 writes.
+            var promotedKey = expectedFirst == finishedFolder.Id
+                ? reviewOneKey : reviewTwoKey;
+            grid.SelectedItem = grid.Items.Cast<object>().Single(item =>
+                Equals(item.GetType().GetProperty("Key")?.GetValue(item),
+                    promotedKey));
+            Pump(manager);
+            var startNow = Descendants<Button>(manager).Single(button =>
+                Equals(button.Content, "Jetzt ausführen"));
+            if (!startNow.IsEnabled)
+                throw new Exception("Waiting root review has no Start now command.");
+            startNow.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, startNow));
+            Until(manager, () =>
+                firstRepo.GetUrgentRootReviewIds().Contains(expectedFirst),
+                "Promoted root review did not persist the user's P2 request.");
+            database.Initialize();
+            if (!new FolderRepository(database).GetUrgentRootReviewIds()
+                .Contains(expectedFirst))
+                throw new Exception("Promoted review priority was lost on restart.");
 
             // The formerly EMPTY taskmanager during a live background scan
             // is a regression. The row must have a real operation (Stop).

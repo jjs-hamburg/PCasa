@@ -415,6 +415,11 @@ public sealed class LocalDatabase
         // Zero means no explicit position has been assigned yet.
         EnsureColumn(connection, "scan_root_review", "queue_order",
             "INTEGER NOT NULL DEFAULT 0");
+        // A user-requested promotion of an existing root-review intent is
+        // persisted independently of the current process. P2 never outranks
+        // the manual P0 original-file writes.
+        EnsureColumn(connection, "scan_root_review", "requested_priority",
+            "INTEGER NOT NULL DEFAULT 4");
         if (firstReviewMigration)
         {
             using var migrated = connection.CreateCommand();

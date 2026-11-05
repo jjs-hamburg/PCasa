@@ -64,6 +64,11 @@ public partial class BrowseCacheProgressWindow : Window
         => ProgressPresentationChanged?.Invoke(this, EventArgs.Empty);
 
     private bool _manualPresentationActive;
+    // The database backup is an ordinary P2 scheduler task. Its progress
+    // reuses THIS shared presenter and never steals a manual P0 scan/write
+    // overlay. Hide remains a user preference, not cancellation.
+    private object? _databaseBackupOwner;
+    private DatabaseBackupProgress? _databaseBackupProgress;
     // Presentation-only: actual NAS work may replace a waiting manual caption.
     private bool _showingScanDuringManualWait;
     public bool ShowingScanDuringManualWait => _showingScanDuringManualWait;
@@ -237,6 +242,69 @@ public partial class BrowseCacheProgressWindow : Window
     // Manual work overrides the presentation of any preempted scan, using
     // the scheduler's own job state and progress. Underlying scanner status
     // remains in the scheduler and resumes without a competing UI model.
+    public void BeginDatabaseBackup(object owner)
+    {
+        if (_finished || Dispatcher.HasShutdownStarted) return;
+        _databaseBackupOwner = owner;
+        _databaseBackupProgress = new DatabaseBackupProgress(
+            "Sicherung wartet auf Scheduler", 0, 0);
+        ShowDatabaseBackupIfIdle();
+    }
+
+    public void UpdateDatabaseBackup(object owner, DatabaseBackupProgress value)
+    {
+        if (!ReferenceEquals(_databaseBackupOwner, owner) ||
+            _finished || Dispatcher.HasShutdownStarted) return;
+        _databaseBackupProgress = value;
+        ShowDatabaseBackupIfIdle();
+    }
+
+    public void EndDatabaseBackup(object owner)
+    {
+        if (!ReferenceEquals(_databaseBackupOwner, owner)) return;
+        _databaseBackupOwner = null;
+        _databaseBackupProgress = null;
+        if (!_manualPresentationActive && !_scanPhaseActive &&
+            !(_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null))
+            ClearInactivePresentation();
+    }
+
+    private void ShowDatabaseBackupIfIdle()
+    {
+        if (_databaseBackupProgress is not { } progress ||
+            _manualPresentationActive || _scanPhaseActive ||
+            (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null))
+            return;
+        PhaseText.Text = UiLanguage.T(progress.Phase);
+        Progress.IsIndeterminate = progress.TotalBytes <= 0;
+        if (progress.TotalBytes > 0)
+        {
+            Progress.Maximum = 100;
+            Progress.Value = 100.0 *
+                Math.Clamp(progress.ProcessedBytes, 0, progress.TotalBytes) /
+                progress.TotalBytes;
+            CountText.Text = UiLanguage.Format(
+                "{0:N1} / {1:N1} MB · {2:N0} / {3:N0} Dateien",
+                progress.ProcessedBytes / 1048576.0,
+                progress.TotalBytes / 1048576.0,
+                progress.ProcessedFiles, progress.TotalFiles);
+        }
+        else
+            CountText.Text = UiLanguage.T("Vorbereitung");
+        CountText.ToolTip = UiLanguage.T(
+            "Gesamtgröße der unkomprimierten Datenbank und Vorschaudateien");
+        CurrentFileText.Text = progress.CurrentFile is null
+            ? UiLanguage.T("Datenbank und Vorschaudaten")
+            : Path.GetFileName(progress.CurrentFile);
+        CurrentFileText.ToolTip = progress.CurrentFile;
+        FolderPathText.Text = progress.CurrentFile is null ? string.Empty :
+            Path.GetDirectoryName(progress.CurrentFile) ?? string.Empty;
+        FolderPathText.ToolTip = progress.CurrentFile;
+        CurrentThumbnail.Source = null;
+        PublishProgressStatus();
+        RevealActiveProgress();
+    }
+
     public void BeginManualOperation(string name, int total)
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
@@ -414,6 +482,13 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void ClearInactivePresentation()
     {
+        // A cache/scan completing during a backup restores the still-live
+        // backup rather than hiding the one progress presenter.
+        if (_databaseBackupProgress is not null)
+        {
+            ShowDatabaseBackupIfIdle();
+            return;
+        }
         PhaseText.Text = string.Empty;
         CountText.Text = string.Empty;
         CountText.ToolTip = null;
@@ -712,7 +787,8 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || Dispatcher.HasShutdownStarted ||
             !(_manualPresentationActive || _scanPhaseActive ||
-              (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null)))
+              (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null) ||
+              _databaseBackupProgress is not null))
             return;
         _hiddenByUser = false;
         UserHiddenChanged?.Invoke(false);

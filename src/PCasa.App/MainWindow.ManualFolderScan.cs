@@ -154,33 +154,19 @@ public partial class MainWindow
                     throw new InvalidOperationException(
                         "Dieser Ordner muss zuerst im Ordnermanager ausgewählt werden.");
 
-                // A full-root manual request CONTINUES the same unfinished
-                // import, including its saved first-pass receipts. It is not
-                // a second import and retires the sole pending marker when
-                // the complete traversal succeeds. A child-only scan cannot
-                // acknowledge a whole-root import.
-                var importTarget = await _scheduler.RunAsync(
-                    $"catalog:manual-import-target:{Guid.NewGuid():N}",
-                    SchedulerPriority.ManualAction,
-                    token =>
-                    {
-                        token.ThrowIfCancellationRequested();
-                        var root = ResolveMonitoredFolder(directory);
-                        if (root is null) return (Id: (long?)null, Pending: false);
-                        var sameRoot = string.Equals(
-                            FolderExclusionRules.Normalize(directory),
-                            FolderExclusionRules.Normalize(root.LocalPath),
-                            StringComparison.OrdinalIgnoreCase);
-                        // The import may have been removed from the automatic
-                        // queue, but remains genuinely incomplete. An explicit
-                        // full-root scan can still finish that SAME import.
-                        var pending = sameRoot &&
-                            _folderRepository.HasIncompleteImport(root.Id);
-                        return (Id: (long?)root.Id, Pending: pending);
-                    }, cancellationToken: cancellation.Token,
-                    workKind: SchedulerWorkKind.CatalogRead);
-                expectedRootId = importTarget.Id;
-                acknowledgeTargetedPending = importTarget.Pending;
+                // Register the durable P0 package NOW, before any queued
+                // source or catalog read. The scanner's first step checks
+                // source generation and folder identity on its own worker.
+                // An older P0 network read must never delay Taskmanager's
+                // visibility of a newly accepted user request.
+                expectedRootId = owner.Id;
+                // Completion uses the existing generation/epoch CAS and is
+                // harmless when this whole root already finished importing.
+                // Child-only scans never acknowledge a root import.
+                acknowledgeTargetedPending = string.Equals(
+                    FolderExclusionRules.Normalize(directory),
+                    FolderExclusionRules.Normalize(owner.LocalPath),
+                    StringComparison.OrdinalIgnoreCase);
             }
 
             scanActive = true;
@@ -305,9 +291,13 @@ public partial class MainWindow
             var payload = System.Text.Json.JsonSerializer.Serialize(
                 new ManualScanRecipe(directory, expectedMonitoredFolderId,
                     requirePendingInitialImport, acknowledgeTargetedPending));
-            await _scheduler.EnqueueDurablePackageAsync(package,
+            var completion = _scheduler.EnqueueDurablePackageAsync(package,
                 "manual-folder-scan-v1", payload, priority,
                 SchedulerWorkKind.CatalogScan, cancellationToken);
+            // The journal entry exists synchronously. Refresh the filtered
+            // scheduler view immediately, not after a timer or first photo.
+            _taskManagerWindow?.RequestRefresh();
+            await completion;
         }
         else
         {

@@ -14,6 +14,9 @@ public partial class MainWindow
     // The ONE background scan dispatcher uses the same durable P4 ranks
     // that Taskmanager displays. No independent visual priority queue.
     private readonly Dictionary<long, long> _backgroundReviewOrder = new();
+    // Explicit P2 promotions are persisted on scan_root_review, then
+    // mirrored here only while the one background dispatcher is active.
+    private readonly HashSet<long> _backgroundUrgentReviews = new();
     private bool _backgroundOrderChanged;
     // These are references into the already existing one-batch scan dispatcher;
     // they expose its real waiting tasks without spawning extra operations.
@@ -242,7 +245,7 @@ public partial class MainWindow
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, pendingInitialIds,
                 interruptedInventories, dueRootReviews, reviewRound,
-                reconnectedFolderIds) = await _scheduler.RunAsync(
+                reconnectedFolderIds, urgentReviews) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -279,8 +282,9 @@ public partial class MainWindow
                     // Never schedule a new review from a WPF timer alone.
                     var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
                     var round = _folderRepository.GetReviewRoundStatus(DateTime.UtcNow);
+                    var urgent = _folderRepository.GetUrgentRootReviewIds();
                     return (roots, states, rules, pending, inventories, due,
-                        round, reconnected);
+                        round, reconnected, urgent);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -294,6 +298,9 @@ public partial class MainWindow
             _backgroundReviewOrder.Clear();
             for (var i = 0; i < dueRootReviews.Count; i++)
                 _backgroundReviewOrder[dueRootReviews[i]] = i + 1L;
+            _backgroundUrgentReviews.Clear();
+            foreach (var id in urgentReviews)
+                _backgroundUrgentReviews.Add(id);
 
             // The initial-import retry guard is session-only. After a
             // confirmed reconnect it may be retried immediately; a
@@ -365,10 +372,18 @@ public partial class MainWindow
                 !_manualFileTransferActive;
             var reachableDue = dueRootReviews.Count(id =>
                 availability.TryGetValue(id, out var reachable) && reachable);
-            var idleCandidate = idleSlotFree
-                ? dueRootReviews.FirstOrDefault(id =>
-                    availability.TryGetValue(id, out var reachable) && reachable)
-                : 0L;
+            // A user-promoted P2 review is an explicit request, not idle
+            // maintenance. Admit it immediately even when a manual P0 scan
+            // is running: the SAME scheduler enforces P0 before P2 execution.
+            var urgentCandidate = dueRootReviews.FirstOrDefault(id =>
+                _backgroundUrgentReviews.Contains(id) &&
+                availability.TryGetValue(id, out var urgentReachable) &&
+                urgentReachable);
+            var idleCandidate = urgentCandidate != 0 ? urgentCandidate :
+                idleSlotFree
+                    ? dueRootReviews.FirstOrDefault(id =>
+                        availability.TryGetValue(id, out var reachable) && reachable)
+                    : 0L;
             var roundText =
                 $"Prüfrunde {reviewRound.Round}: " +
                 $"{reviewRound.Completed}/{reviewRound.Eligible} Stammordner fertig";
@@ -715,7 +730,9 @@ public partial class MainWindow
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
                 progress,
                 runningSnapshot is not null ? "Läuft" : "Wartet",
-                AutomaticTaskPriority(task.Kind),
+                task.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                    _backgroundUrgentReviews.Contains(task.MonitoredFolderId)
+                    ? 2 : AutomaticTaskPriority(task.Kind),
                 task.Kind == BackgroundFolderChangeKind.RescanRoot &&
                 _backgroundReviewOrder.TryGetValue(task.MonitoredFolderId, out var reviewRank)
                     ? reviewRank : rank++,
@@ -780,6 +797,18 @@ public partial class MainWindow
     // Full-root checks get a retry backoff, preventing a 30-second restart.
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
+        if (key.StartsWith("database:backup:", StringComparison.Ordinal))
+        {
+            if (!string.Equals(key, _databaseBackupKey,
+                StringComparison.Ordinal) ||
+                _databaseBackupCancellation is not
+                    { IsCancellationRequested: false } backup)
+                return false;
+            try { await backup.CancelAsync(); }
+            catch (ObjectDisposedException) { return false; }
+            return true;
+        }
+
         // Delete applies to BOTH waiting and explicitly held imports.
         // It removes the persistent queue intent, never the catalog or
         // committed first-pass receipts. A later explicit scan can resume
@@ -992,14 +1021,17 @@ public partial class MainWindow
     {
         _backgroundDebounceTimer?.Stop();
 
+        var urgentQueued = _backgroundPending.Values.Any(request =>
+            request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+            _backgroundUrgentReviews.Contains(request.MonitoredFolderId));
         if (_backgroundWorkerRunning ||
             _folderRemovalPending ||
             _backgroundScanSettings?.Enabled != true ||
             !_browseInitialized ||
             _browseCacheBuilding ||
-            _manualFileTransferActive ||
-            _manualContextScanActive ||
-            _manualScanAllActive)
+            // P2 can queue behind P0, but cannot execute before it.
+            (!urgentQueued && (_manualFileTransferActive ||
+                _manualContextScanActive || _manualScanAllActive)))
         {
             if (!_folderRemovalPending && _backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
             {
@@ -1019,7 +1051,10 @@ public partial class MainWindow
         var requests = _backgroundPending.Values
             // A concrete file discovery must never queue behind the
             // startup full-root verification. Both use this same scanner.
-            .OrderBy(request => request.Kind switch
+            .OrderBy(request =>
+                request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                _backgroundUrgentReviews.Contains(request.MonitoredFolderId)
+                    ? -1 : request.Kind switch
             {
                 BackgroundFolderChangeKind.RemovePath => 0,
                 BackgroundFolderChangeKind.ScanFile => 1,
@@ -1071,8 +1106,11 @@ public partial class MainWindow
                 FolderScanner.ScanResumeState? scanResume = request.Resume;
                 var resumeGeneration = request.ResumeGeneration;
                 _backgroundLifetime.Token.ThrowIfCancellationRequested();
-                if (_manualContextScanActive || _manualScanAllActive ||
-                    _manualFileTransferActive || _folderRemovalPending)
+                if ((_manualContextScanActive || _manualScanAllActive ||
+                     _manualFileTransferActive) &&
+                    !(request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                      _backgroundUrgentReviews.Contains(request.MonitoredFolderId)) ||
+                    _folderRemovalPending)
                     throw new OperationCanceledException("User-requested folder operation has priority.");
 
                 var folder = _folderRepository.GetAll()
@@ -1355,7 +1393,9 @@ public partial class MainWindow
                         // outrank it at P3; dedicated initial imports and
                         // all manual P0/P1 packages keep their existing lanes.
                         request.Kind == BackgroundFolderChangeKind.RescanRoot
-                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
+                            ? _backgroundUrgentReviews.Contains(request.MonitoredFolderId)
+                                ? SchedulerPriority.UserAction : SchedulerPriority.Idle
+                            : SchedulerPriority.Background,
                         token =>
                         {
                             token.ThrowIfCancellationRequested();
@@ -1381,7 +1421,10 @@ public partial class MainWindow
                         workKind: SchedulerWorkKind.CatalogScan);
                     var result = scanResult ?? throw new OperationCanceledException();
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
+                    {
                         _backgroundRootReviewYields.Remove(scanPath);
+                        _backgroundUrgentReviews.Remove(request.MonitoredFolderId);
+                    }
                     scanResume.Dispose();
                     scanResume = null;
                     var followup = request.NeedsFollowup;

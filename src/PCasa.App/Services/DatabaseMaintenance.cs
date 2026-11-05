@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -6,6 +7,10 @@ using Microsoft.Data.Sqlite;
 using PCasa.App.Data;
 
 namespace PCasa.App.Services;
+
+public sealed record DatabaseBackupProgress(
+    string Phase, long ProcessedBytes, long TotalBytes,
+    string? CurrentFile = null, int ProcessedFiles = 0, int TotalFiles = 0);
 
 /// <summary>
 /// Offline owner of PCasa's local catalog. Restores and resets are deliberately
@@ -146,8 +151,11 @@ public sealed class DatabaseMaintenance
         }
     }
 
-    public void Backup(string destination)
+    public void Backup(string destination,
+        IProgress<DatabaseBackupProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var fullDestination = Path.GetFullPath(destination);
         if (PathIsUnder(fullDestination, _directory))
             throw new InvalidOperationException(
@@ -155,57 +163,142 @@ public sealed class DatabaseMaintenance
         Directory.CreateDirectory(Path.GetDirectoryName(fullDestination)!);
         var work = CreateWorkDir();
         var temporaryArchive = fullDestination + ".part-" + Guid.NewGuid().ToString("N");
+        long bytesProcessed = 0, bytesTotal = 0;
+        int filesProcessed = 0, filesTotal = 0;
+        long lastProgressTick = 0;
+        void Report(string phase, string? current = null, bool force = false)
+        {
+            var tick = Environment.TickCount64;
+            if (!force && tick - lastProgressTick < 170) return;
+            lastProgressTick = tick;
+            progress?.Report(new DatabaseBackupProgress(phase,
+                Math.Min(bytesProcessed, bytesTotal), bytesTotal, current,
+                filesProcessed, filesTotal));
+        }
+        void Transfer(Stream input, Stream output, string name, string phase)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
+            try
+            {
+                int read;
+                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    output.Write(buffer, 0, read);
+                    bytesProcessed += read;
+                    Report(phase, name);
+                }
+            }
+            finally { ArrayPool<byte>.Shared.Return(buffer); }
+            filesProcessed++;
+            Report(phase, name, force: true);
+        }
+        void Archive(ZipArchive zip, string source, string entryName,
+            string phase)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = zip.CreateEntry(entryName, CompressionLevel.Fastest);
+            using var input = new FileStream(source, FileMode.Open,
+                FileAccess.Read, FileShare.Read, 1024 * 1024,
+                FileOptions.SequentialScan);
+            using var output = entry.Open();
+            Transfer(input, output, entryName, phase);
+        }
+
         try
         {
-            // The main application remains open during read-only backups.
-            // Existing cache compaction and scan publication own this lock,
-            // so no pack referenced by the SQLite snapshot can disappear
-            // during archival. No second scheduler or background writer is
-            // created by database management.
+            Report("SQLite-Sicherung erstellen", force: true);
+            var snapshot = Path.Combine(work, CatalogName);
+            (string Source, string Snapshot, string Entry, long Bytes)[] cacheFiles;
+            // Protect pack/index identity ONLY while creating the frozen
+            // local snapshot. Time-consuming ZIP compression runs after
+            // releasing the cache lock, so manual P0 writes are not blocked
+            // for the full archive duration.
             lock (CatalogRemovalService.CacheLock)
             {
-            // SQLite online backup creates one consistent standalone image,
-            // including data that may previously have been in the WAL.
-            var snapshot = Path.Combine(work, CatalogName);
-            using (var source = new SqliteConnection(
-                new SqliteConnectionStringBuilder {
-                    DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly
-                }.ToString()))
-            using (var target = new SqliteConnection(
-                new SqliteConnectionStringBuilder {
-                    DataSource = snapshot, Mode = SqliteOpenMode.ReadWriteCreate
-                }.ToString()))
-            {
-                source.Open();
-                target.Open();
-                source.BackupDatabase(target);
+                using (var source = new SqliteConnection(
+                    new SqliteConnectionStringBuilder {
+                        DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly
+                    }.ToString()))
+                using (var target = new SqliteConnection(
+                    new SqliteConnectionStringBuilder {
+                        DataSource = snapshot, Mode = SqliteOpenMode.ReadWriteCreate
+                    }.ToString()))
+                {
+                    source.Open();
+                    target.Open();
+                    source.BackupDatabase(target);
+                }
+                using (var verified = OpenReadOnly(snapshot)) VerifyIntegrity(verified);
+                SqliteConnection.ClearAllPools();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                cacheFiles = new[] { "thumbnails", "browse-cache" }
+                    .Where(name => Directory.Exists(Path.Combine(_directory, name)))
+                    .SelectMany(name => Directory.EnumerateFiles(
+                        Path.Combine(_directory, name), "*",
+                        SearchOption.AllDirectories).Select(file =>
+                        (
+                            Source: file,
+                            Snapshot: Path.Combine(work, name,
+                                Path.GetRelativePath(Path.Combine(_directory, name), file)),
+                            Entry: name + "/" + Path.GetRelativePath(
+                                Path.Combine(_directory, name), file).Replace('\\', '/'),
+                            Bytes: new FileInfo(file).Length
+                        )))
+                    .ToArray();
+                var cacheBytes = cacheFiles.Sum(file => file.Bytes);
+                bytesTotal = new FileInfo(snapshot).Length + cacheBytes * 2;
+                filesTotal = 1 + cacheFiles.Length * 2;
+                // Fail BEFORE committing a backup when the staging volume
+                // cannot accommodate an uncompressed cache snapshot.
+                var localRoot = Path.GetPathRoot(work);
+                if (localRoot is not null &&
+                    new DriveInfo(localRoot).AvailableFreeSpace < cacheBytes + 64L * 1024 * 1024)
+                    throw new IOException(
+                        "Zu wenig lokaler Speicherplatz für die konsistente Cache-Sicherung.");
+
+                Report("Vorschaudaten sichern", force: true);
+                foreach (var file in cacheFiles)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Directory.CreateDirectory(Path.GetDirectoryName(file.Snapshot)!);
+                    using var input = new FileStream(file.Source, FileMode.Open,
+                        FileAccess.Read, FileShare.Read, 1024 * 1024,
+                        FileOptions.SequentialScan);
+                    using var output = new FileStream(file.Snapshot, FileMode.CreateNew,
+                        FileAccess.Write, FileShare.None, 1024 * 1024);
+                    Transfer(input, output, file.Entry,
+                        "Vorschaudaten sichern");
+                }
             }
-            using (var verified = OpenReadOnly(snapshot)) VerifyIntegrity(verified);
-            // Microsoft.Data.Sqlite pools disposed connections by default.
-            // A pooled destination handle blocks ZipFile.CreateEntryFromFile
-            // on Windows, even though the backup transaction has finished.
-            SqliteConnection.ClearAllPools();
+
+            // All ZIP input now resides in a frozen local snapshot. The
+            // original PCasa cache is no longer locked while compressing.
+            Report("Datenbank archivieren", force: true);
             using (var zip = ZipFile.Open(temporaryArchive, ZipArchiveMode.Create))
             {
-                zip.CreateEntryFromFile(snapshot, CatalogName,
-                    CompressionLevel.Fastest);
+                Archive(zip, snapshot, CatalogName, "Datenbank archivieren");
                 var info = zip.CreateEntry(ArchiveManifest, CompressionLevel.Fastest);
                 using (var writer = new StreamWriter(info.Open()))
                     writer.Write(JsonSerializer.Serialize(new {
                         Format = "PCasa-local-backup", Version = 1,
                         CreatedUtc = DateTimeOffset.UtcNow
                     }));
-                AddFolder(zip, "thumbnails");
-                AddFolder(zip, "browse-cache");
+                foreach (var file in cacheFiles)
+                    Archive(zip, file.Snapshot, file.Entry,
+                        "Vorschaudaten archivieren");
             }
-            }
-            // Never destroy an older successful backup because this attempt
-            // failed. The complete .part archive is published in one rename.
+            cancellationToken.ThrowIfCancellationRequested();
+            Report("Sicherung abschließen", force: true);
             File.Move(temporaryArchive, fullDestination, overwrite: true);
+            bytesProcessed = bytesTotal;
+            Report("Sicherung abgeschlossen", force: true);
         }
         finally
         {
             if (File.Exists(temporaryArchive)) File.Delete(temporaryArchive);
+            SqliteConnection.ClearAllPools();
             DeleteWorkDir(work);
         }
     }
