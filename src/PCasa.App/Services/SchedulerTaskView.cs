@@ -377,6 +377,10 @@ public sealed class SchedulerTaskView
         catch (JsonException) { return 0; }
     }
 
+    private static bool IsRootReview(string key)
+        => key.StartsWith("automatic:", StringComparison.Ordinal) &&
+           key.Contains(":RescanRoot:", StringComparison.Ordinal);
+
     private static string TaskCaption(DurablePackageRecord item)
         => item.Type switch
         {
