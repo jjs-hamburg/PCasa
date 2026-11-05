@@ -175,6 +175,7 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 exif.ExecuteNonQuery();
             }
             tx.Commit();
+            ownMutation?.Confirm(after.Length, after.LastWriteTimeUtc.Ticks);
             PCasaDiagnostics.WriteMessage("GPS.Edit.Timing",
                 $"ImageId={imageId}; Changed={shouldWrite}; Bytes={after.Length}; " +
                 $"ReadMs={readMilliseconds}; NativeWriteMs={writeMilliseconds}; " +
