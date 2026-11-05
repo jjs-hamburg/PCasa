@@ -228,6 +228,7 @@ internal static class GlobalTaskOrderFlow
             }
             AssertDefaultP0AndBackgroundSafety(root);
             AssertBlockedManualScanCannotStarveGps(root);
+            AssertOwnedMetadataChangeStaysInItsPackage(root);
             AssertReorderNeverWaitsForNetworkCancellation();
             Console.WriteLine("PASS: GPS accepted before eligibility, visible in TM; " +
                 "free cross-priority up/down and real persisted execution order.");
@@ -386,6 +387,25 @@ internal static class GlobalTaskOrderFlow
             if (!cleanup.Wait(TimeSpan.FromSeconds(5)))
                 throw new TimeoutException("Blocked-scan scheduler cleanup stalled.");
         }
+    }
+
+    private static void AssertOwnedMetadataChangeStaysInItsPackage(string root)
+    {
+        var path = Path.Combine(root, "self-owned-original.jpg");
+        File.WriteAllText(path, "initial");
+        using (var edit = OriginalFileMutationReceipts.Begin(path))
+        {
+            if (!OriginalFileMutationReceipts.IsOwnedNotification(path))
+                throw new Exception("Active original-file package was treated as external.");
+            File.WriteAllText(path, "modified by original package");
+            var info = new FileInfo(path);
+            edit.Confirm(info.Length, info.LastWriteTimeUtc.Ticks);
+        }
+        if (!OriginalFileMutationReceipts.IsOwnedNotification(path))
+            throw new Exception("Verified original-file write spawned an unrelated ScanFile.");
+        File.AppendAllText(path, "external modification");
+        if (OriginalFileMutationReceipts.IsOwnedNotification(path))
+            throw new Exception("External modification was suppressed as a package step.");
     }
 
     // Scanner cancellation callbacks may be blocked in native SMB I/O.
