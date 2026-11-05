@@ -1369,6 +1369,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                     _signals[LaneManual].Release();
                                 if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManualScan))
                                     _signals[LaneManualScan].Release();
+                                if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManualSourceProbe))
+                                    _signals[LaneManualSourceProbe].Release();
                                 if (_catalogInteractiveRunning == 0 &&
                                     _catalogManualRunning == 0 &&
                                     !HasManualSourceProbeUnsafe() &&
