@@ -1,0 +1,84 @@
+name: Pre-chat Restore Windows Package
+
+# Exact pre-chat app source, packaged without suppressing the known separate
+# failing gallery-move regression in the original acceptance workflow.
+on:
+  push:
+    branches:
+      - pre-chat-restore
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pcasa-prechat-rollback-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rollback-package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v5
+      # Prefer the .NET 10 SDK already present on windows-latest. The
+      # setup-dotnet CDN currently returns HTTP 409 for both LTS runtime
+      # and SDK downloads; use it only if the runner lacks a 10.x SDK.
+      - name: Check installed .NET 10 SDK
+        id: installed-dotnet
+        shell: pwsh
+        run: |
+          $sdks = @(dotnet --list-sdks)
+          $has10 = @($sdks | Where-Object { $_ -match '^10\.' }).Count -gt 0
+          Write-Host ($sdks -join "`n")
+          "has10=$($has10.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - name: Setup .NET 10 if absent
+        if: steps.installed-dotnet.outputs.has10 != 'true'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install verified lossless metadata tool
+        shell: pwsh
+        run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
+      - name: Bundle pinned MapLibre JS and CSS into PCasa.App.dll
+        shell: pwsh
+        run: ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+      - name: Record known rollback limitation
+        shell: pwsh
+        run: |
+          Write-Host "::warning::Pre-chat source 73ec131 has a known failing concurrent manual gallery-move test. This rollback artifact is NOT a scheduler acceptance build."
+          "Known regression: second manual move was silently discarded before scheduler." >> $env:GITHUB_STEP_SUMMARY
+      - name: Publish self-contained Windows x64 acceptance package
+        shell: pwsh
+        run: |
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:InformationalVersion=$env:GITHUB_SHA -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          python -m pip install --quiet numpy pillow
+          python tools/generate_pcasa_textures.py publish/PCasa/Texturen
+          if (-not (Test-Path "publish/PCasa/Texturen/Stein - Schiefer dunkel.jpg") -or
+              -not (Test-Path "publish/PCasa/Texturen/Stein - Nachtblau.jpg")) {
+            throw "New original textures missing from package"
+          }
+          New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
+          Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
+          Copy-Item -Path "tools/PCasa-JPEG-Benchmark.cmd" -Destination "publish/PCasa/PCasa-JPEG-Benchmark.cmd" -Force
+          if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
+          if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
+          if (-not (Test-Path "publish/PCasa/PCasa-JPEG-Benchmark.cmd")) { throw "JPEG benchmark launcher missing" }
+          $dll = "publish/PCasa/PCasa.App.dll"
+          $dllHash = (Get-FileHash -Path $dll -Algorithm SHA256).Hash
+          @(
+            "Commit=$env:GITHUB_SHA"
+            "WorkflowRun=$env:GITHUB_RUN_ID"
+            "PCasa.App.dll.SHA256=$dllHash"
+          ) | Set-Content -Path "publish/PCasa/BUILD-INFO.txt" -Encoding UTF8
+          Write-Host "Build identity: commit=$env:GITHUB_SHA DLL SHA256=$dllHash"
+          $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
+          if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
+          Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Upload pre-chat rollback package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-win-x64-pre-chat-rollback
+          path: publish/PCasa/
+          if-no-files-found: error
+          retention-days: 14
