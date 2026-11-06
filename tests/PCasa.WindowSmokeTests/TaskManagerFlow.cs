@@ -76,6 +76,22 @@ internal static class TaskManagerFlow
                 Until(idle, () => idleStatus.Text.Contains(
                     "Keine Bestandsprüfung fällig", StringComparison.Ordinal),
                     "Empty Taskmanager did not disclose whether idle review is due.");
+                var timer = (DispatcherTimer)typeof(PCasa.App.TaskManagerWindow)
+                    .GetField("_refreshTimer",
+                        System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance)!.GetValue(idle)!;
+                Thread.Sleep(300);
+                Pump(idle);
+                if (timer.IsEnabled)
+                    throw new Exception("Taskmanager still polls its state while idle.");
+                scheduler.NotifyTaskViewChanged();
+                if (!timer.IsEnabled)
+                    throw new Exception("Scheduler change did not schedule a view refresh.");
+                Thread.Sleep(300);
+                Pump(idle);
+                if (timer.IsEnabled)
+                    throw new Exception("Taskmanager change coalescer did not stop after one tick.");
+                Console.WriteLine("PASS: Taskmanager refresh is event-driven, with no idle polling.");
             }
             finally { idle.Close(); }
 
@@ -281,6 +297,21 @@ internal static class TaskManagerFlow
                 checks[3].IsChecked != false)
                 throw new Exception("Task status filters do not use the requested compact default.");
             var grid = Descendants<DataGrid>(manager).Single();
+            if (grid.Columns[3] is not DataGridTextColumn statusColumn ||
+                statusColumn.Binding is not System.Windows.Data.Binding statusBinding ||
+                statusBinding.Path.Path != "LocalizedStatus")
+                throw new Exception("Task status cell is not bound to localization.");
+            UiLanguage.Current.Select("en");
+            try
+            {
+                var localized = new SchedulerTaskViewItem("status-test",
+                    "Update folder", dir, "–", "Wartet", null, 0, 0,
+                    true, true, false, false);
+                if (localized.LocalizedStatus != "Waiting" ||
+                    (localized with { Status = "Angehalten" }).LocalizedStatus != "Paused")
+                    throw new Exception("Task status is mixed German/English.");
+            }
+            finally { UiLanguage.Current.Select("de"); }
             if (!grid.Columns.Select(col => col.Header?.ToString())
                     .SequenceEqual(new[] { "Aufgabe", "Verzeichnis", "Fortschritt", "Status" }) ||
                 grid.CanUserSortColumns)
