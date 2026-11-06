@@ -87,6 +87,8 @@ internal static class Program
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
+        Run("Startup browse projection is visible beside blocked or deferred durable P0 without admitting P4",
+            StartupBrowseReadSurvivesDurableP0, failures);
         Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
         Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
         Run("Running durable first import yields to manual Tag P0 and resumes", InitialImportYieldsToManualTag, failures);
@@ -2476,6 +2478,73 @@ internal static class Program
                 release.TrySetResult();
                 await scanner.WaitAsync(TimeSpan.FromSeconds(5));
             }
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void StartupBrowseReadSurvivesDurableP0()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (db, root, _) = sandbox.Prepare();
+            var journal = new DurablePackageJournal(db);
+            _ = new SchedulerTaskOrderStore(db);
+            const string deferredKey = "test:startup-offline-p0";
+            journal.Put(deferredKey, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = root.LocalPath,
+                    MonitoredRootId = root.Id
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            journal.Defer(deferredKey, 0, "Quelle vorübergehend offline",
+                TimeSpan.FromMinutes(30));
+
+            await using var scheduler = new PCasaScheduler();
+            scheduler.EnableDurablePackages(db);
+            var manualStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseManual = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var manual = scheduler.EnqueueAsync("test:startup-active-p0",
+                SchedulerPriority.ManualAction, async _ =>
+                {
+                    manualStarted.TrySetResult();
+                    await releaseManual.Task;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                await manualStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var idleStarted = false;
+                var idle = scheduler.EnqueueAsync("test:startup-p4",
+                    SchedulerPriority.Idle, _ =>
+                    {
+                        idleStarted = true;
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.CatalogScan);
+                var rendered = false;
+                await scheduler.EnqueueAsync("catalog:initial-summary:test",
+                    SchedulerPriority.Interactive, _ =>
+                    {
+                        rendered = true;
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.BrowseRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                await scheduler.EnqueueAsync("catalog:gallery-index:test",
+                    SchedulerPriority.Interactive, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.BrowseRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!rendered || manual.IsCompleted || idleStarted || idle.IsCompleted)
+                    throw new Exception(
+                        "Startup gallery blocked by durable P0, interrupted P0, or admitted P4.");
+            }
+            finally
+            {
+                releaseManual.TrySetResult();
+                if (!journal.Cancel(deferredKey))
+                    throw new Exception("Deferred P0 fixture could not be canceled.");
+            }
+            await manual.WaitAsync(TimeSpan.FromSeconds(5));
         }
         Check().GetAwaiter().GetResult();
     }
