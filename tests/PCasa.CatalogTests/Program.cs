@@ -1659,10 +1659,16 @@ internal static class Program
             new BrowseThumbnailProfileRepository(db));
         var next = reopened.ScanDirectory(root, root.LocalPath, true,
             durableScanKey: "manual:first-pass:two", preferFirstPass: true);
-        if (next.ImageFilesSeen != 1 || next.Removed != 0 ||
-            new ImageCatalogRepository(db).CountAll() != 4)
+        if (next.ImageFilesSeen != 2 || next.Removed != 0 ||
+            new ImageCatalogRepository(db).CountAll() != 5)
             throw new Exception(
-                "New manual job reread completed directories or pruned an unvisited file.");
+                "New manual job must import ONLY new files in completed directories and new subfolders.");
+        var repeated = reopened.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:first-pass:three", preferFirstPass: true);
+        if (repeated.ImageFilesSeen != 0 ||
+            new ImageCatalogRepository(db).CountAll() != 5)
+            throw new Exception(
+                "Completed first-pass markers reread previously catalogued images.");
 
         // Background verification does NOT use the fast first-pass hint.
         // It must eventually see late additions and physically removed files.
