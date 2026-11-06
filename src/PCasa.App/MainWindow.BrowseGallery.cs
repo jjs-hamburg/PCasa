@@ -1361,7 +1361,13 @@ public partial class MainWindow
         // A filtered search list and a sidebar resize must not change
         // the user's folder-tree focus. They change gallery geometry,
         // not the selected source folder.
-        if (e.VerticalChange == 0 || _pendingGalleryAnchor is not null ||
+        // WPF generates ScrollChanged while a catalog refresh changes
+        // section geometry. That is never an explicit user scroll: treating
+        // it as one clears the pending image anchor and jumps to the start.
+        if (e.VerticalChange == 0 ||
+            Math.Abs(e.ExtentHeightChange) > 0.5 ||
+            Math.Abs(e.ViewportHeightChange) > 0.5 ||
+            _pendingGalleryAnchor is not null ||
             _restoringGalleryLayoutAnchor)
         {
             return;
