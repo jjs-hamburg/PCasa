@@ -291,7 +291,7 @@ public sealed class FolderScanner
             indexedFirstPassPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using var snapshotDb = _catalog.Database.OpenConnection();
             using var known = snapshotDb.CreateCommand();
-            known.CommandText = "SELECT local_path FROM images WHERE monitored_folder_id=$root;";
+            known.CommandText = "SELECT local_path FROM images WHERE folder_id=$root;";
             known.Parameters.AddWithValue("$root", folder.Id);
             using var knownReader = known.ExecuteReader();
             while (knownReader.Read())
