@@ -146,7 +146,7 @@ public partial class MainWindow
                 RefreshBackgroundMonitor();
             _backgroundDebounceTimer?.Start();
         }
-        _taskManagerWindow?.RequestRefresh();
+        _scheduler.NotifyTaskViewChanged();
         return true;
     }
 
@@ -303,7 +303,7 @@ public partial class MainWindow
         }
         _backgroundDebounceTimer?.Stop();
         _backgroundDebounceTimer?.Start();
-        _taskManagerWindow?.RequestRefresh();
+        _scheduler.NotifyTaskViewChanged();
         return true;
     }
 
