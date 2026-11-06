@@ -54,6 +54,10 @@ jobs:
       - name: Verify selected GPS overlay at 6,000 photos and across continents
         shell: pwsh
         run: node tests/gps-map-overlay.test.cjs
+      - name: Exercise real WPF gallery copy and move on monitored folders
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
       - name: Run WPF window smoke tests
         shell: pwsh
         run: |
@@ -87,10 +91,6 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --tag-flow
-      - name: Exercise real WPF gallery copy and move on monitored folders
-        shell: pwsh
-        run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
       - name: Verify taskmanager durable ordering, retry and safe cancellation
         timeout-minutes: 2
         shell: pwsh
