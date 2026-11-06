@@ -596,6 +596,10 @@ internal static class TaskManagerFlow
 
                 if (!firstRepo.DeletePendingFirstImport(initialA.FolderId))
                     throw new Exception("Deleting a held import did not remove intent.");
+                // This test mutates the repository directly instead of using
+                // the real taskmanager command. The source must announce
+                // its changed intent; the view no longer polls SQLite.
+                scheduler.NotifyTaskViewChanged();
                 Until(heldView, () => heldGrid.Items.Cast<object>().All(item =>
                     item.GetType().GetProperty("Key")?.GetValue(item)
                     ?.ToString() != $"initial:{initialA.FolderId}"),
