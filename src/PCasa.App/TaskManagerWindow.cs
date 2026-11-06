@@ -45,7 +45,8 @@ public sealed class TaskManagerWindow : Window
     private bool _reading;
     private bool _acting;
     private bool _refreshRequested;
-    private long _lastProgressRefreshTick;
+    // A one-shot coalescer, never a polling loop. Each tick is caused by
+    // an actual scheduler change notification.
     private Point? _dragOrigin;
     private string? _dragKey;
     private const string TaskDragFormat = "PCasa.TaskManager.TaskKey";
@@ -129,7 +130,7 @@ public sealed class TaskManagerWindow : Window
         AddColumn("Verzeichnis", nameof(TaskRow.Directory),
             new DataGridLength(1, DataGridLengthUnitType.Star));
         AddColumn("Fortschritt", nameof(TaskRow.Progress), new DataGridLength(92));
-        AddColumn("Status", nameof(TaskRow.Status), new DataGridLength(92));
+        AddColumn("Status", nameof(TaskRow.LocalizedStatus), new DataGridLength(92));
         _list.SelectionChanged += (_, _) => UpdateActions();
         // Reordering changes the scheduler's persisted dispatch sequence,
         // never merely the DataGrid's visual sort order.
@@ -179,42 +180,40 @@ public sealed class TaskManagerWindow : Window
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMilliseconds(850)
+            Interval = TimeSpan.FromMilliseconds(200)
         };
-        _refreshTimer.Tick += (_, _) => RequestRefresh();
+        // Single-shot: never periodically query SQLite without a change.
+        _refreshTimer.Tick += (_, _) =>
+        {
+            _refreshTimer.Stop();
+            RequestRefresh();
+        };
         Loaded += (_, _) =>
         {
-            _scheduler.ProgressChanged += SchedulerProgressChanged;
-            _scheduler.TaskAccepted += RequestRefresh;
-            _scheduler.TaskOrderChanged += RequestRefresh;
-            _refreshTimer.Start();
+            _scheduler.TaskViewChanged += SchedulerTaskViewChanged;
             RequestRefresh();
         };
         Closed += (_, _) =>
         {
             _refreshTimer.Stop();
-            _scheduler.ProgressChanged -= SchedulerProgressChanged;
-            _scheduler.TaskAccepted -= RequestRefresh;
-            _scheduler.TaskOrderChanged -= RequestRefresh;
+            _scheduler.TaskViewChanged -= SchedulerTaskViewChanged;
         };
         UpdateActions();
     }
 
-    private void SchedulerProgressChanged(SchedulerJobSnapshot snapshot)
+    private void SchedulerTaskViewChanged()
     {
-        // A large scan reports progress many times per second. Re-reading
-        // the journal, all import receipts and the error ledger on EVERY
-        // progress event saturated SQLite and delayed new GPS admission
-        // rows. Acceptance and user changes still trigger immediate reads;
-        // only repeated progress snapshots are coalesced here.
-        var now = Environment.TickCount64;
-        if (snapshot.State is SchedulerJobState.Completed or
-            SchedulerJobState.Canceled or SchedulerJobState.Failed ||
-            now - Interlocked.Read(ref _lastProgressRefreshTick) >= 250)
+        if (!Dispatcher.CheckAccess())
         {
-            Interlocked.Exchange(ref _lastProgressRefreshTick, now);
-            RequestRefresh();
+            if (!Dispatcher.HasShutdownStarted)
+                _ = Dispatcher.BeginInvoke(new Action(SchedulerTaskViewChanged));
+            return;
         }
+        if (!IsLoaded || Dispatcher.HasShutdownStarted) return;
+        // Debounce bursty progress callbacks without dropping the FINAL event.
+        // The timer does not run unless the scheduler actually changed.
+        if (!_refreshTimer.IsEnabled)
+            _refreshTimer.Start();
     }
 
     // On accepting a durable manual job the journal entry already exists.
@@ -406,8 +405,8 @@ public sealed class TaskManagerWindow : Window
         }
         finally
         {
-            if (IsLoaded && !_refreshTimer.IsEnabled)
-                _refreshTimer.Start();
+            if (IsLoaded)
+                RequestRefresh();
         }
     }
 
