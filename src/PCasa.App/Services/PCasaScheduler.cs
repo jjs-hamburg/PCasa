@@ -864,7 +864,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Func<CancellationToken, TResult> operation,
         Func<bool>? isCurrent = null,
         CancellationToken cancellationToken = default,
-        SchedulerWorkKind workKind = SchedulerWorkKind.CatalogRead)
+        SchedulerWorkKind workKind = SchedulerWorkKind.CatalogRead,
+        string? parentKey = null)
     {
         TResult? result = default;
         await EnqueueAsync(key, priority,
@@ -873,7 +874,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 token.ThrowIfCancellationRequested();
                 result = operation(token);
                 return Task.CompletedTask;
-            }, isCurrent, cancellationToken, workKind);
+            }, isCurrent, cancellationToken, workKind, parentKey: parentKey);
         return result!;
     }
 
@@ -1080,7 +1081,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Func<bool>? isCurrent = null,
         CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
-        long? queueOrder = null)
+        long? queueOrder = null, string? parentKey = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -1120,8 +1121,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 };
                 // Technical catalog reads started by an executing package
                 // are dependent STEPS, not independent competitors for rank.
-                if (_currentPackage.Value is { } parent &&
-                    _runningWork.Contains(parent))
+                // Explicit owner identity survives WPF Dispatcher hops;
+                // AsyncLocal alone cannot cover that asynchronous boundary.
+                if (!string.IsNullOrWhiteSpace(parentKey))
+                    item.Parent = _runningWork.FirstOrDefault(work =>
+                        string.Equals(work.Key, parentKey, StringComparison.Ordinal));
+                else if (_currentPackage.Value is { } parent &&
+                         _runningWork.Contains(parent))
                     item.Parent = parent;
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
