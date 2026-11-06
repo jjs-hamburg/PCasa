@@ -346,26 +346,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     ? SchedulerJobState.YieldRequested : SchedulerJobState.Running);
                 changed.Add(active);
             }
-            // A global move is an ordinary scheduler order change.
-            // Compare ALL accepted waiting work with active workers, using
-            // exactly the same rule as package admission and preemption.
-            var firstWaiting = _pending.OrderBy(x => x.Priority)
-                .ThenBy(x => x.QueueOrder).ThenBy(x => x.Id)
-                .FirstOrDefault();
-            if (firstWaiting is not null)
-            {
-                for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
-                {
-                    var active = _runningPriorityJobs[lane];
-                    if (active is null || active.YieldRequested ||
-                        !Precedes(firstWaiting, active)) continue;
-                    active.YieldRequested = true;
-                    SetStateUnsafe(active, SchedulerJobState.YieldRequested);
-                    changed.Add(active);
-                    if (_runningYield[lane] is { } token)
-                        yields.Add(token);
-                }
-            }
             WakePendingWorkersUnsafe();
         }
         foreach (var work in changed) PublishState(work);
@@ -1155,8 +1135,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
         Task completion;
-        WorkItem admitted;
-        List<CancellationTokenSource> yieldRequests = new();
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -1173,7 +1151,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     SignalController();
                 }
                 completion = existing.Completion.Task;
-                admitted = existing;
             }
             else
             {
@@ -1203,29 +1180,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 TrimHistoryUnsafe();
                 SignalController();
                 completion = item.Completion.Task;
-                admitted = item;
             }
 
-            // The same global rank comparison controls dispatch and
-            // interruption. A worker controls only the safe stop boundary.
-            for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
-            {
-                var active = _runningPriorityJobs[lane];
-                if (active is null || active.YieldRequested ||
-                    !Precedes(admitted, active))
-                    continue;
-                active.YieldRequested = true;
-                SetStateUnsafe(active, SchedulerJobState.YieldRequested);
-                if (_runningYield[lane] is { } token)
-                    yieldRequests.Add(token);
-            }
-        }
-        // Cancellation callbacks may re-enter the scheduler: never invoke
-        // them under _gate (including from the WPF UI thread).
-        foreach (var yield in yieldRequests)
-        {
-            try { _ = yield.CancelAsync(); }
-            catch (ObjectDisposedException) { }
+            SignalController();
         }
         return completion;
     }
