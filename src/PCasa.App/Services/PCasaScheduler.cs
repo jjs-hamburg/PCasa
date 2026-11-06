@@ -69,10 +69,22 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // P0 eligibility checks, or the first filesystem operation.
     public event Action? TaskAccepted;
 
+    // One notification channel for the read-only task projection. Owners of
+    // queued automatic scan intents also notify this scheduler; only the
+    // scheduler publishes the change to task manager consumers.
+    public event Action? TaskViewChanged;
+
+    public void NotifyTaskViewChanged()
+    {
+        try { TaskViewChanged?.Invoke(); }
+        catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.TaskViewChanged", ex); }
+    }
+
     private void NotifyTaskAccepted()
     {
         try { TaskAccepted?.Invoke(); }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.TaskAccepted", ex); }
+        NotifyTaskViewChanged();
     }
     private readonly HashSet<Task> _durableCompletions = new();
     private bool _restoringDurablePackages;
@@ -334,6 +346,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         foreach (var work in changed) PublishState(work);
         try { TaskOrderChanged?.Invoke(); }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.TaskOrderChanged", ex); }
+        NotifyTaskViewChanged();
         return true;
     }
 
@@ -1145,6 +1158,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // Observers (including WPF) run outside _gate.
             try { ProgressChanged?.Invoke(snapshot); }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+            NotifyTaskViewChanged();
         }
     }
 
@@ -1212,6 +1226,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
             SignalController();
         }
+        NotifyTaskViewChanged();
         return completion;
     }
 
@@ -1475,6 +1490,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 $"Path={snapshot.CurrentPath ?? "(none)"}");
         try { ProgressChanged?.Invoke(snapshot); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        NotifyTaskViewChanged();
     }
 
     private void SetStateUnsafe(WorkItem item, SchedulerJobState state, string? error = null)
