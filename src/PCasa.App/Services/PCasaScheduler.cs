@@ -877,6 +877,38 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _runningManualSourceProbe?.Key == key;
     }
 
+    // The currently executing parent is available only inside its async
+    // execution scope. It does not create another scheduler task.
+    public string? CurrentPackageKey => _currentPackage.Value?.Key;
+
+    // A shared asynchronous operation can have been queued by an earlier
+    // caller before a higher-priority package begins awaiting it. Inherit
+    // the waiting package's rank for its existing technical steps, too.
+    // This only updates parentage in the ONE scheduler list; no new job,
+    // cancellation or parallel queue is created.
+    public void AttachDependentWorkToPackage(string packageKey,
+        params string[] technicalKeyPrefixes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageKey);
+        lock (_gate)
+        {
+            var parent = _runningWork.FirstOrDefault(item =>
+                string.Equals(item.Key, packageKey, StringComparison.Ordinal));
+            if (parent is null)
+                throw new InvalidOperationException(
+                    "Dependent work has no running owning package: " + packageKey);
+            foreach (var item in _pending.Concat(_runningWork))
+            {
+                if (ReferenceEquals(item, parent) ||
+                    !technicalKeyPrefixes.Any(prefix =>
+                        item.Key.StartsWith(prefix, StringComparison.Ordinal)))
+                    continue;
+                item.Parent = parent;
+            }
+            SignalController();
+        }
+    }
+
     // Restores a durable package's execution context across UI Dispatcher
     // boundaries. The nested work remains a STEP of the running package,
     // never an independently ranked P1 task. The scope flows across await.
