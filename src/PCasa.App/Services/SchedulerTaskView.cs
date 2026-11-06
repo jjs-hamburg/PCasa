@@ -13,7 +13,12 @@ public sealed record SchedulerTaskViewItem(
     string Key, string Title, string Directory, string Progress,
     string Status, string? Error, int Priority, long Order,
     bool Durable, bool Movable, bool Retryable, bool Deletable,
-    SchedulerWorkKind WorkKind = SchedulerWorkKind.Catalog);
+    SchedulerWorkKind WorkKind = SchedulerWorkKind.Catalog)
+{
+    // Internal state remains stable German tokens for actions and filters.
+    // Only the visible cell is translated at the presentation boundary.
+    public string LocalizedStatus => UiLanguage.T(Status);
+}
 
 public sealed record SchedulerTaskViewResult(
     List<SchedulerTaskViewItem> Rows,
