@@ -6,7 +6,7 @@ namespace PCasa.App.Services;
 
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
-public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport, DatabaseBackup }
+public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport, DatabaseBackup, BrowseRead }
 
 public sealed record SchedulerJobSnapshot(
     long Id, string Key, SchedulerPriority Priority, SchedulerJobState State,
@@ -801,7 +801,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         => kind switch
         {
             SchedulerWorkKind.ViewerRead => LaneViewer,
-            SchedulerWorkKind.CatalogRead => LaneCatalogRead,
+            SchedulerWorkKind.CatalogRead or SchedulerWorkKind.BrowseRead => LaneCatalogRead,
             SchedulerWorkKind.DatabaseBackup => LaneManualBackup,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
             SchedulerWorkKind.InitialImport => LaneInitialImport,
@@ -1278,7 +1278,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
         // queued P0 package. All independent packages still use global rank.
         var childOfRunningPackage = candidate.Parent is { } parent &&
             _runningWork.Contains(parent);
-        if (!childOfRunningPackage &&
+        // Pure WPF view reads and bounded thumbnail decoding cannot write a
+        // catalog or source. Their separate read lanes must remain serviceable
+        // while an offline durable P0 job holds the global package priority.
+        // All other work still follows the single global scheduler ranking.
+        var viewRead = candidate.Kind is SchedulerWorkKind.BrowseRead or
+            SchedulerWorkKind.ThumbnailRead;
+        if (!childOfRunningPackage && !viewRead &&
             _pending.Any(other => !ReferenceEquals(other, candidate) &&
                 Precedes(other, candidate)))
             return null;
@@ -1294,7 +1300,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
         // Journal recovery may have an accepted P0 package not yet copied
         // into the in-memory run queue. It still wins over P2-P4 execution.
-        if (!childOfRunningPackage && durableManualPending &&
+        if (!childOfRunningPackage && !viewRead && durableManualPending &&
             RankOwner(candidate).Priority > SchedulerPriority.ManualAction)
             return null;
 
