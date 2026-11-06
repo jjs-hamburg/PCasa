@@ -1200,7 +1200,10 @@ public partial class MainWindow
         object sender,
         RoutedPropertyChangedEventArgs<object> e)
     {
-        if (_syncingFolderSelection ||
+        // Reconstructing the folder tree is not user navigation.
+        // A WPF selection event posted during this rebuild must never
+        // overwrite the restored gallery anchor or jump to folder zero.
+        if (_rebuildingFolderTree || _syncingFolderSelection ||
             e.NewValue is not TreeViewItem item ||
             item.Tag is not FolderTreeTag tag)
         {
