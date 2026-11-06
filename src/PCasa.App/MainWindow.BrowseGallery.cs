@@ -330,7 +330,7 @@ public partial class MainWindow
                     .GetVerifiedPendingInitialDirectories();
                 createdDirectories = _folderRepository.GetCreatedDirectories();
                 return Task.CompletedTask;
-            }, workKind: SchedulerWorkKind.CatalogRead);
+            }, workKind: SchedulerWorkKind.BrowseRead);
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
         _dropTargetProjection = initialConfiguration;
@@ -598,7 +598,7 @@ public partial class MainWindow
                     imageCount = _imageCatalog.CountAll();
                     return Task.CompletedTask;
                 }, () => _browseRefreshRequests.IsCurrent(refresh),
-                workKind: SchedulerWorkKind.CatalogRead,
+                workKind: SchedulerWorkKind.BrowseRead,
                 parentKey: _galleryRefreshOwningPackageKey);
         }
         catch (OperationCanceledException) { return; }
@@ -651,7 +651,7 @@ public partial class MainWindow
                         index = _browseCacheRepository.GetIndex(tier);
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh),
-                    workKind: SchedulerWorkKind.CatalogRead,
+                    workKind: SchedulerWorkKind.BrowseRead,
                     parentKey: _galleryRefreshOwningPackageKey);
             }
             catch (OperationCanceledException) { return; }
@@ -682,7 +682,7 @@ public partial class MainWindow
                         existing = _imageCatalog.GetExistingImageIds(checkedSelection);
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh),
-                    workKind: SchedulerWorkKind.CatalogRead,
+                    workKind: SchedulerWorkKind.BrowseRead,
                     parentKey: _galleryRefreshOwningPackageKey);
             }
             catch (OperationCanceledException) { return; }
