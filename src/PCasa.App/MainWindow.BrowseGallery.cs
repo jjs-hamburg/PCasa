@@ -102,6 +102,13 @@ public partial class MainWindow
         // owner will bring the new catalog state into the current view.
         // Reconciliation is queued after registering and restoring durable P0 packages.
 
+        // Publish the persisted catalog BEFORE restoring long-running P0
+        // packages. The initial interactive database/index reads must not sit
+        // behind an offline SMB source while the entire WPF gallery is blank.
+        // This is a bounded read-only bootstrap, not another scheduler queue.
+        await EnsureBrowseCacheAndRefreshAsync(initialProjectionOnly: true);
+        if (Dispatcher.HasShutdownStarted) return;
+
         // Durable user imports enter the scheduler BEFORE background legacy
         // repair. Both use the SAME catalog and generation guards.
         // Recovered user edits must be queued BEFORE background folder scans.
@@ -151,7 +158,9 @@ public partial class MainWindow
         if (unresolvedPackages.Count > 0)
             StatusText.Text = $"{unresolvedPackages.Count} Paket(e) für spätere Wiederherstellung vorgemerkt";
         _ = ReconcilePersistedExclusionsAsync();
-        await EnsureBrowseCacheAndRefreshAsync();
+        // Cache repair is maintenance, never a prerequisite for the already
+        // published gallery. It can remain queued behind P0 indefinitely.
+        _ = EnsureBrowseCacheAndRefreshAsync();
         StartTagBackfill();
     }
 
@@ -294,7 +303,8 @@ public partial class MainWindow
         }
     }
 
-    private async Task EnsureBrowseCacheAndRefreshAsync()
+    private async Task EnsureBrowseCacheAndRefreshAsync(
+        bool initialProjectionOnly = false)
     {
         if (!_browseInitialized ||
             _browseProfileRepository is null ||
@@ -348,6 +358,14 @@ public partial class MainWindow
         _ = RefreshPendingTagDotsAsync();
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (initialProjectionOnly)
+        {
+            // Once-only startup publication, before any recovered P0 can
+            // starve the first browse index and leave the workspace blank.
+            await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                warmViewport: true);
+            return;
+        }
         // A foreground scan must NOT suppress the independent gallery.
         // Display everything already committed even if a newly added NAS root
         // is still being scanned (or is blocked/offline). Defer expensive
