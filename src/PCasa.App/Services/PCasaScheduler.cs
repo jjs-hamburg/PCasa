@@ -715,14 +715,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
-    // All P0 worker capacities compare the SAME ranks, including during
-    // startup recovery. A separate execution lane never implies a queue.
-    private static bool ManualPrecedes(WorkItem first, WorkItem second)
-        => first.Priority < second.Priority ||
-           (first.Priority == second.Priority &&
-            (first.QueueOrder < second.QueueOrder ||
-             (first.QueueOrder == second.QueueOrder && first.Id < second.Id)));
-
     private static int LaneFor(SchedulerPriority priority, SchedulerWorkKind kind)
         => kind switch
         {
@@ -1160,6 +1152,75 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return completion;
     }
 
+    // One global ordering rule for Taskmanager moves, default priorities,
+    // manual LIFO and cross-lane admission. QueueOrder is assigned once at
+    // registration and updated only by an explicit user reorder.
+    private static bool Precedes(WorkItem first, WorkItem second)
+        => first.Priority < second.Priority ||
+           (first.Priority == second.Priority &&
+            (first.QueueOrder < second.QueueOrder ||
+             (first.QueueOrder == second.QueueOrder && first.Id < second.Id)));
+
+    // Called under _gate. This is the ONE business decision about which
+    // accepted job may start. The physical lane is only an execution-capacity
+    // constraint. A new P0 outranks an older P0 on another blocked SMB lane.
+    // It may start on a free worker while that older worker reaches a safe
+    // interruption boundary. No task's priority is derived from its lane.
+    private WorkItem? SelectNextJobUnsafe(int lane,
+        bool durableManualPending, bool durableNonIdlePending)
+    {
+        var candidate = _pending
+            .Where(x => LaneFor(x.Priority, x.Kind) == lane)
+            .OrderBy(x => x.Priority)
+            .ThenBy(x => x.QueueOrder)
+            .ThenBy(x => x.Id)
+            .FirstOrDefault();
+        if (candidate is null) return null;
+
+        // Restore the saved journal/order before allowing any restored P0
+        // worker to start. Existing packages are NOT recreated.
+        if (_restoringDurablePackages &&
+            lane is LaneManual or LaneManualScan or LaneManualBackup or LaneManualSourceProbe)
+            return null;
+        if (_nativeDragInteractionCount > 0 &&
+            lane is LaneBackground or LaneInitialImport or LaneUserAction or LaneSourceProbe)
+            return null;
+
+        // P4 is pure idle work. All waiting/running P0-P3 requests exclude
+        // it, INCLUDING durable 'deferred' packages visible as Wartet in TM.
+        if (candidate.Priority == SchedulerPriority.Idle &&
+            (durableNonIdlePending ||
+             _pending.Any(other => !ReferenceEquals(other, candidate) &&
+                 other.Priority < SchedulerPriority.Idle) ||
+             _runningWork.Any(other => other.Priority < SchedulerPriority.Idle)))
+            return null;
+
+        // The smallest global rank must be admitted first. A pending higher
+        // ranked job may be on a different worker, but never loses its turn
+        // simply because the lower-ranked worker became free first.
+        if (_pending.Any(other => !ReferenceEquals(other, candidate) &&
+                Precedes(other, candidate)))
+            return null;
+        if (_runningWork.Any(active => Precedes(active, candidate)))
+            return null;
+
+        // Journal recovery may have an accepted P0 package not yet copied
+        // into the in-memory run queue. It still wins over P2-P4 execution.
+        if (durableManualPending && candidate.Priority > SchedulerPriority.ManualAction)
+            return null;
+
+        // Technical safety only: never overlap a foreground catalog mutation
+        // with a lower-priority bulk catalog pass. This does NOT assign order.
+        if (lane is LaneBackground or LaneInitialImport &&
+            (_catalogForegroundRunning > 0 || HasManualSourceProbeUnsafe()))
+            return null;
+        if (lane == LaneUserAction &&
+            (_catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
+             HasManualSourceProbeUnsafe()))
+            return null;
+        return candidate;
+    }
+
     private async Task RunAsync(int lane)
     {
         try
@@ -1175,124 +1236,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 var persistedManualPending =
                     (lane is LaneBackground or LaneInitialImport or LaneUserAction) &&
                     _durableJournal?.HasPendingEffectiveManualActions() == true;
+                // Persisted deferred P0-P3 work remains an accepted job.
+                // Admission never treats a visibly WAITING job as absent.
+                // Read SQLite outside the scheduler lock.
+                var persistedNonIdle =
+                    lane == LaneBackground &&
+                    _durableJournal?.HasOutstandingNonIdleTasks() == true;
                 WorkItem? item;
                 CancellationTokenSource? yieldRequest = null;
                 lock (_gate)
                 {
-                    // A free background worker must not pick the next job while
-                    // a higher-priority catalog request is pending or running.
-                    // Otherwise parallel workers can reverse the logical order.
-                    var blockedByHigherPriority =
-                        (lane == LaneBackground || lane == LaneInitialImport) &&
-                        (persistedManualPending ||
-                         _catalogForegroundRunning > 0 ||
-                         HasManualSourceProbeUnsafe() ||
-                         _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
-                             x.Priority <= SchedulerPriority.UserAction)) ||
-                        lane == LaneUserAction &&
-                        (persistedManualPending ||
-                         _catalogManualRunning > 0 || _catalogInteractiveRunning > 0 ||
-                         HasManualSourceProbeUnsafe() ||
-                         _pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
-                             x.Priority <= SchedulerPriority.Interactive));
-                    var candidate = _pending.Where(x =>
-                            LaneFor(x.Priority, x.Kind) == lane)
-                            .OrderBy(x => x.Priority)
-                            // Manual mutations are P0 and a resumed scan is
-                            // P2 within the shared manual lane. Otherwise an
-                            // old yielded scan wins by ID and starves the
-                            // exact user move that requested its preemption.
-                            .ThenBy(x => lane == LaneManual ? 0 :
-                                x.Kind == SchedulerWorkKind.CatalogScan ? 1 : 0)
-                            // Durable user reordering is the actual dispatch
-                            // rank, with the original manual-LIFO default.
-                            // This is NOT a separately sorted UI projection.
-                            .ThenBy(x => x.QueueOrder)
-                            .ThenBy(x => x.Id)
-                            .FirstOrDefault();
-                    // LIFO is a GLOBAL scheduler decision, not a side effect
-                    // of which physical capacity happens to be free first.
-                    // A blocked older NAS scan must yield to a newer P0 write,
-                    // but an older write must not bypass a newer scan during
-                    // durable recovery or after a manual user reorder.
-                    var waitForEarlierManual = candidate is not null &&
-                        candidate.Priority == SchedulerPriority.ManualAction &&
-                        lane is LaneManual or LaneManualScan or LaneManualBackup or LaneManualSourceProbe &&
-                        (_pending.Any(other => !ReferenceEquals(other, candidate) &&
-                            other.Priority == SchedulerPriority.ManualAction &&
-                            ManualPrecedes(other, candidate)) ||
-                         _runningPriorityJobs.Any(active => active is not null &&
-                            active.Priority == SchedulerPriority.ManualAction &&
-                            ManualPrecedes(active, candidate)) ||
-                         (_runningManualSourceProbe is { } probe &&
-                            ManualPrecedes(probe, candidate)));
-                    // Manual source probes have a separate executor so blocked
-                    // SMB calls do not freeze the manual catalog worker. Yet an
-                    // older yielded manual package must NOT resume while a
-                    // newer manual probe is queued or running.
-                    var newerManualProbe = lane == LaneManual &&
-                        candidate is not null &&
-                        ((_runningManualSourceProbe?.Id ?? 0) > candidate.Id ||
-                         _pending.Any(x => x.Kind == SchedulerWorkKind.SourceProbe &&
-                             x.Priority == SchedulerPriority.ManualAction &&
-                             x.Id > candidate.Id));
-                    // Idle P4 never starts ahead of any waiting non-idle
-                    // scheduler task. This affects execution, not only the
-                    // taskmanager's display order. Deferred/offline requests
-                    // are not in the runnable queue and cannot starve P4.
-                    var idleHasRunnablePredecessor = candidate is not null &&
-                        candidate.Priority == SchedulerPriority.Idle &&
-                        (_pending.Any(other => other.Priority < SchedulerPriority.Idle) ||
-                         _runningWork.Any(other => other.Priority < SchedulerPriority.Idle));
-                    var blockedByNativeDrag = _nativeDragInteractionCount > 0 &&
-                        lane is LaneBackground or LaneInitialImport or
-                            LaneUserAction or LaneSourceProbe;
-                    // User-positioned tasks form a global scheduler order,
-                    // regardless of their original execution lane. Only the
-                    // first accepted queued position is eligible to start;
-                    // this gate preserves physical worker isolation without
-                    // letting a later background job overtake it.
-                    var earliestOrdered = _pending
-                        .Where(x => _userDispatchOrder.ContainsKey(
-                            TaskIdentityUnsafe(x.Key)))
-                        .OrderBy(x => x.Priority)
-                        .ThenBy(x => x.QueueOrder).FirstOrDefault();
-                    long candidateRank = long.MaxValue;
-                    var candidateHasPosition = candidate is not null &&
-                        _userDispatchOrder.TryGetValue(
-                            TaskIdentityUnsafe(candidate.Key),
-                            out candidateRank);
-                    var waitingForEarlierOrdered =
-                        candidateHasPosition &&
-                        ((earliestOrdered is not null &&
-                          !ReferenceEquals(candidate, earliestOrdered)) ||
-                         _runningPriorityJobs.Any(active =>
-                             active is not null &&
-                             _userDispatchOrder.TryGetValue(
-                                 TaskIdentityUnsafe(active.Key),
-                                 out var runningRank) &&
-                             (active.Priority < candidate!.Priority ||
-                              (active.Priority == candidate.Priority &&
-                               runningRank < candidateRank))));
-                    // The original blanket P0 database guard is only a
-                    // DEFAULT-priority rule. A user-promoted initial import
-                    // above P0 must not be blocked by its old class. Still
-                    // respect any running catalog write's safe boundary.
-                    if (lane == LaneInitialImport && candidateHasPosition &&
-                        _userPriorityOverrides.TryGetValue(
-                            TaskIdentityUnsafe(candidate!.Key), out var initialOverride) &&
-                        initialOverride == SchedulerPriority.ManualAction &&
-                        !waitingForEarlierOrdered &&
-                        _catalogForegroundRunning == 0 &&
-                        !HasManualSourceProbeUnsafe())
-                        blockedByHigherPriority = false;
-                    item = blockedByHigherPriority || newerManualProbe ||
-                        idleHasRunnablePredecessor ||
-                        blockedByNativeDrag || waitingForEarlierOrdered ||
-                        waitForEarlierManual ||
-                        (_restoringDurablePackages &&
-                         lane is LaneManual or LaneManualScan or LaneManualBackup or LaneManualSourceProbe)
-                        ? null : candidate;
+                    // The global list is the only source of execution rank:
+                    // (priority, queue order, admission id). Worker lanes are
+                    // CAPACITY, not competing job queues or priority systems.
+                    item = SelectNextJobUnsafe(lane, persistedManualPending,
+                        persistedNonIdle);
                     if (item is not null)
                     {
                         _pending.Remove(item);
