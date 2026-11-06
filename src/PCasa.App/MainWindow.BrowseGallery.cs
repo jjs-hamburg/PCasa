@@ -106,7 +106,12 @@ public partial class MainWindow
         // packages. The initial interactive database/index reads must not sit
         // behind an offline SMB source while the entire WPF gallery is blank.
         // This is a bounded read-only bootstrap, not another scheduler queue.
+        PCasaDiagnostics.WriteMessage("Gallery.Startup", "Begin initial catalog projection");
         await EnsureBrowseCacheAndRefreshAsync(initialProjectionOnly: true);
+        PCasaDiagnostics.WriteMessage("Gallery.Startup",
+            $"Published initial projection: Catalog={_lastCatalogImageCount}; " +
+            $"Index={_browseIndex.Count}; Visible={_displayedBrowseIndex.Count}; " +
+            $"TreeRoots={FoldersTree.Items.Count}");
         if (Dispatcher.HasShutdownStarted) return;
 
         // Durable user imports enter the scheduler BEFORE background legacy
@@ -360,8 +365,10 @@ public partial class MainWindow
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (initialProjectionOnly)
         {
-            // Once-only startup publication, before any recovered P0 can
-            // starve the first browse index and leave the workspace blank.
+            // Once-only startup publication, before recovered P0 operations.
+            PCasaDiagnostics.WriteMessage("Gallery.Startup",
+                $"Catalog ready: Images={imageCount}; Folders={initialFolders.Count}; " +
+                $"Sources={initialConfiguration.Count}");
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: true);
             return;
