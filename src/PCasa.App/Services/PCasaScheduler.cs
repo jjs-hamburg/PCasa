@@ -763,6 +763,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _pending.RemoveAt(index);
                 SetStateUnsafe(item, SchedulerJobState.Canceled);
                 item.Completion.TrySetCanceled();
+                WakePendingWorkersUnsafe();
             }
         }
     }
@@ -942,13 +943,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _pending.Remove(waiting);
                 SetStateUnsafe(waiting, SchedulerJobState.Canceled);
                 waiting.Completion.TrySetCanceled();
+                WakePendingWorkersUnsafe();
                 return true;
             }
             running = _runningPriorityJobs.FirstOrDefault(item => item?.Key == key);
             if (running is null && _runningManualSourceProbe?.Key == key)
                 running = _runningManualSourceProbe;
             if (running is null)
-                return journal.Cancel(key); // deferred; no live executor
+            {
+                var canceled = journal.Cancel(key); // deferred; no live executor
+                if (canceled) WakePendingWorkersUnsafe();
+                return canceled;
+            }
             completion = running.Completion.Task;
         }
         // Cooperative cancellation respects a file's atomic write/commit
