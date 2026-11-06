@@ -1059,9 +1059,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
             // A running background or bulk-user request can yield, but a slow
             // SMB/decoder call never holds the dispatcher or a different lane.
-            if (workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or SchedulerWorkKind.DatabaseBackup ||
-                (workKind == SchedulerWorkKind.SourceProbe &&
-                 priority == SchedulerPriority.ManualAction))
+            if (priority < SchedulerPriority.Idle ||
+                workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or SchedulerWorkKind.DatabaseBackup)
             {
                 foreach (var lane in new[] { LaneBackground, LaneUserAction,
                              LaneManual, LaneManualScan, LaneManualBackup, LaneInitialImport })
