@@ -83,6 +83,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // All physical executor lanes participate in idle admission, including
     // read/thumbnail lanes that have no catalog-mutation counter.
     private readonly HashSet<WorkItem> _runningWork = new();
+    private bool _outstandingNonIdleAtLastReview;
     // Nested operations inherit their owning package across await/Dispatcher
     // continuations. A package must never await a child that the queue puts
     // behind another waiting package (dependency deadlock).
@@ -473,6 +474,48 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return unresolved;
     }
 
+    // Central dispatch reconciliation for durable state changes that do not
+    // pass through EnqueueAsync. The timer belongs to this scheduler; it is
+    // NOT a second task queue, status store, or independent priority policy.
+    private void ReconcilePersistedDispatch(DurablePackageJournal journal)
+    {
+        // SQLite must never be accessed under _gate: a pending catalog write
+        // may hold the database lock while awaiting a safe yield.
+        var higherWorkExists = journal.HasOutstandingNonIdleTasks();
+        List<CancellationTokenSource> toYield = [];
+        lock (_gate)
+        {
+            if (_disposed || _shutdown.IsCancellationRequested) return;
+            if (higherWorkExists)
+            {
+                for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
+                {
+                    var active = _runningPriorityJobs[lane];
+                    if (active is null ||
+                        active.Priority != SchedulerPriority.Idle ||
+                        active.YieldRequested) continue;
+                    active.YieldRequested = true;
+                    SetStateUnsafe(active, SchedulerJobState.YieldRequested);
+                    if (_runningYield[lane] is { } token)
+                        toYield.Add(token);
+                }
+            }
+            if (_outstandingNonIdleAtLastReview != higherWorkExists)
+            {
+                _outstandingNonIdleAtLastReview = higherWorkExists;
+                // When the final higher job is completed/canceled, P4 must
+                // wake even if no active worker happens to finish.
+                WakePendingWorkersUnsafe();
+            }
+        }
+        foreach (var yield in toYield)
+        {
+            // Never run cancellation callbacks under the scheduler lock.
+            try { _ = yield.CancelAsync(); }
+            catch (ObjectDisposedException) { }
+        }
+    }
+
     private async Task RetryDeferredPackagesAsync()
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
@@ -484,6 +527,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 if (journal is null) continue;
                 try
                 {
+                    // A queued/deferred P0-P3 package may enter the durable
+                    // journal without creating a new running WorkItem (for
+                    // example while restoring an offline NAS scan). Reconcile
+                    // the SAME global list continuously, including active P4.
+                    ReconcilePersistedDispatch(journal);
                     // A manual NAS scan was deferred because its source was
                     // offline. Do not wait through the exponential retry delay
                     // after that source is confirmed reachable again.
