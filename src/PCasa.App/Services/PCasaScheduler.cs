@@ -89,8 +89,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // behind another waiting package (dependency deadlock).
     private readonly AsyncLocal<WorkItem?> _currentPackage = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
+    // Worker semaphores are execution handoffs ONLY. No worker chooses work.
     private readonly SemaphoreSlim[] _signals =
         Enumerable.Range(0, LaneManualBackup + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
+    private readonly Queue<(WorkItem Item, CancellationTokenSource? Yield)>[] _assigned =
+        Enumerable.Range(0, LaneManualBackup + 1)
+            .Select(_ => new Queue<(WorkItem, CancellationTokenSource?)>()).ToArray();
+    private readonly int[] _laneCapacity = [1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1];
+    private readonly int[] _laneOccupied = new int[LaneManualBackup + 1];
+    private readonly SemaphoreSlim _controllerWake = new(0, 1);
+    private readonly Task _controller;
     // Track the dedicated first-import executor as well. Otherwise an
     // already-running initial scan never receives the scheduler's yield
     // cancellation when a new manual P0 package arrives.
@@ -175,6 +183,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         SourceAvailability = sourceAvailability ?? new SourceAvailabilityGate();
         // File reading is bounded. UI painting and hit testing never enter a lane.
+        _controller = Task.Run(ControlLoopAsync);
         _workers = new[]
         {
             Task.Run(() => RunAsync(LaneBackground)),
@@ -474,46 +483,114 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return unresolved;
     }
 
-    // Central dispatch reconciliation for durable state changes that do not
-    // pass through EnqueueAsync. The timer belongs to this scheduler; it is
-    // NOT a second task queue, status store, or independent priority policy.
-    private void ReconcilePersistedDispatch(DurablePackageJournal journal)
+    // The SINGLE continuously active decision maker. Worker threads do not
+    // pick, rank, preempt or interpret the durable task journal.
+    private async Task ControlLoopAsync()
     {
-        // SQLite must never be accessed under _gate: a pending catalog write
-        // may hold the database lock while awaiting a safe yield.
-        var higherWorkExists = journal.HasOutstandingNonIdleTasks();
-        List<CancellationTokenSource> toYield = [];
-        lock (_gate)
+        try
         {
-            if (_disposed || _shutdown.IsCancellationRequested) return;
-            if (higherWorkExists)
+            while (!_shutdown.IsCancellationRequested)
             {
-                for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
+                // Immediate wake on any mutation, PLUS a regular independent
+                // reconciliation: neither progress callbacks nor UI events
+                // are required to notice a different durable queue state.
+                await _controllerWake.WaitAsync(TimeSpan.FromMilliseconds(150),
+                    _shutdown.Token);
+                var durable = _durableJournal;
+                bool manualWaiting = false, nonIdleWaiting = false;
+                try
                 {
-                    var active = _runningPriorityJobs[lane];
-                    if (active is null ||
-                        active.Priority != SchedulerPriority.Idle ||
-                        active.YieldRequested) continue;
-                    active.YieldRequested = true;
-                    SetStateUnsafe(active, SchedulerJobState.YieldRequested);
-                    if (_runningYield[lane] is { } token)
-                        toYield.Add(token);
+                    if (durable is not null)
+                    {
+                        manualWaiting = durable.HasPendingEffectiveManualActions();
+                        nonIdleWaiting = durable.HasOutstandingNonIdleTasks();
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException)
+                {
+                    PCasaDiagnostics.Write("Scheduler.ControlRead", ex);
+                    // Never admit P4 on an unverified journal snapshot.
+                    nonIdleWaiting = true;
+                }
+                var cancel = new List<CancellationTokenSource>();
+                lock (_gate)
+                {
+                    if (_disposed) break;
+                    // Global rank, not per-lane callbacks, decides preemption.
+                    var highest = _pending.OrderBy(p => p.Priority)
+                        .ThenBy(p => p.QueueOrder).ThenBy(p => p.Id).FirstOrDefault();
+                    for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
+                    {
+                        var running = _runningPriorityJobs[lane];
+                        if (running is null || running.YieldRequested) continue;
+                        if (!((running.Priority == SchedulerPriority.Idle &&
+                               (nonIdleWaiting || _pending.Any(p =>
+                                   p.Priority < SchedulerPriority.Idle))) ||
+                              (highest is not null && Precedes(highest, running))))
+                            continue;
+                        running.YieldRequested = true;
+                        SetStateUnsafe(running, SchedulerJobState.YieldRequested);
+                        if (_runningYield[lane] is { } yield) cancel.Add(yield);
+                    }
+                    // Keep filling available bounded capacity in global rank
+                    // order. SelectNextJobUnsafe is the sole eligibility check.
+                    var available = true;
+                    while (available)
+                    {
+                        available = false;
+                        for (var lane = 0; lane <= LaneManualBackup; lane++)
+                        {
+                            if (_laneOccupied[lane] >= _laneCapacity[lane]) continue;
+                            var item = SelectNextJobUnsafe(lane,
+                                manualWaiting, nonIdleWaiting);
+                            if (item is null) continue;
+                            _pending.Remove(item);
+                            item.YieldRequested = false;
+                            _laneOccupied[lane]++;
+                            if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
+                            {
+                                if (lane == LaneUserAction) _catalogForegroundRunning++;
+                                if (lane is LaneManual or LaneManualScan)
+                                {
+                                    _catalogForegroundRunning++;
+                                    _catalogManualRunning++;
+                                }
+                                if (lane == LaneInteractive)
+                                {
+                                    _catalogForegroundRunning++;
+                                    _catalogInteractiveRunning++;
+                                }
+                            }
+                            if (lane == LaneManualSourceProbe)
+                            {
+                                _manualSourceProbeRunning++;
+                                _runningManualSourceProbe = item;
+                            }
+                            CancellationTokenSource? yieldRequest = null;
+                            if (lane <= LaneManual ||
+                                lane is LaneInitialImport or LaneManualScan or LaneManualBackup)
+                            {
+                                yieldRequest = new CancellationTokenSource();
+                                _runningPriorityJobs[lane] = item;
+                                _runningYield[lane] = yieldRequest;
+                            }
+                            _runningWork.Add(item);
+                            SetStateUnsafe(item, SchedulerJobState.Running);
+                            _assigned[lane].Enqueue((item, yieldRequest));
+                            _signals[lane].Release();
+                            available = true;
+                        }
+                    }
+                }
+                // Never execute cancellation callbacks under scheduler lock.
+                foreach (var yield in cancel)
+                {
+                    try { _ = yield.CancelAsync(); }
+                    catch (ObjectDisposedException) { }
                 }
             }
-            if (_outstandingNonIdleAtLastReview != higherWorkExists)
-            {
-                _outstandingNonIdleAtLastReview = higherWorkExists;
-                // When the final higher job is completed/canceled, P4 must
-                // wake even if no active worker happens to finish.
-                WakePendingWorkersUnsafe();
-            }
         }
-        foreach (var yield in toYield)
-        {
-            // Never run cancellation callbacks under the scheduler lock.
-            try { _ = yield.CancelAsync(); }
-            catch (ObjectDisposedException) { }
-        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }
 
     private async Task RetryDeferredPackagesAsync()
@@ -531,7 +608,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // journal without creating a new running WorkItem (for
                     // example while restoring an offline NAS scan). Reconcile
                     // the SAME global list continuously, including active P4.
-                    ReconcilePersistedDispatch(journal);
+                    SignalController();
                     // A manual NAS scan was deferred because its source was
                     // offline. Do not wait through the exponential retry delay
                     // after that source is confirmed reachable again.
@@ -1246,16 +1323,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // A scheduler state change never depends on which worker happened to
     // finish. Reconsider ALL pending jobs against the same global order.
     // Calling under _gate avoids lost wakeups between eligibility and sleep.
-    private void WakePendingWorkersUnsafe()
+    private void SignalController()
     {
         if (_shutdown.IsCancellationRequested) return;
-        var lanes = _pending
-            .Select(item => LaneFor(item.Priority, item.Kind))
-            .Distinct()
-            .ToArray();
-        foreach (var lane in lanes)
-            _signals[lane].Release();
+        try { _controllerWake.Release(); }
+        catch (SemaphoreFullException) { }
     }
+
+    private void WakePendingWorkersUnsafe() => SignalController();
 
     private async Task RunAsync(int lane)
     {
@@ -1264,63 +1339,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
             while (true)
             {
                 await _signals[lane].WaitAsync(_shutdown.Token);
-                // Inspect the durable P0 journal outside the scheduler lock:
-                // SQLite may briefly wait on a catalogue write. Background
-                // catalogue execution is the only work gated by this rule;
-                // scheduled source probes and manual/interactive jobs remain
-                // independent and responsive.
-                var persistedManualPending =
-                    (lane is LaneBackground or LaneInitialImport or LaneUserAction) &&
-                    _durableJournal?.HasPendingEffectiveManualActions() == true;
-                // Persisted deferred P0-P3 work remains an accepted job.
-                // Admission never treats a visibly WAITING job as absent.
-                // Read SQLite outside the scheduler lock.
-                var persistedNonIdle =
-                    lane == LaneBackground &&
-                    _durableJournal?.HasOutstandingNonIdleTasks() == true;
-                WorkItem? item;
-                CancellationTokenSource? yieldRequest = null;
+                WorkItem item;
+                CancellationTokenSource? yieldRequest;
                 lock (_gate)
                 {
-                    // The global list is the only source of execution rank:
-                    // (priority, queue order, admission id). Worker lanes are
-                    // CAPACITY, not competing job queues or priority systems.
-                    item = SelectNextJobUnsafe(lane, persistedManualPending,
-                        persistedNonIdle);
-                    if (item is not null)
-                    {
-                        _pending.Remove(item);
-                        item.YieldRequested = false;
-                        if (item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan)
-                        {
-                            if (lane == LaneUserAction) _catalogForegroundRunning++;
-                            if (lane is LaneManual or LaneManualScan)
-                            {
-                                _catalogForegroundRunning++;
-                                _catalogManualRunning++;
-                            }
-                            if (lane == LaneInteractive)
-                            {
-                                _catalogForegroundRunning++;
-                                _catalogInteractiveRunning++;
-                            }
-                        }
-                        if (lane == LaneManualSourceProbe)
-                        {
-                            _manualSourceProbeRunning++;
-                            _runningManualSourceProbe = item;
-                        }
-                        if (lane <= LaneManual || lane is LaneInitialImport or LaneManualScan or LaneManualBackup)
-                        {
-                            yieldRequest = new CancellationTokenSource();
-                            _runningPriorityJobs[lane] = item;
-                            _runningYield[lane] = yieldRequest;
-                        }
-                        _runningWork.Add(item);
-                        SetStateUnsafe(item, SchedulerJobState.Running);
-                    }
+                    if (_assigned[lane].Count == 0) continue; // stale signal
+                    (item, yieldRequest) = _assigned[lane].Dequeue();
                 }
-                if (item is null) continue;
                 // The presenter must learn that the worker actually started,
                 // even if the first SQLite/SMB/ExifTool call is still blocked
                 // and has not yet reached its first ReportProgress boundary.
@@ -1388,6 +1413,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         lock (_gate)
                         {
                             _runningWork.Remove(item);
+                            _laneOccupied[lane]--;
                             // Every completed, canceled or yielded operation
                             // changes the ONE global eligibility decision.
                             // Wake each pending lane once; the scheduler will
