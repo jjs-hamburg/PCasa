@@ -709,12 +709,21 @@ internal static class GalleryFileOperationFlow
                         string.Equals(job.CurrentPath, firstQueuedSource,
                             StringComparison.OrdinalIgnoreCase)),
                     "The first manual move never reached its blocked source.");
+                // Capture the first package's identity before submitting B.
+                // A valid LIFO controller can start B immediately; requiring
+                // an observable Queued snapshot would reject that correct
+                // behavior when the first package yields quickly.
+                var existingTransferIds = scheduler.Snapshot()
+                    .Where(job => job.Key.StartsWith("gallery:file-transfer:",
+                        StringComparison.Ordinal))
+                    .Select(job => job.Id).ToHashSet();
                 secondQueuedTransfer = StartTransfer(window,
                     [secondQueuedSource], third, move: true);
                 Until(window, () => scheduler.Snapshot().Any(job =>
-                        job.Key.StartsWith("gallery:file-transfer:") &&
-                        job.State == SchedulerJobState.Queued),
-                    "The second manual move was silently discarded before the scheduler.");
+                        job.Key.StartsWith("gallery:file-transfer:",
+                            StringComparison.Ordinal) &&
+                        !existingTransferIds.Contains(job.Id)),
+                    "The second manual move was never accepted by the scheduler.");
             }
             try
             {
