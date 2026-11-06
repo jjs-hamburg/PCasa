@@ -184,7 +184,7 @@ public partial class MainWindow
                     return new ImageTagRepository(_database).SearchImageIds(query);
                 }, () => version == _tagSearchVersion,
                 cancellationToken: cancellationToken,
-                workKind: SchedulerWorkKind.CatalogRead);
+                workKind: SchedulerWorkKind.BrowseRead);
         }
         cancellationToken.ThrowIfCancellationRequested();
         if (version != _tagSearchVersion ||
@@ -373,7 +373,7 @@ public partial class MainWindow
                 }
                 return original;
             }, () => revision == _tagSidebarRefreshVersion,
-                workKind: SchedulerWorkKind.CatalogRead);
+                workKind: SchedulerWorkKind.BrowseRead);
             if (revision != _tagSidebarRefreshVersion || _sidebarMode != "Tags") return;
             _tagSidebarCountImageIds = selected.OrderBy(id => id).ToArray();
             _tagSidebarOriginalTags = counts;
@@ -468,7 +468,7 @@ public partial class MainWindow
                     token.ThrowIfCancellationRequested();
                     return new ImageTagRepository(_database).GetRecentTags();
                 }, () => revision == _quickTagRefreshVersion,
-                workKind: SchedulerWorkKind.CatalogRead);
+                workKind: SchedulerWorkKind.BrowseRead);
         }
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { PCasaDiagnostics.Write("Tags.Quick", ex); return; }
@@ -1060,7 +1060,7 @@ public partial class MainWindow
                     .SuggestExistingTags(query, 8, token),
                 () => version == _tagSuggestionVersion,
                 cancellationToken: cancellation.Token,
-                workKind: SchedulerWorkKind.CatalogRead);
+                workKind: SchedulerWorkKind.BrowseRead);
             if (cancellation.IsCancellationRequested ||
                 version != _tagSuggestionVersion ||
                 !string.Equals(TagEntryBox.Text.Trim(), query,
