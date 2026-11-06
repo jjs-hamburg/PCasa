@@ -494,6 +494,7 @@ public partial class MainWindow
                 }
             }
             _backgroundFirstMonitorSnapshot = false;
+            _scheduler.NotifyTaskViewChanged();
             if (idleCandidate == 0L && dueRootReviews.Count > 0 &&
                 reachableDue > 0 && idleSlotFree &&
                 _backgroundPending.Count == 0)
@@ -1042,6 +1043,7 @@ public partial class MainWindow
         _cacheMaintenanceCancellation?.Cancel();
         _backgroundDebounceTimer?.Stop();
         _backgroundDebounceTimer?.Start();
+        _scheduler.NotifyTaskViewChanged();
     }
 
     private async void BackgroundDebounceTimer_Tick(object? sender, EventArgs e)
@@ -1665,6 +1667,7 @@ public partial class MainWindow
             _backgroundWorkerRunning = false;
             _isScanning = _manualScanRunning;
             UpdateManualScanControls();
+            _scheduler.NotifyTaskViewChanged();
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
