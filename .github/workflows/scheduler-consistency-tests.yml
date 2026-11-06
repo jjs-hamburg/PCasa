@@ -54,6 +54,11 @@ jobs:
       - name: Verify selected GPS overlay at 6,000 photos and across continents
         shell: pwsh
         run: node tests/gps-map-overlay.test.cjs
+      - name: Verify startup gallery rendering beside blocked durable P0
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --startup-browse-probe
       - name: Exercise real WPF gallery copy and move on monitored folders
         shell: pwsh
         run: |
