@@ -509,6 +509,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     nonIdleWaiting = true;
                 }
                 var cancel = new List<CancellationTokenSource>();
+                var viewChanged = false;
                 lock (_gate)
                 {
                     if (_disposed) break;
@@ -529,6 +530,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             continue;
                         running.YieldRequested = true;
                         SetStateUnsafe(running, SchedulerJobState.YieldRequested);
+                        viewChanged = true;
                         if (_runningYield[lane] is { } yield) cancel.Add(yield);
                     }
                     // Keep filling available bounded capacity in global rank
@@ -575,12 +577,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             }
                             _runningWork.Add(item);
                             SetStateUnsafe(item, SchedulerJobState.Running);
+                            viewChanged = true;
                             _assigned[lane].Enqueue((item, yieldRequest));
                             _signals[lane].Release();
                             available = true;
                         }
                     }
                 }
+                // Publish only real dispatch/yield changes, outside the lock.
+                if (viewChanged) NotifyTaskViewChanged();
                 // Never execute cancellation callbacks under scheduler lock.
                 foreach (var yield in cancel)
                 {
