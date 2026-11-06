@@ -3651,6 +3651,13 @@ internal static class Program
         }
         if (cache.GetIndex(tier).Count != 0)
             throw new Exception("Test setup did not remove the gallery thumbnail.");
+        var gallery = cache.GetGalleryIndex(tier);
+        if (gallery.Count != 1 ||
+            gallery[0].ImageId <= 0 ||
+            gallery[0].ByteLength != 0 ||
+            string.IsNullOrWhiteSpace(gallery[0].LegacyThumbnailPath))
+            throw new Exception(
+                "A committed image vanished from the gallery while its packed thumbnail was missing.");
         if (cache.CountMissing(profile) == 0)
             throw new Exception("A missing thumbnail without a queued job is invisible to the repair mechanism.");
     }
