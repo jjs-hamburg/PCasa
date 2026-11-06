@@ -58,17 +58,23 @@ public sealed class BrowseCacheRepository
         return result;
     }
 
+    // Only fully valid packed cache entries (used by cache verification/tests).
     public IReadOnlyList<BrowseThumbnailIndexEntry> GetIndex(int tier)
-        => ReadIndex(tier, imageId: null);
+        => ReadIndex(tier, imageId: null, includeMissing: false);
+
+    // The gallery shows ALL committed images. A missing packed tier uses the
+    // existing local thumbnail until the ordinary cache builder completes.
+    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(int tier)
+        => ReadIndex(tier, imageId: null, includeMissing: true);
 
     // A completed file transfer needs ONE prepared image, not a reload of a
     // half-million-entry gallery. Uses the SAME index SQL and cache validity
     // rules as the normal full projection.
     public BrowseThumbnailIndexEntry? GetIndexEntry(int tier, long imageId)
-        => ReadIndex(tier, imageId).FirstOrDefault();
+        => ReadIndex(tier, imageId, includeMissing: false).FirstOrDefault();
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
-        int tier, long? imageId)
+        int tier, long? imageId, bool includeMissing)
     {
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
@@ -97,7 +103,8 @@ public sealed class BrowseCacheRepository
                 i.thumbnail_path
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
-            LEFT JOIN thumbnail_entries te ON te.image_id = i.id
+            """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
+                 thumbnail_entries te ON te.image_id = i.id
                 AND te.tier = $tier
                 AND te.source_modified_utc_ticks = i.modified_utc_ticks
             LEFT JOIN image_exif x ON x.image_id = i.id
