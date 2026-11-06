@@ -281,6 +281,23 @@ public sealed class FolderScanner
                     fileCursors[directory] = cursor;
         }
 
+        // A P0 first-pass scan consults the existing LOCAL catalog once.
+        // A completed directory is still enumerated for NEW paths only;
+        // already-indexed originals never go through metadata/decode again.
+        // P4 full verification deliberately does not use this shortcut.
+        HashSet<string>? indexedFirstPassPaths = null;
+        if (preferFirstPass && specificFile is null)
+        {
+            indexedFirstPassPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using var snapshotDb = _catalog.Database.OpenConnection();
+            using var known = snapshotDb.CreateCommand();
+            known.CommandText = "SELECT local_path FROM images WHERE monitored_folder_id=$root;";
+            known.Parameters.AddWithValue("$root", folder.Id);
+            using var knownReader = known.ExecuteReader();
+            while (knownReader.Read())
+                indexedFirstPassPaths.Add(knownReader.GetString(0));
+        }
+
         if (persistentScan && specificFile is null)
         {
             // A restart log must identify the actual persisted checkpoint,
@@ -374,6 +391,7 @@ public sealed class FolderScanner
                     scanRoot, recursive, exclusions, CancellationToken.None,
                     completedDirectories,
                     fileCursors,
+                    indexedFirstPassPaths,
                     persistentScan
                         ? resume is null
                             ? DirectoryCompleted
@@ -817,6 +835,7 @@ public sealed class FolderScanner
         CancellationToken token,
         IReadOnlySet<string>? completedDirectories = null,
         IReadOnlyDictionary<string, string>? fileCursors = null,
+        IReadOnlySet<string>? alreadyIndexedPaths = null,
         Action<string>? onDirectoryComplete = null)
     {
         var pending = new Stack<string>();
@@ -838,7 +857,26 @@ public sealed class FolderScanner
             if (FolderExclusionRules.IsExcluded(directory, exclusions)) continue;
 
             var previouslyCompleted = completedDirectories?.Contains(directory) == true;
-            if (!previouslyCompleted)
+            if (previouslyCompleted && alreadyIndexedPaths is not null)
+            {
+                // Completion means the expensive first import finished here;
+                // not that future new files should be invisible to P0.
+                // Compare directory entries to the LOCAL catalog snapshot.
+                // No existing file is opened, decoded or counted as checked.
+                string[] files;
+                try { files = Directory.GetFiles(directory, "*", options); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new IOException($"Verzeichnis konnte nicht vollständig gelesen werden: {directory}", ex);
+                }
+                foreach (var file in files)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!alreadyIndexedPaths.Contains(file))
+                        yield return file;
+                }
+            }
+            else if (!previouslyCompleted)
             {
                 // First-import filename cursors need deterministic sorting.
                 // Ordinary reconciliation does not: stream NAS directory entries
