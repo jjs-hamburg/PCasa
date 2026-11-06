@@ -28,6 +28,29 @@ public sealed class PackedThumbnailReader : IDisposable
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
+        // The gallery catalog includes every committed photo, even if its
+        // packed browse tier is still awaiting background conversion.
+        // Read the existing local legacy thumbnail for that image instead.
+        // Never synchronously fetch a NAS original on the WPF dispatcher.
+        if (entry.ByteLength <= 0 || string.IsNullOrWhiteSpace(entry.PackFile))
+        {
+            if (string.IsNullOrWhiteSpace(entry.LegacyThumbnailPath) ||
+                !File.Exists(entry.LegacyThumbnailPath))
+                return null;
+            using var fallback = new FileStream(entry.LegacyThumbnailPath,
+                FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            cancellationToken.ThrowIfCancellationRequested();
+            var legacy = new BitmapImage();
+            legacy.BeginInit();
+            legacy.CacheOption = BitmapCacheOption.OnLoad;
+            legacy.DecodePixelWidth = Math.Max(48, entry.Tier);
+            legacy.StreamSource = fallback;
+            legacy.EndInit();
+            legacy.Freeze();
+            return legacy;
+        }
+
         var handle = _handles.GetOrAdd(entry.PackFile, OpenPack);
         var bytes = new byte[entry.ByteLength];
         var totalRead = 0;
