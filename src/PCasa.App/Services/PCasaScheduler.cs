@@ -78,6 +78,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private Action<string, Task>? _durableRestoreObserver;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
+    // All physical executor lanes participate in idle admission, including
+    // read/thumbnail lanes that have no catalog-mutation counter.
+    private readonly HashSet<WorkItem> _runningWork = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
         Enumerable.Range(0, LaneManualBackup + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
@@ -1199,7 +1202,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // are not in the runnable queue and cannot starve P4.
                     var idleHasRunnablePredecessor = candidate is not null &&
                         candidate.Priority == SchedulerPriority.Idle &&
-                        _pending.Any(other => other.Priority < SchedulerPriority.Idle);
+                        (_pending.Any(other => other.Priority < SchedulerPriority.Idle) ||
+                         _runningWork.Any(other => other.Priority < SchedulerPriority.Idle));
                     var blockedByNativeDrag = _nativeDragInteractionCount > 0 &&
                         lane is LaneBackground or LaneInitialImport or
                             LaneUserAction or LaneSourceProbe;
@@ -1278,6 +1282,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             _runningPriorityJobs[lane] = item;
                             _runningYield[lane] = yieldRequest;
                         }
+                        _runningWork.Add(item);
                         SetStateUnsafe(item, SchedulerJobState.Running);
                     }
                 }
@@ -1345,6 +1350,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     {
                         lock (_gate)
                         {
+                            _runningWork.Remove(item);
                             // A global move can strand an earlier rank on a
                             // different worker. Wake all pending executors
                             // when its predecessor finishes or yields.
