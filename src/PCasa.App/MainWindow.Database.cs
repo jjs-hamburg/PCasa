@@ -48,15 +48,18 @@ public partial class MainWindow
         });
         try
         {
-            // The SINGLE scheduler is authoritative for queued/running
-            // status. P2 backup waits for P0 manual writes, but the
-            // management dialog may close immediately after admission.
-            var execution = _scheduler.EnqueueAsync(
-                key, SchedulerPriority.UserAction,
-                token => Task.Run(() =>
-                    new DatabaseMaintenance().Backup(destination, progress, token), token),
+            // The user's backup click is a P0 manual PACKAGE, not a P2
+            // maintenance request. Its own scheduler capacity lets it begin
+            // even while a NAS directory scan is stuck in native I/O.
+            // DatabaseMaintenance writes a temporary archive and publishes
+            // the destination only after a complete, validated backup.
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(token => Task.Run(() =>
+                new DatabaseMaintenance().Backup(destination, progress, token), token));
+            var execution = _scheduler.EnqueuePackageAsync(
+                package, SchedulerPriority.ManualAction,
                 cancellationToken: cancellation.Token,
-                workKind: SchedulerWorkKind.Catalog);
+                workKind: SchedulerWorkKind.DatabaseBackup);
             _databaseBackupTask = execution;
             _taskManagerWindow?.RequestRefresh();
             _ = CompleteDatabaseBackupAsync(
