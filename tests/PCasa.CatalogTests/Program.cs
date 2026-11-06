@@ -64,6 +64,7 @@ internal static class Program
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("P4 catalog verify yields to every nonidle task and resumes after work", SchedulerIdleVerifyOnlyWhenOtherWorkFinished, failures);
+        Run("P4 never starts while an accepted NAS P0 package remains deferred", DeferredP0BlocksP4Admission, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
@@ -654,6 +655,56 @@ internal static class Program
             throw new Exception(
                 "Migrating old 314/828 recovery lost a pending intent, " +
                 "changed LIFO order, or discarded its persisted identity.");
+    }
+
+    // Actual user-visible failure: a deferred NAS scan says "Wartet",
+    // yet the taskmanager reports that P4 catalog verification is running.
+    // The *same durable journal* must participate in admission.
+    private static void DeferredP0BlocksP4Admission()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (db, root, _) = sandbox.Prepare();
+            var journal = new DurablePackageJournal(db);
+            const string key = "test:manual-nas-deferred";
+            journal.Put(key, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = root.LocalPath,
+                    MonitoredRootId = root.Id
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            journal.Defer(key, 0, "Quelle vorübergehend offline",
+                TimeSpan.FromMinutes(30));
+            if (!journal.HasOutstandingNonIdleTasks())
+                throw new Exception("P0 deferred package vanished from scheduler's global list.");
+
+            await using var scheduler = new PCasaScheduler();
+            scheduler.EnableDurablePackages(db);
+            var idleStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var idle = scheduler.EnqueueAsync("test:verify-idle",
+                SchedulerPriority.Idle, _ =>
+                {
+                    idleStarted.TrySetResult();
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await Task.Delay(200);
+            if (idleStarted.Task.IsCompleted)
+                throw new Exception("P4 started while NAS P0 was visibly waiting.");
+
+            if (!journal.Cancel(key))
+                throw new Exception("Could not dismiss deferred test package.");
+            // The next ordinary scheduler state change wakes ALL job lanes.
+            await scheduler.EnqueueAsync("test:interactive-event",
+                SchedulerPriority.Interactive, _ => Task.CompletedTask,
+                workKind: SchedulerWorkKind.CatalogRead)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            await idle.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!idleStarted.Task.IsCompleted)
+                throw new Exception("P4 stayed blocked after last nonidle job finished.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void SchedulerIdleVerifyOnlyWhenOtherWorkFinished()
