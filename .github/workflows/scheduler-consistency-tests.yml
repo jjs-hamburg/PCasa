@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - scheduler-consistency
+      - pre-chat-restore
   workflow_dispatch:
 
 permissions:
