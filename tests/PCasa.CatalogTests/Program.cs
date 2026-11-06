@@ -3667,6 +3667,12 @@ internal static class Program
             string.IsNullOrWhiteSpace(gallery[0].LegacyThumbnailPath))
             throw new Exception(
                 "A committed image vanished from the gallery while its packed thumbnail was missing.");
+        if (File.Exists(gallery[0].LegacyThumbnailPath))
+        {
+            using var reader = new PackedThumbnailReader();
+            if (reader.Load(gallery[0]) is null)
+                throw new Exception("Fallback thumbnail could not be decoded.");
+        }
         if (cache.CountMissing(profile) == 0)
             throw new Exception("A missing thumbnail without a queued job is invisible to the repair mechanism.");
     }
