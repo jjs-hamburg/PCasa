@@ -100,7 +100,7 @@ public sealed class BrowseCacheRepository
                 x.date_time_original,
                 i.width,
                 i.height,
-                i.thumbnail_path
+                CASE WHEN te.image_id IS NULL THEN i.thumbnail_path ELSE NULL END
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
             """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
