@@ -545,7 +545,8 @@ public partial class MainWindow
                         !File.Exists(thumbnailPath))
                         return null;
                     return new ThumbnailImageLoader().Load(thumbnailPath, 92, token);
-                }, workKind: SchedulerWorkKind.ThumbnailRead);
+                }, workKind: SchedulerWorkKind.ThumbnailRead,
+                parentKey: jobKey);
             if (!Dispatcher.HasShutdownStarted &&
                 _visibleManualActiveKey == jobKey)
                 _visibleManualWindow?.ShowManualThumbnail(source, bitmap);
