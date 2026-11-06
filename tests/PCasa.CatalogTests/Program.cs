@@ -667,6 +667,7 @@ internal static class Program
             using var sandbox = new Sandbox();
             var (db, root, _) = sandbox.Prepare();
             var journal = new DurablePackageJournal(db);
+            _ = new SchedulerTaskOrderStore(db);
             const string key = "test:manual-nas-deferred";
             journal.Put(key, "manual-folder-scan-v1",
                 System.Text.Json.JsonSerializer.Serialize(new
