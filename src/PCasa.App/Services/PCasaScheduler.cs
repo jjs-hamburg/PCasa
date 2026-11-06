@@ -1221,6 +1221,20 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return candidate;
     }
 
+    // A scheduler state change never depends on which worker happened to
+    // finish. Reconsider ALL pending jobs against the same global order.
+    // Calling under _gate avoids lost wakeups between eligibility and sleep.
+    private void WakePendingWorkersUnsafe()
+    {
+        if (_shutdown.IsCancellationRequested) return;
+        var lanes = _pending
+            .Select(item => LaneFor(item.Priority, item.Kind))
+            .Distinct()
+            .ToArray();
+        foreach (var lane in lanes)
+            _signals[lane].Release();
+    }
+
     private async Task RunAsync(int lane)
     {
         try
@@ -1349,13 +1363,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         lock (_gate)
                         {
                             _runningWork.Remove(item);
-                            // A global move can strand an earlier rank on a
-                            // different worker. Wake all pending executors
-                            // when its predecessor finishes or yields.
-                            if (_userDispatchOrder.Count > 0)
-                                for (var wake=0;wake<_signals.Length;wake++)
-                                    if (_pending.Any(w => LaneFor(w.Priority,w.Kind)==wake))
-                                        _signals[wake].Release();
+                            // Every completed, canceled or yielded operation
+                            // changes the ONE global eligibility decision.
+                            // Wake each pending lane once; the scheduler will
+                            // choose the next ranked job, never the worker.
+                            WakePendingWorkersUnsafe();
                             if ((lane <= LaneManual || lane is LaneInitialImport or LaneManualScan or LaneManualBackup) &&
                                 ReferenceEquals(_runningPriorityJobs[lane], item))
                             {
@@ -1382,38 +1394,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                     _catalogInteractiveRunning--;
                                 }
                             }
-                            // A blocked lane consumed a signal without taking
-                            // a job. Wake it when higher priority work drains.
-                            if (!_shutdown.IsCancellationRequested)
-                            {
-                                if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManual))
-                                    _signals[LaneManual].Release();
-                                if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManualScan))
-                                    _signals[LaneManualScan].Release();
-                                if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManualBackup))
-                                    _signals[LaneManualBackup].Release();
-                                if (_pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneManualSourceProbe))
-                                    _signals[LaneManualSourceProbe].Release();
-                                if (_catalogInteractiveRunning == 0 &&
-                                    _catalogManualRunning == 0 &&
-                                    !HasManualSourceProbeUnsafe() &&
-                                    !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
-                                        x.Priority <= SchedulerPriority.Interactive) &&
-                                    _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneUserAction))
-                                    _signals[LaneUserAction].Release();
-                                if (_catalogForegroundRunning == 0 &&
-                                    !HasManualSourceProbeUnsafe() &&
-                                    !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
-                                        x.Priority <= SchedulerPriority.UserAction) &&
-                                    _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneBackground))
-                                    _signals[LaneBackground].Release();
-                                if (_catalogForegroundRunning == 0 &&
-                                    !HasManualSourceProbeUnsafe() &&
-                                    !_pending.Any(x => (x.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan) &&
-                                        x.Priority <= SchedulerPriority.UserAction) &&
-                                    _pending.Any(x => LaneFor(x.Priority, x.Kind) == LaneInitialImport))
-                                    _signals[LaneInitialImport].Release();
-                            }
+
                         }
                     }
                 }
