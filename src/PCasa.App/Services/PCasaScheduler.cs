@@ -804,6 +804,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // state after the final checkpoint, without any second queue.
             if (!_shutdown.IsCancellationRequested)
                 WakeDeferredAutomaticWork();
+            // The worker already announced its final state, but the durable
+            // journal commits completion/defer only in this continuation.
+            // Notify after that commit so the task view never stays stale.
+            NotifyTaskViewChanged();
         }
     }
 
