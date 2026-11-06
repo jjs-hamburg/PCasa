@@ -407,14 +407,25 @@ public partial class MainWindow
                 _resume.CacheRepaired));
             try
             {
+                // An unfinished first pass resumes from its committed frontier.
+                // After the root itself is complete and no partial file cursor
+                // remains, a NEW user-initiated scan must check files again.
+                // Otherwise it returns 'completed: 0 checked' forever and
+                // never discovers photos added after the first pass.
+                var continueFirstPass = !requirePendingInitialImport;
+                if (continueFirstPass)
+                {
+                    var frontier = owner._folderRepository.GetDirectoryFirstPass(
+                        folder.Id, currentSource.Value.Generation, directory);
+                    if (frontier.Completed.Contains(directory) &&
+                        frontier.Cursors.Count == 0)
+                        continueFirstPass = false;
+                }
                 Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    // Manual reads are continuation-first. Complete directories
-                    // stay confirmed across different scan jobs; old and changed
-                    // photos belong to later low-priority reconciliation.
-                    preferFirstPass: !requirePendingInitialImport);
+                    preferFirstPass: continueFirstPass);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)
