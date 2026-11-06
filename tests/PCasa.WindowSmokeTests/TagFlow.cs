@@ -1816,9 +1816,45 @@ internal static class TagFlow
             selected.Clear();
             foreach (var imageId in editorIds) selected.Add(imageId);
             surface.SetSelection(selected);
-            sidebarButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, sidebarButton));
-            Until(window, () => window.FindName("TagSidebar") is Grid sidebar &&
-                sidebar.IsVisible, "Tag sidebar did not open.");
+            // Regression: an active manual P0 source scan must not starve
+            // visible tag reads. Those are read-only UI projections.
+            var taskScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!.GetValue(window)!;
+            var blockedP0Started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseBlockedP0 = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockedP0 = taskScheduler.EnqueueAsync(
+                "test:tags-visible-during-p0", SchedulerPriority.ManualAction,
+                async _ =>
+                {
+                    blockedP0Started.TrySetResult();
+                    await releaseBlockedP0.Task;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                Until(window, () => blockedP0Started.Task.IsCompleted,
+                    "Manual P0 test package was not admitted.");
+                sidebarButton.RaiseEvent(
+                    new RoutedEventArgs(Button.ClickEvent, sidebarButton));
+                Until(window, () => window.FindName("TagSidebar") is Grid sidebar &&
+                    sidebar.IsVisible, "Tag sidebar did not open.");
+                Until(window, () => tagRows.Children.OfType<DockPanel>()
+                    .Any(row => row.Children.OfType<TextBlock>()
+                        .Any(label => label.Text.Contains("roma",
+                            StringComparison.OrdinalIgnoreCase))),
+                    "Selected image tags were starved by a running P0 scan.");
+            }
+            finally
+            {
+                releaseBlockedP0.TrySetResult();
+            }
+            Until(window, () => blockedP0.IsCompleted,
+                "Blocked P0 test package did not finish after release.");
+            Console.WriteLine(
+                "PASS: Tag sidebar renders existing keywords beside active P0.");
             tagInput.Text = editableTag;
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
             var tagOk = (Button?)window.FindName("TagDraftOkButton")
