@@ -1155,7 +1155,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (_pending.Any(other => !ReferenceEquals(other, candidate) &&
                 Precedes(other, candidate)))
             return null;
-        if (_runningWork.Any(active => Precedes(active, candidate)))
+        // Manual P0 packages form an actual LIFO interruption stack.
+        // P1-P3 may run on independent read/executor capacity while an
+        // older higher-priority operation is already in flight. P4 is
+        // explicitly stricter and was checked above against ALL running jobs.
+        if (candidate.Priority == SchedulerPriority.ManualAction &&
+            _runningWork.Any(active =>
+                active.Priority == SchedulerPriority.ManualAction &&
+                Precedes(active, candidate)))
             return null;
 
         // Journal recovery may have an accepted P0 package not yet copied
