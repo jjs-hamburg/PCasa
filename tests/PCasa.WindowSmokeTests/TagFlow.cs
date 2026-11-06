@@ -219,6 +219,38 @@ internal static class TagFlow
             var original = surface.CaptureImageAnchor(scroller.VerticalOffset)
                 ?? throw new Exception("Cannot remember original photo.");
 
+            // Passive catalog/section reflow must not turn a saved image at
+            // the end of the gallery into a scroll-to-zero navigation.
+            var passiveRefresh = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshBrowseGalleryAsync",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var savedOffset = scroller.VerticalOffset;
+            var layoutReload = (Task)passiveRefresh.Invoke(
+                window, [true, false, false])!;
+            Until(window, () => layoutReload.IsCompleted,
+                "Passive gallery reload never completed.");
+            layoutReload.GetAwaiter().GetResult();
+            var afterReload = surface.CaptureImageAnchor(scroller.VerticalOffset);
+            if (afterReload is null ||
+                afterReload.Value.ImageId != original.ImageId ||
+                Math.Abs(scroller.VerticalOffset - savedOffset) > 5)
+                throw new Exception(
+                    "Passive gallery reload jumped away from the previously visible photo.");
+            var rebuildTree = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshFolderTree",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            rebuildTree.Invoke(window, [true]);
+            window.Dispatcher.Invoke(() => { },
+                DispatcherPriority.ContextIdle);
+            afterReload = surface.CaptureImageAnchor(scroller.VerticalOffset);
+            if (afterReload is null || afterReload.Value.ImageId != original.ImageId)
+                throw new Exception(
+                    "Programmatic folder-tree rebuild displaced the gallery.");
+            Console.WriteLine(
+                "PASS: Passive catalog refresh and tree rebuild preserve a nonzero gallery anchor.");
+
             // ScrollChanged normally synchronizes tree selection to the album.
             // Explicitly choose the parent AFTER scrolling so this test
             // captures an intentional parent-folder focus before searching.
