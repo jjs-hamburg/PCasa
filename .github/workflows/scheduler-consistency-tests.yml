@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - scheduler-consistency
+      - gallery-recovery-baseline
   workflow_dispatch:
 
 permissions:
