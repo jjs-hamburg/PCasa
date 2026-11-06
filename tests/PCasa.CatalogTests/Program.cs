@@ -64,6 +64,7 @@ internal static class Program
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("P4 catalog verify yields to every nonidle task and resumes after work", SchedulerIdleVerifyOnlyWhenOtherWorkFinished, failures);
+        Run("Native drag interrupts background only through the central controller", NativeDragYieldIsControllerOwned, failures);
         Run("P4 never starts while an accepted NAS P0 package remains deferred", DeferredP0BlocksP4Admission, failures);
         Run("Newly deferred NAS P0 interrupts an already running P4 verification", DeferredP0PreemptsAlreadyRunningP4, failures);
         Run("Manual P0 package may await nested read while older P0 is queued", NestedPackageCatalogReadDoesNotDeadlockLifo, failures);
@@ -769,6 +770,52 @@ internal static class Program
             await idle.WaitAsync(TimeSpan.FromSeconds(8));
             if (attempts != 2)
                 throw new Exception("P4 lost its resumable job identity.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void NativeDragYieldIsControllerOwned()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var initial = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumed = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var bg = scheduler.EnqueueAsync("test:native-drag-background",
+                SchedulerPriority.Background, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        initial.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    else resumed.TrySetResult();
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await initial.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using (scheduler.BeginNativeDragInteraction())
+            {
+                var until = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+                while (DateTime.UtcNow < until &&
+                       !scheduler.Snapshot().Any(x =>
+                           x.Key == "test:native-drag-background" &&
+                           x.State is SchedulerJobState.YieldRequested or
+                               SchedulerJobState.Queued))
+                    await Task.Delay(25);
+                if (!scheduler.Snapshot().Any(x =>
+                    x.Key == "test:native-drag-background" &&
+                    x.State is SchedulerJobState.YieldRequested or
+                        SchedulerJobState.Queued))
+                    throw new Exception("Controller did not preempt background on native drag.");
+                if (resumed.Task.IsCompleted)
+                    throw new Exception("Background resumed before the drag ended.");
+            }
+            await resumed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await bg.WaitAsync(TimeSpan.FromSeconds(5));
+            if (attempts != 2)
+                throw new Exception("Controller lost background job continuity.");
         }
         Check().GetAwaiter().GetResult();
     }
