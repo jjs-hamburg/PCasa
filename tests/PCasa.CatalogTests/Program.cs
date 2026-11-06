@@ -672,6 +672,8 @@ internal static class Program
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var childStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
+            var uiChildStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             var resumedOlder = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var attempts = 0;
@@ -706,8 +708,26 @@ internal static class Program
                             parentKey: "p0:newer-transfer"));
                     }
                     await dependent;
+                    // A separate WPF callback that has lost AsyncLocal still
+                    // becomes an owned publication step via the explicit scope.
+                    Task uiDependent;
+                    using (ExecutionContext.SuppressFlow())
+                    {
+                        uiDependent = Task.Run(() =>
+                            scheduler.ExecuteDependentStepAsync(
+                                "p0:newer-transfer",
+                                () => scheduler.EnqueueAsync(
+                                    "p1:gallery-publish-from-dispatcher",
+                                    SchedulerPriority.Interactive, _ =>
+                                    {
+                                        uiChildStarted.TrySetResult();
+                                        return Task.CompletedTask;
+                                    }, workKind: SchedulerWorkKind.CatalogRead)));
+                    }
+                    await uiDependent;
                 }, workKind: SchedulerWorkKind.Catalog);
             await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await uiChildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await newer.WaitAsync(TimeSpan.FromSeconds(5));
             await older.WaitAsync(TimeSpan.FromSeconds(5));
             if (!resumedOlder.Task.IsCompleted || attempts != 2)
