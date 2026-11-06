@@ -77,12 +77,12 @@ public sealed class BrowseCacheRepository
             SELECT
                 i.id,
                 i.photo_folder_id,
-                te.tier,
-                te.pack_file,
-                te.byte_offset,
-                te.byte_length,
-                te.pixel_width,
-                te.pixel_height,
+                COALESCE(te.tier, $tier),
+                COALESCE(te.pack_file, ''),
+                COALESCE(te.byte_offset, 0),
+                COALESCE(te.byte_length, 0),
+                COALESCE(te.pixel_width, i.width),
+                COALESCE(te.pixel_height, i.height),
                 i.file_name,
                 CASE WHEN x.gps_latitude IS NOT NULL AND x.gps_longitude IS NOT NULL THEN 1 ELSE 0 END,
                 CASE WHEN t.keywords IS NOT NULL AND LENGTH(TRIM(t.keywords)) > 0 THEN 1 ELSE 0 END,
@@ -93,17 +93,19 @@ public sealed class BrowseCacheRepository
                 i.created_utc_ticks,
                 x.date_time_original,
                 i.width,
-                i.height
+                i.height,
+                i.thumbnail_path
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
-            INNER JOIN thumbnail_entries te ON te.image_id = i.id
+            LEFT JOIN thumbnail_entries te ON te.image_id = i.id
+                AND te.tier = $tier
+                AND te.source_modified_utc_ticks = i.modified_utc_ticks
             LEFT JOIN image_exif x ON x.image_id = i.id
                 AND x.source_modified_utc_ticks = i.modified_utc_ticks
                 AND x.source_file_size = i.file_size
             LEFT JOIN image_tags t ON t.image_id = i.id
                 AND t.source_modified_utc_ticks = i.modified_utc_ticks
-            WHERE te.tier = $tier
-              AND te.source_modified_utc_ticks = i.modified_utc_ticks
+            WHERE i.photo_folder_id IS NOT NULL
             """ + (imageId is long ? " AND i.id = $imageId " : " ") + """
             ORDER BY
                 pf.canonical_path COLLATE NOCASE,
@@ -137,7 +139,8 @@ public sealed class BrowseCacheRepository
                 reader.IsDBNull(15)
                     ? null : ParseCaptureTime(reader.GetString(15)),
                 reader.GetInt32(16),
-                reader.GetInt32(17)));
+                reader.GetInt32(17),
+                reader.IsDBNull(18) ? null : reader.GetString(18)));
         }
 
         return result;
