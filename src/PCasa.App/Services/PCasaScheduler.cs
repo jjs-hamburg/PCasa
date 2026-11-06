@@ -859,6 +859,26 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 _runningManualSourceProbe?.Key == key;
     }
 
+    // Restores a durable package's execution context across UI Dispatcher
+    // boundaries. The nested work remains a STEP of the running package,
+    // never an independently ranked P1 task. The scope flows across await.
+    public async Task ExecuteDependentStepAsync(string packageKey, Func<Task> operation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageKey);
+        ArgumentNullException.ThrowIfNull(operation);
+        WorkItem? parent;
+        lock (_gate)
+            parent = _runningWork.FirstOrDefault(item =>
+                string.Equals(item.Key, packageKey, StringComparison.Ordinal));
+        if (parent is null)
+            throw new InvalidOperationException(
+                "Dependent scheduler step has no running owning package: " + packageKey);
+        var previous = _currentPackage.Value;
+        _currentPackage.Value = parent;
+        try { await operation().ConfigureAwait(true); }
+        finally { _currentPackage.Value = previous; }
+    }
+
     // Typed scheduler results use exactly the same queue, priority,
     // cancellation and lifetime bookkeeping as catalog mutations.
     public async Task<TResult> RunAsync<TResult>(
