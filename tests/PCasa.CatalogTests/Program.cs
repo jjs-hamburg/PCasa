@@ -15,6 +15,20 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--startup-browse-probe"))
+        {
+            try
+            {
+                StartupBrowseReadSurvivesDurableP0();
+                Console.WriteLine("STARTUP BROWSE PROBE PASS");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("STARTUP BROWSE PROBE FAIL: " + ex);
+                return 1;
+            }
+        }
         if (args.Contains("--exif-probe"))
         {
             try { ExifCatalogRoundTrip(); Console.WriteLine("EXIF PROBE PASS"); return 0; }
