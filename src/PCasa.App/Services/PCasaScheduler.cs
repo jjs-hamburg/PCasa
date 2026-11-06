@@ -1046,7 +1046,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
         Task completion;
-        long incomingId;
+        WorkItem admitted;
         List<CancellationTokenSource> yieldRequests = new();
         lock (_gate)
         {
@@ -1064,7 +1064,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     _signals[LaneFor(existing.Priority, existing.Kind)].Release();
                 }
                 completion = existing.Completion.Task;
-                incomingId = existing.Id;
+                admitted = existing;
             }
             else
             {
@@ -1089,64 +1089,28 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 TrimHistoryUnsafe();
                 _signals[LaneFor(priority, workKind)].Release();
                 completion = item.Completion.Task;
-                incomingId = item.Id;
+                admitted = item;
             }
 
-            // A running background or bulk-user request can yield, but a slow
-            // SMB/decoder call never holds the dispatcher or a different lane.
-            if (priority < SchedulerPriority.Idle ||
-                workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or SchedulerWorkKind.DatabaseBackup)
+            // The same global rank comparison controls dispatch and
+            // interruption. A worker controls only the safe stop boundary.
+            for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
             {
-                foreach (var lane in new[] { LaneBackground, LaneUserAction,
-                             LaneManual, LaneManualScan, LaneManualBackup, LaneInitialImport })
-                {
-                    var active = _runningPriorityJobs[lane];
-                    // An incoming user file mutation supersedes a longer
-                    // manual SCAN in the same lane. Two manual mutations
-                    // never cancel one another.
-                    var supersedesOlderManual =
-                        priority == SchedulerPriority.ManualAction &&
-                        active?.Priority == SchedulerPriority.ManualAction &&
-                        active.Id < incomingId &&
-                        workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or SchedulerWorkKind.SourceProbe or SchedulerWorkKind.DatabaseBackup;
-                    var supersedesManualScan =
-                        priority == SchedulerPriority.ManualAction &&
-                        workKind is SchedulerWorkKind.Catalog or SchedulerWorkKind.SourceProbe or SchedulerWorkKind.DatabaseBackup &&
-                        active?.Priority == SchedulerPriority.ManualAction &&
-                        active.Kind == SchedulerWorkKind.CatalogScan;
-                    var outranksByExplicitOrder =
-                        _userDispatchOrder.TryGetValue(identity, out var incomingRank) &&
-                        _userDispatchOrder.TryGetValue(
-                            TaskIdentityUnsafe(active?.Key ?? ""), out var currentRank) &&
-                        active is not null &&
-                        (priority < active.Priority ||
-                         (priority == active.Priority &&
-                          incomingRank < currentRank));
-                    // P4 verification owns only idle capacity. ANY new
-                    // non-idle task displaces it, including a read/probe or
-                    // an operation on a different executor lane.
-                    var displacesIdle = priority < SchedulerPriority.Idle &&
-                        active?.Priority == SchedulerPriority.Idle;
-                    if (active is not null &&
-                        (displacesIdle || outranksByExplicitOrder ||
-                         (!_userDispatchOrder.ContainsKey(identity) &&
-                          (priority < active.Priority || supersedesManualScan ||
-                           supersedesOlderManual))) &&
-                        !active.YieldRequested)
-                    {
-                        active.YieldRequested = true;
-                        SetStateUnsafe(active, SchedulerJobState.YieldRequested);
-                        if (_runningYield[lane] is { } token)
-                            yieldRequests.Add(token);
-                    }
-                }
+                var active = _runningPriorityJobs[lane];
+                if (active is null || active.YieldRequested ||
+                    !Precedes(admitted, active))
+                    continue;
+                active.YieldRequested = true;
+                SetStateUnsafe(active, SchedulerJobState.YieldRequested);
+                if (_runningYield[lane] is { } token)
+                    yieldRequests.Add(token);
             }
         }
         // Cancellation callbacks may re-enter the scheduler: never invoke
         // them under _gate (including from the WPF UI thread).
         foreach (var yield in yieldRequests)
         {
-            try { yield.Cancel(); }
+            try { _ = yield.CancelAsync(); }
             catch (ObjectDisposedException) { }
         }
         return completion;
