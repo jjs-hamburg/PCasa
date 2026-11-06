@@ -423,6 +423,27 @@ public sealed class DurablePackageJournal
         return migrated;
     }
 
+    // The idle scheduler gate uses ALL outstanding non-idle packages,
+    // including temporarily deferred NAS packages. The Taskmanager must
+    // not display 'Wartet' for P0 while starting an unrelated P4 review.
+    // A deliberately canceled/completed/failed package is not outstanding.
+    // The persisted user priority override is authoritative.
+    public bool HasOutstandingNonIdleTasks()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM scheduler_packages p
+                LEFT JOIN scheduler_task_order o ON o.task_key=p.package_key
+                WHERE COALESCE(o.priority_override,p.priority) < $idle
+                  AND p.state IN ('queued','running','deferred')
+            );
+            """;
+        cmd.Parameters.AddWithValue("$idle", (int)SchedulerPriority.Idle);
+        return Convert.ToInt32(cmd.ExecuteScalar()) != 0;
+    }
+
     // Only runnable P0 packets prevent automatic work from starting.
     // A deferred original-file write is still in Pending() and retains its
     // priority/cursor, but cannot hold the scanner hostage until NAS returns.
