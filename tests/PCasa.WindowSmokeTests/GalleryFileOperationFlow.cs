@@ -742,7 +742,14 @@ internal static class GalleryFileOperationFlow
                 var heldGate = SourceFileLocks.ForPath(firstQueuedSource);
                 var sourceGateAvailable = Monitor.TryEnter(heldGate);
                 if (sourceGateAvailable) Monitor.Exit(heldGate);
+                var schedulerBlockers = string.Join(" | ", scheduler.Snapshot()
+                    .Where(job => job.State is SchedulerJobState.Queued or
+                        SchedulerJobState.Running or SchedulerJobState.YieldRequested)
+                    .TakeLast(35)
+                    .Select(job => $"{job.Key}: {job.State}, P{(int)job.Priority}, " +
+                        $"{job.WorkKind}, {job.Phase}, {job.CurrentPath}"));
                 throw new TimeoutException("Manual LIFO stalled. " +
+                    $"BlockingJobs=[{schedulerBlockers}]; " +
                     $"SourceGateAvailable={sourceGateAvailable}, " +
                     $"First={firstQueuedTransfer.Status}, " +
                     $"Second={secondQueuedTransfer.Status}; " +
