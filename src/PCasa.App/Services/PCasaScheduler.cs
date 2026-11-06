@@ -83,6 +83,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // All physical executor lanes participate in idle admission, including
     // read/thumbnail lanes that have no catalog-mutation counter.
     private readonly HashSet<WorkItem> _runningWork = new();
+    // Nested operations inherit their owning package across await/Dispatcher
+    // continuations. A package must never await a child that the queue puts
+    // behind another waiting package (dependency deadlock).
+    private readonly AsyncLocal<WorkItem?> _currentPackage = new();
     private readonly List<SchedulerJobSnapshot> _history = new();
     private readonly SemaphoreSlim[] _signals =
         Enumerable.Range(0, LaneManualBackup + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
@@ -1072,6 +1076,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         : queueOrder ?? (priority == SchedulerPriority.ManualAction
                             ? (long.MinValue / 2) - _nextId : _nextId)
                 };
+                // Technical catalog reads started by an executing package
+                // are dependent STEPS, not independent competitors for rank.
+                if (_currentPackage.Value is { } parent &&
+                    _runningWork.Contains(parent))
+                    item.Parent = parent;
                 _pending.Add(item);
                 _history.Add(new SchedulerJobSnapshot(item.Id, key, priority,
                     SchedulerJobState.Queued, DateTimeOffset.UtcNow, null)
@@ -1149,10 +1158,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
              _runningWork.Any(other => other.Priority < SchedulerPriority.Idle)))
             return null;
 
-        // The smallest global rank must be admitted first. A pending higher
-        // ranked job may be on a different worker, but never loses its turn
-        // simply because the lower-ranked worker became free first.
-        if (_pending.Any(other => !ReferenceEquals(other, candidate) &&
+        // One package owns its technical dependent operations. A running
+        // package must never await a child which is stuck behind a different
+        // queued P0 package. All independent packages still use global rank.
+        var childOfRunningPackage = candidate.Parent is { } parent &&
+            _runningWork.Contains(parent);
+        if (!childOfRunningPackage &&
+            _pending.Any(other => !ReferenceEquals(other, candidate) &&
                 Precedes(other, candidate)))
             return null;
         // Manual P0 packages form an actual LIFO interruption stack.
@@ -1167,7 +1179,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
         // Journal recovery may have an accepted P0 package not yet copied
         // into the in-memory run queue. It still wins over P2-P4 execution.
-        if (durableManualPending && candidate.Priority > SchedulerPriority.ManualAction)
+        if (!childOfRunningPackage && durableManualPending &&
+            candidate.Priority > SchedulerPriority.ManualAction)
             return null;
 
         // Technical safety only: never overlap a foreground catalog mutation
@@ -1278,7 +1291,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         linked.Token.ThrowIfCancellationRequested();
                         if (item.IsCurrent is not null && !item.IsCurrent())
                             throw new OperationCanceledException();
-                        await item.Operation(linked.Token);
+                        var previousPackage = _currentPackage.Value;
+                        _currentPackage.Value = item;
+                        try { await item.Operation(linked.Token); }
+                        finally { _currentPackage.Value = previousPackage; }
                         linked.Token.ThrowIfCancellationRequested();
                         if (item.IsCurrent is not null && !item.IsCurrent())
                             throw new OperationCanceledException();
@@ -1461,6 +1477,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         public long Id { get; } = id;
         public string Key { get; } = key;
         public long QueueOrder { get; set; }
+        public WorkItem? Parent { get; set; }
         public CancellationTokenSource UserCancellation { get; } = new();
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;
