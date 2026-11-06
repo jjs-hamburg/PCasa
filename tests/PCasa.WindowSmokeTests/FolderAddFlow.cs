@@ -347,13 +347,41 @@ internal static class FolderAddFlow
             });
             if (!restartGateReady.Wait(TimeSpan.FromSeconds(5)))
                 throw new Exception("Restart source lock not acquired.");
+            // Simulate a durable P0 NAS job parked across restart. Its
+            // presence must never leave an already indexed gallery blank.
+            // Unlike an ordinary transient blocker, this exercises the
+            // journal-level P0 admission fence that formerly starved P1 reads.
+            const string parkedStartupKey = "test:startup-deferred-manual-scan";
+            var startupJournal = new DurablePackageJournal(db);
+            startupJournal.Put(parkedStartupKey, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = afterRestart,
+                    MonitoredRootId = roots.GetAll().Single(root =>
+                        SamePath(root.LocalPath, afterRestart)).Id
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            startupJournal.Defer(parkedStartupKey, 0,
+                "Test fixture: parked manual source",
+                TimeSpan.FromMinutes(30));
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             window.Show();
             tree = (TreeView)window.FindName("FoldersTree");
             surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
-            Until(window, () =>
-                Walk(tree).Any(item => SamePath(PathOf(item), newFolderPath)),
-                "Empty folder created in PCasa vanished from the tree after restart.");
+            try
+            {
+                Until(window, () =>
+                    Walk(tree).Any(item => SamePath(PathOf(item), newFolderPath)),
+                    "Persisted folder tree stayed blank behind deferred P0 at startup.");
+                Until(window, () => surface.GetFolderOffset(firstFolder.Id).HasValue,
+                    "Existing photo gallery stayed blank behind deferred P0 at startup.");
+                Console.WriteLine(
+                    "PASS: Startup folder tree and committed images render with deferred durable P0.");
+            }
+            finally
+            {
+                if (!startupJournal.Cancel(parkedStartupKey))
+                    throw new Exception("Could not retire startup P0 test fixture.");
+            }
             Console.WriteLine("PASS: Empty NAS directory survives PCasa restart without any images.");
             Until(window, () =>
                 Walk(tree).Any(item => SamePath(PathOf(item), afterRestart)),
