@@ -26,11 +26,13 @@ public sealed class BrowseThumbnailPageCache : IDisposable
     // A catalog relocation retains its image ID, tier and pack byte span.
     private readonly record struct ThumbnailContentKey(
         long ImageId, int Tier, string PackFile, long ByteOffset,
-        int ByteLength, int PixelWidth, int PixelHeight)
+        int ByteLength, int PixelWidth, int PixelHeight,
+        long ModifiedUtcTicks, string? LegacyThumbnailPath)
     {
         public static ThumbnailContentKey From(BrowseThumbnailIndexEntry item)
             => new(item.ImageId, item.Tier, item.PackFile, item.ByteOffset,
-                item.ByteLength, item.PixelWidth, item.PixelHeight);
+                item.ByteLength, item.PixelWidth, item.PixelHeight,
+                item.ModifiedUtcTicks, item.LegacyThumbnailPath);
     }
 
     private readonly Dictionary<ThumbnailContentKey, BitmapSource>
