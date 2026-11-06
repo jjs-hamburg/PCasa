@@ -2548,7 +2548,16 @@ internal static class Program
                     SchedulerPriority.Interactive, _ => Task.CompletedTask,
                     workKind: SchedulerWorkKind.BrowseRead)
                     .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!rendered || manual.IsCompleted || idleStarted || idle.IsCompleted)
+                var thumbnailLoaded = false;
+                await scheduler.EnqueueAsync("thumb-page:startup-visible",
+                    SchedulerPriority.UserAction, _ =>
+                    {
+                        thumbnailLoaded = true;
+                        return Task.CompletedTask;
+                    }, workKind: SchedulerWorkKind.ThumbnailRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (!rendered || !thumbnailLoaded ||
+                    manual.IsCompleted || idleStarted || idle.IsCompleted)
                     throw new Exception(
                         "Startup gallery blocked by durable P0, interrupted P0, or admitted P4.");
             }
