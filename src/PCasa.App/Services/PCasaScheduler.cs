@@ -6,7 +6,7 @@ namespace PCasa.App.Services;
 
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
-public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport, DatabaseBackup }
+public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport, DatabaseBackup, BrowseRead }
 
 public sealed record SchedulerJobSnapshot(
     long Id, string Key, SchedulerPriority Priority, SchedulerJobState State,
@@ -823,7 +823,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         => kind switch
         {
             SchedulerWorkKind.ViewerRead => LaneViewer,
-            SchedulerWorkKind.CatalogRead => LaneCatalogRead,
+            SchedulerWorkKind.CatalogRead or SchedulerWorkKind.BrowseRead => LaneCatalogRead,
             SchedulerWorkKind.DatabaseBackup => LaneManualBackup,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
             SchedulerWorkKind.InitialImport => LaneInitialImport,
@@ -1297,12 +1297,17 @@ public sealed class PCasaScheduler : IAsyncDisposable
              _runningWork.Any(other => RankOwner(other).Priority < SchedulerPriority.Idle)))
             return null;
 
-        // One package owns its technical dependent operations. A running
-        // package must never await a child which is stuck behind a different
-        // queued P0 package. All independent packages still use global rank.
+        // The read-only browse projection is a technical view operation,
+        // not a competing user package. It has bounded read capacity and
+        // cannot write originals or seize a P0 execution lane. In particular,
+        // an offline/slow durable P0 NAS scan must never leave the initial
+        // folder tree and gallery blank on startup.
+        var independentBrowseRead = candidate.Kind == SchedulerWorkKind.BrowseRead;
+        // One package owns its dependent operations. They must never wait
+        // behind an unrelated queued P0 while the owner awaits them.
         var childOfRunningPackage = candidate.Parent is { } parent &&
             _runningWork.Contains(parent);
-        if (!childOfRunningPackage &&
+        if (!childOfRunningPackage && !independentBrowseRead &&
             _pending.Any(other => !ReferenceEquals(other, candidate) &&
                 Precedes(other, candidate)))
             return null;
@@ -1318,7 +1323,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
         // Journal recovery may have an accepted P0 package not yet copied
         // into the in-memory run queue. It still wins over P2-P4 execution.
-        if (!childOfRunningPackage && durableManualPending &&
+        if (!childOfRunningPackage && !independentBrowseRead &&
+            durableManualPending &&
             RankOwner(candidate).Priority > SchedulerPriority.ManualAction)
             return null;
 
