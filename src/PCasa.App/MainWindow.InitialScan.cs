@@ -24,6 +24,7 @@ public partial class MainWindow
 
     private void QueuePendingInitialScans()
     {
+        _scheduler.NotifyTaskViewChanged();
         if (!_folderManagerOpen && !_initialScanPumpRunning &&
             !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
@@ -114,6 +115,7 @@ public partial class MainWindow
         _initialScanStopRequested = false;
         _manualFolderScanWaiting = true;
         _initialScanActive = true;
+        _scheduler.NotifyTaskViewChanged();
         _manualScanRunning = true;
         _isScanning = true;
         _activeScanCancellation = cancellation;
@@ -249,6 +251,7 @@ public partial class MainWindow
                 _activeScanFolderId = null;
             }
             _initialScanActive = false;
+            _scheduler.NotifyTaskViewChanged();
             _initialScanTaskKey = null;
             _initialScanTaskDirectory = null;
             _initialScanTaskCurrentFile = null;
