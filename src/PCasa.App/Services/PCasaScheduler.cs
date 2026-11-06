@@ -53,6 +53,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // A manually requested online database backup must not wait for either
     // blocked SMB scans or original-file writers. One scheduler, one rank.
     private const int LaneManualBackup = 12;
+    // Reserved capacity for the user's read-only gallery projection. This
+    // lane never executes P0-P4 mutations and is never occupied by scan work.
+    private const int LaneGalleryRead = 13;
     private readonly object _gate = new();
     private DurablePackageJournal? _durableJournal;
     private SchedulerTaskOrderStore? _taskOrderStore;
@@ -107,26 +110,26 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly List<SchedulerJobSnapshot> _history = new();
     // Worker semaphores are execution handoffs ONLY. No worker chooses work.
     private readonly SemaphoreSlim[] _signals =
-        Enumerable.Range(0, LaneManualBackup + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
+        Enumerable.Range(0, LaneGalleryRead + 1).Select(_ => new SemaphoreSlim(0)).ToArray();
     private readonly Queue<(WorkItem Item, CancellationTokenSource? Yield)>[] _assigned =
-        Enumerable.Range(0, LaneManualBackup + 1)
+        Enumerable.Range(0, LaneGalleryRead + 1)
             .Select(_ => new Queue<(WorkItem, CancellationTokenSource?)>()).ToArray();
-    private readonly int[] _laneCapacity = [1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1];
-    private readonly int[] _laneOccupied = new int[LaneManualBackup + 1];
+    private readonly int[] _laneCapacity = [1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 2];
+    private readonly int[] _laneOccupied = new int[LaneGalleryRead + 1];
     private readonly SemaphoreSlim _controllerWake = new(0, 1);
     private readonly Task _controller;
     // Track the dedicated first-import executor as well. Otherwise an
     // already-running initial scan never receives the scheduler's yield
     // cancellation when a new manual P0 package arrives.
     private readonly WorkItem?[] _runningPriorityJobs =
-        new WorkItem?[LaneManualBackup + 1];
+        new WorkItem?[LaneGalleryRead + 1];
     private int _catalogForegroundRunning;
     private int _catalogManualRunning;
     private int _catalogInteractiveRunning;
     private int _manualSourceProbeRunning;
     private WorkItem? _runningManualSourceProbe;
     private readonly CancellationTokenSource?[] _runningYield =
-        new CancellationTokenSource?[LaneManualBackup + 1];
+        new CancellationTokenSource?[LaneGalleryRead + 1];
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task[] _workers;
     private long _nextId;
@@ -200,7 +203,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // User-initiated source I/O has its own bounded capacity but
             // remains under the SAME scheduler queue and job lifecycle.
             Task.Run(() => RunAsync(LaneManualSourceProbe)),
-            Task.Run(() => RunAsync(LaneInteractiveSourceProbe))
+            Task.Run(() => RunAsync(LaneInteractiveSourceProbe)),
+            Task.Run(() => RunAsync(LaneGalleryRead)),
+            Task.Run(() => RunAsync(LaneGalleryRead))
         };
     }
 
@@ -521,6 +526,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     {
                         var running = _runningPriorityJobs[lane];
                         if (running is null || running.YieldRequested) continue;
+                        // Read-only view requests run on reserved capacity.
+                        // Yielding them for an unrelated P0 scan is a livelock:
+                        // the gallery retry is repeatedly canceled and never
+                        // publishes a first image. They cannot mutate files.
+                        if (running.Kind is SchedulerWorkKind.BrowseRead or
+                            SchedulerWorkKind.ThumbnailRead or
+                            SchedulerWorkKind.ViewerRead)
+                            continue;
                         if (!((RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
@@ -539,7 +552,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     while (available)
                     {
                         available = false;
-                        for (var lane = 0; lane <= LaneManualBackup; lane++)
+                        for (var lane = 0; lane <= LaneGalleryRead; lane++)
                         {
                             if (_laneOccupied[lane] >= _laneCapacity[lane]) continue;
                             var item = SelectNextJobUnsafe(lane,
@@ -823,7 +836,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         => kind switch
         {
             SchedulerWorkKind.ViewerRead => LaneViewer,
-            SchedulerWorkKind.CatalogRead or SchedulerWorkKind.BrowseRead => LaneCatalogRead,
+            SchedulerWorkKind.BrowseRead => LaneGalleryRead,
+            SchedulerWorkKind.CatalogRead => LaneCatalogRead,
             SchedulerWorkKind.DatabaseBackup => LaneManualBackup,
             SchedulerWorkKind.ThumbnailRead => LaneThumbnail,
             SchedulerWorkKind.InitialImport => LaneInitialImport,
