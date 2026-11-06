@@ -347,13 +347,63 @@ internal static class FolderAddFlow
             });
             if (!restartGateReady.Wait(TimeSpan.FromSeconds(5)))
                 throw new Exception("Restart source lock not acquired.");
+            // Restore an OFFLINE durable P0 from the real journal before
+            // WPF starts. Old startup enqueued its first P1 catalog snapshot
+            // behind this P0 and rendered an entirely blank workspace.
+            const string startupP0 = "test:wpf-startup-deferred-p0";
+            var startupJournal = new DurablePackageJournal(db);
+            startupJournal.Put(startupP0, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = afterRestart,
+                    MonitoredRootId = roots.GetAll().Single(root =>
+                        SamePath(root.LocalPath, afterRestart)).Id
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            startupJournal.Defer(startupP0, 0, "Test fixture: unavailable NAS",
+                TimeSpan.FromMinutes(30));
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             window.Show();
             tree = (TreeView)window.FindName("FoldersTree");
             surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
-            Until(window, () =>
-                Walk(tree).Any(item => SamePath(PathOf(item), newFolderPath)),
-                "Empty folder created in PCasa vanished from the tree after restart.");
+            try
+            {
+                Until(window, () =>
+                    Walk(tree).Any(item => SamePath(PathOf(item), newFolderPath)),
+                    "Startup left tree blank behind a deferred durable P0.");
+                Until(window, () =>
+                    surface.GetFolderOffset(firstFolder.Id).HasValue,
+                    "Startup left gallery blank behind a deferred durable P0.");
+                var indexField = typeof(PCasa.App.MainWindow).GetField(
+                    "_displayedBrowseIndex", BindingFlags.NonPublic |
+                    BindingFlags.Instance)!;
+                var cacheField = typeof(PCasa.App.MainWindow).GetField(
+                    "_browsePageCache", BindingFlags.NonPublic |
+                    BindingFlags.Instance)!;
+                Until(window, () =>
+                {
+                    if (indexField.GetValue(window) is not
+                        IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry> index ||
+                        cacheField.GetValue(window) is not BrowseThumbnailPageCache cache)
+                        return false;
+                    var position = -1;
+                    for (var i = 0; i < index.Count; i++)
+                        if (index[i].PhotoFolderId == firstFolder.Id)
+                        {
+                            position = i;
+                            break;
+                        }
+                    if (position < 0) return false;
+                    _ = surface.WarmVisibleAsync();
+                    return cache.TryGet(position, out var bitmap) &&
+                        bitmap is { PixelWidth: > 0, PixelHeight: > 0 };
+                }, "WPF startup restored folders but not a decoded image.");
+            }
+            finally
+            {
+                if (!startupJournal.Cancel(startupP0))
+                    throw new Exception("Could not release test's deferred P0.");
+            }
+            Console.WriteLine("PASS: Startup publishes real gallery bitmap before durable P0 recovery.");
             Console.WriteLine("PASS: Empty NAS directory survives PCasa restart without any images.");
             Until(window, () =>
                 Walk(tree).Any(item => SamePath(PathOf(item), afterRestart)),
