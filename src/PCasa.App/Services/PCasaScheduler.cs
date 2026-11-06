@@ -76,7 +76,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
     }
     private readonly HashSet<Task> _durableCompletions = new();
     private bool _restoringDurablePackages;
-    private Task? _deferredRetryWorker;
+    // The controller owns deferred activation. A passive probe only reports
+    // source readiness; it never starts, ranks, or resumes a package.
+    private Task<(HashSet<string> Ready, HashSet<string> Reconnected)>? _deferredProbe;
+    private DateTimeOffset _nextDeferredProbe = DateTimeOffset.MinValue;
+    private bool _deferredRecoveryReady;
     private Action<string, Task>? _durableRestoreObserver;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
@@ -425,10 +429,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 SignalController();
             }
         }
-        // One retry coordinator owned by this scheduler, not a second
-        // Tag, transfer, or scan queue. Start only after recovery is staged.
+        // Enable the already-running controller to reconcile the journal.
+        // There is no independently scheduled retry/activation coordinator.
         lock (_gate)
-            _deferredRetryWorker ??= Task.Run(RetryDeferredPackagesAsync);
+        {
+            _deferredRecoveryReady = true;
+            _nextDeferredProbe = DateTimeOffset.MinValue;
+            SignalController();
+        }
         return unresolved;
     }
 
@@ -445,6 +453,32 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 // are required to notice a different durable queue state.
                 await _controllerWake.WaitAsync(TimeSpan.FromMilliseconds(150),
                     _shutdown.Token);
+                if (_deferredRecoveryReady)
+                {
+                    // Completed source probes are DATA, not execution decisions.
+                    // Only this controller activates a journal record.
+                    if (_deferredProbe is { IsCompleted: true } finishedProbe)
+                    {
+                        _deferredProbe = null;
+                        try { ActivateDeferredPackages(finishedProbe.GetAwaiter().GetResult()); }
+                        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+                        {
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            PCasaDiagnostics.Write("Scheduler.DeferredReconcile", ex);
+                        }
+                    }
+                    if (_deferredProbe is null &&
+                        DateTimeOffset.UtcNow >= _nextDeferredProbe)
+                    {
+                        _nextDeferredProbe = DateTimeOffset.UtcNow.AddSeconds(2);
+                        // Never block priority arbitration on offline SMB I/O.
+                        // Probe merely reports due/reconnected identities.
+                        _deferredProbe = Task.Run(ProbeDeferredPackages);
+                    }
+                }
                 var durable = _durableJournal;
                 bool manualWaiting = false, nonIdleWaiting = false;
                 try
@@ -545,108 +579,91 @@ public sealed class PCasaScheduler : IAsyncDisposable
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }
 
-    private async Task RetryDeferredPackagesAsync()
+    // Passive I/O probe, with no mutation of queue or journal state.
+    // An offline SMB path may block; controller arbitration continues.
+    private (HashSet<string> Ready, HashSet<string> Reconnected) ProbeDeferredPackages()
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
-        try
+        var ready = new HashSet<string>(StringComparer.Ordinal);
+        var reconnected = new HashSet<string>(StringComparer.Ordinal);
+        var journal = _durableJournal;
+        if (journal is null || _shutdown.IsCancellationRequested)
+            return (ready, reconnected);
+        ready.UnionWith(journal.DueDeferredKeys());
+        foreach (var pending in journal.Pending())
         {
-            while (await timer.WaitForNextTickAsync(_shutdown.Token))
+            _shutdown.Token.ThrowIfCancellationRequested();
+            if (pending.State != "deferred" ||
+                pending.Type != "manual-folder-scan-v1" ||
+                pending.Error?.StartsWith(
+                    "Quelle vorübergehend offline", StringComparison.Ordinal) != true)
+                continue;
+            try
             {
-                var journal = _durableJournal;
-                if (journal is null) continue;
-                try
-                {
-                    // A queued/deferred P0-P3 package may enter the durable
-                    // journal without creating a new running WorkItem (for
-                    // example while restoring an offline NAS scan). Reconcile
-                    // the SAME global list continuously, including active P4.
-                    SignalController();
-                    // A manual NAS scan was deferred because its source was
-                    // offline. Do not wait through the exponential retry delay
-                    // after that source is confirmed reachable again.
-                    // The existing scheduler loop owns admission, and the
-                    // SAME durable record/cursor is reactivated via SQLite CAS.
-                    var reconnected = new HashSet<string>(StringComparer.Ordinal);
-                    var ready = new HashSet<string>(
-                        journal.DueDeferredKeys(), StringComparer.Ordinal);
-                    foreach (var pending in journal.Pending())
-                    {
-                        if (pending.State != "deferred" ||
-                            pending.Type != "manual-folder-scan-v1" ||
-                            pending.Error?.StartsWith(
-                                "Quelle vorübergehend offline", StringComparison.Ordinal) != true)
-                            continue;
-                        try
-                        {
-                            using var recipe = JsonDocument.Parse(pending.Payload);
-                            if (!recipe.RootElement.TryGetProperty("Directory", out var directory) ||
-                                directory.ValueKind != JsonValueKind.String)
-                                continue;
-                            var source = directory.GetString();
-                            if (string.IsNullOrWhiteSpace(source) ||
-                                !SourceAvailability.CanAccess(source, _shutdown.Token))
-                                continue;
-                            ready.Add(pending.Key);
-                            reconnected.Add(pending.Key);
-                        }
-                        catch (Exception ex) when (ex is JsonException or ArgumentException
-                                                    or IOException or UnauthorizedAccessException)
-                        {
-                            PCasaDiagnostics.Write("Scheduler.SourceReconnectProbe", ex);
-                        }
-                    }
-                    foreach (var key in ready)
-                    {
-                        _shutdown.Token.ThrowIfCancellationRequested();
-                        var record = journal.Pending().FirstOrDefault(p => p.Key == key);
-                        if (record is null || record.State != "deferred") continue;
-                        if (!_packageFactories.TryGetValue(record.Type, out var factory))
-                        {
-                            journal.Defer(key, record.CompletedSteps,
-                                "Wiederherstellungsfabrik fehlt: " + record.Type);
-                            continue;
-                        }
-                        SchedulerTaskPackage package;
-                        try
-                        {
-                            package = factory(record.Key, record.Payload);
-                            package.RestoreCursor(record.CompletedSteps);
-                        }
-                        catch (Exception ex)
-                        {
-                            journal.Defer(key, record.CompletedSteps, ex.Message);
-                            PCasaDiagnostics.Write("Scheduler.RetryRecipe:" + key, ex);
-                            continue;
-                        }
-                        var activated = reconnected.Contains(key)
-                            ? journal.RestartDeferred(key)
-                            : journal.ActivateDueDeferred(key);
-                        if (activated is null) continue;
-                        // SAME journal identity, step cursor and P0 priority;
-                        // ordinary worker lanes still own every execution.
-                        var completion = TrackDurableCompletion(
-                            QueueDurableExisting(package, activated));
-                        try { _durableRestoreObserver?.Invoke(key, completion); }
-                        catch (Exception ex)
-                        {
-                            PCasaDiagnostics.Write("Scheduler.RetryObserver", ex);
-                        }
-                        PCasaDiagnostics.WriteMessage(
-                            reconnected.Contains(key) ? "Scheduler.SourceReconnected" : "Scheduler.Retry",
-                            $"Key={key}; Type={record.Type}; Step={record.CompletedSteps}");
-                    }
-                }
-                catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    PCasaDiagnostics.Write("Scheduler.RetryLoop", ex);
-                }
+                using var recipe = JsonDocument.Parse(pending.Payload);
+                if (!recipe.RootElement.TryGetProperty("Directory", out var directory) ||
+                    directory.ValueKind != JsonValueKind.String)
+                    continue;
+                var source = directory.GetString();
+                if (string.IsNullOrWhiteSpace(source) ||
+                    !SourceAvailability.CanAccess(source, _shutdown.Token))
+                    continue;
+                ready.Add(pending.Key);
+                reconnected.Add(pending.Key);
+            }
+            catch (Exception ex) when (ex is JsonException or ArgumentException
+                                        or IOException or UnauthorizedAccessException)
+            {
+                PCasaDiagnostics.Write("Scheduler.SourceReconnectProbe", ex);
             }
         }
-        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        return (ready, reconnected);
+    }
+
+    // Called ONLY on the controller loop. A probe never decides which package
+    // may resume; SQLite CAS preserves the existing identity and step cursor.
+    private void ActivateDeferredPackages(
+        (HashSet<string> Ready, HashSet<string> Reconnected) probe)
+    {
+        var journal = _durableJournal;
+        if (journal is null) return;
+        foreach (var key in probe.Ready)
+        {
+            _shutdown.Token.ThrowIfCancellationRequested();
+            var record = journal.Pending().FirstOrDefault(p => p.Key == key);
+            if (record is null || record.State != "deferred") continue;
+            if (!_packageFactories.TryGetValue(record.Type, out var factory))
+            {
+                journal.Defer(key, record.CompletedSteps,
+                    "Wiederherstellungsfabrik fehlt: " + record.Type);
+                continue;
+            }
+            SchedulerTaskPackage package;
+            try
+            {
+                package = factory(record.Key, record.Payload);
+                package.RestoreCursor(record.CompletedSteps);
+            }
+            catch (Exception ex)
+            {
+                journal.Defer(key, record.CompletedSteps, ex.Message);
+                PCasaDiagnostics.Write("Scheduler.RetryRecipe:" + key, ex);
+                continue;
+            }
+            var activated = probe.Reconnected.Contains(key)
+                ? journal.RestartDeferred(key)
+                : journal.ActivateDueDeferred(key);
+            if (activated is null) continue;
+            var completion = TrackDurableCompletion(
+                QueueDurableExisting(package, activated));
+            try { _durableRestoreObserver?.Invoke(key, completion); }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Scheduler.RetryObserver", ex);
+            }
+            PCasaDiagnostics.WriteMessage(
+                probe.Reconnected.Contains(key) ? "Scheduler.SourceReconnected" : "Scheduler.Retry",
+                $"Key={key}; Type={record.Type}; Step={record.CompletedSteps}");
+        }
     }
 
     public Task EnqueueDurablePackageAsync(SchedulerTaskPackage package,
@@ -1471,8 +1488,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         _shutdown.Cancel();
         await _controller;
-        if (_deferredRetryWorker is not null)
-            await _deferredRetryWorker;
+        if (_deferredProbe is not null)
+        {
+            try { await _deferredProbe; }
+            catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+        }
         await Task.WhenAll(_workers);
         // Worker completion can unblock the journal continuation AFTER the
         // worker exits. Do not close the app while a checkpoint is in flight.
