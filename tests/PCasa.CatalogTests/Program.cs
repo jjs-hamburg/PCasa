@@ -700,10 +700,13 @@ internal static class Program
                     {
                         dependent = Task.Run(() => scheduler.EnqueueAsync(
                             "p1:gallery-publish-child",
-                            SchedulerPriority.Interactive, _ =>
+                            SchedulerPriority.Interactive, async token =>
                             {
                                 childStarted.TrySetResult();
-                                return Task.CompletedTask;
+                                // Keep the nested step active across multiple
+                                // controller ticks. An older yielding P0 must
+                                // not preempt its newer P0 owner's publication.
+                                await Task.Delay(450, token);
                             }, workKind: SchedulerWorkKind.CatalogRead,
                             parentKey: "p0:newer-transfer"));
                     }
@@ -718,10 +721,10 @@ internal static class Program
                                 "p0:newer-transfer",
                                 () => scheduler.EnqueueAsync(
                                     "p1:gallery-publish-from-dispatcher",
-                                    SchedulerPriority.Interactive, _ =>
+                                    SchedulerPriority.Interactive, async token =>
                                     {
                                         uiChildStarted.TrySetResult();
-                                        return Task.CompletedTask;
+                                        await Task.Delay(450, token);
                                     }, workKind: SchedulerWorkKind.CatalogRead)));
                     }
                     await uiDependent;
