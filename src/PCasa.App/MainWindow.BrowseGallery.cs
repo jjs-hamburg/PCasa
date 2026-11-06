@@ -447,6 +447,9 @@ public partial class MainWindow
     private bool _galleryRefreshForceIndex;
     private bool _galleryRefreshWarmViewport;
     private bool _galleryRefreshHasExplicitRequest;
+    // Coalesced publication can have been started by another caller.
+    // Awaiting P0 packages donate their rank to its technical reads.
+    private string? _galleryRefreshOwningPackageKey;
 
     private Task RefreshBrowseGalleryAsync(
         bool forceIndexReload,
@@ -455,12 +458,16 @@ public partial class MainWindow
     {
         if (fromScanner && DeferScanGalleryPublication())
             return Task.CompletedTask;
+        var owner = fromScanner ? null : _scheduler.CurrentPackageKey;
+        Task completion;
         lock (_galleryRefreshGate)
         {
             _galleryRefreshPending = true;
             _galleryRefreshForceIndex |= forceIndexReload;
             _galleryRefreshWarmViewport |= warmViewport;
             _galleryRefreshHasExplicitRequest |= !fromScanner;
+            if (owner is not null)
+                _galleryRefreshOwningPackageKey = owner;
             if (!_galleryRefreshRunning)
             {
                 _galleryRefreshRunning = true;
@@ -468,8 +475,13 @@ public partial class MainWindow
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 _ = DrainGalleryRefreshAsync(_galleryRefreshCompletion);
             }
-            return _galleryRefreshCompletion!.Task;
+            completion = _galleryRefreshCompletion!.Task;
         }
+        if (owner is not null)
+            _scheduler.AttachDependentWorkToPackage(owner,
+                "catalog:gallery-summary:", "catalog:gallery-index:",
+                "catalog:selection:");
+        return completion;
     }
 
     private async Task DrainGalleryRefreshAsync(TaskCompletionSource completion)
@@ -489,6 +501,7 @@ public partial class MainWindow
                         // request from now on creates its OWN publisher.
                         _galleryRefreshRunning = false;
                         _galleryRefreshCompletion = null;
+                        _galleryRefreshOwningPackageKey = null;
                         finished = true;
                     }
                     else
@@ -584,7 +597,8 @@ public partial class MainWindow
                     imageCount = _imageCatalog.CountAll();
                     return Task.CompletedTask;
                 }, () => _browseRefreshRequests.IsCurrent(refresh),
-                workKind: SchedulerWorkKind.CatalogRead);
+                workKind: SchedulerWorkKind.CatalogRead,
+                parentKey: _galleryRefreshOwningPackageKey);
         }
         catch (OperationCanceledException) { return; }
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
@@ -636,7 +650,8 @@ public partial class MainWindow
                         index = _browseCacheRepository.GetIndex(tier);
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh),
-                    workKind: SchedulerWorkKind.CatalogRead);
+                    workKind: SchedulerWorkKind.CatalogRead,
+                    parentKey: _galleryRefreshOwningPackageKey);
             }
             catch (OperationCanceledException) { return; }
             if (!_browseRefreshRequests.IsCurrent(refresh))
@@ -666,7 +681,8 @@ public partial class MainWindow
                         existing = _imageCatalog.GetExistingImageIds(checkedSelection);
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh),
-                    workKind: SchedulerWorkKind.CatalogRead);
+                    workKind: SchedulerWorkKind.CatalogRead,
+                    parentKey: _galleryRefreshOwningPackageKey);
             }
             catch (OperationCanceledException) { return; }
             if (!_browseRefreshRequests.IsCurrent(refresh))
