@@ -62,6 +62,7 @@ internal static class Program
         Run("Scheduler does not merge canceled queued work", SchedulerReplacesCanceledPendingWork, failures);
         Run("Scheduler rejects source invalidated during execution", SchedulerRejectsMidFlightInvalidation, failures);
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
+        Run("P4 catalog verify yields to every nonidle task and resumes after work", SchedulerIdleVerifyOnlyWhenOtherWorkFinished, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
@@ -652,6 +653,57 @@ internal static class Program
             throw new Exception(
                 "Migrating old 314/828 recovery lost a pending intent, " +
                 "changed LIFO order, or discarded its persisted identity.");
+    }
+
+    private static void SchedulerIdleVerifyOnlyWhenOtherWorkFinished()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var idleStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var idleResumed = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var higherStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseHigher = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var runs = 0;
+            var idle = scheduler.EnqueueAsync("regression:idle-verify",
+                SchedulerPriority.Idle, async token =>
+                {
+                    if (Interlocked.Increment(ref runs) == 1)
+                    {
+                        idleStarted.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    else idleResumed.TrySetResult();
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await idleStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var higher = scheduler.EnqueueAsync("regression:foreground-read",
+                SchedulerPriority.Interactive, async token =>
+                {
+                    higherStarted.TrySetResult();
+                    await releaseHigher.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.CatalogRead);
+            try
+            {
+                await higherStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.Delay(100);
+                if (idleResumed.Task.IsCompleted)
+                    throw new Exception("P4 catalog verification resumed while nonidle work ran.");
+            }
+            finally
+            {
+                releaseHigher.TrySetResult();
+            }
+            await higher.WaitAsync(TimeSpan.FromSeconds(5));
+            await idleResumed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await idle.WaitAsync(TimeSpan.FromSeconds(5));
+            if (runs != 2)
+                throw new Exception("P4 verification lost its yield/resume identity.");
+        }
+        Check().GetAwaiter().GetResult();
     }
 
     private static void RecoveredManualScanPrecedesOlderTags()
