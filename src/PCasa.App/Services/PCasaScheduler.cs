@@ -466,15 +466,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     if (_disposed) break;
                     // Global rank, not per-lane callbacks, decides preemption.
-                    var highest = _pending.OrderBy(p => p.Priority)
-                        .ThenBy(p => p.QueueOrder).ThenBy(p => p.Id).FirstOrDefault();
+                    var highest = _pending.OrderBy(p => RankOwner(p).Priority)
+                        .ThenBy(p => RankOwner(p).QueueOrder)
+                        .ThenBy(p => RankOwner(p).Id).FirstOrDefault();
                     for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
                     {
                         var running = _runningPriorityJobs[lane];
                         if (running is null || running.YieldRequested) continue;
-                        if (!((running.Priority == SchedulerPriority.Idle &&
+                        if (!((RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
-                                   p.Priority < SchedulerPriority.Idle))) ||
+                                   RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               (_nativeDragInteractionCount > 0 &&
                                lane is LaneBackground or LaneInitialImport or LaneUserAction) ||
                               (highest is not null && Precedes(highest, running))))
@@ -1165,14 +1166,29 @@ public sealed class PCasaScheduler : IAsyncDisposable
         return completion;
     }
 
+    // A technical catalog read, thumbnail read or publication started by a
+    // package inherits its owner's GLOBAL rank. The lane only determines
+    // which bounded executor performs the step; it never creates a new task
+    // competing with the package awaiting that step.
+    private static WorkItem RankOwner(WorkItem item)
+    {
+        while (item.Parent is { } parent)
+            item = parent;
+        return item;
+    }
+
     // One global ordering rule for Taskmanager moves, default priorities,
     // manual LIFO and cross-lane admission. QueueOrder is assigned once at
     // registration and updated only by an explicit user reorder.
     private static bool Precedes(WorkItem first, WorkItem second)
-        => first.Priority < second.Priority ||
-           (first.Priority == second.Priority &&
-            (first.QueueOrder < second.QueueOrder ||
-             (first.QueueOrder == second.QueueOrder && first.Id < second.Id)));
+    {
+        var a = RankOwner(first);
+        var b = RankOwner(second);
+        return a.Priority < b.Priority ||
+               (a.Priority == b.Priority &&
+                (a.QueueOrder < b.QueueOrder ||
+                 (a.QueueOrder == b.QueueOrder && a.Id < b.Id)));
+    }
 
     // Called under _gate. This is the ONE business decision about which
     // accepted job may start. The physical lane is only an execution-capacity
@@ -1184,9 +1200,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         var candidate = _pending
             .Where(x => LaneFor(x.Priority, x.Kind) == lane)
-            .OrderBy(x => x.Priority)
-            .ThenBy(x => x.QueueOrder)
-            .ThenBy(x => x.Id)
+            .OrderBy(x => RankOwner(x).Priority)
+            .ThenBy(x => RankOwner(x).QueueOrder)
+            .ThenBy(x => RankOwner(x).Id)
             .FirstOrDefault();
         if (candidate is null) return null;
 
@@ -1201,11 +1217,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
         // P4 is pure idle work. All waiting/running P0-P3 requests exclude
         // it, INCLUDING durable 'deferred' packages visible as Wartet in TM.
-        if (candidate.Priority == SchedulerPriority.Idle &&
+        if (RankOwner(candidate).Priority == SchedulerPriority.Idle &&
             (durableNonIdlePending ||
              _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                 other.Priority < SchedulerPriority.Idle) ||
-             _runningWork.Any(other => other.Priority < SchedulerPriority.Idle)))
+                 RankOwner(other).Priority < SchedulerPriority.Idle) ||
+             _runningWork.Any(other => RankOwner(other).Priority < SchedulerPriority.Idle)))
             return null;
 
         // One package owns its technical dependent operations. A running
@@ -1221,16 +1237,16 @@ public sealed class PCasaScheduler : IAsyncDisposable
         // P1-P3 may run on independent read/executor capacity while an
         // older higher-priority operation is already in flight. P4 is
         // explicitly stricter and was checked above against ALL running jobs.
-        if (candidate.Priority == SchedulerPriority.ManualAction &&
+        if (RankOwner(candidate).Priority == SchedulerPriority.ManualAction &&
             _runningWork.Any(active =>
-                active.Priority == SchedulerPriority.ManualAction &&
+                RankOwner(active).Priority == SchedulerPriority.ManualAction &&
                 Precedes(active, candidate)))
             return null;
 
         // Journal recovery may have an accepted P0 package not yet copied
         // into the in-memory run queue. It still wins over P2-P4 execution.
         if (!childOfRunningPackage && durableManualPending &&
-            candidate.Priority > SchedulerPriority.ManualAction)
+            RankOwner(candidate).Priority > SchedulerPriority.ManualAction)
             return null;
 
         // Technical safety only: never overlap a foreground catalog mutation
