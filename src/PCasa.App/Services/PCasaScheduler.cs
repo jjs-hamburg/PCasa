@@ -129,31 +129,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     public IDisposable BeginNativeDragInteraction()
     {
-        List<CancellationTokenSource> yields = [];
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (++_nativeDragInteractionCount == 1)
-                foreach (var lane in new[]
-                    { LaneBackground, LaneInitialImport, LaneUserAction })
-                {
-                    var active = _runningPriorityJobs[lane];
-                    if (active is null || active.YieldRequested) continue;
-                    active.YieldRequested = true;
-                    SetStateUnsafe(active, SchedulerJobState.YieldRequested);
-                    if (_runningYield[lane] is { } token)
-                        yields.Add(token);
-                }
-        }
-        // Cancellation callbacks may re-enter this scheduler. Do not hold
-        // _gate while signaling cooperative preemption.
-        foreach (var yield in yields)
-        {
-            // Cancellation callbacks can be expensive (e.g. network
-            // watchers). Set the yield state immediately but dispatch
-            // callbacks off the WPF mouse handler.
-            try { _ = yield.CancelAsync(); }
-            catch (ObjectDisposedException) { }
+            _nativeDragInteractionCount++;
+            SignalController();
         }
         return new NativeDragLease(this);
     }
@@ -304,7 +284,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         var store = _taskOrderStore ??
             throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
-        List<CancellationTokenSource> yields = [];
         List<WorkItem> changed = [];
         lock (_gate)
         {
@@ -349,9 +328,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
             WakePendingWorkersUnsafe();
         }
         foreach (var work in changed) PublishState(work);
-        foreach (var cancellation in yields)
-            try { _ = cancellation.CancelAsync(); }
-            catch (ObjectDisposedException) { }
         try { TaskOrderChanged?.Invoke(); }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.TaskOrderChanged", ex); }
         return true;
@@ -929,8 +905,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public bool MoveDurableTaskTo(string key, string targetKey)
     {
         var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
-        CancellationTokenSource? yield = null;
-        WorkItem? yielded = null;
         lock (_gate)
         {
             var rows = journal.Pending();
@@ -960,33 +934,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 changed.TryGetValue(probe.Key, out var probeRank))
                 probe.QueueOrder = probeRank;
 
-            var lane = LaneFor(source.Priority, source.WorkKind);
-            var current = _runningPriorityJobs[lane];
-            if (current is not null && current.Key != key &&
-                current.Priority == source.Priority &&
-                changed.TryGetValue(key, out var promotedRank) &&
-                promotedRank < current.QueueOrder &&
-                !current.YieldRequested &&
-                // Do not preempt transient P0 validations or read-only
-                // probes with an unrelated persistent request.
-                rows.Any(row => row.Key == current.Key))
-            {
-                current.YieldRequested = true;
-                SetStateUnsafe(current, SchedulerJobState.YieldRequested);
-                yielded = current;
-                yield = _runningYield[lane];
-            }
             SignalController();
         }
 
-        if (yielded is not null) PublishState(yielded);
-        if (yield is not null)
-        {
-            // Native cancellation callbacks can re-enter this owner.
-            // Never execute them under the scheduler lock or WPF drag handler.
-            try { _ = yield.CancelAsync(); }
-            catch (ObjectDisposedException) { }
-        }
         return true;
     }
 
