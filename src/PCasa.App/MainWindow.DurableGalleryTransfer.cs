@@ -320,8 +320,9 @@ public partial class MainWindow
                 recipe.Sources.Length, recipe.Sources.Length);
             await Dispatcher.InvokeAsync(async () =>
             {
-                await RefreshBrowseGalleryAsync(
-                    forceIndexReload: true, warmViewport: false);
+                await _scheduler.ExecuteDependentStepAsync(key, () =>
+                    RefreshBrowseGalleryAsync(
+                        forceIndexReload: true, warmViewport: false));
                 if (!recovered)
                 {
                     var movedIds = journal.MovedImageIds(key);
