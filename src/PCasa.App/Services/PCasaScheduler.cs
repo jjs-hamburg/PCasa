@@ -1,4 +1,5 @@
 using PCasa.App.Data;
+using System.Text.Json;
 
 namespace PCasa.App.Services;
 
@@ -164,8 +165,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
-    public PCasaScheduler()
+    public PCasaScheduler(SourceAvailabilityGate? sourceAvailability = null)
     {
+        SourceAvailability = sourceAvailability ?? new SourceAvailabilityGate();
         // File reading is bounded. UI painting and hit testing never enter a lane.
         _workers = new[]
         {
@@ -197,7 +199,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     // Shared by all source-related operations and the existing background
     // monitor. This is a cached readiness decision, never a parallel job lane.
-    public SourceAvailabilityGate SourceAvailability { get; } = new();
+    public SourceAvailabilityGate SourceAvailability { get; }
 
     public void EnableDurablePackages(LocalDatabase database)
     {
@@ -489,7 +491,41 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 if (journal is null) continue;
                 try
                 {
-                    foreach (var key in journal.DueDeferredKeys())
+                    // A manual NAS scan was deferred because its source was
+                    // offline. Do not wait through the exponential retry delay
+                    // after that source is confirmed reachable again.
+                    // The existing scheduler loop owns admission, and the
+                    // SAME durable record/cursor is reactivated via SQLite CAS.
+                    var reconnected = new HashSet<string>(StringComparer.Ordinal);
+                    var ready = new HashSet<string>(
+                        journal.DueDeferredKeys(), StringComparer.Ordinal);
+                    foreach (var pending in journal.Pending())
+                    {
+                        if (pending.State != "deferred" ||
+                            pending.Type != "manual-folder-scan-v1" ||
+                            pending.Error?.StartsWith(
+                                "Quelle vorübergehend offline", StringComparison.Ordinal) != true)
+                            continue;
+                        try
+                        {
+                            using var recipe = JsonDocument.Parse(pending.Payload);
+                            if (!recipe.RootElement.TryGetProperty("Directory", out var directory) ||
+                                directory.ValueKind != JsonValueKind.String)
+                                continue;
+                            var source = directory.GetString();
+                            if (string.IsNullOrWhiteSpace(source) ||
+                                !SourceAvailability.CanAccess(source, _shutdown.Token))
+                                continue;
+                            ready.Add(pending.Key);
+                            reconnected.Add(pending.Key);
+                        }
+                        catch (Exception ex) when (ex is JsonException or ArgumentException
+                                                    or IOException or UnauthorizedAccessException)
+                        {
+                            PCasaDiagnostics.Write("Scheduler.SourceReconnectProbe", ex);
+                        }
+                    }
+                    foreach (var key in ready)
                     {
                         _shutdown.Token.ThrowIfCancellationRequested();
                         var record = journal.Pending().FirstOrDefault(p => p.Key == key);
@@ -512,7 +548,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             PCasaDiagnostics.Write("Scheduler.RetryRecipe:" + key, ex);
                             continue;
                         }
-                        var activated = journal.ActivateDueDeferred(key);
+                        var activated = reconnected.Contains(key)
+                            ? journal.RestartDeferred(key)
+                            : journal.ActivateDueDeferred(key);
                         if (activated is null) continue;
                         // SAME journal identity, step cursor and P0 priority;
                         // ordinary worker lanes still own every execution.
@@ -523,7 +561,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         {
                             PCasaDiagnostics.Write("Scheduler.RetryObserver", ex);
                         }
-                        PCasaDiagnostics.WriteMessage("Scheduler.Retry",
+                        PCasaDiagnostics.WriteMessage(
+                            reconnected.Contains(key) ? "Scheduler.SourceReconnected" : "Scheduler.Retry",
                             $"Key={key}; Type={record.Type}; Step={record.CompletedSteps}");
                     }
                 }
