@@ -51,6 +51,7 @@ internal static class Program
         Run("Old startup transfer probes are retired without erasing unresolved file intentions",
             LegacyTransferProbesDoNotReplayOnStartup, failures);
         Run("Deferred P0 retry frees scans and restarts at its original priority", DurableTransferRetryPreservesPriority, failures);
+        Run("Offline manual NAS package reactivates on reconnect without waiting for old backoff", ManualNasReconnectOverridesDeferredDeadline, failures);
         Run("Cyclic durable retry resumes saved cursor in the same app session", DeferredManualRetryWithinSameSession, failures);
         Run("NAS source failure is probed once for many folders and files", OfflineSourceGateCoalescesQueries, failures);
         Run("Legacy V1 recovery migrates without losing P0 or pending image tags", LegacyTagRecoveryMigrationPreservesIntents, failures);
@@ -702,6 +703,64 @@ internal static class Program
             await idle.WaitAsync(TimeSpan.FromSeconds(5));
             if (runs != 2)
                 throw new Exception("P4 verification lost its yield/resume identity.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void ManualNasReconnectOverridesDeferredDeadline()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var (database, root, _) = sandbox.Prepare();
+            var gateUp = false;
+            var availability = new SourceAvailabilityGate(
+                _ => Volatile.Read(ref gateUp),
+                offlineInterval: TimeSpan.FromMilliseconds(50),
+                onlineInterval: TimeSpan.FromMilliseconds(50));
+            var journal = new DurablePackageJournal(database);
+            const string key = "catalog:scan:reconnect-test";
+            journal.Put(key, "manual-folder-scan-v1",
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Directory = root.LocalPath,
+                    MonitoredRootId = root.Id
+                }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+            journal.Defer(key, 0,
+                "Quelle vorübergehend offline; später erneut prüfen: " +
+                SourceAvailabilityGate.RootOf(root.LocalPath),
+                TimeSpan.FromMinutes(30));
+            await using var scheduler = new PCasaScheduler(availability);
+            scheduler.EnableDurablePackages(database);
+            var resumed = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            scheduler.RegisterDurablePackageType("manual-folder-scan-v1",
+                (packageKey, _) =>
+                {
+                    var package = new SchedulerTaskPackage(packageKey);
+                    package.AddStep(token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (!availability.CanAccess(root.LocalPath, token))
+                            throw new DurablePackageRetryException(
+                                "Quelle vorübergehend offline; später erneut prüfen: " +
+                                SourceAvailabilityGate.RootOf(root.LocalPath));
+                        resumed.TrySetResult();
+                        return Task.CompletedTask;
+                    });
+                    return package;
+                });
+            scheduler.RecoverDurablePackages();
+            await Task.Delay(100);
+            if (resumed.Task.IsCompleted)
+                throw new Exception("NAS package ran while simulated source was offline.");
+            Volatile.Write(ref gateUp, true);
+            await resumed.Task.WaitAsync(TimeSpan.FromSeconds(12));
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (journal.Pending().Any(x => x.Key == key) && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            if (journal.Pending().Any(x => x.Key == key))
+                throw new Exception("Reconnected package did not commit its original durable identity.");
         }
         Check().GetAwaiter().GetResult();
     }
