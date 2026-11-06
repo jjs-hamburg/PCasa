@@ -169,12 +169,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             foreach (var lane in new[]
                 { LaneBackground, LaneInitialImport, LaneUserAction, LaneSourceProbe })
             {
-                // A blocked lane can consume MANY signals while the native
-                // drag is active; one wakeup would strand the rest indefinitely.
-                var count = _pending.Count(item =>
-                    LaneFor(item.Priority, item.Kind) == lane);
-                if (count > 0)
-                    _signals[lane].Release(count);
+                if (_pending.Any(item => LaneFor(item.Priority, item.Kind) == lane))
+                    SignalController();
             }
         }
     }
@@ -470,10 +466,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             lock (_gate)
             {
                 _restoringDurablePackages = false;
-                // Workers may have consumed signals during recovery.
-                foreach (var lane in new[] { LaneManual, LaneManualScan, LaneManualBackup, LaneManualSourceProbe })
-                    if (_pending.Any(p => LaneFor(p.Priority, p.Kind) == lane))
-                        _signals[lane].Release();
+                SignalController();
             }
         }
         // One retry coordinator owned by this scheduler, not a second
@@ -1003,10 +996,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 yielded = current;
                 yield = _runningYield[lane];
             }
-            // Pending signals may have been consumed while the lane ran.
-            if (_pending.Any(item =>
-                LaneFor(item.Priority, item.Kind) == lane))
-                _signals[lane].Release();
+            SignalController();
         }
 
         if (yielded is not null) PublishState(yielded);
@@ -1180,7 +1170,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     existing.Priority = priority;
                     SetStateUnsafe(existing, SchedulerJobState.Queued);
-                    _signals[LaneFor(existing.Priority, existing.Kind)].Release();
+                    SignalController();
                 }
                 completion = existing.Completion.Task;
                 admitted = existing;
@@ -1211,7 +1201,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     SchedulerJobState.Queued, DateTimeOffset.UtcNow, null)
                 { WorkKind = workKind });
                 TrimHistoryUnsafe();
-                _signals[LaneFor(priority, workKind)].Release();
+                SignalController();
                 completion = item.Completion.Task;
                 admitted = item;
             }
@@ -1391,7 +1381,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 item.YieldRequested = false;
                                 _pending.Add(item);
                                 SetStateUnsafe(item, SchedulerJobState.Queued);
-                                _signals[LaneFor(item.Priority, item.Kind)].Release();
+                                SignalController();
                             }
                             else
                             {
@@ -1529,6 +1519,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             _disposed = true;
         }
         _shutdown.Cancel();
+        await _controller;
         if (_deferredRetryWorker is not null)
             await _deferredRetryWorker;
         await Task.WhenAll(_workers);
@@ -1541,6 +1532,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         _shutdown.Dispose();
         foreach (var signal in _signals) signal.Dispose();
+        _controllerWake.Dispose();
     }
 
     private sealed class WorkItem(
