@@ -363,6 +363,35 @@ internal static class FolderAddFlow
                 "Existing thumbnails vanished while another folder's scan was blocked.");
             Console.WriteLine("PASS: Existing thumbnails stay accessible while a separate pending root is blocked.");
 
+            // A folder counter and gallery offset alone do NOT prove that a
+            // thumbnail was decoded. Exercise the actual WPF gallery bitmap
+            // while another imported source is locked across application restart.
+            var restartFlags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var restartIndexField = typeof(PCasa.App.MainWindow)
+                .GetField("_displayedBrowseIndex", restartFlags)!;
+            var restartCacheField = typeof(PCasa.App.MainWindow)
+                .GetField("_browsePageCache", restartFlags)!;
+            Until(window, () =>
+            {
+                if (restartIndexField.GetValue(window) is not
+                        IReadOnlyList<PCasa.App.Models.BrowseThumbnailIndexEntry> visible ||
+                    restartCacheField.GetValue(window) is not BrowseThumbnailPageCache cache)
+                    return false;
+                var imageAt = -1;
+                for (var i = 0; i < visible.Count; i++)
+                    if (visible[i].PhotoFolderId == firstFolder.Id)
+                    {
+                        imageAt = i;
+                        break;
+                    }
+                if (imageAt < 0) return false;
+                _ = surface.WarmVisibleAsync();
+                return cache.TryGet(imageAt, out var bitmap) &&
+                    bitmap is { PixelWidth: > 0, PixelHeight: > 0 };
+            }, "WPF restart has folder counts but no decoded gallery image.");
+            Console.WriteLine(
+                "PASS: Restart renders an actual decoded gallery bitmap during a blocked import.");
+
             // A previously unseen file created while monitoring is disabled
             // requires root reconciliation, but NOT ahead of an unfinished
             // durable first import on another root. The old startup sweep
