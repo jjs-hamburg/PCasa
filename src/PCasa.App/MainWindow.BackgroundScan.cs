@@ -834,6 +834,7 @@ public partial class MainWindow
                 return false;
             try { await backup.CancelAsync(); }
             catch (ObjectDisposedException) { return false; }
+            _scheduler.NotifyTaskViewChanged();
             return true;
         }
 
@@ -882,6 +883,7 @@ public partial class MainWindow
             _initialScanStopRequested = true;
             try { await initialCancellation.CancelAsync(); }
             catch (ObjectDisposedException) { }
+            _scheduler.NotifyTaskViewChanged();
             return true;
         }
         if (!key.StartsWith("automatic:", StringComparison.Ordinal))
@@ -913,6 +915,7 @@ public partial class MainWindow
                         try { await active.CancelAsync(); }
                         catch (ObjectDisposedException) { }
                     }
+                    _scheduler.NotifyTaskViewChanged();
                     return true;
                 }
 
@@ -920,6 +923,7 @@ public partial class MainWindow
                 if (_backgroundPending.Remove(key, out var pendingFollowup))
                     pendingFollowup.Resume?.Dispose();
                 DeferStoppedRootReview(task);
+                _scheduler.NotifyTaskViewChanged();
                 return true;
             }
 
@@ -928,6 +932,7 @@ public partial class MainWindow
             queued.Resume?.Dispose();
             DeferStoppedRootReview(queued);
             RefreshFolderStatusVisuals();
+            _scheduler.NotifyTaskViewChanged();
             return true;
         }
         return false;
