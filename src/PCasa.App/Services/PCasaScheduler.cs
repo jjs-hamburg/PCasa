@@ -336,39 +336,27 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     ? SchedulerJobState.YieldRequested : SchedulerJobState.Running);
                 changed.Add(active);
             }
-            // A running file mutation remains atomic; the worker yields at
-            // the next checkpoint if any accepted waiting task moved ahead.
-            var firstWaiting = _pending
-                .Where(w => _userDispatchOrder.ContainsKey(
-                    TaskIdentityUnsafe(w.Key)))
-                .OrderBy(w => w.Priority)
-                .ThenBy(w => w.QueueOrder).FirstOrDefault();
+            // A global move is an ordinary scheduler order change.
+            // Compare ALL accepted waiting work with active workers, using
+            // exactly the same rule as package admission and preemption.
+            var firstWaiting = _pending.OrderBy(x => x.Priority)
+                .ThenBy(x => x.QueueOrder).ThenBy(x => x.Id)
+                .FirstOrDefault();
             if (firstWaiting is not null)
             {
-                for (var lane=0;lane<_runningPriorityJobs.Length;lane++)
+                for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
                 {
                     var active = _runningPriorityJobs[lane];
-                    if (active is null ||
-                        !_userDispatchOrder.TryGetValue(
-                            TaskIdentityUnsafe(active.Key), out var activeOrder) ||
-                        active.YieldRequested ||
-                        active.Priority < firstWaiting.Priority ||
-                        (active.Priority == firstWaiting.Priority &&
-                         activeOrder <= firstWaiting.QueueOrder)) continue;
+                    if (active is null || active.YieldRequested ||
+                        !Precedes(firstWaiting, active)) continue;
                     active.YieldRequested = true;
-                    SetStateUnsafe(active,SchedulerJobState.YieldRequested);
+                    SetStateUnsafe(active, SchedulerJobState.YieldRequested);
                     changed.Add(active);
                     if (_runningYield[lane] is { } token)
                         yields.Add(token);
                 }
             }
-            for (var lane=0;lane<_signals.Length;lane++)
-            {
-                // All pending work is still owned by the same scheduler.
-                // Signal every newly eligible worker after a global move.
-                if (_pending.Any(w => LaneFor(w.Priority,w.Kind)==lane))
-                    _signals[lane].Release();
-            }
+            WakePendingWorkersUnsafe();
         }
         foreach (var work in changed) PublishState(work);
         foreach (var cancellation in yields)
@@ -707,11 +695,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_disposed) return;
-            foreach (var lane in new[] { LaneBackground, LaneInitialImport,
-                         LaneUserAction })
-                if (_pending.Any(item => LaneFor(item.Priority, item.Kind) == lane))
-                    _signals[lane].Release();
+            if (!_disposed) WakePendingWorkersUnsafe();
         }
     }
 
