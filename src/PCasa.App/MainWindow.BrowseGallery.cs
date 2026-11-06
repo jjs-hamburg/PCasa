@@ -648,7 +648,7 @@ public partial class MainWindow
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
-                        index = _browseCacheRepository.GetIndex(tier);
+                        index = _browseCacheRepository.GetGalleryIndex(tier);
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh),
                     workKind: SchedulerWorkKind.BrowseRead,
