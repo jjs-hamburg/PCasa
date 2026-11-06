@@ -1,63 +1,85 @@
-# PCasa Taskmanager / Scheduler contract
+# PCasa – verbindlicher Scheduler-Vertrag
 
-This is the acceptance contract for the existing scheduler. Do **not** redesign
-the worker lanes as part of a UI clean-up. Slow NAS I/O, manual original-file
-writes and catalog reads need their existing bounded isolation.
+Dieser Vertrag beschreibt **die einzige fachliche Ablaufregel**. Eine
+Ausführungsspur/Worker ist lediglich technische Kapazität und hat keine eigene
+Prioritätenordnung. Der Scheduler darf nicht mehrere konkurrierende
+Startentscheidungen auf unterschiedliche Auftragstypen verteilen.
 
-## One owner for execution
+## 1. Ein Auftrag = ein Paket
 
-- **PCasaScheduler** is the only execution, yielding and global-order owner.
-  No Taskmanager queue, worker, or independent UI priority list exists.
-- **SchedulerTaskView** is the scheduler's read-only projection. It combines
-  persistent job receipts and the existing scan owners' accepted intents.
-  It does **not** create execution work. The Taskmanager filters its result.
-- Durable jobs retain the original `scheduler_packages.package_key`,
-  recipe version, retry/deferral state and completed-step cursor across
-  restart. Existing `gps-edit-v1` remains restorable alongside v2.
-- Automatic scanner tasks retain their `automatic:<source>:<kind>:<path>`
-  identity while awaiting the single background scan owner. During actual
-  execution, `background-scan:...` is an alias of that same intent.
-- One logical task must have one visible row. An automatic **ScanFile** is
-  **"Datei einlesen / Import file"**, not a GPS writer. GPS writing is a
-  `gps-edit-v1/v2` package named **"GPS schreiben / Write GPS"**.
+Jeder fachliche Vorgang (GPS/Tags, Import, manuelles Scannen, Backup, Transfer,
+Watcher-Folgearbeit) wird unter **einer Auftrags-ID** angenommen. Alle
+notwendigen Schritte (Original, Prüfung, Katalog, Anzeige) gehören zum
+selben Paket. SQLite-Journal speichert Typ, Nutzdaten, Fortschritt, Position
+und Status. Der Taskmanager besitzt keine eigene Warteschlange.
 
-## Admission and responsiveness
+## 2. Eine globale Liste
 
-- A Filmstrip/Gallery GPS action writes its immutable v2 intent to the local
-  journal *before* eligibility checks and original-file edits. The accepted
-  key is traceable via `GPS.Edit.Admission` and `GPS.Edit.Accepted`.
-  Rejected UI commands are traceable via `GPS.Filmstrip.Rejected`.
-- Admission notification and user reordering are immediate control-plane
-  changes, not queued behind the work they intend to control.
-- A manually moved automatic **ScanFile** must inform its original scan
-  owner, just like a full-root review; a pending/in-flight scan is requeued
-  with its existing confirmed cursor at its safe cancellation boundary.
-- Frequent progress messages must not force repeated full SQLite projections.
-  Accepted tasks and user order changes still trigger immediate refresh.
+Bei Annahme erhält jedes Paket seine Standardpriorität.
+`P0 = manuell`, `P1 = interaktiv`, `P2 = Benutzerfolgearbeit`,
+`P3 = Hintergrund`, `P4 = ausschließlich Leerlauf`.
 
-## Non-regression invariants
+Innerhalb P0 gilt **LIFO**: das jüngste manuelle Paket steht vorne.
+Eine ausdrücklich im Taskmanager veränderte Position/Priorität gilt
+verbindlich, auch nach Neustart.
 
-1. Original P0 manual write tasks retain the **LIFO** default; background
-   work does not overtake them when there is no user-defined order.
-2. User-defined order survives restart and is enforced at the existing
-   scheduler's safe execution checkpoints. The Taskmanager shows the same
-   effective order.
-3. A slow/offline NAS scan does not suppress unrelated local P0 operations.
-4. Original-file writes are never canceled halfway through an atomic
-   file-write/metadata-verify step. A scheduler yield is not a delete.
-5. An unavailable source or canceled scan does not imply removal of photos,
-   thumbnails or confirmed scan cursors.
-6. No journal migration silently deletes uncommitted GPS/Tag writes.
+Die eine Rangfolge lautet:
+`(effektive Priorität, gespeicherte Reihenfolge, Auftrags-ID)`.
+`PCasaScheduler.Precedes` definiert den Vergleich. Dieser Vergleich
+wird bei Aufnahme, Benutzeränderung und Startfreigabe verwendet.
 
-## Tests and diagnostics
+## 3. Eine Ablaufsteuerung
 
-The Windows acceptance workflow runs catalog regression tests,
-`--taskmanager` and `--taskmanager-global`. The latter now also protects
-default P0 LIFO, background isolation, a blocked GPS factory, scheduler
-order persistence and distinct GPS vs ScanFile task identities.
+Auf jede Aufnahme, Prioritätsänderung, Unterbrechung, Beendigung,
+Stornierung oder Wiederzulassung folgt eine Neubewertung der globalen Liste.
+Es werden keine unabhängigen Worker-Prioritäten verwendet.
 
-On a user's NAS/VPN machine, correlate the timestamped
-`GPS.Filmstrip.Requested`, `GPS.Edit.Admission` and
-`GPS.Edit.Accepted` messages with scheduler P0 state and the displayed
-task key. A screenshot of "Import file" alone is **not** evidence that
-the GPS write was renamed. Do not guess without these data.
+- Ein neuer P0-Auftrag verdrängt ältere manuelle Pakete gemäß LIFO.
+- Die Ausführung wird **sofort angestoßen**. Bereits begonnene atomare
+  Dateischritte werden nicht unsicher abgebrochen.
+- Der Worker meldet den nächsten sicheren Unterbrechungspunkt und bewahrt
+  Paket-ID und bereits bestätigten Cursor.
+- Nach der Unterbrechung läuft das höchste ausführbare Paket; unterbrochene
+  Pakete kehren gemäß ihrer gespeicherten Position zurück.
+- Blockierte NAS-I/O darf andere, unabhängige lokale manuelle Aufträge nicht
+  am Start hindern. Die Worker-Kapazitäten sind nur dafür getrennt.
+
+`PCasaScheduler.SelectNextJobUnsafe` ist die zentrale Freigabestelle.
+`WakePendingWorkersUnsafe` signalisiert nach Zustandsübergängen eine
+Neubewertung, **ohne** einen zweiten Auftragsbestand aufzubauen.
+
+## 4. P4 – keine Ausnahme
+
+`Verify catalog` hat ausschließlich P4. Es darf **nur** starten oder
+fortsetzen, wenn kein Auftrag P0–P3 läuft oder wartet. Dazu zählen
+ausdrücklich auch als `deferred` gespeicherte NAS-Pakete, solange sie im
+Taskmanager als `Wartet` erscheinen. Die bisherige Ausnahme für offline
+zurückgestellte Aufgaben widersprach der Benutzervereinbarung.
+
+Konsequenz: Ein dauernd wartender Offline-Auftrag verhindert P4.
+P4 kann erst wieder starten, wenn der höher priorisierte Auftrag erledigt,
+entfernt oder ausdrücklich in einen Zustand außerhalb der wartenden Liste
+versetzt wurde. Eine solche Zustandsänderung darf nicht stillschweigend
+behauptet werden.
+
+## 5. Ein Taskmanager
+
+Der Taskmanager spiegelt Paketidentität, effektive Reihenfolge und Zustand
+aus dem Scheduler. Jede Verschiebung ist ein **Steuerbefehl an denselben
+Scheduler**, keine Sortierung einer unabhängigen UI-Liste.
+
+## 6. Abnahme
+
+Die CI muss mindestens nachweisen:
+
+1. P0-LIFO über unterschiedliche Ausführungs-Worker.
+2. P0 startet trotz blockiertem SMB-Scan; atomare Schritte bleiben sicher.
+3. Benutzerreihenfolge wirkt auf tatsächlichen Start und über Neustart.
+4. P4 läuft nur bei absolut leerer P0–P3-Liste, einschließlich `deferred`.
+5. Die nächste freigebbare Arbeit startet nach Abschluss/Abbruch ohne
+   verlorene Weckmeldungen.
+6. GPS/Tags und ihre selbst erzeugten Dateiänderungen sind ein Paket.
+7. Verzeichnis-Marker und Paket-Cursor überleben Unterbrechung und Neustart.
+
+**Kein Build gilt als abgenommen, solange die Tests nicht bestanden sind.**
+Die reale NAS-/VPN-Abnahme bleibt zusätzlich erforderlich.
