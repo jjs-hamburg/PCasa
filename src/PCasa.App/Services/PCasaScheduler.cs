@@ -1088,8 +1088,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         (priority < active.Priority ||
                          (priority == active.Priority &&
                           incomingRank < currentRank));
+                    // P4 verification owns only idle capacity. ANY new
+                    // non-idle task displaces it, including a read/probe or
+                    // an operation on a different executor lane.
+                    var displacesIdle = priority < SchedulerPriority.Idle &&
+                        active?.Priority == SchedulerPriority.Idle;
                     if (active is not null &&
-                        (outranksByExplicitOrder ||
+                        (displacesIdle || outranksByExplicitOrder ||
                          (!_userDispatchOrder.ContainsKey(identity) &&
                           (priority < active.Priority || supersedesManualScan ||
                            supersedesOlderManual))) &&
@@ -1189,6 +1194,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                          _pending.Any(x => x.Kind == SchedulerWorkKind.SourceProbe &&
                              x.Priority == SchedulerPriority.ManualAction &&
                              x.Id > candidate.Id));
+                    // Idle P4 never starts ahead of any waiting non-idle
+                    // scheduler task. This affects execution, not only the
+                    // taskmanager's display order. Deferred/offline requests
+                    // are not in the runnable queue and cannot starve P4.
+                    var idleHasRunnablePredecessor = candidate is not null &&
+                        candidate.Priority == SchedulerPriority.Idle &&
+                        _pending.Any(other => other.Priority < SchedulerPriority.Idle);
                     var blockedByNativeDrag = _nativeDragInteractionCount > 0 &&
                         lane is LaneBackground or LaneInitialImport or
                             LaneUserAction or LaneSourceProbe;
@@ -1232,6 +1244,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         !HasManualSourceProbeUnsafe())
                         blockedByHigherPriority = false;
                     item = blockedByHigherPriority || newerManualProbe ||
+                        idleHasRunnablePredecessor ||
                         blockedByNativeDrag || waitingForEarlierOrdered ||
                         waitForEarlierManual ||
                         (_restoringDurablePackages &&
