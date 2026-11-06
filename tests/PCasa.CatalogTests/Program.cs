@@ -65,6 +65,7 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("P4 catalog verify yields to every nonidle task and resumes after work", SchedulerIdleVerifyOnlyWhenOtherWorkFinished, failures);
         Run("P4 never starts while an accepted NAS P0 package remains deferred", DeferredP0BlocksP4Admission, failures);
+        Run("Manual P0 package may await nested read while older P0 is queued", NestedPackageCatalogReadDoesNotDeadlockLifo, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
         Run("Newer manual source probes hold older manual package resumption", NewerManualProbeSuspendsOlderPackage, failures);
@@ -660,6 +661,51 @@ internal static class Program
     // Actual user-visible failure: a deferred NAS scan says "Wartet",
     // yet the taskmanager reports that P4 catalog verification is running.
     // The *same durable journal* must participate in admission.
+    private static void NestedPackageCatalogReadDoesNotDeadlockLifo()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var olderStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var childStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumedOlder = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var older = scheduler.EnqueueAsync("p0:older-transfer",
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        olderStarted.TrySetResult();
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    resumedOlder.TrySetResult();
+                }, workKind: SchedulerWorkKind.Catalog);
+            await olderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var newer = scheduler.EnqueueAsync("p0:newer-transfer",
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    // This catalog-read is a required part of the CURRENT
+                    // package's final publication, not a competing P1 task.
+                    await scheduler.EnqueueAsync("p1:gallery-publish-child",
+                        SchedulerPriority.Interactive, _ =>
+                        {
+                            childStarted.TrySetResult();
+                            return Task.CompletedTask;
+                        }, workKind: SchedulerWorkKind.CatalogRead);
+                }, workKind: SchedulerWorkKind.Catalog);
+            await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await newer.WaitAsync(TimeSpan.FromSeconds(5));
+            await older.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!resumedOlder.Task.IsCompleted || attempts != 2)
+                throw new Exception("Older manual package did not resume after nested publication.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
     private static void DeferredP0BlocksP4Admission()
     {
         static async Task Check()
