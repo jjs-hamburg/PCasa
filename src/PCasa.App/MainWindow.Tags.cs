@@ -278,7 +278,11 @@ public partial class MainWindow
         // Ordinary search still ignores collapsed folders. The new optional
         // Galerieansicht mode limits the scope above, using the same
         // gallery mask; it never mutates the user's folder expansion state.
-        UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
+        // A passive catalog refresh is not search navigation. When its
+        // section visibility mask changes, keep the current folder-relative
+        // viewport rather than allowing WPF to clamp the view to image zero.
+        UpdateGalleryFolderVisibility(
+            preserveGalleryAnchor: !scrollToTop && !enteringSearch && !leavingSearch);
         BrowseSurface.SetSelection(_selectedImageIds);
         EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanelHeading.Text = query.Length == 0 && !AttributeFilterActive
