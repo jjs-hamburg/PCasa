@@ -348,16 +348,17 @@ public partial class MainWindow
         _ = RefreshPendingTagDotsAsync();
         _lastCatalogImageCount = imageCount;
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
-        // A foreground scan must NOT suppress the independent gallery.
-        // Display everything already committed even if a newly added NAS root
-        // is still being scanned (or is blocked/offline). Defer expensive
-        // missing-cache repair, but never defer showing existing thumbnails.
-        if (_manualScanRunning)
-        {
-            await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                warmViewport: false);
-            return;
-        }
+        // Publish the committed catalog BEFORE scheduling cache repair.
+        // A P3/P4 missing-thumbnail rebuild can be held by a running NAS
+        // scan indefinitely. Neither the folder tree nor the initial image
+        // index may depend on that background job finishing.
+        await RefreshBrowseGalleryAsync(forceIndexReload: true,
+            warmViewport: false);
+        if (!_browseInitialized || _folderRemovalPending) return;
+
+        // A manual foreground scan already owns source/cache work. It must
+        // not hide the gallery, and startup must never await another rebuild.
+        if (_manualScanRunning) return;
         if (imageCount == 0)
         {
             StatusText.Text = UiLanguage.T("0 Bilder");
