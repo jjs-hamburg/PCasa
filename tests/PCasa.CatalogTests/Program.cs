@@ -2536,14 +2536,26 @@ internal static class Program
                         idleStarted = true;
                         return Task.CompletedTask;
                     }, workKind: SchedulerWorkKind.CatalogScan);
+                // The old controller canceled this running view read every
+                // 150 ms as soon as another P0 waited. Real SQLite index reads
+                // can take longer and would then never publish the gallery.
+                var viewStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 var rendered = false;
-                await scheduler.EnqueueAsync("catalog:initial-summary:test",
-                    SchedulerPriority.Interactive, _ =>
+                var firstRead = scheduler.EnqueueAsync("catalog:initial-summary:test",
+                    SchedulerPriority.Interactive, async token =>
                     {
+                        viewStarted.TrySetResult();
+                        await Task.Delay(700, token);
                         rendered = true;
-                        return Task.CompletedTask;
-                    }, workKind: SchedulerWorkKind.BrowseRead)
-                    .WaitAsync(TimeSpan.FromSeconds(5));
+                    }, workKind: SchedulerWorkKind.BrowseRead);
+                await viewStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var newerManual = scheduler.EnqueueAsync("test:startup-newer-p0",
+                    SchedulerPriority.ManualAction, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.CatalogScan);
+                await firstRead.WaitAsync(TimeSpan.FromSeconds(5));
+                if (newerManual.IsCompleted)
+                    throw new Exception("The queued P0 bypassed the occupied manual scan executor.");
                 await scheduler.EnqueueAsync("catalog:gallery-index:test",
                     SchedulerPriority.Interactive, _ => Task.CompletedTask,
                     workKind: SchedulerWorkKind.BrowseRead)
