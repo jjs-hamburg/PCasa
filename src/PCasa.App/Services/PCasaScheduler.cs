@@ -1302,7 +1302,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
         // cannot write originals or seize a P0 execution lane. In particular,
         // an offline/slow durable P0 NAS scan must never leave the initial
         // folder tree and gallery blank on startup.
-        var independentBrowseRead = candidate.Kind == SchedulerWorkKind.BrowseRead;
+        var independentBrowseRead =
+            candidate.Kind is SchedulerWorkKind.BrowseRead or
+                SchedulerWorkKind.ThumbnailRead;
         // One package owns its dependent operations. They must never wait
         // behind an unrelated queued P0 while the owner awaits them.
         var childOfRunningPackage = candidate.Parent is { } parent &&
