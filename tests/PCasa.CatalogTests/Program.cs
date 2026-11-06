@@ -689,14 +689,22 @@ internal static class Program
                 SchedulerPriority.ManualAction, async token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    // This catalog-read is a required part of the CURRENT
-                    // package's final publication, not a competing P1 task.
-                    await scheduler.EnqueueAsync("p1:gallery-publish-child",
-                        SchedulerPriority.Interactive, _ =>
-                        {
-                            childStarted.TrySetResult();
-                            return Task.CompletedTask;
-                        }, workKind: SchedulerWorkKind.CatalogRead);
+                    // Mimic the WPF Dispatcher hop by explicitly dropping
+                    // ExecutionContext. Parent identity MUST still propagate
+                    // via parentKey and not depend on AsyncLocal inheritance.
+                    Task dependent;
+                    using (ExecutionContext.SuppressFlow())
+                    {
+                        dependent = Task.Run(() => scheduler.EnqueueAsync(
+                            "p1:gallery-publish-child",
+                            SchedulerPriority.Interactive, _ =>
+                            {
+                                childStarted.TrySetResult();
+                                return Task.CompletedTask;
+                            }, workKind: SchedulerWorkKind.CatalogRead,
+                            parentKey: "p0:newer-transfer"));
+                    }
+                    await dependent;
                 }, workKind: SchedulerWorkKind.Catalog);
             await childStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await newer.WaitAsync(TimeSpan.FromSeconds(5));
