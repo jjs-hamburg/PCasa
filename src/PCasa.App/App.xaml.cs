@@ -74,12 +74,14 @@ public partial class App : Application
             // stays alive and reports errors, progress and completion.
             var maintenanceWindow = new DatabaseMaintenanceProgressWindow();
             MainWindow = maintenanceWindow;
-            maintenanceWindow.Show();
-            // Do not let the first PCasa process disappear until the
-            // maintenance UI has actually entered its visible dispatcher.
-            // The parent waits asynchronously for this explicit handoff.
-            Dispatcher.BeginInvoke(new Action(() =>
+            // ContentRendered, not process creation or Loaded, is the
+            // observable handoff boundary. The original PCasa only closes
+            // after the user has a rendered maintenance window to watch.
+            var readySignaled = false;
+            maintenanceWindow.ContentRendered += (_, _) =>
             {
+                if (readySignaled) return;
+                readySignaled = true;
                 try
                 {
                     File.WriteAllText(path + ".ready", Environment.ProcessId.ToString(
@@ -91,7 +93,8 @@ public partial class App : Application
                     PCasaDiagnostics.Write("Database.MaintenanceReady", ex);
                     maintenanceWindow.ShowStartupFailure(ex);
                 }
-            }), DispatcherPriority.Loaded);
+            };
+            maintenanceWindow.Show();
             return;
         }
         if (e.Args.Length == 0 || !string.Equals(e.Args[0],
