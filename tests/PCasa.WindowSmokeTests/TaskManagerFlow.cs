@@ -57,6 +57,31 @@ internal static class TaskManagerFlow
             scheduler.RegisterDurablePackageType("taskmanager-test-v1", Make);
             scheduler.RecoverDurablePackages();
 
+            // A concurrently executing database backup belongs above a
+            // waiting scan on screen, without changing either job's real
+            // scheduler priority or persisted queue position.
+            var orderProbe = new[]
+            {
+                new SchedulerTaskViewItem("probe:waiting-scan", "Update folder",
+                    @"S:\\Archiv.Negative", "5.190 checked", "Wartet", null,
+                    0, 1, false, false, false, false),
+                new SchedulerTaskViewItem("probe:running-backup", "Back up database",
+                    @"C:\\backup.zip", "3.008 files", "Läuft", null,
+                    0, 2, false, false, false, false)
+            };
+            var orderedProbe = scheduler.OrderTaskView(orderProbe,
+                row => row.Key, row => (SchedulerPriority)row.Priority,
+                row => row.Order, row => row.Status == "Abgeschlossen",
+                (row, priority, order) => row with
+                {
+                    Priority = (int)priority, Order = order
+                }, row => row.Status == "Läuft");
+            if (orderedProbe[0].Key != "probe:running-backup" ||
+                orderedProbe[1].Key != "probe:waiting-scan")
+                throw new Exception(
+                    "Executing backup is wrongly shown below a waiting scan.");
+            Console.WriteLine("PASS: Active execution leads the task view without changing scheduler rank.");
+
             // An empty taskmanager must state WHY the scheduler has no
             // actionable work: the periodic 30-day review may legitimately
             // not be due, or a source may be offline. Never display a blank
