@@ -761,12 +761,9 @@ public partial class MainWindow
         SidePanelText.Text = UiLanguage.T("Bildinformationen laden …");
         try
         {
-            var content = await _scheduler.RunAsync(
-                $"catalog:sidebar-info:{imageId}:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
+            var content = await _galleryCatalogReader.ReadAsync(
                 token => { token.ThrowIfCancellationRequested(); return ReadImageInfo(imageId, mode); },
-                () => _sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds),
-                workKind: SchedulerWorkKind.CatalogRead);
+                () => _sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds));
             if (_sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds))
             {
                 SidePanelText.Text = content.Text;
