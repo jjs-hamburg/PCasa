@@ -146,7 +146,9 @@ internal static class TagFlow
                 PicasaGalleryScrollBar.SpeedInViewportsPerSecond(3) != 0 ||
                 PicasaGalleryScrollBar.SpeedInViewportsPerSecond(30) <= 0 ||
                 PicasaGalleryScrollBar.SpeedInViewportsPerSecond(100) <=
-                    PicasaGalleryScrollBar.SpeedInViewportsPerSecond(30))
+                    PicasaGalleryScrollBar.SpeedInViewportsPerSecond(30) ||
+                PicasaGalleryScrollBar.SpeedPixelsPerSecond(120, 800, 30_000_000) <=
+                    PicasaGalleryScrollBar.SpeedPixelsPerSecond(120, 800, 20_000))
                 throw new Exception("Gallery velocity scrollbar arrows or speed curve invalid.");
             scroller.ScrollToVerticalOffset(0);
             if (scroller.ScrollableHeight > 10)
