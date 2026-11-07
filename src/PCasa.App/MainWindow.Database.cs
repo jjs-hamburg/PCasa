@@ -88,6 +88,11 @@ public partial class MainWindow
             await execution;
             if (!Dispatcher.HasShutdownStarted)
             {
+                // End the backup overlay before a modal success message.
+                // Otherwise the completed backup stays at 100% for the
+                // entire lifetime of that dialog instead of showing the
+                // currently executing scan again.
+                presenter.EndDatabaseBackup(owner);
                 StatusText.Text = UiLanguage.T("Datenbanksicherung abgeschlossen: ") +
                     destination;
                 MessageBox.Show(this,
