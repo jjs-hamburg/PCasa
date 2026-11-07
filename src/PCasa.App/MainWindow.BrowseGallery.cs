@@ -86,7 +86,7 @@ public partial class MainWindow
         _browseCacheBuilder = new BrowseCacheBuilder(
             _browseCacheRepository,
             _browseProfileRepository);
-        _browsePageCache = new BrowseThumbnailPageCache(_scheduler);
+        _browsePageCache = new BrowseThumbnailPageCache();
         BrowseSurface.ImageClicked += BrowseSurface_ImageClicked;
         BrowseSurface.EmptyAreaClicked += BrowseSurface_EmptyAreaClicked;
         BrowseSurface.ImageOpened += BrowseSurface_ImageOpened;
@@ -316,8 +316,7 @@ public partial class MainWindow
         HashSet<long> pendingInitialRootIds = new();
         IReadOnlyList<string> verifiedInitialDirectories = Array.Empty<string>();
         var imageCount = 0;
-        await _scheduler.EnqueueAsync(
-            $"catalog:initial-summary:{Guid.NewGuid():N}", SchedulerPriority.Interactive,
+        await _galleryCatalogReader.ReadAsync(
             token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -330,7 +329,7 @@ public partial class MainWindow
                     .GetVerifiedPendingInitialDirectories();
                 createdDirectories = _folderRepository.GetCreatedDirectories();
                 return Task.CompletedTask;
-            }, workKind: SchedulerWorkKind.BrowseRead);
+            });
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
         _dropTargetProjection = initialConfiguration;
@@ -589,17 +588,14 @@ public partial class MainWindow
         var imageCount = 0;
         try
         {
-            await _scheduler.EnqueueAsync(
-                $"catalog:gallery-summary:{refresh}", SchedulerPriority.Interactive,
+            await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
                     freshFolders = _imageCatalog.GetPhotoFolders();
                     imageCount = _imageCatalog.CountAll();
                     return Task.CompletedTask;
-                }, () => _browseRefreshRequests.IsCurrent(refresh),
-                workKind: SchedulerWorkKind.BrowseRead,
-                parentKey: _galleryRefreshOwningPackageKey);
+                }, () => _browseRefreshRequests.IsCurrent(refresh));
         }
         catch (OperationCanceledException) { return; }
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
@@ -643,16 +639,13 @@ public partial class MainWindow
             IReadOnlyList<BrowseThumbnailIndexEntry> index = Array.Empty<BrowseThumbnailIndexEntry>();
             try
             {
-                await _scheduler.EnqueueAsync(
-                    $"catalog:gallery-index:{refresh}:{tier}", SchedulerPriority.Interactive,
+                await _galleryCatalogReader.ReadAsync(
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
                         index = _browseCacheRepository.GetGalleryIndex(tier);
                         return Task.CompletedTask;
-                    }, () => _browseRefreshRequests.IsCurrent(refresh),
-                    workKind: SchedulerWorkKind.BrowseRead,
-                    parentKey: _galleryRefreshOwningPackageKey);
+                    }, () => _browseRefreshRequests.IsCurrent(refresh));
             }
             catch (OperationCanceledException) { return; }
             if (!_browseRefreshRequests.IsCurrent(refresh))
@@ -674,16 +667,13 @@ public partial class MainWindow
             HashSet<long> existing = new();
             try
             {
-                await _scheduler.EnqueueAsync(
-                    $"catalog:selection:{refresh}", SchedulerPriority.Interactive,
+                await _galleryCatalogReader.ReadAsync(
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
                         existing = _imageCatalog.GetExistingImageIds(checkedSelection);
                         return Task.CompletedTask;
-                    }, () => _browseRefreshRequests.IsCurrent(refresh),
-                    workKind: SchedulerWorkKind.BrowseRead,
-                    parentKey: _galleryRefreshOwningPackageKey);
+                    }, () => _browseRefreshRequests.IsCurrent(refresh));
             }
             catch (OperationCanceledException) { return; }
             if (!_browseRefreshRequests.IsCurrent(refresh))
