@@ -29,19 +29,35 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private bool _paging;
     private long _lastTick;
     private const double AnimationSeconds = 0.27;
+    // Fine control near center; full speed requires deliberate travel.
+    private const double SpeedDeadZone = 9;
+    private const double SpeedRange = 165;
 
     public PicasaGalleryScrollBar()
     {
-        Width = 25;
+        Width = 22;
         HorizontalAlignment = HorizontalAlignment.Right;
-        SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
+        SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
         var surface = new Grid();
+        surface.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
         surface.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         surface.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         surface.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         surface.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         surface.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Content = surface;
+        // A narrow theme-aware separator makes the scrollbar read as its
+        // own control, without introducing a heavy bright panel.
+        var separator = new Border
+        {
+            Width = 1,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            IsHitTestVisible = false
+        };
+        separator.SetResourceReference(Border.BackgroundProperty, "PcasaDividerBrush");
+        Grid.SetRowSpan(separator, 5);
+        System.Windows.Controls.Panel.SetZIndex(separator, 10);
+        surface.Children.Add(separator);
 
         // Outside buttons page; inside buttons move by one short step.
         // All four buttons and their blue Picasa-style pictograms share
@@ -50,7 +66,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
         AddArrow(surface, 1, "line-up", "Eine Zeile nach oben", () => MoveLines(-1));
 
         _track = new Grid { MinHeight = 54, Cursor = Cursors.Hand };
-        _track.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
+        _track.SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
         Grid.SetRow(_track, 2);
         surface.Children.Add(_track);
         _track.MouseLeftButtonDown += Track_MouseLeftButtonDown;
@@ -78,21 +94,23 @@ public sealed class PicasaGalleryScrollBar : UserControl
         up.SetValue(System.Windows.Shapes.Path.DataProperty,
             Geometry.Parse("M 10,2 L 3,11 H 17 Z"));
         up.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.None);
-        up.SetValue(FrameworkElement.WidthProperty, 20d);
-        up.SetValue(FrameworkElement.HeightProperty, 14d);
+        up.SetValue(FrameworkElement.WidthProperty, 15d);
+        up.SetValue(FrameworkElement.HeightProperty, 11d);
         up.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
-        up.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 9, 0, 0));
-        up.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "PcasaAccentBrush");
+        up.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 12, 0, 0));
+        up.SetValue(UIElement.OpacityProperty, 0.72d);
+        up.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "PcasaMutedTextBrush");
         symbols.AppendChild(up);
         var down = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
         down.SetValue(System.Windows.Shapes.Path.DataProperty,
             Geometry.Parse("M 3,3 H 17 L 10,12 Z"));
         down.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.None);
-        down.SetValue(FrameworkElement.WidthProperty, 20d);
-        down.SetValue(FrameworkElement.HeightProperty, 14d);
+        down.SetValue(FrameworkElement.WidthProperty, 15d);
+        down.SetValue(FrameworkElement.HeightProperty, 11d);
         down.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Bottom);
-        down.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 0, 9));
-        down.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "PcasaAccentBrush");
+        down.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 0, 12));
+        down.SetValue(UIElement.OpacityProperty, 0.72d);
+        down.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "PcasaMutedTextBrush");
         symbols.AppendChild(down);
         border.AppendChild(symbols);
         gripTemplate.VisualTree = border;
@@ -116,7 +134,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private static void AddArrow(Grid parent, int row, string symbol,
         string tooltip, Action action)
     {
-        // Same 16x16 icon box and stroke/visual weight on all four buttons.
+        // Same smaller 12x12 icon box and visual weight on all four buttons.
         // A page symbol has an end-stop bar; a line symbol only a chevron.
         var shape = symbol switch
         {
@@ -130,13 +148,14 @@ public sealed class PicasaGalleryScrollBar : UserControl
         {
             Data = Geometry.Parse(shape),
             Stretch = Stretch.Uniform,
-            Width = 16,
-            Height = 16,
+            Width = 12,
+            Height = 12,
+            Opacity = 0.68,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
         icon.SetResourceReference(System.Windows.Shapes.Path.FillProperty,
-            "PcasaAccentBrush");
+            "PcasaMutedTextBrush");
         var arrow = new RepeatButton
         {
             Height = 23,
@@ -148,7 +167,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
             Interval = 95,
             Focusable = false
         };
-        arrow.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
+        arrow.SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
         arrow.Click += (_, _) => action();
         Grid.SetRow(arrow, row);
         parent.Children.Add(arrow);
@@ -264,7 +283,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
         if (_dragging)
         {
             var distance = _dragDisplacement;
-            if (Math.Abs(distance) < 5) return;
+            if (Math.Abs(distance) < SpeedDeadZone) return;
             // Precise near center, increasingly fast when pulled away.
             // Speed is measured in viewports/second, not image counts.
             var pixelsPerSecond = SpeedPixelsPerSecond(distance,
@@ -294,10 +313,12 @@ public sealed class PicasaGalleryScrollBar : UserControl
     // Pure movement curve: exposed for a deterministic regression test.
     public static double SpeedInViewportsPerSecond(double displacement)
     {
-        if (!double.IsFinite(displacement) || Math.Abs(displacement) < 5)
+        if (!double.IsFinite(displacement) ||
+            Math.Abs(displacement) < SpeedDeadZone)
             return 0;
-        var normalized = Math.Clamp((Math.Abs(displacement) - 5) / 115, 0, 1);
-        return 0.35 + 20 * normalized * normalized;
+        var normalized = Math.Clamp(
+            (Math.Abs(displacement) - SpeedDeadZone) / SpeedRange, 0, 1);
+        return 0.2 + 10 * normalized * normalized;
     }
 
     // Enormous libraries need a fast traversal mode: a fully displaced
@@ -309,11 +330,12 @@ public sealed class PicasaGalleryScrollBar : UserControl
         if (!double.IsFinite(displacement) ||
             !double.IsFinite(viewportHeight) ||
             !double.IsFinite(scrollableHeight) ||
-            Math.Abs(displacement) < 5) return 0;
+            Math.Abs(displacement) < SpeedDeadZone) return 0;
         var viewport = Math.Max(1, viewportHeight);
-        var normalized = Math.Clamp((Math.Abs(displacement) - 5) / 115, 0, 1);
-        return 0.35 * viewport + normalized * normalized *
-            Math.Max(20 * viewport, 0.15 * Math.Max(0, scrollableHeight));
+        var normalized = Math.Clamp(
+            (Math.Abs(displacement) - SpeedDeadZone) / SpeedRange, 0, 1);
+        return 0.2 * viewport + normalized * normalized *
+            Math.Max(10 * viewport, 0.05 * Math.Max(0, scrollableHeight));
     }
 
     private void ScrollBy(double pixels)
