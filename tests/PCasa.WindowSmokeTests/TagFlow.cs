@@ -155,10 +155,16 @@ internal static class TagFlow
             var iconSizes = arrows.Select(button =>
                 button.Content as System.Windows.Shapes.Path).ToArray();
             if (iconSizes.Any(icon => icon is null ||
-                    Math.Abs(icon.Width - 16) > 0.01 ||
-                    Math.Abs(icon.Height - 16) > 0.01) ||
+                    Math.Abs(icon.Width - 12) > 0.01 ||
+                    Math.Abs(icon.Height - 12) > 0.01 ||
+                    icon.Opacity > 0.8) ||
                 arrows.Any(button => Math.Abs(button.Height - 23) > 0.01) ||
                 grip.Height <= arrows[0].Height * 2 ||
+                Math.Abs(picasaBar.Width - 22) > 0.01 ||
+                !chrome.Children.OfType<Border>().Any(border =>
+                    border.Width == 1 && !border.IsHitTestVisible) ||
+                PicasaGalleryScrollBar.SpeedPixelsPerSecond(30, 800, 20_000) >= 700 ||
+                PicasaGalleryScrollBar.SpeedPixelsPerSecond(8, 800, 20_000) != 0 ||
                 !Equals(arrows[0].ToolTip, "Eine Seite nach oben") ||
                 !Equals(arrows[1].ToolTip, "Eine Zeile nach oben") ||
                 !Equals(arrows[2].ToolTip, "Eine Zeile nach unten") ||
