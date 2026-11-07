@@ -122,7 +122,7 @@ public partial class MainWindow
     private void ShowFileActionError(Exception ex)
     {
         PCasaDiagnostics.Write("Context.FileAction", ex);
-        MessageBox.Show(this, ex.Message, UiLanguage.T("Dateiaktion fehlgeschlagen"),
+        PcasaDialog.Show(this, ex.Message, UiLanguage.T("Dateiaktion fehlgeschlagen"),
             MessageBoxButton.OK, MessageBoxImage.Warning);
     }
 }
