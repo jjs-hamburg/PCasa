@@ -12,6 +12,7 @@ on:
       - database-maintenance-visible-progress
       - restore-folder-previews-themed-dialogs
       - picasa-gallery-scrollbar
+      - picasa-scrollbar-grip-controls
       - gallery-foreground-guarantee
   workflow_dispatch:
 
