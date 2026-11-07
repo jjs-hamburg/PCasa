@@ -245,7 +245,12 @@ internal static class Program
             var packs = Path.Combine(data, "browse-cache");
             Directory.CreateDirectory(cacheDir);
             Directory.CreateDirectory(packs);
-            File.WriteAllBytes(Path.Combine(cacheDir, "saved.jpg"), [2, 4, 6]);
+            // Real thumbnails are nested in hash buckets, not flat files.
+            var bucket = Path.Combine(cacheDir, "81");
+            Directory.CreateDirectory(bucket);
+            var restoredThumb = Path.Combine(bucket,
+                "812d6849ba08937c49fbb96406d00410dd465e6dc387b2bf85c01d45.jpg");
+            File.WriteAllBytes(restoredThumb, [2, 4, 6]);
             File.WriteAllBytes(Path.Combine(packs, "pack.bin"), [5, 4, 3, 2]);
             File.WriteAllText(Path.Combine(data, "appearance.json"), "KEEP-SETTINGS");
 
@@ -277,11 +282,23 @@ internal static class Program
                 cmd.Parameters.AddWithValue("$local", first);
                 cmd.Parameters.AddWithValue("$canonical", a.CanonicalPath);
                 cmd.Parameters.AddWithValue("$image", original);
-                cmd.Parameters.AddWithValue("$thumb", Path.Combine(cacheDir, "saved.jpg"));
+                cmd.Parameters.AddWithValue("$thumb", restoredThumb);
                 cmd.ExecuteNonQuery();
             }
 
             var work = new DatabaseMaintenance(data);
+            // A backup taken under another Windows profile must retain the
+            // bucket suffix; never flatten to the hash filename.
+            var oldProfile = Path.Combine(@"C:\\Users\\OtherUser\\AppData\\Local\\PCasa",
+                "thumbnails", "81", Path.GetFileName(restoredThumb));
+            if (!string.Equals(DatabaseMaintenance.RehomeThumbnailPath(
+                    oldProfile, cacheDir), restoredThumb,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(DatabaseMaintenance.RehomeThumbnailPath(
+                    Path.Combine(@"C:\\Legacy\\thumbnails", "saved.jpg"), cacheDir),
+                    Path.Combine(cacheDir, "saved.jpg"),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Restored thumbnail path lost directory hierarchy.");
             var archive = Path.Combine(folder, "backup.pcasa.zip");
             var progressEvents = new List<DatabaseBackupProgress>();
             work.Backup(archive, new InlineProgress<DatabaseBackupProgress>(
@@ -345,11 +362,12 @@ internal static class Program
                         StringComparison.OrdinalIgnoreCase) ||
                     reader.GetInt64(2) != 0 ||
                     !string.Equals(reader.GetString(3),
-                        Path.Combine(cacheDir, "saved.jpg"),
-                        StringComparison.OrdinalIgnoreCase))
+                        restoredThumb,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(reader.GetString(3)))
                     throw new Exception("Path remap or deferred metadata refresh was incorrect.");
             }
-            if (!File.ReadAllBytes(Path.Combine(cacheDir, "saved.jpg"))
+            if (!File.ReadAllBytes(restoredThumb)
                     .SequenceEqual(new byte[] { 2, 4, 6 }) ||
                 !File.ReadAllBytes(Path.Combine(packs, "pack.bin"))
                     .SequenceEqual(new byte[] { 5, 4, 3, 2 }) ||
