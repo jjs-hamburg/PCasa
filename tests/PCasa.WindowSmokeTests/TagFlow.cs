@@ -1380,6 +1380,37 @@ internal static class TagFlow
             }
             Console.WriteLine("PASS: Running database backup appears above waiting scan and restores scan progress.");
 
+            // The separate maintenance process must own a real visible WPF
+            // window and preserve failures rather than silently exiting.
+            // An invalid request is safe: it cannot touch a catalog or spawn
+            // a replacement application.
+            var maintenanceWindow = new PCasa.App.DatabaseMaintenanceProgressWindow();
+            try
+            {
+                maintenanceWindow.Show();
+                maintenanceWindow.Start(
+                    Path.Combine(Path.GetTempPath(),
+                        "missing-pcasa-maintenance-" + Guid.NewGuid().ToString("N")),
+                    Environment.ProcessId);
+                var fields = typeof(PCasa.App.DatabaseMaintenanceProgressWindow)
+                    .GetFields(System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic);
+                var phase = (TextBlock?)fields.Single(field =>
+                    field.Name == "_phase").GetValue(maintenanceWindow);
+                var closeButton = (Button?)fields.Single(field =>
+                    field.Name == "_close").GetValue(maintenanceWindow);
+                var restartButton = (Button?)fields.Single(field =>
+                    field.Name == "_restart").GetValue(maintenanceWindow);
+                Until(window, () => maintenanceWindow.IsVisible &&
+                    phase?.Text.Contains("fehlgeschlagen",
+                        StringComparison.OrdinalIgnoreCase) == true &&
+                    closeButton?.IsEnabled == true &&
+                    restartButton?.IsEnabled == true,
+                    "Offline maintenance process hid its fatal error instead of keeping the window open.");
+            }
+            finally { maintenanceWindow.Close(); }
+            Console.WriteLine("PASS: Offline maintenance window displays failures without terminating PCasa.");
+
             // Hide is a user preference, never a transient property of the
             // current job. Even a newly started manual P0 or scan must not
             // resurrect the hidden progress window.
