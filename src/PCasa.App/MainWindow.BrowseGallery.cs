@@ -302,12 +302,13 @@ public partial class MainWindow
 
     private async Task CompleteBrowseStartupMaintenanceAsync()
     {
-        try { await EnsureBrowseCacheAndRefreshAsync(); }
+        try { await EnsureBrowseCacheAndRefreshAsync(maintenanceOnly: true); }
         catch (OperationCanceledException) { }
         catch (Exception ex) { PCasaDiagnostics.Write("Gallery.StartupMaintenance", ex); }
     }
 
-    private async Task EnsureBrowseCacheAndRefreshAsync(bool initialProjectionOnly = false)
+    private async Task EnsureBrowseCacheAndRefreshAsync(
+        bool initialProjectionOnly = false, bool maintenanceOnly = false)
     {
         if (!_browseInitialized ||
             _browseProfileRepository is null ||
@@ -320,6 +321,9 @@ public partial class MainWindow
             return;
         }
 
+        var imageCount = _lastCatalogImageCount;
+        if (!maintenanceOnly)
+        {
         IReadOnlyList<PhotoFolderSummary> initialFolders = Array.Empty<PhotoFolderSummary>();
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> initialConfiguration =
             Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
@@ -328,7 +332,7 @@ public partial class MainWindow
         // previously FULL root inventory. Read it in the SAME catalog job.
         HashSet<long> pendingInitialRootIds = new();
         IReadOnlyList<string> verifiedInitialDirectories = Array.Empty<string>();
-        var imageCount = 0;
+        imageCount = 0;
         await _galleryCatalogReader.ReadAsync(
             token =>
             {
@@ -376,6 +380,9 @@ public partial class MainWindow
             StatusText.Text = UiLanguage.T("0 Bilder");
             return;
         }
+        } // Initial tree and gallery projection already published on startup.
+
+        if (_manualScanRunning || imageCount == 0) return;
 
         var profile = await _galleryCatalogReader.ReadAsync(
             _ => _browseProfileRepository.Get());
