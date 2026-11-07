@@ -1347,6 +1347,7 @@ public partial class MainWindow
         if (e.Delta == 0 || (Keyboard.Modifiers & ModifierKeys.Control) != 0)
             return;
 
+        PicasaGalleryScrollBar.StopMotion();
         const double pixelsPerWheelNotch = 96.0;
         var movement = e.Delta / 120.0 * pixelsPerWheelNotch;
         var previous = BrowseScrollViewer.VerticalOffset;
