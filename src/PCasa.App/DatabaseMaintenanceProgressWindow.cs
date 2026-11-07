@@ -110,10 +110,12 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
     private async Task RunAsync(string path, int parentPid,
         IProgress<DatabaseMaintenanceOperationProgress> report)
     {
+        var succeeded = false;
         try
         {
             var result = await Task.Run(() =>
                 DatabaseMaintenance.RunRequest(path, parentPid, report));
+            succeeded = true;
             _phase.Text = UiLanguage.T("Datenbankwartung abgeschlossen");
             _detail.Text = result;
             _progress.IsIndeterminate = false;
@@ -124,7 +126,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
             var error = ex.GetBaseException();
             PCasaDiagnostics.Write("Database.Maintenance", error);
             _phase.Text = UiLanguage.T("Datenbankwartung fehlgeschlagen");
-            _detail.Text = error.ToString();
+            _detail.Text = error.Message;
             _detail.ToolTip = error.ToString();
             _progress.IsIndeterminate = false;
             _progress.Value = 0;
@@ -135,11 +137,21 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
             _restart.IsEnabled = true;
             _close.IsEnabled = true;
             Activate();
+            if (succeeded && !Dispatcher.HasShutdownStarted)
+            {
+                // Restart only after the offline operation succeeded and
+                // its commit/rollback boundary completed. Failure leaves
+                // this window open so the actual error remains visible.
+                _phase.Text = UiLanguage.T("Datenbankwartung abgeschlossen – PCasa wird gestartet");
+                Dispatcher.BeginInvoke(new Action(Restart),
+                    System.Windows.Threading.DispatcherPriority.Background);
+            }
         }
     }
 
     private void Restart()
     {
+        _restart.IsEnabled = false;
         try
         {
             var executable = Environment.ProcessPath
@@ -154,6 +166,10 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Database.MaintenanceRestart", ex);
+            _phase.Text = UiLanguage.T("PCasa konnte nicht neu gestartet werden");
+            _detail.Text = ex.Message;
+            _detail.ToolTip = ex.ToString();
+            _restart.IsEnabled = true;
             MessageBox.Show(this, ex.Message, "PCasa", MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
