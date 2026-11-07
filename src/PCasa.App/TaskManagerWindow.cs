@@ -755,7 +755,7 @@ public sealed class TaskManagerWindow : Window
                 : UiLanguage.Format(
                     "Auftrag '{0}' wirklich löschen? Bereits erfolgreich geschriebene Dateien werden nicht zurückgesetzt.",
                     row.Title);
-        if (MessageBox.Show(this, prompt, UiLanguage.T("Task löschen"),
+        if (PcasaDialog.Show(this, prompt, UiLanguage.T("Task löschen"),
             MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
         if (_failedRows.TryGetValue(row.Key, out var failedFiles))
@@ -793,7 +793,7 @@ public sealed class TaskManagerWindow : Window
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Taskmanager.Action", ex);
-            MessageBox.Show(this, ex.Message, UiLanguage.T("Taskmanager"),
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("Taskmanager"),
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         finally
