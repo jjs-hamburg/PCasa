@@ -160,7 +160,7 @@ public partial class MainWindow
         // silently discard them when the user closes the main window.
         if (_tagDraft.HasChanges)
         {
-            var choice = MessageBox.Show(this,
+            var choice = PcasaDialog.Show(this,
                 UiLanguage.Format("{0:N0} Bilder mit {1:N0} vorgemerkten Tag-Änderungen verwerfen?",
                     _tagDraft.ImageCount, _tagDraft.ChangeCount),
                 UiLanguage.T("Nicht bestätigte Tag-Änderungen"),
