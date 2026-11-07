@@ -8,6 +8,7 @@ on:
       - scheduler-consistency
       - gallery-read-isolation
       - backup-progress-pin-label
+      - restore-startup-crash-fix
       - gallery-foreground-guarantee
   workflow_dispatch:
 
