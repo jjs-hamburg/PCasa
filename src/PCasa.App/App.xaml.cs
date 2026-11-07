@@ -69,10 +69,26 @@ public partial class App : Application
             base.OnStartup(e);
             var path = e.Args[1];
             var parentPid = int.TryParse(e.Args[2], out var parsed) ? parsed : 0;
+            // This is a fresh process without MainWindow.InitializeAppearance.
+            // Apply the same persisted language before creating any dialog.
+            try
+            {
+                var settings = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "PCasa", "appearance.json");
+                if (File.Exists(settings))
+                {
+                    using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(settings));
+                    if (json.RootElement.TryGetProperty("Language", out var language))
+                        UiLanguage.Current.Select(language.GetString() ?? "de");
+                }
+            }
+            catch (Exception ex) { PCasaDiagnostics.Write("Database.MaintenanceLanguage", ex); }
             // This separate maintenance process owns a real visible window.
             // The previous PCasa process can exit safely while the window
             // stays alive and reports errors, progress and completion.
-            var maintenanceWindow = new DatabaseMaintenanceProgressWindow();
+            var maintenanceWindow = new DatabaseMaintenanceProgressWindow(
+                DatabaseMaintenance.ReadRequestOperation(path));
             MainWindow = maintenanceWindow;
             // ContentRendered, not process creation or Loaded, is the
             // observable handoff boundary. The original PCasa only closes
