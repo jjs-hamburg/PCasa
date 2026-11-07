@@ -1022,7 +1022,7 @@
                     <Grid Grid.Row="1">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="25" />
+                            <ColumnDefinition Width="22" />
                         </Grid.ColumnDefinitions>
                         <ScrollViewer x:Name="BrowseScrollViewer" Grid.Column="0"
                                       HorizontalScrollBarVisibility="Disabled"
