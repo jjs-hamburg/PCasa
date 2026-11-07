@@ -19,10 +19,9 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private readonly Grid _track;
     private readonly Thumb _grip;
     private readonly DispatcherTimer _clock;
-    private readonly Stopwatch _elapsed = new();
+    private readonly TranslateTransform _gripOffset = new();
     private ScrollViewer? _viewer;
     private bool _dragging;
-    private double _dragOriginY;
     private double _dragDisplacement;
     private double _pageStart;
     private double _pageTarget;
@@ -44,8 +43,11 @@ public sealed class PicasaGalleryScrollBar : UserControl
         surface.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Content = surface;
 
-        AddArrow(surface, 0, "▲", "Eine Zeile nach oben", () => MoveLines(-1));
-        AddArrow(surface, 1, "▲\n▲", "Eine Seite nach oben", () => MovePages(-1));
+        // Outside buttons page; inside buttons move by one short step.
+        // All four buttons and their blue Picasa-style pictograms share
+        // exactly the same dimensions, unlike the larger center joystick.
+        AddArrow(surface, 0, "page-up", "Eine Seite nach oben", () => MovePages(-1));
+        AddArrow(surface, 1, "line-up", "Eine Zeile nach oben", () => MoveLines(-1));
 
         _track = new Grid { MinHeight = 54, Cursor = Cursors.Hand };
         _track.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
@@ -55,8 +57,9 @@ public sealed class PicasaGalleryScrollBar : UserControl
 
         _grip = new Thumb
         {
-            Height = 46,
-            Margin = new Thickness(2, 0, 2, 0),
+            Height = 86,
+            Margin = new Thickness(1, 0, 1, 0),
+            RenderTransform = _gripOffset,
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Cursor = Cursors.SizeNS,
@@ -68,14 +71,30 @@ public sealed class PicasaGalleryScrollBar : UserControl
         border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
         border.SetResourceReference(Border.BackgroundProperty, "PcasaSelectionBrush");
         border.SetResourceReference(Border.BorderBrushProperty, "PcasaMutedTextBrush");
-        var inner = new FrameworkElementFactory(typeof(TextBlock));
-        inner.SetValue(TextBlock.TextProperty, "≡");
-        inner.SetValue(TextBlock.FontSizeProperty, 19d);
-        inner.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
-        inner.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
-        inner.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
-        inner.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
-        border.AppendChild(inner);
+        // Large center control has Picasa's opposed blue arrows, not
+        // a conventional scrollbar position thumb / three-line glyph.
+        var symbols = new FrameworkElementFactory(typeof(Grid));
+        var up = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
+        up.SetValue(System.Windows.Shapes.Path.DataProperty,
+            Geometry.Parse("M 10,2 L 3,11 H 17 Z"));
+        up.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.None);
+        up.SetValue(FrameworkElement.WidthProperty, 20d);
+        up.SetValue(FrameworkElement.HeightProperty, 14d);
+        up.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
+        up.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 9, 0, 0));
+        up.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "PcasaAccentBrush");
+        symbols.AppendChild(up);
+        var down = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
+        down.SetValue(System.Windows.Shapes.Path.DataProperty,
+            Geometry.Parse("M 3,3 H 17 L 10,12 Z"));
+        down.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.None);
+        down.SetValue(FrameworkElement.WidthProperty, 20d);
+        down.SetValue(FrameworkElement.HeightProperty, 14d);
+        down.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Bottom);
+        down.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 0, 9));
+        down.SetResourceReference(System.Windows.Shapes.Path.FillProperty, "PcasaAccentBrush");
+        symbols.AppendChild(down);
+        border.AppendChild(symbols);
         gripTemplate.VisualTree = border;
         _grip.Template = gripTemplate;
         _grip.DragStarted += Grip_DragStarted;
@@ -83,8 +102,8 @@ public sealed class PicasaGalleryScrollBar : UserControl
         _grip.DragCompleted += Grip_DragCompleted;
         _track.Children.Add(_grip);
 
-        AddArrow(surface, 3, "▼\n▼", "Eine Seite nach unten", () => MovePages(1));
-        AddArrow(surface, 4, "▼", "Eine Zeile nach unten", () => MoveLines(1));
+        AddArrow(surface, 3, "line-down", "Eine Zeile nach unten", () => MoveLines(1));
+        AddArrow(surface, 4, "page-down", "Eine Seite nach unten", () => MovePages(1));
 
         _clock = new DispatcherTimer(DispatcherPriority.Render)
         {
@@ -94,24 +113,42 @@ public sealed class PicasaGalleryScrollBar : UserControl
         Unloaded += (_, _) => StopMotion();
     }
 
-    private static void AddArrow(Grid parent, int row, string glyph,
+    private static void AddArrow(Grid parent, int row, string symbol,
         string tooltip, Action action)
     {
+        // Same 16x16 icon box and stroke/visual weight on all four buttons.
+        // A page symbol has an end-stop bar; a line symbol only a chevron.
+        var shape = symbol switch
+        {
+            "page-up" => "M 8,4 L 2,11 H 14 Z M 2,1 H 14 V 2.8 H 2 Z",
+            "line-up" => "M 8,3 L 2,11 H 14 Z",
+            "line-down" => "M 2,5 H 14 L 8,13 Z",
+            "page-down" => "M 2,5 H 14 L 8,12 Z M 2,13.2 H 14 V 15 H 2 Z",
+            _ => throw new ArgumentOutOfRangeException(nameof(symbol))
+        };
+        var icon = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse(shape),
+            Stretch = Stretch.Uniform,
+            Width = 16,
+            Height = 16,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        icon.SetResourceReference(System.Windows.Shapes.Path.FillProperty,
+            "PcasaAccentBrush");
         var arrow = new RepeatButton
         {
             Height = 23,
             Margin = new Thickness(1),
             Padding = new Thickness(0),
-            FontSize = glyph.Contains('\n') ? 8 : 12,
-            FontWeight = FontWeights.SemiBold,
-            Content = glyph,
+            Content = icon,
             ToolTip = tooltip,
             Delay = 360,
             Interval = 95,
             Focusable = false
         };
         arrow.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
-        arrow.SetResourceReference(ForegroundProperty, "PcasaTextBrush");
         arrow.Click += (_, _) => action();
         Grid.SetRow(arrow, row);
         parent.Children.Add(arrow);
@@ -127,8 +164,8 @@ public sealed class PicasaGalleryScrollBar : UserControl
         _paging = false;
         _dragging = false;
         _dragDisplacement = 0;
+        _gripOffset.Y = 0;
         _clock.Stop();
-        _elapsed.Reset();
     }
 
     private void MoveLines(int direction)
@@ -171,17 +208,22 @@ public sealed class PicasaGalleryScrollBar : UserControl
     {
         StopMotion();
         _dragging = true;
-        _dragOriginY = Mouse.GetPosition(this).Y;
         _dragDisplacement = 0;
+        _gripOffset.Y = 0;
         StartClock();
     }
 
     private void Grip_DragDelta(object sender, DragDeltaEventArgs e)
     {
         if (!_dragging) return;
-        // Position relative to the whole scrollbar, not the moving grip.
-        // WPF Thumb capture continues even outside the original hit box.
-        _dragDisplacement = Mouse.GetPosition(this).Y - _dragOriginY;
+        // Thumb captures the mouse, so the grip really moves while held.
+        // The travel range depends on the track, never on catalog position.
+        // Clamping prevents the large grip covering the four arrow buttons.
+        var maxTravel = Math.Max(0,
+            (_track.ActualHeight - _grip.ActualHeight) / 2);
+        _dragDisplacement = Math.Clamp(
+            _dragDisplacement + e.VerticalChange, -maxTravel, maxTravel);
+        _gripOffset.Y = _dragDisplacement;
     }
 
     private void Grip_DragCompleted(object sender, DragCompletedEventArgs e)
