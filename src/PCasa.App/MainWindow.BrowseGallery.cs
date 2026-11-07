@@ -1468,12 +1468,9 @@ public partial class MainWindow
                 _browseProfileRepository is null)
                 return;
 
-            var profile = await _scheduler.RunAsync(
-                $"catalog:slider-profile:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
+            var profile = await _galleryCatalogReader.ReadAsync(
                 token => { token.ThrowIfCancellationRequested(); return _browseProfileRepository.Get(); },
-                cancellationToken: cancellation,
-                workKind: SchedulerWorkKind.CatalogRead);
+                cancellationToken: cancellation);
 
             if (cancellation.IsCancellationRequested || _thumbnailSizePreviewActive)
                 return;
