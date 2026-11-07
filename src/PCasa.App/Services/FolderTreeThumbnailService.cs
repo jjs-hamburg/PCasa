@@ -44,13 +44,12 @@ public static class FolderTreeThumbnailService
                 """;
             command.Parameters.AddWithValue("$photoFolderId", photoFolderId);
 
-            var path = command.ExecuteScalar() as string;
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            {
-                return null;
-            }
-
-            var thumbnailPath = path!;
+            // A restore in an older PCasa build flattened the hash-bucket
+            // directory out of thumbnail_path. Resolve the existing local
+            // cached file without rescanning photos or touching SQLite.
+            var thumbnailPath = ThumbnailCache.ResolveExistingLocalPath(
+                command.ExecuteScalar() as string);
+            if (thumbnailPath is null) return null;
             return new ThumbnailImageLoader().Load(
                 thumbnailPath,
                 decodePixelWidth: 36,
