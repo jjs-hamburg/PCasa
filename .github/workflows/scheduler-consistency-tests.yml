@@ -9,6 +9,7 @@ on:
       - gallery-read-isolation
       - backup-progress-pin-label
       - restore-startup-crash-fix
+      - database-maintenance-visible-progress
       - gallery-foreground-guarantee
   workflow_dispatch:
 
