@@ -314,7 +314,17 @@ internal static class Program
                 x.Id, x.LocalPath, x.CanonicalPath,
                 x.Id == a.Id ? remapped : x.LocalPath,
                 x.Id == a.Id)).ToArray();
-            work.Restore(archive, choices);
+            var restoreProgress = new List<DatabaseMaintenanceOperationProgress>();
+            work.Restore(archive, choices,
+                new InlineProgress<DatabaseMaintenanceOperationProgress>(
+                    value => restoreProgress.Add(value)));
+            if (!restoreProgress.Any(x =>
+                    x.Phase == "Datenbank und Vorschaudaten entpacken" &&
+                    x.Total > 0 && x.Completed == x.Total) ||
+                !restoreProgress.Any(x =>
+                    x.Phase == "Datenbank und Cache sicher austauschen") ||
+                restoreProgress[^1].Phase != "Wiederherstellung abgeschlossen")
+                throw new Exception("Restore did not report actual staged extraction and publication.");
             var summary = work.ReadSummary();
             if (summary.Images != 1 || summary.Roots != 1 ||
                 summary.OpenWrites != 0 || summary.OpenTasks != 0)
@@ -346,8 +356,20 @@ internal static class Program
                 !File.ReadAllBytes(original).SequenceEqual(new byte[] { 1, 3, 5, 7 }))
                 throw new Exception("Restore changed original image or damaged cached bytes.");
 
-            work.Optimize();
-            work.Reset();
+            var optimizeProgress = new List<DatabaseMaintenanceOperationProgress>();
+            work.Optimize(new InlineProgress<DatabaseMaintenanceOperationProgress>(
+                value => optimizeProgress.Add(value)));
+            if (!optimizeProgress.Any(x =>
+                    x.Phase == "Datenbank komprimieren (VACUUM)") ||
+                optimizeProgress[^1].Phase != "Optimierung abgeschlossen")
+                throw new Exception("Optimize did not report its real SQLite stages.");
+            var resetProgress = new List<DatabaseMaintenanceOperationProgress>();
+            work.Reset(new InlineProgress<DatabaseMaintenanceOperationProgress>(
+                value => resetProgress.Add(value)));
+            if (!resetProgress.Any(x =>
+                    x.Phase == "Katalog und Cache sicher zurücksetzen") ||
+                resetProgress[^1].Phase != "Zurücksetzen abgeschlossen")
+                throw new Exception("Reset did not report its catalog replacement.");
             var empty = work.ReadSummary();
             if (empty.Images != 0 || empty.Roots != 0 || empty.OpenTasks != 0 ||
                 empty.CacheBytes != 0 ||
