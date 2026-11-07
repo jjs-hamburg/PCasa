@@ -580,12 +580,14 @@ public sealed class DatabaseMaintenance
             SELECT canonical_path,1,0,1,strftime('%Y-%m-%dT%H:%M:%fZ','now')
             FROM monitored_folders;
             """, tx);
-        // Thumbnails are part of the archive, but their absolute paths might
-        // refer to another Windows user's profile. Rehome by file name.
+        // The archive retains the exact thumbnails/<hash-prefix>/<hash>
+        // layout. Rehome the relative suffix, NOT just the final filename:
+        // flattening it makes folder-tree previews disappear after restore.
+        // Preserve ordinary flat legacy thumbnails as well.
         var localCache = Path.Combine(_directory, "thumbnails");
         connection.CreateFunction<string, string>("pcasa_thumb", value =>
-            Path.Combine(localCache, Path.GetFileName(value)));
-        Sql(connection, "UPDATE images SET thumbnail_path=pcasa_thumb(thumbnail_path);", tx);
+            RehomeThumbnailPath(value, localCache));
+        Sql(connection, "UPDATE images SET thumbnail_path=pcasa_thumb(thumbnail_path) WHERE thumbnail_path IS NOT NULL;", tx);
         // The next fresh root scan checks every file, but unchanged images
         // retain their existing thumbnails and EXIF. Unfinished metadata
         // edits were selectively invalidated above instead.
@@ -596,6 +598,36 @@ public sealed class DatabaseMaintenance
             checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
             checkpoint.ExecuteNonQuery();
         }
+    }
+
+    internal static string RehomeThumbnailPath(string originalPath, string localCache)
+    {
+        // Cross-user and cross-machine restores may change the profile root.
+        // Both classic flat thumbnails and the current hash-bucket layout
+        // must resolve to the files actually included in the ZIP.
+        var normalized = originalPath.Replace('/', '\\');
+        var marker = "\\thumbnails\\";
+        var index = normalized.LastIndexOf(marker,
+            StringComparison.OrdinalIgnoreCase);
+        var relative = index >= 0
+            ? normalized[(index + marker.Length)..]
+            : Path.GetFileName(normalized);
+        // Also accept paths originally stored relative to thumbnails/.
+        if (index < 0 && normalized.StartsWith("thumbnails\\",
+                StringComparison.OrdinalIgnoreCase))
+            relative = normalized["thumbnails\\".Length..];
+        // Keep the restored path inside the local thumbnail root even if a
+        // damaged database contains traversal segments.
+        if (string.IsNullOrWhiteSpace(relative) ||
+            relative.Split('\\').Any(part => part is "." or ".." or ""))
+            throw new InvalidDataException(
+                "Ungültiger Vorschaudateipfad in der Sicherung: " + originalPath);
+        var fullRoot = Path.GetFullPath(localCache);
+        var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relative));
+        if (!PathIsUnder(fullPath, fullRoot))
+            throw new InvalidDataException(
+                "Vorschaudateipfad liegt außerhalb des PCasa-Caches.");
+        return fullPath;
     }
 
     private sealed record Mapping(long Id, string OldLocal, string OldCanonical,
