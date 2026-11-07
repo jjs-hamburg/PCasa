@@ -191,7 +191,7 @@ public partial class MainWindow
     {
         if (GpsFilmstripFreezeToggle is null) return;
         GpsFilmstripFreezeCaption.Text = _gpsFilmstripFrozen
-            ? UiLanguage.T("Fixiert") : UiLanguage.T("Fixieren");
+            ? UiLanguage.T("GPS-Quelle fixiert") : UiLanguage.T("Als GPS-Quelle fixieren");
         GpsFilmstripFreezeToggle.ToolTip = _gpsFilmstripFrozen
             ? UiLanguage.T("Fixierung lösen: Filmstrip folgt wieder der Galerieauswahl.")
             : UiLanguage.T("Filmstrip-Auswahl festhalten. Neue Galerieauswahlen verändern dann nur die Karte.");
