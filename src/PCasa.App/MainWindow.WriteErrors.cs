@@ -226,7 +226,7 @@ public partial class MainWindow
         {
             var selected = individual ?? Selected(all);
             if (selected.Length == 0) return;
-            if (!retry && MessageBox.Show(dialog,
+            if (!retry && PcasaDialog.Show(dialog,
                     UiLanguage.Format("{0} ausstehende Änderungen wirklich verwerfen?", selected.Length),
                     UiLanguage.T("Schreibfehler"), MessageBoxButton.YesNo,
                     MessageBoxImage.Warning) != MessageBoxResult.Yes)
@@ -249,7 +249,7 @@ public partial class MainWindow
             }
             Refresh();
             if (errorsDuringReview.Count > 0)
-                MessageBox.Show(dialog,
+                PcasaDialog.Show(dialog,
                     string.Join(Environment.NewLine, errorsDuringReview.Take(12)),
                     UiLanguage.T("Schreibfehler"), MessageBoxButton.OK,
                     MessageBoxImage.Warning);
