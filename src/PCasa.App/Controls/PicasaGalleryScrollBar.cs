@@ -226,9 +226,9 @@ public sealed class PicasaGalleryScrollBar : UserControl
             if (Math.Abs(distance) < 5) return;
             // Precise near center, increasingly fast when pulled away.
             // Speed is measured in viewports/second, not image counts.
-            var viewportsPerSecond = SpeedInViewportsPerSecond(distance);
-            ScrollBy(Math.Sign(distance) * viewportsPerSecond *
-                Math.Max(1, _viewer.ViewportHeight) * dt);
+            var pixelsPerSecond = SpeedPixelsPerSecond(distance,
+                _viewer.ViewportHeight, _viewer.ScrollableHeight);
+            ScrollBy(Math.Sign(distance) * pixelsPerSecond * dt);
         }
         else if (_paging)
         {
@@ -257,6 +257,22 @@ public sealed class PicasaGalleryScrollBar : UserControl
             return 0;
         var normalized = Math.Clamp((Math.Abs(displacement) - 5) / 115, 0, 1);
         return 0.35 + 20 * normalized * normalized;
+    }
+
+    // Enormous libraries need a fast traversal mode: a fully displaced
+    // grip can cross the catalog in seconds, rather than needing thousands
+    // of viewport-sized steps. Fine movement near center stays precise.
+    public static double SpeedPixelsPerSecond(double displacement,
+        double viewportHeight, double scrollableHeight)
+    {
+        if (!double.IsFinite(displacement) ||
+            !double.IsFinite(viewportHeight) ||
+            !double.IsFinite(scrollableHeight) ||
+            Math.Abs(displacement) < 5) return 0;
+        var viewport = Math.Max(1, viewportHeight);
+        var normalized = Math.Clamp((Math.Abs(displacement) - 5) / 115, 0, 1);
+        return 0.35 * viewport + normalized * normalized *
+            Math.Max(20 * viewport, 0.15 * Math.Max(0, scrollableHeight));
     }
 
     private void ScrollBy(double pixels)
