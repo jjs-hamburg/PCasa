@@ -10,6 +10,7 @@ on:
       - backup-progress-pin-label
       - restore-startup-crash-fix
       - database-maintenance-visible-progress
+      - restore-folder-previews-themed-dialogs
       - gallery-foreground-guarantee
   workflow_dispatch:
 
