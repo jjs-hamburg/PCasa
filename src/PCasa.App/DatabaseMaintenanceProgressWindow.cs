@@ -84,6 +84,19 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
         content.Children.Add(_detail);
     }
 
+    public void ShowStartupFailure(Exception error)
+    {
+        _working = false;
+        PCasaDiagnostics.Write("Database.MaintenanceStartup", error);
+        _phase.Text = UiLanguage.T("Datenbankwartung konnte nicht gestartet werden");
+        _detail.Text = error.Message;
+        _detail.ToolTip = error.ToString();
+        _progress.IsIndeterminate = false;
+        _progress.Value = 0;
+        _restart.IsEnabled = false;
+        _close.IsEnabled = true;
+    }
+
     public void Start(string path, int parentPid)
     {
         var report = new Progress<DatabaseMaintenanceOperationProgress>(value =>
