@@ -1291,6 +1291,57 @@ internal static class TagFlow
             }
             Console.WriteLine("PASS: NAS scan, cache and manual P0 share one priority-correct presenter.");
 
+            // Database backup is a manual P0 action. A waiting NAS update must
+            // not hide a RUNNING backup in the common progress dialog.
+            var backupPresenter = new PCasa.App.BrowseCacheProgressWindow
+                { Owner = window };
+            var backupOwner = new object();
+            var backupScanOwner = new object();
+            try
+            {
+                var backupPhase = (TextBlock?)backupPresenter.FindName("PhaseText")
+                    ?? throw new Exception("Missing backup progress phase.");
+                var backupCount = (TextBlock?)backupPresenter.FindName("CountText")
+                    ?? throw new Exception("Missing backup progress count.");
+                backupPresenter.BeginManualOperation("Update folder", 20);
+                backupPresenter.UpdateScan(
+                    new ScanProgress(100, 0, 100, 0, null),
+                    scanOwner: backupScanOwner);
+                backupPresenter.BeginDatabaseBackup(backupOwner);
+                if (backupPhase.Text.Contains("Sicherung",
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Queued database backup displaced waiting scan.");
+                backupPresenter.UpdateDatabaseBackup(backupOwner,
+                    new DatabaseBackupProgress("Datenbanksicherung", 1048576,
+                        4194304, "pcasa.db", 1, 4));
+                if (!backupPresenter.IsVisible ||
+                    !backupPhase.Text.Contains("Datenbanksicherung",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !backupCount.Text.Contains("1,0") &&
+                    !backupCount.Text.Contains("1.0"))
+                    throw new Exception(
+                        "Running P0 database backup was hidden by waiting folder scan.");
+                backupPresenter.UpdateScan(
+                    new ScanProgress(101, 0, 101, 0, null),
+                    scanOwner: backupScanOwner);
+                if (!backupPhase.Text.Contains("Datenbanksicherung",
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Background scan overwrote live backup progress.");
+                backupPresenter.EndDatabaseBackup(backupOwner);
+                if (!backupPhase.Text.Contains(UiLanguage.T("Datei überprüfen"),
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Backup completion did not restore scan progress.");
+                backupPresenter.EndManualOperation();
+                backupPresenter.EndScanPhase(backupScanOwner);
+            }
+            finally
+            {
+                backupPresenter.EndDatabaseBackup(backupOwner);
+                backupPresenter.EndScanPhase(backupScanOwner);
+                backupPresenter.Finish();
+            }
+            Console.WriteLine("PASS: Running database backup appears above waiting scan and restores scan progress.");
+
             // Hide is a user preference, never a transient property of the
             // current job. Even a newly started manual P0 or scan must not
             // resurrect the hidden progress window.
