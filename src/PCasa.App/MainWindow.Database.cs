@@ -26,7 +26,7 @@ public partial class MainWindow
         if (_shutdownStarted || _databaseMaintenancePending) return false;
         if (_databaseBackupTask is { IsCompleted: false })
         {
-            MessageBox.Show(this, UiLanguage.T("Eine Datenbanksicherung läuft bereits."),
+            PcasaDialog.Show(this, UiLanguage.T("Eine Datenbanksicherung läuft bereits."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
             return false;
         }
@@ -73,7 +73,7 @@ public partial class MainWindow
             _databaseBackupCancellation = null;
             _databaseBackupKey = null;
             cancellation.Dispose();
-            MessageBox.Show(this, ex.Message, "PCasa",
+            PcasaDialog.Show(this, ex.Message, "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
@@ -95,7 +95,7 @@ public partial class MainWindow
                 presenter.EndDatabaseBackup(owner);
                 StatusText.Text = UiLanguage.T("Datenbanksicherung abgeschlossen: ") +
                     destination;
-                MessageBox.Show(this,
+                PcasaDialog.Show(this,
                     UiLanguage.T("Datenbanksicherung erfolgreich abgeschlossen.") +
                     Environment.NewLine + destination, "PCasa",
                     MessageBoxButton.OK, MessageBoxImage.Information);
@@ -112,7 +112,7 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
             {
                 StatusText.Text = UiLanguage.T("Datenbanksicherung fehlgeschlagen.");
-                MessageBox.Show(this, ex.Message, "PCasa",
+                PcasaDialog.Show(this, ex.Message, "PCasa",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -171,7 +171,7 @@ public partial class MainWindow
                 PCasaDiagnostics.Write("Database.MaintenanceHandoffCleanup", cleanupEx);
             }
             if (!Dispatcher.HasShutdownStarted)
-                MessageBox.Show(this, ex.Message,
+                PcasaDialog.Show(this, ex.Message,
                     UiLanguage.T("Datenbankverwaltung"),
                     MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -195,7 +195,7 @@ public partial class MainWindow
         if (_databaseMaintenancePending || _shutdownStarted) return false;
         if (_databaseBackupTask is { IsCompleted: false })
         {
-            MessageBox.Show(this,
+            PcasaDialog.Show(this,
                 UiLanguage.T("Die Datenbanksicherung läuft noch. Bitte vor einer Wiederherstellung oder einem Zurücksetzen abschließen."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
             return false;
@@ -204,7 +204,7 @@ public partial class MainWindow
         // launching a child process that will be waiting for us to exit.
         if (_tagDraft.HasChanges)
         {
-            var choice = MessageBox.Show(this,
+            var choice = PcasaDialog.Show(this,
                 UiLanguage.Format(
                     "{0:N0} Bilder mit {1:N0} noch nicht bestätigten Tag-Änderungen verwerfen?",
                     _tagDraft.ImageCount, _tagDraft.ChangeCount),
@@ -245,7 +245,7 @@ public partial class MainWindow
         {
             if (requestPath is not null && System.IO.File.Exists(requestPath))
                 System.IO.File.Delete(requestPath);
-            MessageBox.Show(this, ex.Message,
+            PcasaDialog.Show(this, ex.Message,
                 UiLanguage.T("Datenbankverwaltung"), MessageBoxButton.OK,
                 MessageBoxImage.Error);
             return false;
