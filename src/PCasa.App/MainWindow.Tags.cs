@@ -968,7 +968,7 @@ public partial class MainWindow
             EndVisibleManualOperation(key);
             PCasaDiagnostics.Write("Tags.PackageQueue", ex);
             StatusText.Text = UiLanguage.T("Tag-Paket konnte nicht eingeplant werden");
-            MessageBox.Show(this, ex.Message, UiLanguage.T("Tag-Änderung fehlgeschlagen"),
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("Tag-Änderung fehlgeschlagen"),
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
