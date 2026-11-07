@@ -1381,7 +1381,7 @@
                                                               StrokeLineJoin="Round" Fill="Transparent"/>
                                                     </Canvas>
                                                 </Viewbox>
-                                                <TextBlock x:Name="GpsFilmstripFreezeCaption" Text="{loc:Tr Key='Fixieren'}" FontSize="12"/>
+                                                <TextBlock x:Name="GpsFilmstripFreezeCaption" Text="{loc:Tr Key='Als GPS-Quelle fixieren'}" FontSize="12"/>
                                             </StackPanel>
                                         </ToggleButton>
                                         <Button x:Name="GpsFilmstripToGalleryButton"
