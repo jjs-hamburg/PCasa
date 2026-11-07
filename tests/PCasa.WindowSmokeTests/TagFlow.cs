@@ -1816,9 +1816,42 @@ internal static class TagFlow
             selected.Clear();
             foreach (var imageId in editorIds) selected.Add(imageId);
             surface.SetSelection(selected);
-            sidebarButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, sidebarButton));
-            Until(window, () => window.FindName("TagSidebar") is Grid sidebar &&
-                sidebar.IsVisible, "Tag sidebar did not open.");
+            // The tag sidebar is a foreground database projection, not a
+            // P0-P4 job. It must render saved keywords with P0 occupied.
+            var schedulerField = typeof(PCasa.App.MainWindow).GetField(
+                "_scheduler", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var scheduler = (PCasaScheduler)schedulerField.GetValue(window)!;
+            var blockerStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var unblock = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var blocker = scheduler.EnqueueAsync(
+                "test:blocked-manual-scan-while-tag-sidebar-loads",
+                SchedulerPriority.ManualAction, async token =>
+                {
+                    blockerStarted.TrySetResult();
+                    await unblock.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                Until(window, () => blockerStarted.Task.IsCompleted,
+                    "Blocking manual P0 was not scheduled.");
+                sidebarButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, sidebarButton));
+                Until(window, () => window.FindName("TagSidebar") is Grid sidebar &&
+                    sidebar.IsVisible, "Tag sidebar did not open.");
+                Until(window, () => tagRows.Children.OfType<DockPanel>().Any(
+                    row => row.Children.OfType<TextBlock>().Any(label =>
+                        label.Text.Contains("roma", StringComparison.OrdinalIgnoreCase))),
+                    "Tag sidebar failed to show catalog keywords during active P0.");
+            }
+            finally
+            {
+                unblock.TrySetResult();
+            }
+            Until(window, () => blocker.IsCompleted,
+                "Test P0 did not finish after unblocking.");
+            Console.WriteLine("PASS: Tag sidebar reads existing tags during blocked manual P0.");
             tagInput.Text = editableTag;
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
             var tagOk = (Button?)window.FindName("TagDraftOkButton")
