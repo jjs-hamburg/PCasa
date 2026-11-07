@@ -392,7 +392,7 @@ public partial class FolderManagerWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, UiLanguage.T("Ordner konnte nicht vorgemerkt werden.") + "\n\n" +
+            PcasaDialog.Show(this, UiLanguage.T("Ordner konnte nicht vorgemerkt werden.") + "\n\n" +
                 ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
