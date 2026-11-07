@@ -532,5 +532,7 @@
   "GPS-Kopie nicht gestartet: Quellenkoordinaten sind nicht mehr verfügbar.": "GPS copy not started: source coordinates are no longer available.",
   "GPS-Auftrag nicht angenommen: Keine Zielfotos ausgewählt.": "GPS request not accepted: no target photos selected.",
   "GPS-Auftrag konnte nicht eingereiht werden: ": "Could not queue GPS request: ",
-  "Taskmanager: Auftrag konnte nicht aktiviert werden.": "Task Manager: could not activate the task."
+  "Taskmanager: Auftrag konnte nicht aktiviert werden.": "Task Manager: could not activate the task.",
+  "Als GPS-Quelle fixieren": "Pin as GPS Source",
+  "GPS-Quelle fixiert": "GPS Source Pinned"
 }
