@@ -104,6 +104,23 @@ public sealed class DatabaseMaintenance
         return file;
     }
 
+    // Safe, read-only request metadata for the maintenance window title.
+    // RunRequest still independently validates and owns the work itself.
+    public static string ReadRequestOperation(string requestPath)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(File.ReadAllText(requestPath));
+            return json.RootElement.TryGetProperty("Operation", out var value)
+                ? value.GetString() ?? string.Empty : string.Empty;
+        }
+        catch (Exception ex) when (ex is IOException or
+            UnauthorizedAccessException or JsonException)
+        {
+            return string.Empty;
+        }
+    }
+
     public static string RunRequest(string requestPath, int parentProcessId,
         IProgress<DatabaseMaintenanceOperationProgress>? progress = null)
     {
