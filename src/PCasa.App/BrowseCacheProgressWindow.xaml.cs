@@ -74,6 +74,12 @@ public partial class BrowseCacheProgressWindow : Window
     private bool _showingScanDuringManualWait;
     public bool ShowingScanDuringManualWait => _showingScanDuringManualWait;
     private string? _manualCurrentImagePath;
+    // Preserve the latest authoritative manual scheduler snapshot while a
+    // database backup temporarily owns the shared progress presenter.
+    private SchedulerJobSnapshot? _lastManualSnapshot;
+    private string? _lastManualTitle;
+    private string? _lastManualDirectory;
+    private int _lastManualConfirmedProcessed;
     private bool _finishRequestedWhileManual;
 
     // Background projection only; PCasaScheduler remains sole job owner.
@@ -273,6 +279,14 @@ public partial class BrowseCacheProgressWindow : Window
             ShowScanProgress(scan);
             RevealActiveProgress();
         }
+        else if (_manualPresentationActive && _lastManualSnapshot is { } manual)
+        {
+            // The backup had hidden manual updates, not stopped their owner.
+            // Re-render its latest genuine scheduler state immediately.
+            UpdateManualOperationWithContext(manual, _lastManualTitle,
+                _lastManualDirectory, _lastManualConfirmedProcessed);
+            RevealActiveProgress();
+        }
         else if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } cache)
         {
             ShowCacheProgress(cache);
@@ -327,6 +341,10 @@ public partial class BrowseCacheProgressWindow : Window
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _manualPresentationActive = true;
         _showingScanDuringManualWait = false;
+        _lastManualSnapshot = null;
+        _lastManualTitle = null;
+        _lastManualDirectory = null;
+        _lastManualConfirmedProcessed = 0;
         if (_databaseBackupRunning) return;
         // A new manual action is NOT permission to undo the user's Hide.
         PhaseText.Text = UiLanguage.T(name) + " · " + UiLanguage.T("wartet");
@@ -351,8 +369,12 @@ public partial class BrowseCacheProgressWindow : Window
         string? title = null, string? directory = null, int confirmedProcessed = 0)
     {
         if (_finished || !_manualPresentationActive ||
-            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait ||
-            _databaseBackupRunning) return;
+            Dispatcher.HasShutdownStarted) return;
+        _lastManualSnapshot = progress;
+        _lastManualTitle = title;
+        _lastManualDirectory = directory;
+        _lastManualConfirmedProcessed = confirmedProcessed;
+        if (_showingScanDuringManualWait || _databaseBackupRunning) return;
 
         // YieldRequested and Queued are the SAME waiting condition once a
         // worker releases its lane. The taskmanager also calls it "Wartet".
@@ -464,6 +486,10 @@ public partial class BrowseCacheProgressWindow : Window
         if (!_manualPresentationActive) return;
         _manualPresentationActive = false;
         _showingScanDuringManualWait = false;
+        _lastManualSnapshot = null;
+        _lastManualTitle = null;
+        _lastManualDirectory = null;
+        _lastManualConfirmedProcessed = 0;
         if (_databaseBackupRunning)
         {
             ShowDatabaseBackupIfIdle();
