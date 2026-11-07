@@ -254,7 +254,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Func<T,SchedulerPriority> defaultPriority,
         Func<T,long> defaultOrder,
         Func<T,bool> completed,
-        Func<T,SchedulerPriority,long,T> withPlacement)
+        Func<T,SchedulerPriority,long,T> withPlacement,
+        Func<T,bool>? running = null)
     {
         lock (_gate)
         {
@@ -271,9 +272,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         priority = customPriority;
                 }
                 return (Value: withPlacement(item, priority, order),
-                    Completed: completed(item), Priority: priority,
-                    Order: order, Key: identity);
-            }).OrderBy(item => item.Completed ? 1 : 0)
+                    Completed: completed(item),
+                    Running: running?.Invoke(item) == true,
+                    Priority: priority, Order: order, Key: identity);
+            // Execution is shown above the waiting queue; within each
+            // group the one scheduler-defined priority/order remains intact.
+            // This is a VIEW only. Dispatch and persisted ranks are unchanged.
+            }).OrderBy(item => item.Completed ? 2 : item.Running ? 0 : 1)
                 .ThenBy(item => item.Priority)
                 .ThenBy(item => item.Order)
                 .ThenBy(item => item.Key, StringComparer.Ordinal)
