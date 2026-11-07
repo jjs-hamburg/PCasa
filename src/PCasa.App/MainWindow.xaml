@@ -1016,22 +1016,34 @@
                             </Button>
                         </StackPanel>
                     </Border>
-                    <ScrollViewer x:Name="BrowseScrollViewer" Grid.Row="1"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  VerticalScrollBarVisibility="Auto"
-                                  CanContentScroll="False"
-                                  PanningMode="VerticalOnly"
-                                  PreviewMouseWheel="BrowseScrollViewer_PreviewMouseWheel"
-                                  ScrollChanged="BrowseScrollViewer_ScrollChanged">
-                        <controls:BrowseGallerySurface x:Name="BrowseSurface"
-                                                       Loaded="BrowseSurface_Loaded"
-                                                       AllowDrop="True"
-                                                       DragOver="GalleryFiles_DragOver"
-                                                       DragLeave="DragTarget_Leave"
-                                                       Drop="GalleryFiles_Drop"
-                                                       HorizontalAlignment="Stretch"
-                                                       VerticalAlignment="Top" />
-                    </ScrollViewer>
+                    <!-- Gallery owns one unchanged ScrollViewer. Only its
+                         vertical chrome is replaced; virtualization and
+                         gallery update/anchor rules stay exactly as before. -->
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="25" />
+                        </Grid.ColumnDefinitions>
+                        <ScrollViewer x:Name="BrowseScrollViewer" Grid.Column="0"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Hidden"
+                                      CanContentScroll="False"
+                                      PanningMode="VerticalOnly"
+                                      PreviewMouseWheel="BrowseScrollViewer_PreviewMouseWheel"
+                                      ScrollChanged="BrowseScrollViewer_ScrollChanged">
+                            <controls:BrowseGallerySurface x:Name="BrowseSurface"
+                                                           Loaded="BrowseSurface_Loaded"
+                                                           AllowDrop="True"
+                                                           DragOver="GalleryFiles_DragOver"
+                                                           DragLeave="DragTarget_Leave"
+                                                           Drop="GalleryFiles_Drop"
+                                                           HorizontalAlignment="Stretch"
+                                                           VerticalAlignment="Top" />
+                        </ScrollViewer>
+                        <controls:PicasaGalleryScrollBar x:Name="PicasaGalleryScrollBar"
+                                                        Grid.Column="1"
+                                                        Loaded="PicasaGalleryScrollBar_Loaded" />
+                    </Grid>
 
                     <Grid x:Name="PhotoViewerPanel" Grid.Row="1"
                           Visibility="Collapsed"
