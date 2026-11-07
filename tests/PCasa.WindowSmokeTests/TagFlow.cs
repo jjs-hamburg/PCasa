@@ -131,6 +131,40 @@ internal static class TagFlow
                 surface.GetFolderOffset(b.Id) is not null,
                 "Catalog pictures never appeared in the WPF gallery.");
 
+            // The Picasa scrollbar is a velocity controller on the
+            // ORIGINAL ScrollViewer, not a new scroll surface. Test its four
+            // arrows, eased page animation and increasing joystick speed.
+            var picasaBar = (PicasaGalleryScrollBar?)window.FindName(
+                "PicasaGalleryScrollBar")
+                ?? throw new Exception("Picasa gallery scrollbar is missing.");
+            var chrome = picasaBar.Content as Grid
+                ?? throw new Exception("Picasa scrollbar chrome missing.");
+            var arrows = chrome.Children.OfType<RepeatButton>()
+                .OrderBy(button => Grid.GetRow(button)).ToArray();
+            if (arrows.Length != 4 ||
+                PicasaGalleryScrollBar.SpeedInViewportsPerSecond(3) != 0 ||
+                PicasaGalleryScrollBar.SpeedInViewportsPerSecond(30) <= 0 ||
+                PicasaGalleryScrollBar.SpeedInViewportsPerSecond(100) <=
+                    PicasaGalleryScrollBar.SpeedInViewportsPerSecond(30))
+                throw new Exception("Gallery velocity scrollbar arrows or speed curve invalid.");
+            scroller.ScrollToVerticalOffset(0);
+            if (scroller.ScrollableHeight > 10)
+            {
+                arrows[3].RaiseEvent(new RoutedEventArgs(
+                    ButtonBase.ClickEvent, arrows[3]));
+                Until(window, () => scroller.VerticalOffset >= 10,
+                    "Picasa line-down arrow did not scroll original gallery.");
+                picasaBar.StopMotion();
+                var beforePage = scroller.VerticalOffset;
+                arrows[2].RaiseEvent(new RoutedEventArgs(
+                    ButtonBase.ClickEvent, arrows[2]));
+                Until(window, () => scroller.VerticalOffset > beforePage + 1,
+                    "Picasa animated page-down arrow did not scroll original gallery.");
+                picasaBar.StopMotion();
+                scroller.ScrollToVerticalOffset(0);
+            }
+            Console.WriteLine("PASS: Picasa scrollbar retains the original ScrollViewer with four arrows and accelerated motion.");
+
             // The agreed default is Name ASCENDING, independently within
             // each photo folder. Changing the menu direction must not merge
             // the two sections or disrupt the existing selection/search.
