@@ -536,13 +536,9 @@ public partial class MainWindow
     {
         try
         {
-            // One scheduled, cancellable read package. One packed-file reader
-            // owns its file handles; it never touches the originals.
-            var images = await _scheduler.RunAsync(
-                // Scroll pages are independent reads of the SAME packed
-                // thumbnail store; never coalesce two different page requests.
-                "gps:filmstrip:" + revision + ":" + Guid.NewGuid().ToString("N"),
-                SchedulerPriority.Interactive,
+            // Read-only packed thumbnails are part of the foreground
+            // presentation and never contend with scheduler P0-P4 work.
+            var images = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     using var reader = new PackedThumbnailReader();
@@ -560,8 +556,7 @@ public partial class MainWindow
                     return result;
                 },
                 () => revision == _gpsFilmstripRevision &&
-                    _sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip,
-                workKind: SchedulerWorkKind.ThumbnailRead);
+                    _sidebarMode == "GPS" && _appearance.ShowGpsFilmstrip);
             if (revision != _gpsFilmstripRevision || _sidebarMode != "GPS" ||
                 !_appearance.ShowGpsFilmstrip) return;
             foreach (var (item, bitmap) in images)
