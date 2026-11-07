@@ -558,5 +558,11 @@
   "Optimierung abgeschlossen": "Optimization completed",
   "Neue Datenbank vorbereiten": "Preparing fresh database",
   "Katalog und Cache sicher zurücksetzen": "Safely resetting catalog and cache",
-  "Zurücksetzen abgeschlossen": "Reset completed"
+  "Zurücksetzen abgeschlossen": "Reset completed",
+  "Wiederherstellung fehlgeschlagen": "Restore failed",
+  "Optimierung fehlgeschlagen": "Optimization failed",
+  "Zurücksetzen fehlgeschlagen": "Reset failed",
+  "PCasa wird gestartet": "Restarting PCasa",
+  "Ja": "Yes",
+  "Nein": "No"
 }
