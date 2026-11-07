@@ -176,15 +176,13 @@ public partial class MainWindow
         HashSet<long>? imageIds = null;
         if (query.Length > 0 && !_searchFileNames)
         {
-            imageIds = await _scheduler.RunAsync(
-                $"catalog:tag-search:{version}", SchedulerPriority.Interactive,
+            imageIds = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
                     return new ImageTagRepository(_database).SearchImageIds(query);
                 }, () => version == _tagSearchVersion,
-                cancellationToken: cancellationToken,
-                workKind: SchedulerWorkKind.CatalogRead);
+                cancellationToken: cancellationToken);
         }
         cancellationToken.ThrowIfCancellationRequested();
         if (version != _tagSearchVersion ||
@@ -356,8 +354,7 @@ public partial class MainWindow
         }
         try
         {
-            var counts = await _scheduler.RunAsync(
-                $"catalog:tag-sidebar:{revision}", SchedulerPriority.Interactive,
+            var counts = await _galleryCatalogReader.ReadAsync(
                 token =>
             {
                 token.ThrowIfCancellationRequested();
@@ -372,8 +369,7 @@ public partial class MainWindow
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 }
                 return original;
-            }, () => revision == _tagSidebarRefreshVersion,
-                workKind: SchedulerWorkKind.CatalogRead);
+            }, () => revision == _tagSidebarRefreshVersion);
             if (revision != _tagSidebarRefreshVersion || _sidebarMode != "Tags") return;
             _tagSidebarCountImageIds = selected.OrderBy(id => id).ToArray();
             _tagSidebarOriginalTags = counts;
@@ -461,14 +457,12 @@ public partial class MainWindow
         IReadOnlyList<string> tags;
         try
         {
-            tags = await _scheduler.RunAsync(
-                $"catalog:quick-tags:{revision}", SchedulerPriority.Interactive,
+            tags = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
                     return new ImageTagRepository(_database).GetRecentTags();
-                }, () => revision == _quickTagRefreshVersion,
-                workKind: SchedulerWorkKind.CatalogRead);
+                }, () => revision == _quickTagRefreshVersion);
         }
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { PCasaDiagnostics.Write("Tags.Quick", ex); return; }
@@ -1054,13 +1048,11 @@ public partial class MainWindow
         try
         {
             await Task.Delay(150, cancellation.Token);
-            var suggestions = await _scheduler.RunAsync(
-                "catalog:tag-suggest:" + version, SchedulerPriority.Interactive,
+            var suggestions = await _galleryCatalogReader.ReadAsync(
                 token => new ImageTagRepository(_database)
                     .SuggestExistingTags(query, 8, token),
                 () => version == _tagSuggestionVersion,
-                cancellationToken: cancellation.Token,
-                workKind: SchedulerWorkKind.CatalogRead);
+                cancellationToken: cancellation.Token);
             if (cancellation.IsCancellationRequested ||
                 version != _tagSuggestionVersion ||
                 !string.Equals(TagEntryBox.Text.Trim(), query,
