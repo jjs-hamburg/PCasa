@@ -1402,8 +1402,10 @@ internal static class TagFlow
                 var restartButton = (Button?)fields.Single(field =>
                     field.Name == "_restart").GetValue(maintenanceWindow);
                 Until(window, () => maintenanceWindow.IsVisible &&
-                    phase?.Text.Contains("fehlgeschlagen",
-                        StringComparison.OrdinalIgnoreCase) == true &&
+                    (phase?.Text.Contains("fehlgeschlagen",
+                        StringComparison.OrdinalIgnoreCase) == true ||
+                     phase?.Text.Contains("failed",
+                        StringComparison.OrdinalIgnoreCase) == true) &&
                     closeButton?.IsEnabled == true &&
                     restartButton?.IsEnabled == true,
                     "Offline maintenance process hid its fatal error instead of keeping the window open.");
