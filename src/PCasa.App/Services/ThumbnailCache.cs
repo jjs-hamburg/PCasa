@@ -100,6 +100,31 @@ public sealed class ThumbnailCache
         }
     }
 
+    // Read-only compatibility with catalogs restored by the historical
+    // path-flattening bug. No SQLite mutation and no original-file access.
+    // The existing thumbnail writer already uses the first two SHA-256
+    // characters as a bucket; recover that same location from its basename.
+    public static string? ResolveExistingLocalPath(
+        string? recordedPath, string? cacheRoot = null)
+    {
+        if (string.IsNullOrWhiteSpace(recordedPath)) return null;
+        if (File.Exists(recordedPath)) return recordedPath;
+
+        var filename = Path.GetFileName(recordedPath);
+        if (!filename.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var stem = Path.GetFileNameWithoutExtension(filename);
+        if (stem.StartsWith("raw2-", StringComparison.OrdinalIgnoreCase))
+            stem = stem[5..];
+        if (stem.Length != 64 || !stem.All(char.IsAsciiHexDigit))
+            return null;
+        cacheRoot ??= Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PCasa", "thumbnails");
+        var candidate = Path.Combine(cacheRoot, stem[..2].ToLowerInvariant(), filename);
+        return File.Exists(candidate) ? candidate : null;
+    }
+
     private string GetCachePath(string canonicalPath, long fileSize,
         long modifiedUtcTicks, bool raw)
     {
