@@ -226,8 +226,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
             if (Math.Abs(distance) < 5) return;
             // Precise near center, increasingly fast when pulled away.
             // Speed is measured in viewports/second, not image counts.
-            var normalized = Math.Clamp((Math.Abs(distance) - 5) / 115, 0, 1);
-            var viewportsPerSecond = 0.35 + 20 * normalized * normalized;
+            var viewportsPerSecond = SpeedInViewportsPerSecond(distance);
             ScrollBy(Math.Sign(distance) * viewportsPerSecond *
                 Math.Max(1, _viewer.ViewportHeight) * dt);
         }
@@ -249,6 +248,15 @@ public sealed class PicasaGalleryScrollBar : UserControl
         {
             _clock.Stop();
         }
+    }
+
+    // Pure movement curve: exposed for a deterministic regression test.
+    public static double SpeedInViewportsPerSecond(double displacement)
+    {
+        if (!double.IsFinite(displacement) || Math.Abs(displacement) < 5)
+            return 0;
+        var normalized = Math.Clamp((Math.Abs(displacement) - 5) / 115, 0, 1);
+        return 0.35 + 20 * normalized * normalized;
     }
 
     private void ScrollBy(double pixels)
