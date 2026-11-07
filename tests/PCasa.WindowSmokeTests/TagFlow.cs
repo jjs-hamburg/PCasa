@@ -1305,7 +1305,7 @@ internal static class TagFlow
                     ?? throw new Exception("Missing backup progress count.");
                 backupPresenter.BeginManualOperation("Update folder", 20);
                 backupPresenter.UpdateScan(
-                    new ScanProgress(100, 0, 100, 0, null),
+                    new ScanProgress(100, 0, 100, 0, null, ReadingNew: false),
                     scanOwner: backupScanOwner);
                 backupPresenter.BeginDatabaseBackup(backupOwner);
                 if (backupPhase.Text.Contains("Sicherung",
@@ -1322,7 +1322,7 @@ internal static class TagFlow
                     throw new Exception(
                         "Running P0 database backup was hidden by waiting folder scan.");
                 backupPresenter.UpdateScan(
-                    new ScanProgress(101, 0, 101, 0, null),
+                    new ScanProgress(101, 0, 101, 0, null, ReadingNew: false),
                     scanOwner: backupScanOwner);
                 if (!backupPhase.Text.Contains("Datenbanksicherung",
                     StringComparison.OrdinalIgnoreCase))
