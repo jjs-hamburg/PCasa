@@ -131,6 +131,65 @@ public partial class MainWindow
         }
     }
 
+    private async Task CompleteMaintenanceHandoffAsync(Process child, string requestPath)
+    {
+        var ready = requestPath + ".ready";
+        try
+        {
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            while (started.Elapsed < TimeSpan.FromSeconds(30))
+            {
+                if (child.HasExited)
+                    throw new InvalidOperationException(
+                        "Der separate Wartungsprozess wurde vor der Anzeige des Wartungsdialogs beendet.");
+                try
+                {
+                    if (System.IO.File.Exists(ready) &&
+                        System.IO.File.ReadAllText(ready).Trim() ==
+                        child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                        break;
+                }
+                catch (System.IO.IOException) { /* Child is still publishing ready marker. */ }
+                await Task.Delay(50);
+            }
+            if (!System.IO.File.Exists(ready) ||
+                System.IO.File.ReadAllText(ready).Trim() !=
+                    child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                throw new TimeoutException(
+                    "Der Wartungsdialog wurde nicht sichtbar. PCasa bleibt geöffnet.");
+            // The existing close path owns every scanner, writer, database
+            // transaction and ExifTool child. No second shutdown route.
+            if (!Dispatcher.HasShutdownStarted) Close();
+        }
+        catch (Exception ex)
+        {
+            _databaseMaintenancePending = false;
+            PCasaDiagnostics.Write("Database.MaintenanceHandoff", ex);
+            try { if (!child.HasExited) child.Kill(); }
+            catch (Exception cleanupEx)
+            {
+                PCasaDiagnostics.Write("Database.MaintenanceHandoffCleanup", cleanupEx);
+            }
+            if (!Dispatcher.HasShutdownStarted)
+                MessageBox.Show(this, ex.Message,
+                    UiLanguage.T("Datenbankverwaltung"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            child.Dispose();
+            try { System.IO.File.Delete(ready); }
+            catch (System.IO.IOException) { }
+            // The maintenance child removes the request when it starts work.
+            // A failed handoff must not leave a replayable request behind.
+            if (!_databaseMaintenancePending)
+            {
+                try { System.IO.File.Delete(requestPath); }
+                catch (System.IO.IOException) { }
+            }
+        }
+    }
+
     private bool StartDatabaseMaintenance(DatabaseMaintenance.Request request)
     {
         if (_databaseMaintenancePending || _shutdownStarted) return false;
@@ -173,14 +232,13 @@ public partial class MainWindow
             info.ArgumentList.Add(requestPath);
             info.ArgumentList.Add(Environment.ProcessId.ToString(
                 System.Globalization.CultureInfo.InvariantCulture));
-            using var process = Process.Start(info)
+            var process = Process.Start(info)
                 ?? throw new InvalidOperationException(
                     "PCasa-Datenbankwartung konnte nicht gestartet werden.");
             _databaseMaintenancePending = true;
-            // Shut down through the SINGLE existing scheduler cleanup. The
-            // child will touch SQLite only after THIS process has exited.
-            Dispatcher.BeginInvoke(new Action(Close),
-                DispatcherPriority.Background);
+            // Handoff is asynchronous. Never make PCasa disappear before
+            // the child WPF window has actually become visible.
+            _ = CompleteMaintenanceHandoffAsync(process, requestPath);
             return true;
         }
         catch (Exception ex)
