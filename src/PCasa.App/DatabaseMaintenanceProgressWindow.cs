@@ -16,6 +16,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
     private readonly Button _restart;
     private readonly Button _close;
     private bool _working = true;
+    private int _parentProcessId;
 
     public DatabaseMaintenanceProgressWindow()
     {
@@ -99,6 +100,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
 
     public void Start(string path, int parentPid)
     {
+        _parentProcessId = parentPid;
         var report = new Progress<DatabaseMaintenanceOperationProgress>(value =>
         {
             if (!_working || Dispatcher.HasShutdownStarted) return;
@@ -167,6 +169,19 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
         _restart.IsEnabled = false;
         try
         {
+            // A failed parent handoff can leave the old PCasa instance
+            // shutting down. Never start a second catalog owner over it.
+            if (_parentProcessId > 0)
+            {
+                try
+                {
+                    using var oldInstance = Process.GetProcessById(_parentProcessId);
+                    if (!oldInstance.HasExited)
+                        throw new InvalidOperationException(
+                            "PCasa ist noch nicht vollständig beendet. Ein Neustart ist erst danach sicher.");
+                }
+                catch (ArgumentException) { /* Old process has exited. */ }
+            }
             var executable = Environment.ProcessPath
                 ?? throw new InvalidOperationException("PCasa-Programmdatei nicht gefunden.");
             using var process = Process.Start(new ProcessStartInfo(executable)
