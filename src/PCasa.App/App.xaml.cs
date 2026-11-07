@@ -75,7 +75,23 @@ public partial class App : Application
             var maintenanceWindow = new DatabaseMaintenanceProgressWindow();
             MainWindow = maintenanceWindow;
             maintenanceWindow.Show();
-            maintenanceWindow.Start(path, parentPid);
+            // Do not let the first PCasa process disappear until the
+            // maintenance UI has actually entered its visible dispatcher.
+            // The parent waits asynchronously for this explicit handoff.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    File.WriteAllText(path + ".ready", Environment.ProcessId.ToString(
+                        CultureInfo.InvariantCulture));
+                    maintenanceWindow.Start(path, parentPid);
+                }
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("Database.MaintenanceReady", ex);
+                    maintenanceWindow.ShowStartupFailure(ex);
+                }
+            }), DispatcherPriority.Loaded);
             return;
         }
         if (e.Args.Length == 0 || !string.Equals(e.Args[0],
