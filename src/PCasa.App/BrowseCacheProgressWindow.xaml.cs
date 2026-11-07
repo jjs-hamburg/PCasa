@@ -64,11 +64,12 @@ public partial class BrowseCacheProgressWindow : Window
         => ProgressPresentationChanged?.Invoke(this, EventArgs.Empty);
 
     private bool _manualPresentationActive;
-    // The database backup is an ordinary P2 scheduler task. Its progress
-    // reuses THIS shared presenter and never steals a manual P0 scan/write
-    // overlay. Hide remains a user preference, not cancellation.
+    // Backup is a manual P0 task. When the worker really reports progress,
+    // its progress is shown ahead of a queued/interrupted NAS scan.
+    // The user's Hide preference is respected.
     private object? _databaseBackupOwner;
     private DatabaseBackupProgress? _databaseBackupProgress;
+    private bool _databaseBackupRunning;
     // Presentation-only: actual NAS work may replace a waiting manual caption.
     private bool _showingScanDuringManualWait;
     public bool ShowingScanDuringManualWait => _showingScanDuringManualWait;
@@ -246,6 +247,7 @@ public partial class BrowseCacheProgressWindow : Window
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _databaseBackupOwner = owner;
+        _databaseBackupRunning = false;
         _databaseBackupProgress = new DatabaseBackupProgress(
             "Sicherung wartet auf Scheduler", 0, 0);
         ShowDatabaseBackupIfIdle();
@@ -256,6 +258,7 @@ public partial class BrowseCacheProgressWindow : Window
         if (!ReferenceEquals(_databaseBackupOwner, owner) ||
             _finished || Dispatcher.HasShutdownStarted) return;
         _databaseBackupProgress = value;
+        _databaseBackupRunning = true;
         ShowDatabaseBackupIfIdle();
     }
 
@@ -264,16 +267,30 @@ public partial class BrowseCacheProgressWindow : Window
         if (!ReferenceEquals(_databaseBackupOwner, owner)) return;
         _databaseBackupOwner = null;
         _databaseBackupProgress = null;
-        if (!_manualPresentationActive && !_scanPhaseActive &&
-            !(_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null))
+        _databaseBackupRunning = false;
+        if (_scanPhaseActive && _lastScanProgress is { } scan)
+        {
+            ShowScanProgress(scan);
+            RevealActiveProgress();
+        }
+        else if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } cache)
+        {
+            ShowCacheProgress(cache);
+            PublishProgressStatus();
+            RevealActiveProgress();
+        }
+        else if (!_manualPresentationActive)
             ClearInactivePresentation();
     }
 
     private void ShowDatabaseBackupIfIdle()
     {
-        if (_databaseBackupProgress is not { } progress ||
-            _manualPresentationActive || _scanPhaseActive ||
-            (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null))
+        if (_databaseBackupProgress is not { } progress) return;
+        // A QUEUED backup must not hide existing progress. A RUNNING backup
+        // must be visible, even when a preempted scan retains its waiting UI.
+        if (!_databaseBackupRunning &&
+            (_manualPresentationActive || _scanPhaseActive ||
+             (_cachePhaseOwners.Count > 0 && _lastCacheProgress is not null)))
             return;
         PhaseText.Text = UiLanguage.T(progress.Phase);
         Progress.IsIndeterminate = progress.TotalBytes <= 0;
@@ -310,6 +327,7 @@ public partial class BrowseCacheProgressWindow : Window
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _manualPresentationActive = true;
         _showingScanDuringManualWait = false;
+        if (_databaseBackupRunning) return;
         // A new manual action is NOT permission to undo the user's Hide.
         PhaseText.Text = UiLanguage.T(name) + " · " + UiLanguage.T("wartet");
         Progress.IsIndeterminate = true;
@@ -333,7 +351,8 @@ public partial class BrowseCacheProgressWindow : Window
         string? title = null, string? directory = null, int confirmedProcessed = 0)
     {
         if (_finished || !_manualPresentationActive ||
-            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait) return;
+            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait ||
+            _databaseBackupRunning) return;
 
         // YieldRequested and Queued are the SAME waiting condition once a
         // worker releases its lane. The taskmanager also calls it "Wartet".
@@ -411,7 +430,7 @@ public partial class BrowseCacheProgressWindow : Window
     public void ShowManualThumbnail(string originalPath,
         System.Windows.Media.Imaging.BitmapSource? thumbnail)
     {
-        if (!_manualPresentationActive || _finished ||
+        if (!_manualPresentationActive || _finished || _databaseBackupRunning ||
             !string.Equals(_manualCurrentImagePath, originalPath,
                 StringComparison.OrdinalIgnoreCase)) return;
         CurrentThumbnail.Source = thumbnail;
@@ -424,7 +443,8 @@ public partial class BrowseCacheProgressWindow : Window
     public void UpdateTagAggregateProgress(int processed, int total)
     {
         if (_finished || !_manualPresentationActive ||
-            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait) return;
+            Dispatcher.HasShutdownStarted || _showingScanDuringManualWait ||
+            _databaseBackupRunning) return;
         total = Math.Max(0, total);
         processed = Math.Clamp(processed, 0, total);
         Progress.IsIndeterminate = total == 0;
@@ -444,6 +464,11 @@ public partial class BrowseCacheProgressWindow : Window
         if (!_manualPresentationActive) return;
         _manualPresentationActive = false;
         _showingScanDuringManualWait = false;
+        if (_databaseBackupRunning)
+        {
+            ShowDatabaseBackupIfIdle();
+            return;
+        }
         _manualCurrentImagePath = null;
         if (_finishRequestedWhileManual)
         {
@@ -513,6 +538,7 @@ public partial class BrowseCacheProgressWindow : Window
         _scanPhaseActive = true;
         _activeScanOwner = scanOwner;
         _lastScanProgress = progress;
+        if (_databaseBackupRunning) return;
         if (_manualPresentationActive && !showWhileManualWaiting) return;
         if (_manualPresentationActive)
             _showingScanDuringManualWait = true;
@@ -527,6 +553,11 @@ public partial class BrowseCacheProgressWindow : Window
         _scanPhaseActive = false;
         _activeScanOwner = null;
         _lastScanProgress = null;
+        if (_databaseBackupRunning)
+        {
+            ShowDatabaseBackupIfIdle();
+            return;
+        }
         if (_manualPresentationActive) return;
         if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } cache)
         {
@@ -570,7 +601,8 @@ public partial class BrowseCacheProgressWindow : Window
         // A newly QUEUED cache request cannot erase existing progress from
         // another active cache producer, much less an active NAS scan.
         if (_cachePhaseOwners.Count != 1 ||
-            _manualPresentationActive || _scanPhaseActive) return;
+            _manualPresentationActive || _scanPhaseActive ||
+            _databaseBackupRunning) return;
         _lastCacheProgress = null;
         _cacheProgressOwner = null;
         ClearInactivePresentation();
@@ -585,7 +617,8 @@ public partial class BrowseCacheProgressWindow : Window
             _lastCacheProgress = null;
             _cacheProgressOwner = null;
         }
-        if (_manualPresentationActive || _scanPhaseActive) return;
+        if (_manualPresentationActive || _scanPhaseActive ||
+            _databaseBackupRunning) return;
         if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } remaining)
         {
             ShowCacheProgress(remaining);
@@ -604,7 +637,8 @@ public partial class BrowseCacheProgressWindow : Window
             !_cachePhaseOwners.Contains(cacheOwner)) return;
         _lastCacheProgress = progress;
         _cacheProgressOwner = cacheOwner;
-        if (_manualPresentationActive || _scanPhaseActive) return;
+        if (_manualPresentationActive || _scanPhaseActive ||
+            _databaseBackupRunning) return;
         if (progress.TotalImages == 0 && progress.ProcessedImages == 0)
             return;
         ShowCacheProgress(progress);
