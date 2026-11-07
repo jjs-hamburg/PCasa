@@ -30,7 +30,7 @@ public partial class MainWindow
         if (selected?.Tag is not FolderTreeTag tag) return;
         if (!ValidDragTarget(tag.FullPath))
         {
-            MessageBox.Show(this, UiLanguage.T("Der Zielordner wird nicht überwacht."), "PCasa",
+            PcasaDialog.Show(this, UiLanguage.T("Der Zielordner wird nicht überwacht."), "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -58,7 +58,7 @@ public partial class MainWindow
             name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
             name.EndsWith(' ') || name.EndsWith('.'))
         {
-            MessageBox.Show(this, UiLanguage.T("Ungültiger Ordnername."), "PCasa",
+            PcasaDialog.Show(this, UiLanguage.T("Ungültiger Ordnername."), "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -95,7 +95,7 @@ public partial class MainWindow
                 RefreshFolderTree(preserveGalleryAnchor: true);
             }
             PCasaDiagnostics.Write("FolderContext.Create", ex);
-            MessageBox.Show(this, ex.Message, UiLanguage.T("Ordner anlegen"),
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("Ordner anlegen"),
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -171,7 +171,7 @@ public partial class MainWindow
         if (owner is null ||
             !FolderExclusionRules.IsAtOrBelow(path, owner.LocalPath))
         {
-            MessageBox.Show(this, UiLanguage.T("Nur überwachte Ordner können hier gelöscht werden."),
+            PcasaDialog.Show(this, UiLanguage.T("Nur überwachte Ordner können hier gelöscht werden."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
@@ -181,7 +181,7 @@ public partial class MainWindow
         if (_dropTargetProjection.Any(entry => entry.Folder.Id != owner.Id &&
             FolderExclusionRules.IsAtOrBelow(entry.Folder.LocalPath, path)))
         {
-            MessageBox.Show(this,
+            PcasaDialog.Show(this,
                 UiLanguage.T("Dieser Ordner enthält einen weiteren überwachten Stammordner. Die Ordner müssen zuerst getrennt werden."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
@@ -190,7 +190,7 @@ public partial class MainWindow
         var count = _photoFolders.Where(f =>
             FolderExclusionRules.IsAtOrBelow(f.LocalPath, path))
             .Sum(f => f.ImageCount);
-        if (MessageBox.Show(this,
+        if (PcasaDialog.Show(this,
             UiLanguage.T("Ordner einschließlich sämtlicher Unterordner und Dateien DAUERHAFT auf dem Datenträger löschen?") + "\n\n" +
             path + "\n\n" +
             UiLanguage.Format("{0:N0} katalogisierte Bilder sind betroffen. Zusätzlich werden alle anderen Dateien in diesem Ordner gelöscht.", count) + "\n\n" +
@@ -261,7 +261,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderContext.PhysicalDelete", ex);
-            MessageBox.Show(this,
+            PcasaDialog.Show(this,
                 UiLanguage.T("Der Dateisystemordner konnte nicht vollständig gelöscht werden. Die PCasa-Katalogentfernung wurde möglicherweise bereits durchgeführt.") + "\n\n" +
                 ex.Message, UiLanguage.T("Ordner löschen"), MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -281,7 +281,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Windows Explorer",
+            PcasaDialog.Show(this, ex.Message, "Windows Explorer",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
@@ -298,7 +298,7 @@ public partial class MainWindow
                 DisplayedExcludedPaths(root.Id));
         var state = root is null ? UiLanguage.T("Nicht überwacht") :
             excluded ? UiLanguage.T("Im Ordnermanager deaktiviert") : UiLanguage.T("Überwacht");
-        MessageBox.Show(this,
+        PcasaDialog.Show(this,
             UiLanguage.Format("Pfad: {0}\n\nBilder (einschließlich Unterordner): {1:N0}\nBildordner: {2:N0}\nStatus: {3}",
                 tag.FullPath, total, folders.Length, state),
             UiLanguage.T("PCasa – Ordnerinformationen"), MessageBoxButton.OK,
@@ -312,7 +312,7 @@ public partial class MainWindow
         var root = DisplayedMonitoredRoot(tag.FullPath);
         if (root is null)
         {
-            MessageBox.Show(this, UiLanguage.T("Dieser Ordner liegt außerhalb der PCasa-Überwachung."),
+            PcasaDialog.Show(this, UiLanguage.T("Dieser Ordner liegt außerhalb der PCasa-Überwachung."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -320,7 +320,7 @@ public partial class MainWindow
         if (FolderExclusionRules.IsExcluded(path,
                 DisplayedExcludedPaths(root.Id)))
         {
-            MessageBox.Show(this, UiLanguage.T("Der Ordner ist bereits deaktiviert."),
+            PcasaDialog.Show(this, UiLanguage.T("Der Ordner ist bereits deaktiviert."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -332,7 +332,7 @@ public partial class MainWindow
         var actionDescription = removeMonitoredRoot
             ? UiLanguage.T("Der überwachte Ordner wird auch aus dem Ordnermanager entfernt.")
             : UiLanguage.T("Der Unterordner bleibt im Ordnermanager deaktiviert auswählbar.");
-        var answer = MessageBox.Show(this,
+        var answer = PcasaDialog.Show(this,
             UiLanguage.Format("Ordner einschließlich Unterordnern aus PCasa entfernen?\n\n{0}\n\n{1:N0} katalogisierte Bilder verschwinden sofort aus PCasa.\n", path, count) +
             UiLanguage.T("Die Originaldateien bleiben unverändert. ") + actionDescription,
             UiLanguage.T("Aus PCasa entfernen"), MessageBoxButton.YesNo, MessageBoxImage.Warning,
@@ -346,7 +346,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderContext.Remove", ex);
-            MessageBox.Show(this, UiLanguage.T("Die Bereinigung konnte nicht abgeschlossen werden.") + "\n\n" +
+            PcasaDialog.Show(this, UiLanguage.T("Die Bereinigung konnte nicht abgeschlossen werden.") + "\n\n" +
                 ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
