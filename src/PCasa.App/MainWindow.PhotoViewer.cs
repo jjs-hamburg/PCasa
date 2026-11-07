@@ -177,16 +177,13 @@ public partial class MainWindow
         PhotoViewerImageInfo? resolvedInfo = null;
         try
         {
-            await _scheduler.EnqueueAsync(
-                $"catalog:viewer-info:{entry.ImageId}:{version}",
-                SchedulerPriority.Interactive,
+            await _galleryCatalogReader.ReadAsync(
                 readToken =>
                 {
                     readToken.ThrowIfCancellationRequested();
                     resolvedInfo = new PhotoViewerImageRepository(_database).Get(entry.ImageId);
                     return Task.CompletedTask;
-                }, cancellationToken: token,
-                workKind: SchedulerWorkKind.CatalogRead);
+                }, cancellationToken: token);
         }
         catch (OperationCanceledException) { return; }
         catch (Exception) { /* The prepared preview remains usable. */ }
