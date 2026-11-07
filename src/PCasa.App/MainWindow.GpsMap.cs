@@ -662,16 +662,13 @@ public partial class MainWindow
         {
             // Pure geographical projection in the EXISTING scheduler.
             // No separate job system, map-provider API or original file IO.
-            var clustered = await _scheduler.RunAsync(
-                "gps:cluster:" + request,
-                SchedulerPriority.Interactive,
+            var clustered = await _galleryCatalogReader.ReadAsync(
                 cancellation => GpsGeographicClusterer.Cluster(
                     snapshot.Select(p => new GpsPhotoPosition(
                         p.Id, p.Lat, p.Lon)).ToArray(), zoom, cancellation),
                 () => request == _gpsClusterRequestRevision &&
                     pointRevision == _gpsPointRevision &&
-                    _sidebarMode == "GPS",
-                workKind: SchedulerWorkKind.CatalogRead);
+                    _sidebarMode == "GPS");
 
             if (request != _gpsClusterRequestRevision ||
                 pointRevision != _gpsPointRevision || _sidebarMode != "GPS" ||
@@ -864,17 +861,14 @@ public partial class MainWindow
         try
         {
             var mismatchedSources = new List<(long RootId, string Path)>();
-            var points = await _scheduler.RunAsync(
-                "gps:catalog:" + revision,
-                SchedulerPriority.Interactive,
+            var points = await _galleryCatalogReader.ReadAsync(
                 cancellation =>
                 {
                     cancellation.ThrowIfCancellationRequested();
                     return ReadGpsPoints(queryIds, cancellation,
                         mismatchedSources);
                 },
-                () => revision == _gpsQueryRevision && _sidebarMode == "GPS",
-                workKind: SchedulerWorkKind.CatalogRead);
+                () => revision == _gpsQueryRevision && _sidebarMode == "GPS");
             if (revision != _gpsQueryRevision || _sidebarMode != "GPS") return;
             // Never display positions from metadata stored under a different
             // original image. Repair those specific files with the EXISTING
