@@ -3,7 +3,6 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:po="http://schemas.microsoft.com/winfx/2006/xaml/presentation/options"
-             StartupUri="MainWindow.xaml"
              ThemeMode="Dark">
     <Application.Resources>
         <SolidColorBrush x:Key="PcasaWindowBrush" po:Freeze="False" Color="#202122" />
