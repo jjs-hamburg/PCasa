@@ -150,17 +150,61 @@ internal static class TagFlow
                 PicasaGalleryScrollBar.SpeedPixelsPerSecond(120, 800, 30_000_000) <=
                     PicasaGalleryScrollBar.SpeedPixelsPerSecond(120, 800, 20_000))
                 throw new Exception("Gallery velocity scrollbar arrows or speed curve invalid.");
+            var track = chrome.Children.OfType<Grid>().Single();
+            var grip = track.Children.OfType<Thumb>().Single();
+            var iconSizes = arrows.Select(button =>
+                button.Content as System.Windows.Shapes.Path).ToArray();
+            if (iconSizes.Any(icon => icon is null ||
+                    Math.Abs(icon.Width - 16) > 0.01 ||
+                    Math.Abs(icon.Height - 16) > 0.01) ||
+                arrows.Any(button => Math.Abs(button.Height - 23) > 0.01) ||
+                grip.Height <= arrows[0].Height * 2 ||
+                !Equals(arrows[0].ToolTip, "Eine Seite nach oben") ||
+                !Equals(arrows[1].ToolTip, "Eine Zeile nach oben") ||
+                !Equals(arrows[2].ToolTip, "Eine Zeile nach unten") ||
+                !Equals(arrows[3].ToolTip, "Eine Seite nach unten"))
+                throw new Exception("Picasa page/line ordering or icon/large-grip dimensions invalid.");
+
+            // The middle joystick is NEVER a gallery position thumb. It
+            // physically follows a drag but always springs to center at
+            // release, regardless of the current BrowseScrollViewer offset.
+            var transform = grip.RenderTransform as TranslateTransform
+                ?? throw new Exception("Velocity joystick has no visual travel.");
+            var dragStart = new DragStartedEventArgs(0, 0)
+            {
+                RoutedEvent = Thumb.DragStartedEvent
+            };
+            grip.RaiseEvent(dragStart);
+            grip.RaiseEvent(new DragDeltaEventArgs(0, 48)
+            {
+                RoutedEvent = Thumb.DragDeltaEvent
+            });
+            if (transform.Y <= 0)
+                throw new Exception("Picasa grip did not move with downward drag.");
+            grip.RaiseEvent(new DragDeltaEventArgs(0, -90)
+            {
+                RoutedEvent = Thumb.DragDeltaEvent
+            });
+            if (transform.Y >= 0)
+                throw new Exception("Picasa grip did not move with upward drag.");
+            grip.RaiseEvent(new DragCompletedEventArgs(0, 0, false)
+            {
+                RoutedEvent = Thumb.DragCompletedEvent
+            });
+            if (Math.Abs(transform.Y) > 0.01)
+                throw new Exception("Picasa grip did not spring back to track center.");
+
             scroller.ScrollToVerticalOffset(0);
             if (scroller.ScrollableHeight > 10)
             {
-                arrows[3].RaiseEvent(new RoutedEventArgs(
-                    ButtonBase.ClickEvent, arrows[3]));
+                arrows[2].RaiseEvent(new RoutedEventArgs(
+                    ButtonBase.ClickEvent, arrows[2]));
                 Until(window, () => scroller.VerticalOffset >= 10,
                     "Picasa line-down arrow did not scroll original gallery.");
                 picasaBar.StopMotion();
                 var beforePage = scroller.VerticalOffset;
-                arrows[2].RaiseEvent(new RoutedEventArgs(
-                    ButtonBase.ClickEvent, arrows[2]));
+                arrows[3].RaiseEvent(new RoutedEventArgs(
+                    ButtonBase.ClickEvent, arrows[3]));
                 Until(window, () => scroller.VerticalOffset > beforePage + 1,
                     "Picasa animated page-down arrow did not scroll original gallery.");
                 picasaBar.StopMotion();
