@@ -1380,6 +1380,35 @@ internal static class TagFlow
             }
             Console.WriteLine("PASS: Running database backup appears above waiting scan and restores scan progress.");
 
+            // All ordinary confirmation dialogs use the same themed owner,
+            // button style and safe default (No for destructive questions).
+            bool styledConfirmVisible = false;
+            window.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                var dialog = Application.Current.Windows.OfType<Window>()
+                    .FirstOrDefault(w => w.Title == "PCasa – Dialogtest" && w.IsVisible);
+                if (dialog is null) return;
+                var layout = dialog.Content as Grid;
+                var buttons = layout?.Children.OfType<StackPanel>()
+                    .SelectMany(panel => panel.Children.OfType<Button>()).ToArray()
+                    ?? [];
+                styledConfirmVisible = layout is not null &&
+                    buttons.Length == 2 &&
+                    buttons.All(button => button.Style is not null) &&
+                    buttons.Any(button => button.IsDefault);
+                var safeButton = buttons.FirstOrDefault(button => button.IsDefault);
+                if (safeButton is not null)
+                    safeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                else
+                    dialog.Close();
+            }), DispatcherPriority.Background);
+            var confirm = PCasa.App.PcasaDialog.Show(window,
+                "Delete staged changes?", "PCasa – Dialogtest",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+            if (confirm != MessageBoxResult.No || !styledConfirmVisible)
+                throw new Exception("Themed confirmation lost its safe No/default or shared PCasa button style.");
+            Console.WriteLine("PASS: Modal PCasa warnings use the shared theme and safe keyboard defaults.");
+
             // The separate maintenance process must own a real visible WPF
             // window and preserve failures rather than silently exiting.
             // An invalid request is safe: it cannot touch a catalog or spawn
