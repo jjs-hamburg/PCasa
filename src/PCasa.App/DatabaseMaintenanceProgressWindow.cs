@@ -12,15 +12,39 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
 {
     private readonly TextBlock _phase;
     private readonly TextBlock _detail;
+    private readonly string _finishedPhase;
+    private readonly string _failedPhase;
     private readonly ProgressBar _progress;
     private readonly Button _restart;
     private readonly Button _close;
     private bool _working = true;
     private int _parentProcessId;
 
-    public DatabaseMaintenanceProgressWindow()
+    public DatabaseMaintenanceProgressWindow(string operation = "")
     {
-        Title = "PCasa – " + UiLanguage.T("Datenbankverwaltung");
+        var operationTitle = operation switch
+        {
+            "restore" => "Datenbank wiederherstellen",
+            "optimize" => "Datenbank optimieren",
+            "reset" => "Datenbank zurücksetzen",
+            "backup" => "Datenbank sichern",
+            _ => "Datenbankverwaltung"
+        };
+        _finishedPhase = operation switch
+        {
+            "restore" => "Wiederherstellung abgeschlossen",
+            "optimize" => "Optimierung abgeschlossen",
+            "reset" => "Zurücksetzen abgeschlossen",
+            _ => "Datenbankwartung abgeschlossen"
+        };
+        _failedPhase = operation switch
+        {
+            "restore" => "Wiederherstellung fehlgeschlagen",
+            "optimize" => "Optimierung fehlgeschlagen",
+            "reset" => "Zurücksetzen fehlgeschlagen",
+            _ => "Datenbankwartung fehlgeschlagen"
+        };
+        Title = "PCasa – " + UiLanguage.T(operationTitle);
         Width = 565;
         Height = 255;
         MinWidth = 450;
@@ -58,7 +82,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
         root.Children.Add(content);
         content.Children.Add(new TextBlock
         {
-            Text = UiLanguage.T("PCasa – Datenbankwartung"),
+            Text = UiLanguage.T(operationTitle),
             FontSize = 20, FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 16)
         });
@@ -131,7 +155,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
             var result = await Task.Run(() =>
                 DatabaseMaintenance.RunRequest(path, parentPid, report));
             succeeded = true;
-            _phase.Text = UiLanguage.T("Datenbankwartung abgeschlossen");
+            _phase.Text = UiLanguage.T(_finishedPhase);
             _detail.Text = result;
             _progress.IsIndeterminate = false;
             _progress.Value = 100;
@@ -140,7 +164,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
         {
             var error = ex.GetBaseException();
             PCasaDiagnostics.Write("Database.Maintenance", error);
-            _phase.Text = UiLanguage.T("Datenbankwartung fehlgeschlagen");
+            _phase.Text = UiLanguage.T(_failedPhase);
             _detail.Text = error.Message;
             _detail.ToolTip = error.ToString();
             _progress.IsIndeterminate = false;
@@ -157,7 +181,8 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
                 // Restart only after the offline operation succeeded and
                 // its commit/rollback boundary completed. Failure leaves
                 // this window open so the actual error remains visible.
-                _phase.Text = UiLanguage.T("Datenbankwartung abgeschlossen – PCasa wird gestartet");
+                _phase.Text = UiLanguage.T(_finishedPhase) + " – " +
+                    UiLanguage.T("PCasa wird gestartet");
                 Dispatcher.BeginInvoke(new Action(Restart),
                     System.Windows.Threading.DispatcherPriority.Background);
             }
