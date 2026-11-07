@@ -31,7 +31,7 @@ public static class PcasaDialog
 
         owner ??= app.Windows.OfType<Window>()
             .FirstOrDefault(w => w.IsActive && w.IsVisible)
-            ?? app.MainWindow is { IsVisible: true } main ? main : null;
+            ?? (app.MainWindow is { IsVisible: true } main ? main : null);
 
         var safeDefault = defaultResult == MessageBoxResult.None
             ? buttons switch
