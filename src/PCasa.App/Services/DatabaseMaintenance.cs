@@ -12,6 +12,11 @@ public sealed record DatabaseBackupProgress(
     string Phase, long ProcessedBytes, long TotalBytes,
     string? CurrentFile = null, int ProcessedFiles = 0, int TotalFiles = 0);
 
+// The isolated maintenance process reports real stages of offline work.
+// These notifications never enter the normal P0-P4 scheduler.
+public sealed record DatabaseMaintenanceOperationProgress(
+    string Phase, string? Detail = null, int Completed = 0, int Total = 0);
+
 /// <summary>
 /// Offline owner of PCasa's local catalog. Restores and resets are deliberately
 /// executed by a separate PCasa process AFTER the UI/scheduler has exited.
@@ -99,7 +104,8 @@ public sealed class DatabaseMaintenance
         return file;
     }
 
-    public static string RunRequest(string requestPath, int parentProcessId)
+    public static string RunRequest(string requestPath, int parentProcessId,
+        IProgress<DatabaseMaintenanceOperationProgress>? progress = null)
     {
         if (parentProcessId <= 0 || !File.Exists(requestPath))
             throw new InvalidOperationException("Ungültiger Wartungsauftrag.");
@@ -116,6 +122,7 @@ public sealed class DatabaseMaintenance
         }
         if (request.ParentProcessId != parentProcessId)
             throw new InvalidDataException("Wartungsauftrag gehört zu einem anderen Prozess.");
+        progress?.Report(new("PCasa wird beendet – warte auf Freigabe der Datenbank"));
         try
         {
             using var parent = Process.GetProcessById(parentProcessId);
@@ -127,6 +134,7 @@ public sealed class DatabaseMaintenance
         }
         catch (ArgumentException) { /* Parent has already exited. */ }
 
+        progress?.Report(new("Datenbank freigegeben"));
         var maintenance = new DatabaseMaintenance();
         switch (request.Operation)
         {
@@ -138,13 +146,13 @@ public sealed class DatabaseMaintenance
             case "restore":
                 if (string.IsNullOrWhiteSpace(request.Archive))
                     throw new InvalidDataException("Sicherung fehlt.");
-                maintenance.Restore(request.Archive, request.Folders);
+                maintenance.Restore(request.Archive, request.Folders, progress);
                 return "Die PCasa-Datenbank wurde wiederhergestellt. Neue Bestandsprüfungen können beginnen.";
             case "optimize":
-                maintenance.Optimize();
+                maintenance.Optimize(progress);
                 return "Die PCasa-Datenbank wurde optimiert.";
             case "reset":
-                maintenance.Reset();
+                maintenance.Reset(progress);
                 return "Die lokale PCasa-Datenbank wurde vollständig zurückgesetzt.";
             default:
                 throw new InvalidDataException("Unbekannte Datenbankoperation.");
@@ -303,14 +311,23 @@ public sealed class DatabaseMaintenance
         }
     }
 
-    public void Restore(string archivePath, IReadOnlyList<FolderChoice> choices)
+    public void Restore(string archivePath, IReadOnlyList<FolderChoice> choices,
+        IProgress<DatabaseMaintenanceOperationProgress>? progress = null)
     {
+        progress?.Report(new("Sicherungsarchiv öffnen und prüfen"));
         var work = CreateWorkDir();
         try
         {
             using (var zip = ZipFile.OpenRead(archivePath))
             {
                 VerifyArchive(zip);
+                var totalFiles = zip.Entries.Count(entry =>
+                    entry.FullName != ArchiveManifest &&
+                    !entry.FullName.EndsWith("/", StringComparison.Ordinal));
+                var processedFiles = 0;
+                long lastProgressTick = 0;
+                progress?.Report(new("Datenbank und Vorschaudaten entpacken",
+                    null, processedFiles, totalFiles));
                 foreach (var entry in zip.Entries)
                 {
                     var name = entry.FullName.Replace('\\', '/');
@@ -326,21 +343,35 @@ public sealed class DatabaseMaintenance
                         throw new InvalidDataException("Ungültiger Sicherungspfad.");
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     entry.ExtractToFile(target);
+                    processedFiles++;
+                    var now = Environment.TickCount64;
+                    if (processedFiles == totalFiles || now - lastProgressTick >= 150)
+                    {
+                        lastProgressTick = now;
+                        progress?.Report(new("Datenbank und Vorschaudaten entpacken",
+                            name, processedFiles, totalFiles));
+                    }
                 }
             }
+            progress?.Report(new("Wiederhergestellte Datenbank prüfen"));
             var restored = Path.Combine(work, CatalogName);
             using (var check = OpenReadOnly(restored)) VerifyIntegrity(check);
             var db = new LocalDatabase(restored);
             db.Initialize(); // additive migrations on the staged DB, not the live catalog
+            progress?.Report(new("Ordnerzuordnung und Katalog vorbereiten"));
             PrepareRestoredDatabase(restored, choices);
             SqliteConnection.ClearAllPools();
+            progress?.Report(new("Datenbank und Cache sicher austauschen"));
             Publish(work, replaceCache: true);
+            progress?.Report(new("Wiederherstellung abgeschlossen"));
         }
         finally { DeleteWorkDir(work); }
     }
 
-    public void Optimize()
+    public void Optimize(
+        IProgress<DatabaseMaintenanceOperationProgress>? progress = null)
     {
+        progress?.Report(new("Datenbank prüfen"));
         using var db = new SqliteConnection(
             new SqliteConnectionStringBuilder {
                 DataSource = _databasePath, Mode = SqliteOpenMode.ReadWrite
@@ -349,18 +380,25 @@ public sealed class DatabaseMaintenance
         VerifyIntegrity(db);
         using (var command = db.CreateCommand())
         {
+            progress?.Report(new("Transaktionsprotokoll konsolidieren"));
             command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
             command.ExecuteNonQuery();
+            progress?.Report(new("Datenbank komprimieren (VACUUM)"));
             command.CommandText = "VACUUM;";
             command.ExecuteNonQuery();
+            progress?.Report(new("SQLite-Statistiken optimieren"));
             command.CommandText = "PRAGMA optimize;";
             command.ExecuteNonQuery();
         }
+        progress?.Report(new("Optimierte Datenbank verifizieren"));
         VerifyIntegrity(db);
+        progress?.Report(new("Optimierung abgeschlossen"));
     }
 
-    public void Reset()
+    public void Reset(
+        IProgress<DatabaseMaintenanceOperationProgress>? progress = null)
     {
+        progress?.Report(new("Neue Datenbank vorbereiten"));
         var work = CreateWorkDir();
         try
         {
@@ -368,8 +406,10 @@ public sealed class DatabaseMaintenance
             new LocalDatabase(fresh).Initialize();
             Checkpoint(fresh);
             SqliteConnection.ClearAllPools();
+            progress?.Report(new("Katalog und Cache sicher zurücksetzen"));
             // No original photo paths are enumerated or deleted.
             Publish(work, replaceCache: true);
+            progress?.Report(new("Zurücksetzen abgeschlossen"));
         }
         finally { DeleteWorkDir(work); }
     }
