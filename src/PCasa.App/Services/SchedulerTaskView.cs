@@ -236,11 +236,10 @@ public sealed class SchedulerTaskView
                         false, false, _canRetryFailed,
                         _canDiscardFailed));
                 }
-                // Actual execution first. A paused high-priority task
-                // cannot precede a running lower-priority task on screen.
-                // One effective order comes from the scheduler. The display
-                // does not invent a separate status-first queue: moving a
-                // waiting task above a running one must be VISIBLE at once.
+                // Actual running work first, then the scheduler's effective
+                // pending priority/order. This is a single scheduler-owned
+                // projection, not a second dispatch queue. Reordering still
+                // modifies the real persisted scheduler ranks.
                 var positioned = _scheduler.OrderTaskView(
                     rows, row => row.Key,
                     row => (SchedulerPriority)row.Priority,
@@ -250,7 +249,8 @@ public sealed class SchedulerTaskView
                     {
                         Priority = (int)priority,
                         Order = order
-                    });
+                    },
+                    row => row.Status == "Läuft");
                 return new SchedulerTaskViewResult(positioned.ToList(), failedGroups);
     }
 
