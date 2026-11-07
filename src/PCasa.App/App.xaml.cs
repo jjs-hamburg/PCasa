@@ -63,7 +63,8 @@ public partial class App : Application
             // No MainWindow, scheduler, native GPS browser or thumbnail writer
             // exists in this process. Wait for the old process to fully exit
             // BEFORE opening or replacing its WAL-backed catalog.
-            StartupUri = null;
+            // Maintenance starts without a startup window. WPF forbids
+            // assigning null to Application.StartupUri in .NET 10.
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             base.OnStartup(e);
             var path = e.Args[1];
@@ -104,6 +105,10 @@ public partial class App : Application
         if (e.Args.Length == 0 || !string.Equals(e.Args[0],
             "--jpeg-benchmark", StringComparison.OrdinalIgnoreCase))
         {
+            // Only the interactive launch creates MainWindow. Setting a
+            // valid URI here, rather than in App.xaml, keeps the isolated
+            // maintenance process window-free until restore/reset finishes.
+            StartupUri = new Uri("MainWindow.xaml", UriKind.Relative);
             base.OnStartup(e);
             return;
         }
