@@ -824,7 +824,7 @@ public partial class MainWindow
             ? $"{selected.Length:N0} Bilddatei(en) löschen?\n\n" +
               UiLanguage.T("Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht.")
             : $"{selected.Length:N0} Bilddatei(en) in den Windows-Papierkorb verschieben?";
-        if (MessageBox.Show(this, prompt, UiLanguage.T("Bilder löschen"),
+        if (PcasaDialog.Show(this, prompt, UiLanguage.T("Bilder löschen"),
                 MessageBoxButton.YesNo, MessageBoxImage.Warning,
                 MessageBoxResult.No) != MessageBoxResult.Yes) return;
 
@@ -847,7 +847,7 @@ public partial class MainWindow
             StatusText.Text = $"{succeeded.Count:N0} Datei(en) gelöscht" +
                 (errors.Count == 0 ? "" : $" · {errors.Count:N0} Fehler");
             if (errors.Count > 0)
-                MessageBox.Show(this, string.Join("\n", errors.Take(15)),
+                PcasaDialog.Show(this, string.Join("\n", errors.Take(15)),
                     UiLanguage.T("Einige Dateien konnten nicht gelöscht werden"),
                     MessageBoxButton.OK, MessageBoxImage.Warning);
         }
