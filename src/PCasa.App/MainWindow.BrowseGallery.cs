@@ -966,7 +966,7 @@ public partial class MainWindow
             .DistinctBy(folder => folder.Id).ToArray();
         if (roots.Length == 0)
         {
-            MessageBox.Show(
+            PcasaDialog.Show(
                 this,
                 UiLanguage.T("Im Ordnermanager sind noch keine überwachten Ordner definiert."),
                 "PCasa",
@@ -1039,7 +1039,7 @@ public partial class MainWindow
 
         if (failures.Count > 0)
         {
-            MessageBox.Show(
+            PcasaDialog.Show(
                 this,
                 UiLanguage.T("Einige Ordner konnten nicht eingelesen werden:") + "\n\n" +
                     string.Join("\n", failures),
@@ -1079,7 +1079,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderManager.Open", ex);
-            MessageBox.Show(this, UiLanguage.T("Der Ordnermanager konnte nicht geöffnet werden.") + "\n\n" +
+            PcasaDialog.Show(this, UiLanguage.T("Der Ordnermanager konnte nicht geöffnet werden.") + "\n\n" +
                 ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
@@ -1145,7 +1145,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("FolderManager.Commit", ex);
-            MessageBox.Show(this,
+            PcasaDialog.Show(this,
                 durableCommitted
                     ? "Die Ordnerauswahl wurde gespeichert, aber die Aktualisierung " +
                       "der Ansicht oder Einstellungen ist fehlgeschlagen.\n\n" + ex.Message
