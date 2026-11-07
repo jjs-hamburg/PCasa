@@ -10,6 +10,7 @@ namespace PCasa.App;
 public partial class MainWindow : Window
 {
     private readonly PCasaScheduler _scheduler = new();
+    private readonly GalleryCatalogReader _galleryCatalogReader = new();
     private readonly LocalDatabase _database;
     private readonly FolderRepository _folderRepository;
     private readonly ImageCatalogRepository _imageCatalog;
