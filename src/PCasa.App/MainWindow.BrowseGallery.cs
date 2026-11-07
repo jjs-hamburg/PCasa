@@ -96,6 +96,12 @@ public partial class MainWindow
         CatalogChanges.ImageCommitted += OnCatalogImageCommitted;
         CatalogChanges.ImageIndexed += OnCatalogImageIndexed;
         Closed += BrowseWindow_Closed;
+        // Publish the already-committed local catalog BEFORE any durable
+        // recovery or first-import admission. Loading a view is not P0-P4
+        // work; no NAS filesystem probe is required for this projection.
+        await EnsureBrowseCacheAndRefreshAsync(initialProjectionOnly: true);
+        if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
+
         // Recovery is a scheduler operation, not an alternative scanner.
         // It may perform slow SMB probes without blocking WPF startup.
         // If any durable move is recovered, the SAME gallery publication
@@ -151,7 +157,7 @@ public partial class MainWindow
         if (unresolvedPackages.Count > 0)
             StatusText.Text = $"{unresolvedPackages.Count} Paket(e) für spätere Wiederherstellung vorgemerkt";
         _ = ReconcilePersistedExclusionsAsync();
-        await EnsureBrowseCacheAndRefreshAsync();
+        _ = CompleteBrowseStartupMaintenanceAsync();
         StartTagBackfill();
     }
 
@@ -294,7 +300,14 @@ public partial class MainWindow
         }
     }
 
-    private async Task EnsureBrowseCacheAndRefreshAsync()
+    private async Task CompleteBrowseStartupMaintenanceAsync()
+    {
+        try { await EnsureBrowseCacheAndRefreshAsync(); }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("Gallery.StartupMaintenance", ex); }
+    }
+
+    private async Task EnsureBrowseCacheAndRefreshAsync(bool initialProjectionOnly = false)
     {
         if (!_browseInitialized ||
             _browseProfileRepository is null ||
@@ -353,7 +366,7 @@ public partial class MainWindow
         // index may depend on that background job finishing.
         await RefreshBrowseGalleryAsync(forceIndexReload: true,
             warmViewport: false);
-        if (!_browseInitialized || _folderRemovalPending) return;
+        if (!_browseInitialized || _folderRemovalPending || initialProjectionOnly) return;
 
         // A manual foreground scan already owns source/cache work. It must
         // not hide the gallery, and startup must never await another rebuild.
@@ -364,8 +377,14 @@ public partial class MainWindow
             return;
         }
 
-        var profile = _browseProfileRepository.Get();
-        var missing = _browseCacheRepository.CountMissing(profile);
+        var profile = await _galleryCatalogReader.ReadAsync(
+            _ => _browseProfileRepository.Get());
+        var missing = await _galleryCatalogReader.ReadAsync(
+            token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return _browseCacheRepository.CountMissing(profile);
+            });
         BrowseCacheBuildResult? result = null;
 
         if (missing > 0)
