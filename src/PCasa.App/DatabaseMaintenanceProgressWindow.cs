@@ -198,7 +198,7 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
             _detail.Text = ex.Message;
             _detail.ToolTip = ex.ToString();
             _restart.IsEnabled = true;
-            MessageBox.Show(this, ex.Message, "PCasa", MessageBoxButton.OK,
+            PcasaDialog.Show(this, ex.Message, "PCasa", MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
     }
