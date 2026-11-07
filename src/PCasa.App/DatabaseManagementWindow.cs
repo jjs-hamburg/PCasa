@@ -176,7 +176,7 @@ public sealed class DatabaseManagementWindow : Window
         {
             await Task.Run(() => _maintenance.Backup(destination));
             _status.Text = UiLanguage.T("Sicherung erfolgreich erstellt: ") + destination;
-            MessageBox.Show(this, UiLanguage.T("Sicherung erfolgreich erstellt.") +
+            PcasaDialog.Show(this, UiLanguage.T("Sicherung erfolgreich erstellt.") +
                 Environment.NewLine + destination,
                 UiLanguage.T("Datenbank sichern"),
                 MessageBoxButton.OK, MessageBoxImage.Information);
@@ -184,7 +184,7 @@ public sealed class DatabaseManagementWindow : Window
         catch (Exception ex)
         {
             _status.Text = UiLanguage.T("Sicherung fehlgeschlagen: ") + ex.Message;
-            MessageBox.Show(this, ex.Message,
+            PcasaDialog.Show(this, ex.Message,
                 UiLanguage.T("Datenbank sichern"),
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
@@ -215,7 +215,7 @@ public sealed class DatabaseManagementWindow : Window
             {
                 var pending = select.Selections;
                 var included = pending.Count(choice => choice.Include);
-                var approve = MessageBox.Show(this,
+                var approve = PcasaDialog.Show(this,
                     UiLanguage.Format(
                         "{0:N0} Verzeichnisse werden übernommen. Alle alten PCasa-Aufträge, " +
                         "Scanfortschritte und noch nicht in Originaldateien geschriebene Änderungen " +
@@ -236,7 +236,7 @@ public sealed class DatabaseManagementWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, UiLanguage.T("Sicherung ungültig"),
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("Sicherung ungültig"),
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -248,7 +248,7 @@ public sealed class DatabaseManagementWindow : Window
 
     private void Optimize()
     {
-        if (MessageBox.Show(this,
+        if (PcasaDialog.Show(this,
             UiLanguage.T("PCasa wird zur Optimierung der lokalen Datenbank beendet und anschließend neu gestartet. Fortfahren?"),
             UiLanguage.T("Datenbank optimieren"),
             MessageBoxButton.YesNo, MessageBoxImage.Question,
@@ -258,13 +258,13 @@ public sealed class DatabaseManagementWindow : Window
 
     private void Reset()
     {
-        if (MessageBox.Show(this,
+        if (PcasaDialog.Show(this,
             UiLanguage.T("Die lokale PCasa-Datenbank einschließlich aller Katalogeinträge, " +
                          "Aufträge und Vorschaudaten wird gelöscht. Originalfotos und Programmeinstellungen bleiben erhalten.\n\nFortfahren?"),
             UiLanguage.T("Datenbank zurücksetzen"),
             MessageBoxButton.YesNo, MessageBoxImage.Warning,
             MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        if (MessageBox.Show(this,
+        if (PcasaDialog.Show(this,
             UiLanguage.T("Letzte Bestätigung: Auch noch nicht ausgeführte GPS- und Tag-Aufträge " +
                          "werden unwiderruflich verworfen. Die lokale Datenbank wird vollständig neu angelegt.\n\nJetzt zurücksetzen?"),
             UiLanguage.T("Datenbank endgültig zurücksetzen"),
@@ -330,7 +330,7 @@ public sealed class DatabaseRestoreFoldersWindow : Window
         {
             if (!Selections.Any(x => x.Include))
             {
-                MessageBox.Show(this,
+                PcasaDialog.Show(this,
                     UiLanguage.T("Bitte mindestens ein Verzeichnis auswählen."),
                     "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
