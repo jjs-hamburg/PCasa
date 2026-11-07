@@ -83,7 +83,7 @@ public sealed class GalleryTexturePickerWindow : Window
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, UiLanguage.T("Texturordner"), MessageBoxButton.OK, MessageBoxImage.Warning);
+                PcasaDialog.Show(this, ex.Message, UiLanguage.T("Texturordner"), MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         };
         footer.Children.Add(openFolder);
