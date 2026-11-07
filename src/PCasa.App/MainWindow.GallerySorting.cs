@@ -108,15 +108,12 @@ public partial class MainWindow
         IReadOnlyList<BrowseThumbnailIndexEntry> reordered;
         try
         {
-            reordered = await _scheduler.RunAsync(
-                $"gallery:sort:{generation}",
-                SchedulerPriority.Interactive,
+            reordered = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
                     return GalleryFolderOrdering.Order(original, positions, requested);
-                }, () => generation == _gallerySortRequestVersion,
-                workKind: SchedulerWorkKind.CatalogRead);
+                }, () => generation == _gallerySortRequestVersion);
         }
         catch (OperationCanceledException) { return; }
         catch (Exception ex)
