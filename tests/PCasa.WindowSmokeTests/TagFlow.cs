@@ -1821,12 +1821,12 @@ internal static class TagFlow
             var schedulerField = typeof(PCasa.App.MainWindow).GetField(
                 "_scheduler", System.Reflection.BindingFlags.Instance |
                 System.Reflection.BindingFlags.NonPublic)!;
-            var scheduler = (PCasaScheduler)schedulerField.GetValue(window)!;
+            var galleryReadTestScheduler = (PCasaScheduler)schedulerField.GetValue(window)!;
             var blockerStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var unblock = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            var blocker = scheduler.EnqueueAsync(
+            var blocker = galleryReadTestScheduler.EnqueueAsync(
                 "test:blocked-manual-scan-while-tag-sidebar-loads",
                 SchedulerPriority.ManualAction, async token =>
                 {
