@@ -249,7 +249,7 @@ internal static class Program
             var bucket = Path.Combine(cacheDir, "81");
             Directory.CreateDirectory(bucket);
             var restoredThumb = Path.Combine(bucket,
-                "812d6849ba08937c49fbb96406d00410dd465e6dc387b2bf85c01d45.jpg");
+                "812d6849ba08937c49fbb96406d00410dd465e6dc387b2bf85c01d4599abcdef.jpg");
             File.WriteAllBytes(restoredThumb, [2, 4, 6]);
             File.WriteAllBytes(Path.Combine(packs, "pack.bin"), [5, 4, 3, 2]);
             File.WriteAllText(Path.Combine(data, "appearance.json"), "KEEP-SETTINGS");
@@ -285,6 +285,18 @@ internal static class Program
                 cmd.Parameters.AddWithValue("$thumb", restoredThumb);
                 cmd.ExecuteNonQuery();
             }
+
+            // The previous restore build already stored flattened paths in
+            // real user catalogs. Folder previews must recover such paths
+            // immediately, without asking the user to restore again.
+            var flattened = Path.Combine(cacheDir, Path.GetFileName(restoredThumb));
+            if (!string.Equals(ThumbnailCache.ResolveExistingLocalPath(
+                    flattened, cacheDir), restoredThumb,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Existing flattened folder thumbnail path was not recoverable.");
+            if (ThumbnailCache.ResolveExistingLocalPath(
+                    Path.Combine(cacheDir, "invalid.jpg"), cacheDir) is not null)
+                throw new Exception("Invalid thumbnail path unexpectedly resolved.");
 
             var work = new DatabaseMaintenance(data);
             // A backup taken under another Windows profile must retain the
