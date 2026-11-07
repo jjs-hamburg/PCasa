@@ -202,6 +202,11 @@ internal static class TagFlow
                 Until(window, () => scroller.VerticalOffset >= 10,
                     "Picasa line-down arrow did not scroll original gallery.");
                 picasaBar.StopMotion();
+                // The tiny synthetic gallery may already be at its lower
+                // boundary after the line step. Start the independent
+                // animated-page probe at the actual gallery beginning.
+                scroller.ScrollToVerticalOffset(0);
+                window.UpdateLayout();
                 var beforePage = scroller.VerticalOffset;
                 arrows[3].RaiseEvent(new RoutedEventArgs(
                     ButtonBase.ClickEvent, arrows[3]));
