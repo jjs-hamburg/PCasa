@@ -245,7 +245,6 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private void StartClock()
     {
         _lastTick = Stopwatch.GetTimestamp();
-        _elapsed.Restart();
         _clock.Start();
     }
 
