@@ -1333,6 +1333,44 @@ internal static class TagFlow
                     throw new Exception("Backup completion did not restore scan progress.");
                 backupPresenter.EndManualOperation();
                 backupPresenter.EndScanPhase(backupScanOwner);
+
+                // A manual folder scan may keep running without a distinct
+                // ScanProgress phase. Its scheduler snapshot can advance
+                // while the backup owns the one presenter; ending the
+                // backup must restore that snapshot rather than leave
+                // the completed backup at 100%.
+                backupPresenter.BeginManualOperation("Ordner aktualisieren", 0);
+                var scanBeforeBackup = new SchedulerJobSnapshot(
+                    8001, "manual:folder:backup-probe",
+                    SchedulerPriority.ManualAction, SchedulerJobState.Running,
+                    DateTimeOffset.UtcNow, null)
+                {
+                    Phase = "Ordner aktualisieren", Processed = 5190,
+                    CurrentPath = @"S:\\Archiv.Negative\\before.jpg"
+                };
+                backupPresenter.UpdateManualOperationWithContext(
+                    scanBeforeBackup, directory: @"S:\\Archiv.Negative",
+                    confirmedProcessed: 5190);
+                backupPresenter.BeginDatabaseBackup(backupOwner);
+                backupPresenter.UpdateDatabaseBackup(backupOwner,
+                    new DatabaseBackupProgress("Datenbanksicherung", 4194304,
+                        4194304, "pcasa.db", 4, 4));
+                var scanDuringBackup = scanBeforeBackup with
+                {
+                    Processed = 5191,
+                    CurrentPath = @"S:\\Archiv.Negative\\after.jpg"
+                };
+                backupPresenter.UpdateManualOperationWithContext(
+                    scanDuringBackup, directory: @"S:\\Archiv.Negative",
+                    confirmedProcessed: 5191);
+                backupPresenter.EndDatabaseBackup(backupOwner);
+                if (!backupPhase.Text.Contains("Ordner aktualisieren",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !backupCount.Text.Contains("5.191") &&
+                    !backupCount.Text.Contains("5,191"))
+                    throw new Exception(
+                        "Completed backup hid the still-running manual scan.");
+                backupPresenter.EndManualOperation();
             }
             finally
             {
