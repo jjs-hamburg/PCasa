@@ -1,5 +1,4 @@
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -12,14 +11,6 @@ using PCasa.App.Services;
 
 internal static class FolderRemovalFlow
 {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr FindWindow(string? className, string? caption);
-    [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr hwnd, uint message,
-        IntPtr wParam, IntPtr lParam);
-    private const uint WmCommand = 0x0111;
-    private const int IdYes = 6;
-
     public static int Run()
     {
         // Program.Main refuses to run any WPF smoke test outside GitHub Actions.
@@ -95,8 +86,8 @@ internal static class FolderRemovalFlow
                 throw new Exception("Simulated import did not acquire the catalog lock.");
             try
             {
-                // Invoke the SAME menu item the user clicked. Native WPF
-                // confirmation is accepted by an isolated test runner.
+                // Invoke the SAME menu item the user clicked. The themed
+                // confirmation is accepted inside this isolated WPF test.
                 ClickRemoveMenu(window, tree);
                 var manualProgress = Application.Current.Windows
                     .OfType<PCasa.App.BrowseCacheProgressWindow>()
@@ -188,11 +179,17 @@ internal static class FolderRemovalFlow
             window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(30) };
         promptTimer.Tick += (_, _) =>
         {
-            var dialog = FindWindow("#32770", "Aus PCasa entfernen");
-            if (dialog == IntPtr.Zero) return;
+            var dialog = Application.Current.Windows.OfType<Window>()
+                .FirstOrDefault(w => w.IsVisible && ReferenceEquals(w.Owner, window) &&
+                    w.Title == UiLanguage.T("Aus PCasa entfernen"));
+            if (dialog?.Content is not Grid layout) return;
+            var yes = layout.Children.OfType<StackPanel>()
+                .SelectMany(panel => panel.Children.OfType<Button>())
+                .FirstOrDefault(button => Equals(button.Content, UiLanguage.T("Ja")));
+            if (yes is null) return;
             accepted = true;
             promptTimer.Stop();
-            SendMessage(dialog, WmCommand, (IntPtr)IdYes, IntPtr.Zero);
+            yes.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         };
         promptTimer.Start();
         try
