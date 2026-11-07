@@ -617,7 +617,7 @@ public sealed class DatabaseMaintenance
         }
     }
 
-    internal static string RehomeThumbnailPath(string originalPath, string localCache)
+    public static string RehomeThumbnailPath(string originalPath, string localCache)
     {
         // Cross-user and cross-machine restores may change the profile root.
         // Both classic flat thumbnails and the current hash-bucket layout
