@@ -216,7 +216,7 @@ public partial class MainWindow
             TrackFolderActivity(directory, "Failed", recursive: true);
             RefreshFolderStatusVisuals();
             PCasaDiagnostics.Write("Catalog.ManualFolderScan", ex);
-            MessageBox.Show(this, $"Der Ordner konnte nicht eingelesen werden.\n\n{ex.Message}",
+            PcasaDialog.Show(this, $"Der Ordner konnte nicht eingelesen werden.\n\n{ex.Message}",
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
