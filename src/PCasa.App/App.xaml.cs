@@ -133,14 +133,14 @@ public partial class App : Application
             var report = Path.Combine(folder, "JPEG-Benchmark.txt");
             File.WriteAllText(report, result + Environment.NewLine,
                 System.Text.Encoding.UTF8);
-            MessageBox.Show(result + Environment.NewLine + Environment.NewLine +
+            PcasaDialog.Show(result + Environment.NewLine + Environment.NewLine +
                 "Bericht gespeichert unter:" + Environment.NewLine + report,
                 "PCasa – JPEG-Benchmark", MessageBoxButton.OK,
                 MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
+            PcasaDialog.Show(
                 "Der JPEG-Benchmark konnte nicht abgeschlossen werden." +
                 Environment.NewLine + ex.Message +
                 Environment.NewLine +
