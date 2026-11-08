@@ -15,10 +15,7 @@ public sealed class PackedThumbnailStore : IDisposable
     public PackedThumbnailStore(string? cacheRoot = null)
     {
         // An explicit root keeps pack-format/race tests isolated from user data.
-        _cacheRoot = cacheRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa",
-            "browse-cache");
+        _cacheRoot = cacheRoot ?? Path.Combine(PcasaDataPaths.SharedDataRoot, "browse-cache");
 
         Directory.CreateDirectory(_cacheRoot);
     }
@@ -27,10 +24,7 @@ public sealed class PackedThumbnailStore : IDisposable
 
     public static void ResetPackFiles()
     {
-        var cacheRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa",
-            "browse-cache");
+        var cacheRoot = Path.Combine(PcasaDataPaths.SharedDataRoot, "browse-cache");
 
         if (!Directory.Exists(cacheRoot))
         {
