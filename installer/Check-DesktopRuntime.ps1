@@ -87,7 +87,9 @@ try {
         $signature = Get-AuthenticodeSignature -LiteralPath $temp
         if ($signature.Status -ne 'Valid' -or
             $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
-            throw 'Microsoft runtime installer Authenticode signature is not valid.'
+            $subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '<no certificate>' }
+            throw ("Microsoft runtime installer Authenticode signature is not valid: " +
+                "status=$($signature.Status), subject=$subject, detail=$($signature.StatusMessage)")
         }
 
         if ($VerifyInstallerOnly) {
