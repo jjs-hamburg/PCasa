@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Data.Sqlite;
+using PCasa.App;
 using PCasa.App.Controls;
 using PCasa.App.Data;
 using PCasa.App.Models;
