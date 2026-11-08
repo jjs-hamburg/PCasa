@@ -46,15 +46,14 @@ public static class PcasaDialog
         var dialog = new Window
         {
             Title = string.IsNullOrWhiteSpace(caption) ? "PCasa" : caption,
-            Width = 565,
-            Height = 286,
-            MinWidth = 430,
-            MinHeight = 225,
-            MaxHeight = Math.Max(300, SystemParameters.WorkArea.Height - 70),
+            Width = 510,
+            SizeToContent = SizeToContent.Height,
+            MinWidth = 400,
+            MaxHeight = Math.Max(240, SystemParameters.WorkArea.Height - 70),
             WindowStartupLocation = owner is not null
                 ? WindowStartupLocation.CenterOwner
                 : WindowStartupLocation.CenterScreen,
-            ResizeMode = ResizeMode.CanResizeWithGrip,
+            ResizeMode = ResizeMode.CanResize,
             ShowInTaskbar = owner is null,
             Owner = owner
         };
@@ -63,7 +62,7 @@ public static class PcasaDialog
 
         var grid = new Grid { Margin = new Thickness(18, 15, 18, 15) };
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         dialog.Content = grid;
 
@@ -104,7 +103,8 @@ public static class PcasaDialog
         var scroll = new ScrollViewer
         {
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            MaxHeight = Math.Max(90, SystemParameters.WorkArea.Height - 235)
         };
         body.Children.Add(scroll);
         scroll.Content = new TextBox
@@ -126,7 +126,7 @@ public static class PcasaDialog
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 17, 0, 0)
+            Margin = new Thickness(0, 13, 0, 0)
         };
         Grid.SetRow(buttonsPanel, 2);
         grid.Children.Add(buttonsPanel);
