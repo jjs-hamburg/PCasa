@@ -535,6 +535,16 @@
                                   Header="{loc:Tr Key='Datenbankverwaltung...'}"
                                   Click="DatabaseManagementMenu_Click"/>
                     </MenuItem>
+                    <MenuItem Header="{loc:Tr Key='Hilfe'}" Margin="0,0,12,0"
+                              HorizontalAlignment="Left">
+                        <MenuItem x:Name="CheckForUpdatesMenuItem"
+                                  Header="{loc:Tr Key='Nach Updates suchen'}"
+                                  Click="HelpCheckForUpdates_Click"/>
+                        <Separator/>
+                        <MenuItem x:Name="AboutPcasaMenuItem"
+                                  Header="{loc:Tr Key='Über PCasa'}"
+                                  Click="HelpAbout_Click"/>
+                    </MenuItem>
                 </Menu>
             </Border>
             <Border Grid.Row="1" MinHeight="42"
