@@ -148,6 +148,24 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Build signed-scope-aware PCasa Setup executable
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          $iscc = "${env:ProgramFiles(x86)}\\Inno Setup 6\\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not installed" }
+          & $iscc installer/PCasa.iss
+          if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
+          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.1.exe")) {
+            throw "Setup executable missing"
+          }
+      - name: Upload PCasa Setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-Setup-0.1.Alpha.1
+          path: dist/PCasa-Setup-0.1.Alpha.1.exe
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload scheduler acceptance test package
         uses: actions/upload-artifact@v4
         with:
