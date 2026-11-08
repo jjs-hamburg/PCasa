@@ -25,7 +25,7 @@ function Test-DesktopRuntime {
         $dir = Join-Path (Join-Path $root 'shared') $name
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $false }
         $matched = @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match '^10\\.\\d+\\.\\d+$' })
+            Where-Object { $_.Name -match '^10\.\d+\.\d+$' })
         if ($matched.Count -eq 0) { return $false }
     }
     return $true
@@ -46,12 +46,12 @@ try {
     $manifestUri = 'https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json'
     $manifest = Invoke-RestMethod -Uri $manifestUri -TimeoutSec 35
     $entry = @($manifest.releases |
-        Where-Object { $_.windowsdesktop.version -match '^10\\.\\d+\\.\\d+$' } |
+        Where-Object { $_.windowsdesktop.version -match '^10\.\d+\.\d+$' } |
         Sort-Object { [version]$_.windowsdesktop.version } -Descending |
         Select-Object -First 1)
     if ($entry.Count -ne 1) { throw 'Microsoft .NET 10 desktop runtime release is missing from manifest.' }
     $file = @($entry[0].windowsdesktop.files |
-        Where-Object { $_.rid -eq 'win-x64' -and $_.name -match '^windowsdesktop-runtime-10\\.[0-9.]+-win-x64\\.exe$' } |
+        Where-Object { $_.rid -eq 'win-x64' -and $_.name -match '^windowsdesktop-runtime-10\.[0-9.]+-win-x64\.exe$' } |
         Select-Object -First 1)
     if ($file.Count -ne 1 -or -not $file[0].hash -or -not $file[0].url) {
         throw 'Microsoft Windows Desktop Runtime x64 installer not found.'
@@ -74,7 +74,7 @@ try {
         if ($actual -ne $expected) { throw 'Microsoft runtime installer SHA-512 mismatch.' }
         $signature = Get-AuthenticodeSignature -LiteralPath $temp
         if ($signature.Status -ne 'Valid' -or
-            $signature.SignerCertificate.Subject -notmatch '(^|,\\s*)CN=Microsoft Corporation(,|$)') {
+            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
             throw 'Microsoft runtime installer Authenticode signature is not valid.'
         }
 
