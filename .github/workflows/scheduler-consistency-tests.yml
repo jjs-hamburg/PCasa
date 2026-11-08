@@ -204,3 +204,32 @@ jobs:
           path: publish/PCasa/
           if-no-files-found: error
           retention-days: 14
+
+  publish-setup-release:
+    name: Publish directly downloadable Setup EXE
+    needs: catalog-regressions
+    if: github.ref == 'refs/heads/setup-installer-and-update' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested setup executable
+        uses: actions/download-artifact@v4
+        with:
+          name: PCasa-Setup-0.1.Alpha.1
+          path: release
+      - name: Publish PCasa Alpha as direct EXE download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release/PCasa-Setup-0.1.Alpha.1.exe
+          if gh release view v0.1.Alpha.1 >/dev/null 2>&1; then
+            echo "Release v0.1.Alpha.1 already exists: refusing to silently replace a published installer" >&2
+            exit 1
+          fi
+          gh release create v0.1.Alpha.1 release/PCasa-Setup-0.1.Alpha.1.exe \
+            --target "$GITHUB_SHA" --title "PCasa 0.1.Alpha.1" --prerelease \
+            --notes "First PCasa Alpha installer. Choose current-user or all-users setup. Existing portable ZIP remains available as a GitHub Actions artifact."
