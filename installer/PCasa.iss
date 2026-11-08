@@ -55,6 +55,10 @@ Type: files; Name: "{app}\System.*.dll"; Check: OldSelfContainedInstallation
 Type: files; Name: "{app}\Microsoft.*.dll"; Check: OldSelfContainedInstallation
 Type: files; Name: "{app}\Presentation*.dll"; Check: OldSelfContainedInstallation
 Type: files; Name: "{app}\WindowsBase.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\ReachFramework.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\UIAutomation*.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\wpfgfx_cor3.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\vcruntime140_cor3.dll"; Check: OldSelfContainedInstallation
 Type: files; Name: "{app}\Accessibility.dll"; Check: OldSelfContainedInstallation
 Type: files; Name: "{app}\mscorlib.dll"; Check: OldSelfContainedInstallation
 Type: files; Name: "{app}\netstandard.dll"; Check: OldSelfContainedInstallation
