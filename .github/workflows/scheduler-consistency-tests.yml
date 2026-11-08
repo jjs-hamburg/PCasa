@@ -15,6 +15,7 @@ on:
       - picasa-scrollbar-grip-controls
       - picasa-scrollbar-fine-tuning
       - picasa-scrollbar-depth-rowstep
+      - picasa-scrollbar-caption-align
       - gallery-foreground-guarantee
   workflow_dispatch:
 
