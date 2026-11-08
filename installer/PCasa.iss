@@ -9,7 +9,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={autopf}\PCasa
 DefaultGroupName=PCasa
 DisableProgramGroupPage=yes
-OutputDir=dist
+OutputDir=..\dist
 OutputBaseFilename=PCasa-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
@@ -48,8 +48,8 @@ Name: "{commonappdata}\PCasa"; Permissions: users-modify; Check: IsAdminInstallM
 Type: files; Name: "{app}\PCasa.all-users"
 
 [Files]
-Source: "publish\PCasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "installer\PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
+Source: "..\publish\PCasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
 
 [Icons]
 Name: "{autoprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"
