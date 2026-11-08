@@ -214,6 +214,30 @@ internal static class TagFlow
             if (smallRowStep < 75 || largeRowStep <= smallRowStep + 20)
                 throw new Exception("Picasa line-step ignores real thumbnail row geometry.");
 
+            // A downward click aligns the last visible image row's full
+            // caption with the bottom of the viewport, even when starting
+            // between rows and when thumbnail sizes differ. Unlike the old
+            // top-anchored offset this is determined by the viewport bottom.
+            foreach (var width in new[] { 120d, 235d })
+            {
+                surface.SetThumbnailWidth(width);
+                window.UpdateLayout();
+                var smallViewport = Math.Min(165, scroller.ViewportHeight);
+                var landing = surface.GetNextImageRowCaptionOffset(0, smallViewport);
+                if (landing <= 0)
+                    throw new Exception("Row-down did not expose the bottom caption.");
+                var nextLanding = surface.GetNextImageRowCaptionOffset(
+                    landing, smallViewport);
+                if (nextLanding <= landing + 1)
+                    throw new Exception("Row-down did not advance to the next full caption.");
+                // A perfectly aligned caption must not be revisited.
+                if (surface.GetNextImageRowCaptionOffset(landing, smallViewport)
+                    != nextLanding)
+                    throw new Exception("Caption alignment did not advance deterministically.");
+            }
+            surface.SetThumbnailWidth(originalThumbWidth);
+            window.UpdateLayout();
+
             // RepeatButtons and the Thumb must inherit PCasa's SAME 3D
             // shadow/gradient resources while keeping the icons understated.
             if (arrows.Any(button =>
