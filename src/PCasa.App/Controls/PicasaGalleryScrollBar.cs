@@ -21,6 +21,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private readonly DispatcherTimer _clock;
     private readonly TranslateTransform _gripOffset = new();
     private ScrollViewer? _viewer;
+    private BrowseGallerySurface? _gallery;
     private bool _dragging;
     private double _dragDisplacement;
     private double _pageStart;
@@ -86,16 +87,24 @@ public sealed class PicasaGalleryScrollBar : UserControl
         border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
         border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
         border.SetResourceReference(Border.BackgroundProperty, "PcasaSelectionBrush");
-        border.SetResourceReference(Border.BorderBrushProperty, "PcasaMutedTextBrush");
+        border.SetResourceReference(Border.BorderBrushProperty, "PcasaDividerBrush");
+        border.SetResourceReference(UIElement.EffectProperty, "PcasaButtonShadow");
         // Large center control has Picasa's opposed blue arrows, not
         // a conventional scrollbar position thumb / three-line glyph.
         var symbols = new FrameworkElementFactory(typeof(Grid));
+        var depth = new FrameworkElementFactory(typeof(Border));
+        depth.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        depth.SetValue(UIElement.IsHitTestVisibleProperty, false);
+        depth.SetResourceReference(Border.BackgroundProperty, "PcasaButtonDepthBrush");
+        symbols.AppendChild(depth);
         var up = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
         up.SetValue(System.Windows.Shapes.Path.DataProperty,
-            Geometry.Parse("M 10,2 L 3,11 H 17 Z"));
-        up.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.None);
-        up.SetValue(FrameworkElement.WidthProperty, 15d);
-        up.SetValue(FrameworkElement.HeightProperty, 11d);
+            Geometry.Parse("M 6,0 L 0,9 H 12 Z"));
+        up.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.Uniform);
+        up.SetValue(FrameworkElement.WidthProperty, 12d);
+        up.SetValue(FrameworkElement.HeightProperty, 9d);
+        up.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+            HorizontalAlignment.Center);
         up.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
         up.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 12, 0, 0));
         up.SetValue(UIElement.OpacityProperty, 0.72d);
@@ -103,10 +112,12 @@ public sealed class PicasaGalleryScrollBar : UserControl
         symbols.AppendChild(up);
         var down = new FrameworkElementFactory(typeof(System.Windows.Shapes.Path));
         down.SetValue(System.Windows.Shapes.Path.DataProperty,
-            Geometry.Parse("M 3,3 H 17 L 10,12 Z"));
-        down.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.None);
-        down.SetValue(FrameworkElement.WidthProperty, 15d);
-        down.SetValue(FrameworkElement.HeightProperty, 11d);
+            Geometry.Parse("M 0,0 H 12 L 6,9 Z"));
+        down.SetValue(System.Windows.Shapes.Path.StretchProperty, Stretch.Uniform);
+        down.SetValue(FrameworkElement.WidthProperty, 12d);
+        down.SetValue(FrameworkElement.HeightProperty, 9d);
+        down.SetValue(FrameworkElement.HorizontalAlignmentProperty,
+            HorizontalAlignment.Center);
         down.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Bottom);
         down.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 0, 12));
         down.SetValue(UIElement.OpacityProperty, 0.72d);
@@ -167,15 +178,17 @@ public sealed class PicasaGalleryScrollBar : UserControl
             Interval = 95,
             Focusable = false
         };
-        arrow.SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
+        arrow.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
+        arrow.SetResourceReference(StyleProperty, "PcasaGalleryArrowStyle");
         arrow.Click += (_, _) => action();
         Grid.SetRow(arrow, row);
         parent.Children.Add(arrow);
     }
 
-    public void Attach(ScrollViewer scrollViewer)
+    public void Attach(ScrollViewer scrollViewer, BrowseGallerySurface gallery)
     {
         _viewer = scrollViewer;
+        _gallery = gallery;
     }
 
     public void StopMotion()
@@ -190,8 +203,11 @@ public sealed class PicasaGalleryScrollBar : UserControl
     private void MoveLines(int direction)
     {
         StopMotion();
-        if (_viewer is null) return;
-        ScrollBy(direction * 64);
+        if (_viewer is null || _gallery is null) return;
+        var target = _gallery.GetAdjacentImageRowOffset(
+            _viewer.VerticalOffset, direction);
+        _viewer.ScrollToVerticalOffset(Math.Clamp(
+            target, 0, _viewer.ScrollableHeight));
     }
 
     private void MovePages(int direction)
