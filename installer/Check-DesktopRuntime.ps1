@@ -66,7 +66,18 @@ try {
 
     $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('pcasa-desktop-runtime-' + [guid]::NewGuid().ToString('N') + '.exe')
     try {
-        Invoke-WebRequest -Uri $downloadUri -OutFile $temp -TimeoutSec 900
+        try {
+            Invoke-WebRequest -Uri $downloadUri -OutFile $temp -TimeoutSec 900
+        } catch {
+            if ($downloadUri.Host -ne 'builds.dotnet.microsoft.com') { throw }
+            # Microsoft serves the same signed release also from its official
+            # Azure blob origin. Handle an unavailable build CDN without
+            # introducing third-party mirrors or relaxing SHA-512 verification.
+            $alternate = $downloadUri.AbsoluteUri.Replace(
+                'https://builds.dotnet.microsoft.com/dotnet/',
+                'https://dotnetcli.blob.core.windows.net/dotnet/')
+            Invoke-WebRequest -Uri $alternate -OutFile $temp -TimeoutSec 900
+        }
         $expected = ([string]$file[0].hash).Trim().ToLowerInvariant()
         if ($expected -notmatch '^[a-f0-9]{128}$') {
             throw 'Microsoft release manifest SHA-512 has an invalid format.'
