@@ -1,0 +1,55 @@
+name: Third-party license evidence
+on:
+  push:
+    branches: [setup-installer-and-update]
+    paths:
+      - '.github/workflows/license-inventory.yml'
+      - '.github/scripts/audit-published-licenses.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-license-inventory:
+    runs-on: windows-latest
+    steps:
+      - name: Check out exact released version
+        uses: actions/checkout@v5
+        with:
+          ref: v0.1.Alpha.2
+          path: released
+      - name: Check out audit script
+        uses: actions/checkout@v5
+        with:
+          ref: setup-installer-and-update
+          path: audit-scripts
+      - name: Verify installed .NET 10 SDK
+        shell: pwsh
+        run: |
+          if (-not (dotnet --list-sdks | Select-String '^10\\.')) {
+            throw '.NET 10 SDK missing from runner'
+          }
+      - name: Build exact tagged app and bundled assets
+        shell: pwsh
+        working-directory: released
+        run: |
+          ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/released/tools/exiftool"
+          ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
+          Copy-Item "tools/exiftool/*" "publish/PCasa/exiftool" -Recurse -Force
+      - name: Generate per-file SHA256 and resolved NuGet license evidence
+        shell: pwsh
+        run: |
+          ./audit-scripts/.github/scripts/audit-published-licenses.ps1 `
+            -PublishDir "released/publish/PCasa" `
+            -ProjectAssetsFile "released/src/PCasa.App/obj/project.assets.json" `
+            -OutputDir "license-audit"
+      - name: Upload inspection evidence (NOT a compliance certificate)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-license-inventory-alpha2
+          path: license-audit/
+          if-no-files-found: error
+          retention-days: 10
