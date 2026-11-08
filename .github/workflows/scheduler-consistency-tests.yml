@@ -212,6 +212,26 @@ jobs:
             if ($marker -ne ($mode -eq "ALLUSERS")) {
               throw "Setup $mode selected the wrong catalog data scope"
             }
+            # Simulate an older self-contained PCasa installation in-place:
+            # the upgrade must remove old Microsoft WPF/.NET DLLs while
+            # preserving the application and its packaged dependencies.
+            foreach ($legacy in @("hostfxr.dll", "coreclr.dll",
+                "PresentationFramework.dll", "System.Private.CoreLib.dll")) {
+              Set-Content -Path (Join-Path $target $legacy) -Value "legacy-runtime"
+            }
+            $upgrade = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+            if ($upgrade.ExitCode -ne 0) {
+              throw "Setup $mode in-place upgrade failed (exit code $($upgrade.ExitCode))"
+            }
+            foreach ($legacy in @("hostfxr.dll", "coreclr.dll",
+                "PresentationFramework.dll", "System.Private.CoreLib.dll")) {
+              if (Test-Path (Join-Path $target $legacy)) {
+                throw "Setup $mode failed to remove legacy self-contained $legacy"
+              }
+            }
+            if (-not (Test-Path (Join-Path $target "Microsoft.Data.Sqlite.dll"))) {
+              throw "Setup $mode lost application dependencies during runtime cleanup"
+            }
             $uninstaller = Join-Path $target "unins000.exe"
             if (-not (Test-Path $uninstaller)) {
               throw "Setup $mode did not install an uninstaller"
