@@ -173,8 +173,11 @@ jobs:
           # elevation. Simulates a machine lacking .NET.
           $missing = Join-Path $env:RUNNER_TEMP "pcasa-no-desktop-runtime"
           New-Item -ItemType Directory -Force -Path $missing | Out-Null
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "installer/Check-DesktopRuntime.ps1" -ProbeOnly -RuntimeRoot $missing
-          if ($LASTEXITCODE -ne 10) { throw "Missing x64 Desktop Runtime not rejected" }
+          $probe = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", "installer/Check-DesktopRuntime.ps1",
+            "-ProbeOnly", "-RuntimeRoot", $missing) -Wait -PassThru
+          if ($probe.ExitCode -ne 10) { throw "Missing x64 Desktop Runtime not rejected ($($probe.ExitCode))" }
       - name: Verify official Microsoft runtime download without installing
         shell: pwsh
         timeout-minutes: 10
