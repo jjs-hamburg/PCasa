@@ -4,7 +4,8 @@
 param(
     [switch]$ProbeOnly,
     [string]$RuntimeRoot = "",
-    [switch]$NoDownload
+    [switch]$NoDownload,
+    [switch]$VerifyInstallerOnly
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -32,7 +33,7 @@ function Test-DesktopRuntime {
 }
 
 try {
-    if (Test-DesktopRuntime) {
+    if ((-not $VerifyInstallerOnly) -and (Test-DesktopRuntime)) {
         Write-Host 'PCasa: .NET 10 Desktop Runtime x64 is already installed.'
         exit 0
     }
@@ -78,6 +79,10 @@ try {
             throw 'Microsoft runtime installer Authenticode signature is not valid.'
         }
 
+        if ($VerifyInstallerOnly) {
+            Write-Host ('Verified official Microsoft .NET Desktop Runtime ' + $entry[0].windowsdesktop.version + ' installer, SHA-512 and signature.')
+            exit 0
+        }
         $arguments = '/install /quiet /norestart'
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $admin = (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole(
