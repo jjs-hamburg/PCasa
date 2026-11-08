@@ -332,6 +332,41 @@ public sealed class BrowseGallerySurface : FrameworkElement
             preceding.RowOffsets[preceding.RowCount - 1] + offsetInside;
     }
 
+    // The down arrow advances the visible bottom edge to the caption of
+    // the next photo row. It must never leave the filename clipped at the
+    // lower viewport boundary. Row geometry is the same layout used by
+    // DrawSectionImages, including variable photo heights and caption font.
+    public double GetNextImageRowCaptionOffset(
+        double verticalOffset, double viewportHeight)
+    {
+        EnsureLayout();
+        var current = Math.Max(0, verticalOffset);
+        if (_sections.Count == 0 || viewportHeight <= 0)
+            return current;
+
+        // A small inset keeps glyph descenders off the viewport's last pixel.
+        const double captionInset = 3;
+        var visibleBottom = current + viewportHeight;
+        const double epsilon = 0.5;
+        foreach (var section in _sections)
+        {
+            if (section.ImageCount == 0 || section.Bottom < visibleBottom - epsilon)
+                continue;
+            for (var row = 0; row < section.RowCount; row++)
+            {
+                var captionBottom = section.ImagesTop +
+                    section.RowOffsets[row] + section.RowImageHeights[row] +
+                    (_showFileNames ? FileLabelHeight : 0) + captionInset;
+                if (captionBottom <= visibleBottom + epsilon)
+                    continue;
+                // A partially visible bottom row becomes entirely visible;
+                // subsequent clicks advance one row at a time.
+                return Math.Max(current, captionBottom - viewportHeight);
+            }
+        }
+        return current;
+    }
+
     public long? GetFolderIdAtOffset(double verticalOffset)
     {
         EnsureLayout();
