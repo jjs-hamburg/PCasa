@@ -14,10 +14,7 @@ public sealed class ThumbnailCache
 
     public ThumbnailCache()
     {
-        _cacheRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa",
-            "thumbnails");
+        _cacheRoot = Path.Combine(PcasaDataPaths.SharedDataRoot, "thumbnails");
 
         Directory.CreateDirectory(_cacheRoot);
     }
@@ -118,9 +115,7 @@ public sealed class ThumbnailCache
             stem = stem[5..];
         if (stem.Length != 64 || !stem.All(char.IsAsciiHexDigit))
             return null;
-        cacheRoot ??= Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa", "thumbnails");
+        cacheRoot ??= Path.Combine(PcasaDataPaths.SharedDataRoot, "thumbnails");
         var candidate = Path.Combine(cacheRoot, stem[..2].ToLowerInvariant(), filename);
         return File.Exists(candidate) ? candidate : null;
     }
