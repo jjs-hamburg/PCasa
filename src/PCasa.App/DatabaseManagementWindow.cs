@@ -295,10 +295,13 @@ public sealed class DatabaseRestoreFoldersWindow : Window
     {
         _entries = folders.Select(f => new Entry(f)).ToList();
         Title = "PCasa – " + UiLanguage.T("Verzeichnisse wiederherstellen");
-        Width = 980;
-        Height = Math.Min(630, SystemParameters.WorkArea.Height - 70);
-        MinWidth = 780;
-        MinHeight = 340;
+        Width = 900;
+        // A single restored folder should not occupy a full-size list dialog.
+        // Keep the large, scrollable workspace only for substantial backups.
+        Height = Math.Min(SystemParameters.WorkArea.Height - 70,
+            Math.Clamp(185 + folders.Count * 86, 310, 630));
+        MinWidth = 740;
+        MinHeight = 300;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ShowInTaskbar = false;
         SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
