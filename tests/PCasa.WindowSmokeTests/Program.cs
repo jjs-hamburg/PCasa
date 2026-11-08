@@ -61,7 +61,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] {
-                    "Datei", "Ordner", "Darstellung", "Optionen" }))
+                    "Datei", "Ordner", "Darstellung", "Optionen", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             var fileMenu = items.Single(item => Equals(item.Header, "Datei"));
@@ -72,10 +72,15 @@ internal static class Program
             if (!optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     Equals(item.Header, "Schreibfehler")) ||
                 items.Any(item => Equals(item.Header, "Extras") ||
-                                  Equals(item.Header, "Hilfe") ||
                                   Equals(item.Header, "Bearbeiten")))
-                throw new Exception("Write errors belong under Options; Edit, Extras and Help were removed.");
-            Console.WriteLine("PASS: Menu reduced and reorganized without losing commands.");
+                throw new Exception("Write errors belong under Options; Edit and Extras were removed.");
+            var helpMenu = items.Single(item => Equals(item.Header, "Hilfe"));
+            var helpCommands = helpMenu.Items.OfType<MenuItem>().ToArray();
+            if (helpCommands.Length != 2 ||
+                !Equals(helpCommands[0].Header, "Nach Updates suchen") ||
+                !Equals(helpCommands[1].Header, "Über PCasa"))
+                throw new Exception("Help must contain exactly Check for Update and About.");
+            Console.WriteLine("PASS: Menu reduced and reorganized with bilingual Help commands.");
 
             var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Single appearance dialog menu missing.");
@@ -200,7 +205,7 @@ internal static class Program
                 !englishMenu.IsChecked || germanMenu.IsChecked ||
                 !menu.Items.OfType<MenuItem>()
                     .Select(item => item.Header?.ToString())
-                    .SequenceEqual(new[] { "File", "Folder", "Appearance", "Options" }))
+                    .SequenceEqual(new[] { "File", "Folder", "Appearance", "Options", "Help" }))
                 throw new Exception("English translations were not applied live.");
             AssertCaptionGaps("en");
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
