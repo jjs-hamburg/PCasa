@@ -27,7 +27,7 @@ jobs:
       - name: Verify installed .NET 10 SDK
         shell: pwsh
         run: |
-          if (-not (dotnet --list-sdks | Select-String '^10\\.')) {
+          if (-not (dotnet --list-sdks | Select-String '^10[.]')) {
             throw '.NET 10 SDK missing from runner'
           }
       - name: Build exact tagged app and bundled assets
