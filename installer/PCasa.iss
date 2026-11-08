@@ -47,6 +47,35 @@ Name: "{commonappdata}\PCasa"; Permissions: users-modify; Check: IsAdminInstallM
 ; A machine-wide marker must never leak into a per-user installation.
 Type: files; Name: "{app}\PCasa.all-users"
 
+; Alpha.2 was self-contained. Upgrading in-place must not strand Microsoft's
+; bundled .NET/WPF runtime in the PCasa directory. Only remove these files
+; when the *previous* installation has hostfxr.dll. Third-party dependencies
+; needed by the new app are restored from [Files] afterwards.
+Type: files; Name: "{app}\System.*.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\Microsoft.*.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\Presentation*.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\WindowsBase.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\Accessibility.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\mscorlib.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\netstandard.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\System.Xaml.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\Ijwhost.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\coreclr.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\clrjit.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\clrgc.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\clrgcexp.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\clretwrc.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\mscorrc.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\mscordaccore*.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\mscordbi.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\msquic.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\PenImc_cor3.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\D3DCompiler_47_cor3.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\DirectWriteForwarder.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\createdump.exe"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\hostpolicy.dll"; Check: OldSelfContainedInstallation
+Type: files; Name: "{app}\hostfxr.dll"; Check: OldSelfContainedInstallation
+
 [Files]
 Source: "..\publish\PCasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
@@ -60,6 +89,11 @@ Name: "{autodesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon
 Filename: "{app}\PCasa.App.exe"; Description: "{cm:LaunchProgram,PCasa}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function OldSelfContainedInstallation(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\hostfxr.dll'));
+end;
+
 // Install the official Microsoft prerequisite BEFORE replacing any PCasa file.
 // Failure/cancel preserves the prior PCasa installation and catalog.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
