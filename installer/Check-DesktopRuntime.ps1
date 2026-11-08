@@ -51,7 +51,7 @@ try {
         Select-Object -First 1)
     if ($entry.Count -ne 1) { throw 'Microsoft .NET 10 desktop runtime release is missing from manifest.' }
     $file = @($entry[0].windowsdesktop.files |
-        Where-Object { $_.rid -eq 'win-x64' -and $_.name -match '^windowsdesktop-runtime-10\.[0-9.]+-win-x64\.exe$' } |
+        Where-Object { $_.rid -eq 'win-x64' -and $_.name -eq 'windowsdesktop-runtime-win-x64.exe' } |
         Select-Object -First 1)
     if ($file.Count -ne 1 -or -not $file[0].hash -or -not $file[0].url) {
         throw 'Microsoft Windows Desktop Runtime x64 installer not found.'
