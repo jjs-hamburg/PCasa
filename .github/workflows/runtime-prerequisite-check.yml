@@ -1,0 +1,28 @@
+name: Microsoft Desktop Runtime Prerequisite
+on:
+  push:
+    branches: [setup-installer-and-update]
+    paths:
+      - 'installer/Check-DesktopRuntime.ps1'
+      - '.github/workflows/runtime-prerequisite-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-runtime:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify WindowsDesktop runtime present on runner
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/Check-DesktopRuntime.ps1 -ProbeOnly
+          if ($LASTEXITCODE -ne 0) { throw "Installed desktop runtime missing" }
+      - name: Download, hash and check signed Microsoft installer without executing
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/Check-DesktopRuntime.ps1 -VerifyInstallerOnly
+          if ($LASTEXITCODE -ne 0) { throw "Microsoft Desktop Runtime installer verification failed" }
