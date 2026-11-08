@@ -285,4 +285,4 @@ jobs:
           fi
           gh release create v0.1.Alpha.3 release/PCasa-Setup-0.1.Alpha.3.exe \
             --target "$GITHUB_SHA" --title "PCasa 0.1.Alpha.3" --prerelease \
-            --notes "First PCasa Alpha installer. Choose current-user or all-users setup. Existing portable ZIP remains available as a GitHub Actions artifact."
+            --notes "PCasa 0.1.Alpha.3 – Windows x64 setup. Requires .NET 10 Desktop Runtime; the installer checks and installs the official Microsoft runtime if needed."
