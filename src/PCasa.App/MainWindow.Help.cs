@@ -232,7 +232,14 @@ public partial class MainWindow
         try
         {
             Directory.CreateDirectory(folder);
-            using var response = await ReleaseClient.GetAsync(
+            // The 12-second metadata timeout must not terminate a 200 MB
+            // installer download over a slower or intermittent connection.
+            using var installerClient = new HttpClient
+            {
+                Timeout = TimeSpan.FromMinutes(30)
+            };
+            installerClient.DefaultRequestHeaders.UserAgent.ParseAdd("PCasa-Windows/0.1");
+            using var response = await installerClient.GetAsync(
                 url, HttpCompletionOption.ResponseHeadersRead, downloadWindow.Cancellation);
             response.EnsureSuccessStatusCode();
             if (response.Content.Headers.ContentLength is { } length &&
