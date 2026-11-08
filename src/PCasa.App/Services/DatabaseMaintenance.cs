@@ -42,9 +42,7 @@ public sealed class DatabaseMaintenance
 
     public DatabaseMaintenance(string? directory = null)
     {
-        _directory = directory ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa");
+        _directory = directory ?? PcasaDataPaths.SharedDataRoot;
         _databasePath = Path.Combine(_directory, CatalogName);
     }
 
