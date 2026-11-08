@@ -204,8 +204,11 @@ public sealed class PicasaGalleryScrollBar : UserControl
     {
         StopMotion();
         if (_viewer is null || _gallery is null) return;
-        var target = _gallery.GetAdjacentImageRowOffset(
-            _viewer.VerticalOffset, direction);
+        var target = direction > 0
+            ? _gallery.GetNextImageRowCaptionOffset(
+                _viewer.VerticalOffset, _viewer.ViewportHeight)
+            : _gallery.GetAdjacentImageRowOffset(
+                _viewer.VerticalOffset, direction);
         _viewer.ScrollToVerticalOffset(Math.Clamp(
             target, 0, _viewer.ScrollableHeight));
     }
