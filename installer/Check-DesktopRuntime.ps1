@@ -86,7 +86,9 @@ try {
         if ($actual -ne $expected) { throw 'Microsoft runtime installer SHA-512 mismatch.' }
         $signature = Get-AuthenticodeSignature -LiteralPath $temp
         if ($signature.Status -ne 'Valid' -or
-            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=Microsoft Corporation(,|$)') {
+            -not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)O=Microsoft Corporation(,|$)' -or
+            $signature.SignerCertificate.Subject -notmatch '(^|,\s*)CN=(\.NET|Microsoft Corporation)(,|$)') {
             $subject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '<no certificate>' }
             throw ("Microsoft runtime installer Authenticode signature is not valid: " +
                 "status=$($signature.Status), subject=$subject, detail=$($signature.StatusMessage)")
