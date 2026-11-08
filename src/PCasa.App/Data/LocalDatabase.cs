@@ -10,8 +10,7 @@ public sealed class LocalDatabase
     public LocalDatabase(string? databasePath = null)
     {
         DatabasePath = databasePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa", "pcasa.db");
+            PCasa.App.Services.PcasaDataPaths.SharedDataRoot, "pcasa.db");
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(DatabasePath))!);
     }
