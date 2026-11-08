@@ -101,6 +101,9 @@ public partial class MainWindow
         ViewerToolbar.Visibility = Visibility.Visible;
         PhotoZoomToolbar.Visibility = Visibility.Visible;
         PhotoViewerPanel.Visibility = Visibility.Visible;
+        // The same left-column shell now represents the independently
+        // controlled editing pane, not the gallery folder list.
+        UpdateWorkspaceLayoutPreservingGallery();
         Keyboard.Focus(PhotoViewerPanel);
         SelectViewerImage(e.ImageId);
         UpdateComparisonButtons();
@@ -1363,6 +1366,8 @@ public partial class MainWindow
         FolderTreePanel.Visibility = Visibility.Visible;
         PhotoZoomToolbar.Visibility = Visibility.Collapsed;
         ThumbnailSizeToolbar.Visibility = Visibility.Visible;
+        // Restore the gallery's own persisted folder-pane preference.
+        UpdateWorkspaceLayoutPreservingGallery();
         UpdateComparisonButtons();
         SetViewerBitmap(null);
         SetViewerQualityMessage(null);
