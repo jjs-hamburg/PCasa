@@ -298,7 +298,16 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var firstTop = section.ImagesTop + section.RowOffsets[0];
         if (current < firstTop)
         {
-            if (direction > 0) return firstTop;
+            if (direction > 0)
+            {
+                // The first click from the gallery beginning must travel
+                // a complete displayed image row, not merely its header.
+                if (section.RowCount > 1)
+                    return current + section.RowOffsets[1] - section.RowOffsets[0];
+                if (sectionIndex + 1 < _sections.Count)
+                    return _sections[sectionIndex + 1].ImagesTop;
+                return current + ThumbnailRowHeight;
+            }
             if (sectionIndex == 0) return 0;
             var previous = _sections[sectionIndex - 1];
             return previous.ImagesTop + previous.RowOffsets[previous.RowCount - 1];
