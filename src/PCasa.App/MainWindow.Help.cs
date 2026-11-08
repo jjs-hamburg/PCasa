@@ -97,9 +97,9 @@ public partial class MainWindow
                     draft.ValueKind == JsonValueKind.True) continue;
                 if (!item.TryGetProperty("tag_name", out var tag)) continue;
                 var version = PcasaReleaseVersion.TryParse(tag.GetString());
-                if (version is null || version.CompareTo(installed.Value) <= 0)
+                if (version is null || version.Value.CompareTo(installed.Value) <= 0)
                     continue;
-                if (latest is not null && version.CompareTo(latest.Value) <= 0)
+                if (latest is not null && version.Value.CompareTo(latest.Value) <= 0)
                     continue;
                 if (!item.TryGetProperty("html_url", out var url) ||
                     !Uri.TryCreate(url.GetString(), UriKind.Absolute, out var uri) ||
