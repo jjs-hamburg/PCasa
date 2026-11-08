@@ -128,6 +128,25 @@ internal static class TagFlow
             var status = (TextBlock?)window.FindName("StatusText")
                 ?? throw new Exception("Missing status line.");
 
+            // Help is part of the main menu in both languages. Versions
+            // are compared by major/minor/phase/build, never as strings.
+            if (window.FindName("CheckForUpdatesMenuItem") is not MenuItem checkMenu ||
+                window.FindName("AboutPcasaMenuItem") is not MenuItem aboutMenu ||
+                !Equals(UiLanguage.T("Nach Updates suchen"), "Nach Updates suchen") &&
+                    UiLanguage.Current.Code == "de" ||
+                checkMenu.Parent is not MenuItem ||
+                aboutMenu.Parent is not MenuItem ||
+                PcasaReleaseVersion.TryParse("v0.1.Alpha.1") is not { } alpha ||
+                PcasaReleaseVersion.TryParse("0.1.Beta.1") is not { } beta ||
+                PcasaReleaseVersion.TryParse("0.1.RC.1") is not { } candidate ||
+                PcasaReleaseVersion.TryParse("1.0") is not { } stable ||
+                alpha.CompareTo(beta) >= 0 || beta.CompareTo(candidate) >= 0 ||
+                candidate.CompareTo(stable) >= 0 ||
+                PcasaReleaseVersion.TryParse("0.1.Alpha.2") is not { } later ||
+                later.CompareTo(alpha) <= 0 ||
+                PcasaReleaseVersion.TryParse("0.1.0-preview.2") is not null)
+                throw new Exception("PCasa Help menu or release-version ordering invalid.");
+
             Until(window, () => surface.GetFolderOffset(a.Id) is not null &&
                 surface.GetFolderOffset(b.Id) is not null,
                 "Catalog pictures never appeared in the WPF gallery.");
