@@ -200,6 +200,37 @@ internal static class TagFlow
             if (Math.Abs(transform.Y) > 0.01)
                 throw new Exception("Picasa grip did not spring back to track center.");
 
+            // The arrow's "line" must follow the gallery's REAL image-row
+            // layout (including thumbnail size and captions), not 64 pixels.
+            var originalThumbWidth = surface.ThumbnailWidth;
+            surface.SetThumbnailWidth(120);
+            window.UpdateLayout();
+            var smallRowStep = surface.GetAdjacentImageRowOffset(0, 1);
+            surface.SetThumbnailWidth(235);
+            window.UpdateLayout();
+            var largeRowStep = surface.GetAdjacentImageRowOffset(0, 1);
+            surface.SetThumbnailWidth(originalThumbWidth);
+            window.UpdateLayout();
+            if (smallRowStep < 75 || largeRowStep <= smallRowStep + 20)
+                throw new Exception("Picasa line-step ignores real thumbnail row geometry.");
+
+            // RepeatButtons and the Thumb must inherit PCasa's SAME 3D
+            // shadow/gradient resources while keeping the icons understated.
+            if (arrows.Any(button =>
+                button.TryFindResource("PcasaGalleryArrowStyle") is not Style))
+                throw new Exception("Picasa arrow 3D template is unavailable.");
+            foreach (var arrow in arrows)
+            {
+                arrow.ApplyTemplate();
+                if (arrow.Template.FindName("ArrowDepth", arrow) is not Border)
+                    throw new Exception("Picasa arrow lacks PCasa 3D depth overlay.");
+            }
+            grip.ApplyTemplate();
+            if (VisualTreeHelper.GetChildrenCount(grip) == 0 ||
+                VisualTreeHelper.GetChild(grip, 0) is not Border gripFace ||
+                gripFace.Effect is null)
+                throw new Exception("Picasa joystick lacks PCasa 3D shadow.");
+
             scroller.ScrollToVerticalOffset(0);
             if (scroller.ScrollableHeight > 10)
             {
