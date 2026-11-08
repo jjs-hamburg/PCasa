@@ -148,7 +148,7 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
-      - name: Build signed-scope-aware PCasa Setup executable
+      - name: Build dual-scope PCasa Setup executable
         shell: pwsh
         run: |
           choco install innosetup --yes --no-progress
@@ -158,6 +158,37 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
           if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.1.exe")) {
             throw "Setup executable missing"
+          }
+      - name: Smoke-test both Windows installer modes
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.1.exe").Path
+          foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
+            $scope = $mode.ToLowerInvariant()
+            $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
+            $args = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+                      "/$mode", "/DIR=$target")
+            $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "Setup $mode failed (exit code $($process.ExitCode))"
+            }
+            if (-not (Test-Path (Join-Path $target "PCasa.App.exe"))) {
+              throw "Setup $mode did not install PCasa.App.exe"
+            }
+            $marker = Test-Path (Join-Path $target "PCasa.all-users")
+            if ($marker -ne ($mode -eq "ALLUSERS")) {
+              throw "Setup $mode selected the wrong catalog data scope"
+            }
+            $uninstaller = Join-Path $target "unins000.exe"
+            if (-not (Test-Path $uninstaller)) {
+              throw "Setup $mode did not install an uninstaller"
+            }
+            $remove = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
+            if ($remove.ExitCode -ne 0) {
+              throw "Uninstall $mode failed (exit code $($remove.ExitCode))"
+            }
+            Write-Host "PASS: $mode installation, scope marker and uninstall"
           }
       - name: Upload PCasa Setup
         uses: actions/upload-artifact@v4
