@@ -281,6 +281,48 @@ public sealed class BrowseGallerySurface : FrameworkElement
         InvalidateVisual();
     }
 
+    // One scrollbar "line" is one actual photo row, not a fixed pixel
+    // distance. Use the same per-folder row offsets that draw the gallery:
+    // portrait/landscape mixtures, caption settings and thumbnail sizes
+    // therefore cannot desynchronize navigation from the visible rows.
+    public double GetAdjacentImageRowOffset(double verticalOffset, int direction)
+    {
+        EnsureLayout();
+        if (_sections.Count == 0 || direction == 0)
+            return Math.Max(0, verticalOffset);
+
+        var current = Math.Max(0, verticalOffset);
+        var section = FindSectionAt(current);
+        if (section is null) return current;
+        var sectionIndex = _sections.IndexOf(section);
+        var firstTop = section.ImagesTop + section.RowOffsets[0];
+        if (current < firstTop)
+        {
+            if (direction > 0) return firstTop;
+            if (sectionIndex == 0) return 0;
+            var previous = _sections[sectionIndex - 1];
+            return previous.ImagesTop + previous.RowOffsets[previous.RowCount - 1];
+        }
+
+        var row = RowAt(section, current - section.ImagesTop);
+        var rowStart = section.ImagesTop + section.RowOffsets[row];
+        var offsetInside = Math.Max(0, current - rowStart);
+        if (direction > 0)
+        {
+            if (row + 1 < section.RowCount)
+                return section.ImagesTop + section.RowOffsets[row + 1] + offsetInside;
+            if (sectionIndex + 1 < _sections.Count)
+                return _sections[sectionIndex + 1].ImagesTop;
+            return current;
+        }
+        if (row > 0)
+            return section.ImagesTop + section.RowOffsets[row - 1] + offsetInside;
+        if (sectionIndex == 0) return 0;
+        var preceding = _sections[sectionIndex - 1];
+        return preceding.ImagesTop +
+            preceding.RowOffsets[preceding.RowCount - 1] + offsetInside;
+    }
+
     public long? GetFolderIdAtOffset(double verticalOffset)
     {
         EnsureLayout();
