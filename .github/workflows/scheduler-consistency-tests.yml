@@ -113,7 +113,7 @@ jobs:
       - name: Publish self-contained Windows x64 acceptance package
         shell: pwsh
         run: |
-          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:Version=0.1.0-preview.2 -p:InformationalVersion=$env:GITHUB_SHA -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           python -m pip install --quiet numpy pillow
           python tools/generate_pcasa_textures.py publish/PCasa/Texturen
           if (-not (Test-Path "publish/PCasa/Texturen/Stein - Schiefer dunkel.jpg") -or
@@ -128,7 +128,18 @@ jobs:
           if (-not (Test-Path "publish/PCasa/PCasa-JPEG-Benchmark.cmd")) { throw "JPEG benchmark launcher missing" }
           $dll = "publish/PCasa/PCasa.App.dll"
           $dllHash = (Get-FileHash -Path $dll -Algorithm SHA256).Hash
+          # Read the product identity from the published executable, never
+          # invent a separate CI-only version or replace it with the SHA.
+          $exeVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo(
+            (Resolve-Path "publish/PCasa/PCasa.App.exe").Path)
+          $appVersion = $exeVersion.ProductVersion
+          $windowsFileVersion = $exeVersion.FileVersion
+          if ($appVersion -ne "0.1.Alpha.1" -or $windowsFileVersion -ne "0.1.0.1") {
+            throw "Published version mismatch: $appVersion / $windowsFileVersion"
+          }
           @(
+            "Version=$appVersion"
+            "WindowsFileVersion=$windowsFileVersion"
             "Commit=$env:GITHUB_SHA"
             "WorkflowRun=$env:GITHUB_RUN_ID"
             "PCasa.App.dll.SHA256=$dllHash"
