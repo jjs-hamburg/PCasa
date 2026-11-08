@@ -8,6 +8,6 @@ public partial class MainWindow
     {
         // Exactly one scroll authority: the original WPF BrowseScrollViewer.
         // The new control never touches the scheduler or gallery projection.
-        PicasaGalleryScrollBar.Attach(BrowseScrollViewer);
+        PicasaGalleryScrollBar.Attach(BrowseScrollViewer, BrowseSurface);
     }
 }
