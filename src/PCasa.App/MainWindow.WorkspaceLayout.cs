@@ -76,9 +76,14 @@ public partial class MainWindow
         var sidebarOpen = _sidebarMode is not null;
         var fullscreen = gps && _gpsFullscreen;
         var expanded = gps && _gpsExpanded;
-        var showFolder = _appearance.FolderSidebarVisible && !expanded;
+        var paneVisible = _viewerOpen
+            ? _appearance.ViewerEditingSidebarVisible
+            : _appearance.FolderSidebarVisible;
+        var showFolder = paneVisible && !expanded;
         var folderFraction = showFolder
-            ? WorkspaceFraction(_appearance.FolderSidebarFraction, 0.22, 0.12, 0.42)
+            ? _viewerOpen
+                ? WorkspaceFraction(_appearance.ViewerEditingSidebarFraction, 0.22, 0.12, 0.42)
+                : WorkspaceFraction(_appearance.FolderSidebarFraction, 0.22, 0.12, 0.42)
             : 0;
         var sidebarFraction = sidebarOpen
             ? expanded
@@ -153,7 +158,7 @@ public partial class MainWindow
             ? "M 4,12 L 12,12 L 12,4 M 28,12 L 20,12 L 20,4 M 20,28 L 20,20 L 28,20 M 12,28 L 12,20 L 4,20"
             : "M 12,4 L 4,4 L 4,12 M 20,4 L 28,4 L 28,12 M 28,20 L 28,28 L 20,28 M 12,28 L 4,28 L 4,20");
         FolderSidebarSymbolArrow.Data = System.Windows.Media.Geometry.Parse(
-            _appearance.FolderSidebarVisible
+            paneVisible
                 ? "M 16,14 L 24,14 M 20,10 L 24,14 L 20,18"
                 : "M 24,14 L 16,14 M 20,10 L 16,14 L 20,18");
         GpsFullscreenButton.ToolTip = UiLanguage.T(fullscreen
@@ -207,7 +212,10 @@ public partial class MainWindow
     private void FolderSidebarToggle_Click(object sender, RoutedEventArgs e)
     {
         if (_sidebarMode == "GPS" && (_gpsExpanded || _gpsFullscreen)) return;
-        _appearance.FolderSidebarVisible = !_appearance.FolderSidebarVisible;
+        if (_viewerOpen)
+            _appearance.ViewerEditingSidebarVisible = !_appearance.ViewerEditingSidebarVisible;
+        else
+            _appearance.FolderSidebarVisible = !_appearance.FolderSidebarVisible;
         UpdateWorkspaceLayoutPreservingGallery();
         SaveAppearance();
     }
@@ -261,8 +269,14 @@ public partial class MainWindow
         if (denominator > 0 && !_gpsFullscreen)
         {
             if (FolderSidebarPanel.IsVisible)
-                _appearance.FolderSidebarFraction =
-                    Math.Clamp(FolderSidebarColumn.ActualWidth / denominator, 0.12, 0.42);
+            {
+                var widthFraction = Math.Clamp(
+                    FolderSidebarColumn.ActualWidth / denominator, 0.12, 0.42);
+                if (_viewerOpen)
+                    _appearance.ViewerEditingSidebarFraction = widthFraction;
+                else
+                    _appearance.FolderSidebarFraction = widthFraction;
+            }
             if (_sidebarMode is not null)
             {
                 var widthFraction = InfoSidebarColumn.ActualWidth / denominator;
