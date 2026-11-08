@@ -247,6 +247,47 @@
             </Setter>
         </Style>
 
+        <!-- Narrow gallery arrow keys use precisely the same 3D surface,
+             gradient and shadow as normal PCasa buttons. A separate target
+             template is necessary because RepeatButton is not a Button. -->
+        <Style x:Key="PcasaGalleryArrowStyle" TargetType="{x:Type RepeatButton}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource PcasaPanelAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource PcasaDividerBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type RepeatButton}">
+                        <Border x:Name="ArrowBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="3"
+                                Effect="{StaticResource PcasaButtonShadow}">
+                            <Grid>
+                                <Border x:Name="ArrowDepth" CornerRadius="2"
+                                        IsHitTestVisible="False"
+                                        Background="{StaticResource PcasaButtonDepthBrush}"/>
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ArrowBorder" Property="Background"
+                                        Value="{DynamicResource PcasaHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ArrowDepth" Property="Opacity" Value="0"/>
+                                <Setter TargetName="ArrowBorder" Property="BorderThickness" Value="2,2,1,1"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.53"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Default buttons must own *both* foreground and surface.
              Fluent's light button surface paired with a separately patched
              dark foreground made labels illegible after changing themes.
