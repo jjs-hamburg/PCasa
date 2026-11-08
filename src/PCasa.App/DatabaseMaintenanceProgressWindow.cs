@@ -45,10 +45,10 @@ public sealed class DatabaseMaintenanceProgressWindow : Window
             _ => "Datenbankwartung fehlgeschlagen"
         };
         Title = "PCasa – " + UiLanguage.T(operationTitle);
-        Width = 565;
-        Height = 255;
+        Width = 535;
+        SizeToContent = SizeToContent.Height;
         MinWidth = 450;
-        MinHeight = 230;
+        MaxHeight = Math.Max(260, SystemParameters.WorkArea.Height - 70);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ShowInTaskbar = true;
         ResizeMode = ResizeMode.CanMinimize;
