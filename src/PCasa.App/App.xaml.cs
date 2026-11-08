@@ -13,6 +13,9 @@ namespace PCasa.App;
 public partial class App : Application
 {
     private static bool _tooltipsEnabled = true;
+    private Mutex? _singleInstance;
+    private bool _ownsSingleInstance;
+
 
     // A single application-wide gate, including dynamically created folder
     // tree elements, context menus and independently owned dialogs.
@@ -56,6 +59,38 @@ public partial class App : Application
     // ordinary MainWindow, scheduler or monitored-folder background jobs.
     protected override void OnStartup(StartupEventArgs e)
     {
+        // The offline database-maintenance helper must run concurrently with
+        // the exiting parent. It never creates a gallery or a scheduler.
+        var isMaintenance = e.Args.Length >= 3 &&
+            string.Equals(e.Args[0], "--database-maintenance",
+                StringComparison.OrdinalIgnoreCase);
+        var isBenchmark = e.Args.Length > 0 &&
+            string.Equals(e.Args[0], "--jpeg-benchmark",
+                StringComparison.OrdinalIgnoreCase);
+        if (!isMaintenance && !isBenchmark)
+        {
+            try
+            {
+                _singleInstance = new Mutex(true, @"Global\PCasa.Desktop.SingleInstance",
+                    out var created);
+                _ownsSingleInstance = created;
+                if (!created)
+                {
+                    PcasaDialog.Show("PCasa läuft bereits.", "PCasa",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    Shutdown();
+                    return;
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Another Windows session already owns the global mutex.
+                PcasaDialog.Show("PCasa läuft bereits.", "PCasa",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                Shutdown();
+                return;
+            }
+        }
         if (e.Args.Length >= 3 &&
             string.Equals(e.Args[0], "--database-maintenance",
                 StringComparison.OrdinalIgnoreCase))
@@ -180,7 +215,16 @@ public partial class App : Application
             // incidental sidebar switch.
             if (CefSharp.Cef.IsInitialized is true) CefSharp.Cef.Shutdown();
         }
-        finally { base.OnExit(e); }
+        finally
+        {
+            if (_ownsSingleInstance)
+            {
+                try { _singleInstance?.ReleaseMutex(); }
+                catch (ApplicationException) { }
+            }
+            _singleInstance?.Dispose();
+            base.OnExit(e);
+        }
     }
 
     // The folder tree has no hover highlighting. A full-path tooltip is
