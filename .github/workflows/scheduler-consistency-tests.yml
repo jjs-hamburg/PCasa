@@ -113,7 +113,7 @@ jobs:
       - name: Publish self-contained Windows x64 acceptance package
         shell: pwsh
         run: |
-          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           python -m pip install --quiet numpy pillow
           python tools/generate_pcasa_textures.py publish/PCasa/Texturen
           if (-not (Test-Path "publish/PCasa/Texturen/Stein - Schiefer dunkel.jpg") -or
@@ -123,6 +123,21 @@ jobs:
           New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
           Copy-Item -Path "tools/PCasa-JPEG-Benchmark.cmd" -Destination "publish/PCasa/PCasa-JPEG-Benchmark.cmd" -Force
+          # Strict runtime separation: installer must NOT ship Microsoft shared
+          # WPF/.NET runtime files; their installer belongs to Microsoft.
+          if (Test-Path "publish/PCasa/hostfxr.dll") {
+            throw "Framework-dependent PCasa accidentally bundled .NET hostfxr.dll"
+          }
+          if (Test-Path "publish/PCasa/PresentationFramework.dll") {
+            throw "Framework-dependent PCasa accidentally bundled the WPF runtime"
+          }
+          if (Test-Path "publish/PCasa/coreclr.dll") {
+            throw "Framework-dependent PCasa accidentally bundled CoreCLR"
+          }
+          $runtimeConfig = Get-Content "publish/PCasa/PCasa.App.runtimeconfig.json" -Raw
+          if ($runtimeConfig -notmatch "Microsoft.WindowsDesktop.App") {
+            throw "PCasa missing shared Windows Desktop Runtime framework reference"
+          }
           if (-not (Test-Path "publish/PCasa/PCasa.App.exe")) { throw "Windows build missing" }
           if (-not (Test-Path "publish/PCasa/exiftool/exiftool.exe")) { throw "Metadata tool missing" }
           if (-not (Test-Path "publish/PCasa/PCasa-JPEG-Benchmark.cmd")) { throw "JPEG benchmark launcher missing" }
@@ -134,7 +149,7 @@ jobs:
             (Resolve-Path "publish/PCasa/PCasa.App.exe").Path)
           $appVersion = $exeVersion.ProductVersion
           $windowsFileVersion = $exeVersion.FileVersion
-          if ($appVersion -ne "0.1.Alpha.2" -or $windowsFileVersion -ne "0.1.0.2") {
+          if ($appVersion -ne "0.1.Alpha.3" -or $windowsFileVersion -ne "0.1.0.3") {
             throw "Published version mismatch: $appVersion / $windowsFileVersion"
           }
           @(
@@ -148,6 +163,18 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Verify .NET 10 Desktop Runtime prerequisite detection
+        shell: pwsh
+        run: |
+          # Real runner: runtime detected without installing or changing Windows.
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "installer/Check-DesktopRuntime.ps1" -ProbeOnly
+          if ($LASTEXITCODE -ne 0) { throw "Installed x64 Desktop Runtime not detected" }
+          # Isolated empty root: negative case must never initiate download or
+          # elevation. Simulates a machine lacking .NET.
+          $missing = Join-Path $env:RUNNER_TEMP "pcasa-no-desktop-runtime"
+          New-Item -ItemType Directory -Force -Path $missing | Out-Null
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "installer/Check-DesktopRuntime.ps1" -ProbeOnly -RuntimeRoot $missing
+          if ($LASTEXITCODE -ne 10) { throw "Missing x64 Desktop Runtime not rejected" }
       - name: Build dual-scope PCasa Setup executable
         shell: pwsh
         run: |
@@ -156,13 +183,13 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not installed" }
           & $iscc installer/PCasa.iss
           if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
-          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.2.exe")) {
+          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.3.exe")) {
             throw "Setup executable missing"
           }
       - name: Smoke-test both Windows installer modes
         shell: pwsh
         run: |
-          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.2.exe").Path
+          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.3.exe").Path
           foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
@@ -193,8 +220,8 @@ jobs:
       - name: Upload PCasa Setup
         uses: actions/upload-artifact@v4
         with:
-          name: PCasa-Setup-0.1.Alpha.2
-          path: dist/PCasa-Setup-0.1.Alpha.2.exe
+          name: PCasa-Setup-0.1.Alpha.3
+          path: dist/PCasa-Setup-0.1.Alpha.3.exe
           if-no-files-found: error
           retention-days: 7
       - name: Upload scheduler acceptance test package
@@ -216,7 +243,7 @@ jobs:
       - name: Download tested setup executable
         uses: actions/download-artifact@v4
         with:
-          name: PCasa-Setup-0.1.Alpha.2
+          name: PCasa-Setup-0.1.Alpha.3
           path: release
       - name: Publish PCasa Alpha as direct EXE download
         env:
@@ -225,11 +252,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s release/PCasa-Setup-0.1.Alpha.2.exe
-          if gh release view v0.1.Alpha.2 >/dev/null 2>&1; then
-            echo "Release v0.1.Alpha.2 already exists: refusing to silently replace a published installer" >&2
+          test -s release/PCasa-Setup-0.1.Alpha.3.exe
+          if gh release view v0.1.Alpha.3 >/dev/null 2>&1; then
+            echo "Release v0.1.Alpha.3 already exists: refusing to silently replace a published installer" >&2
             exit 1
           fi
-          gh release create v0.1.Alpha.2 release/PCasa-Setup-0.1.Alpha.2.exe \
-            --target "$GITHUB_SHA" --title "PCasa 0.1.Alpha.2" --prerelease \
+          gh release create v0.1.Alpha.3 release/PCasa-Setup-0.1.Alpha.3.exe \
+            --target "$GITHUB_SHA" --title "PCasa 0.1.Alpha.3" --prerelease \
             --notes "First PCasa Alpha installer. Choose current-user or all-users setup. Existing portable ZIP remains available as a GitHub Actions artifact."
