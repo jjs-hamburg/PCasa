@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows;
 using PCasa.App.Services;
@@ -90,7 +91,9 @@ public partial class MainWindow
                 throw new JsonException("GitHub Releases response is not an array.");
 
             PcasaReleaseVersion? latest = null;
-            string? releaseUrl = null;
+            string? installerUrl = null;
+            string? installerDigest = null;
+            long installerBytes = 0;
             foreach (var item in json.RootElement.EnumerateArray())
             {
                 if (item.TryGetProperty("draft", out var draft) &&
@@ -101,17 +104,49 @@ public partial class MainWindow
                     continue;
                 if (latest is not null && version.Value.CompareTo(latest.Value) <= 0)
                     continue;
-                if (!item.TryGetProperty("html_url", out var url) ||
-                    !Uri.TryCreate(url.GetString(), UriKind.Absolute, out var uri) ||
-                    uri.Scheme != Uri.UriSchemeHttps ||
-                    !string.Equals(uri.Host, "github.com",
-                        StringComparison.OrdinalIgnoreCase) ||
-                    !uri.AbsolutePath.StartsWith("/jjs-hamburg/PCasa/releases/",
-                        StringComparison.OrdinalIgnoreCase))
+                // A release is installable only if it contains the exact
+                // versioned Windows installer and GitHub's SHA-256 digest.
+                // Never use workflow artifacts, a redirect supplied by a
+                // release description, or an unverified executable.
+                if (!item.TryGetProperty("assets", out var assets) ||
+                    assets.ValueKind != JsonValueKind.Array)
                     continue;
-
+                string? candidateUrl = null;
+                string? candidateHash = null;
+                long candidateBytes = 0;
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    var expectedName = "PCasa-Setup-" + version.Value + ".exe";
+                    if (!asset.TryGetProperty("name", out var name) ||
+                        name.GetString() != expectedName ||
+                        !asset.TryGetProperty("browser_download_url", out var download) ||
+                        !Uri.TryCreate(download.GetString(), UriKind.Absolute, out var uri) ||
+                        uri.Scheme != Uri.UriSchemeHttps ||
+                        !string.Equals(uri.Host, "github.com",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(uri.AbsolutePath,
+                            "/jjs-hamburg/PCasa/releases/download/" +
+                            Uri.EscapeDataString(tag.GetString() ?? "") + "/" + expectedName,
+                            StringComparison.OrdinalIgnoreCase) ||
+                        !asset.TryGetProperty("digest", out var digest) ||
+                        digest.GetString() is not { } sha ||
+                        !sha.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ||
+                        sha.Length != 71 ||
+                        !sha[7..].All(Uri.IsHexDigit) ||
+                        !asset.TryGetProperty("size", out var size) ||
+                        !size.TryGetInt64(out var bytes) ||
+                        bytes < 100_000 || bytes > 1_073_741_824)
+                        continue;
+                    candidateUrl = uri.AbsoluteUri;
+                    candidateHash = sha[7..];
+                    candidateBytes = bytes;
+                    break;
+                }
+                if (candidateUrl is null) continue;
                 latest = version;
-                releaseUrl = uri.AbsoluteUri;
+                installerUrl = candidateUrl;
+                installerDigest = candidateHash;
+                installerBytes = candidateBytes;
             }
 
             if (latest is null)
@@ -132,16 +167,44 @@ public partial class MainWindow
                 Environment.NewLine +
                 $"{UiLanguage.T("Verfügbar")}: {latest.Value}" +
                 Environment.NewLine + Environment.NewLine +
-                UiLanguage.T("Soll die GitHub-Release-Seite geöffnet werden?") +
+                UiLanguage.T("Soll der geprüfte Installer heruntergeladen und nach dem Beenden von PCasa gestartet werden?") +
                 Environment.NewLine +
-                UiLanguage.T("Die Installation erfolgt nicht automatisch."),
+                UiLanguage.T("Offene PCasa-Aufträge werden vorher geordnet beendet."),
                 UiLanguage.T("Nach Updates suchen"),
                 MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (result == MessageBoxResult.Yes && releaseUrl is not null)
-                Process.Start(new ProcessStartInfo(releaseUrl) { UseShellExecute = true });
+            if (result == MessageBoxResult.Yes && installerUrl is not null &&
+                installerDigest is not null)
+            {
+                var downloaded = await DownloadVerifiedInstallerAsync(
+                    latest.Value.ToString(), installerUrl, installerDigest, installerBytes);
+                if (downloaded is not null)
+                {
+                    // PowerShell is used only as an OS launcher. It waits for
+                    // THIS process to release the SQLite catalog/scheduler
+                    // before opening the downloaded, hash-verified installer.
+                    var quoted = downloaded.Replace("'", "''", StringComparison.Ordinal);
+                    var command = $"Wait-Process -Id {Environment.ProcessId} -ErrorAction SilentlyContinue; " +
+                        $"Start-Process -FilePath '{quoted}'";
+                    var start = new ProcessStartInfo("powershell.exe")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    start.ArgumentList.Add("-NoProfile");
+                    start.ArgumentList.Add("-NonInteractive");
+                    start.ArgumentList.Add("-WindowStyle");
+                    start.ArgumentList.Add("Hidden");
+                    start.ArgumentList.Add("-Command");
+                    start.ArgumentList.Add(command);
+                    using var helper = Process.Start(start) ??
+                        throw new IOException("PCasa update launcher could not be started.");
+                    Close();
+                }
+            }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
-            or JsonException or IOException or System.ComponentModel.Win32Exception)
+            or JsonException or IOException or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception or CryptographicException)
         {
             PCasaDiagnostics.Write("Help.CheckForUpdates", ex);
             PcasaDialog.Show(this,
@@ -154,6 +217,70 @@ public partial class MainWindow
         {
             _checkingForUpdates = false;
             CheckForUpdatesMenuItem.IsEnabled = true;
+        }
+    }
+
+    private async Task<string?> DownloadVerifiedInstallerAsync(
+        string version, string url, string expectedDigest, long expectedBytes)
+    {
+        var downloadWindow = new UpdateDownloadWindow(this, version);
+        var folder = Path.Combine(Path.GetTempPath(), "PCasa-Updates");
+        var filename = "PCasa-Setup-" + version + "-" + Guid.NewGuid().ToString("N") + ".exe";
+        var destination = Path.Combine(folder, filename);
+        var partial = destination + ".part";
+        downloadWindow.Show();
+        try
+        {
+            Directory.CreateDirectory(folder);
+            using var response = await ReleaseClient.GetAsync(
+                url, HttpCompletionOption.ResponseHeadersRead, downloadWindow.Cancellation);
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentLength is { } length &&
+                length != expectedBytes)
+                throw new InvalidDataException("Installer download size differs from GitHub release metadata.");
+            await using (var input = await response.Content.ReadAsStreamAsync(
+                downloadWindow.Cancellation))
+            await using (var output = new FileStream(partial, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None, 131072, useAsync: true))
+            {
+                var buffer = new byte[131072];
+                long transferred = 0;
+                int read;
+                while ((read = await input.ReadAsync(buffer, downloadWindow.Cancellation)) > 0)
+                {
+                    await output.WriteAsync(buffer.AsMemory(0, read),
+                        downloadWindow.Cancellation);
+                    transferred += read;
+                    downloadWindow.Update(transferred, expectedBytes);
+                    if (transferred > expectedBytes)
+                        throw new InvalidDataException("Installer exceeds declared size.");
+                }
+                await output.FlushAsync(downloadWindow.Cancellation);
+                if (transferred != expectedBytes)
+                    throw new InvalidDataException("Incomplete PCasa installer download.");
+            }
+            downloadWindow.Cancellation.ThrowIfCancellationRequested();
+            await using (var verify = File.OpenRead(partial))
+            {
+                var actual = Convert.ToHexString(await SHA256.HashDataAsync(
+                    verify, downloadWindow.Cancellation));
+                if (!string.Equals(actual, expectedDigest,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new CryptographicException("Installer SHA-256 verification failed.");
+            }
+            File.Move(partial, destination);
+            return destination;
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            downloadWindow.Finish();
+            try { if (File.Exists(partial)) File.Delete(partial); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 }
