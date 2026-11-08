@@ -60,7 +60,7 @@ public partial class MainWindow
             $"{UiLanguage.T("Version")}: {version}{Environment.NewLine}" +
             $"{UiLanguage.T("Build")}: {build}{Environment.NewLine}" +
             $"Windows x64 · .NET 10{Environment.NewLine}{Environment.NewLine}" +
-            UiLanguage.T("Fotoverwaltung nach dem Vorbild von Picasa."),
+            "© 2026 Jens-Jürgen Schäfer",
             UiLanguage.T("Über PCasa"),
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
