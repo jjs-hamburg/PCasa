@@ -64,6 +64,10 @@ public partial class MainWindow
         // The folder's user preference stays intact while expanded GPS hides it.
         public bool FolderSidebarVisible { get; set; } = true;
         public double FolderSidebarFraction { get; set; } = 0.22;
+        // Editing panel is independent of the gallery folder tree. Do not
+        // reuse either visibility or width when switching photo/gallery mode.
+        public bool ViewerEditingSidebarVisible { get; set; } = true;
+        public double ViewerEditingSidebarFraction { get; set; } = 0.22;
         public double SidebarFraction { get; set; } = 0.25;
         public double ExpandedGpsFraction { get; set; } = 0.55;
         public bool GpsExpanded { get; set; }
