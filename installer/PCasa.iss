@@ -1,5 +1,5 @@
 #define MyAppName "PCasa"
-#define MyAppVersion "0.1.Alpha.2"
+#define MyAppVersion "0.1.Alpha.3"
 
 [Setup]
 AppId={{3A78A421-2B72-45E6-8CCB-A1085696E6D1}
@@ -26,10 +26,10 @@ RestartApplications=no
 AppMutex=Global\PCasa.Desktop.SingleInstance
 WizardStyle=modern
 SetupLogging=yes
-VersionInfoVersion=0.1.0.2
+VersionInfoVersion=0.1.0.3
 VersionInfoDescription=PCasa Setup
 VersionInfoProductName=PCasa
-VersionInfoProductVersion=0.1.0.2
+VersionInfoProductVersion=0.1.0.3
 
 [Languages]
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
@@ -50,6 +50,7 @@ Type: files; Name: "{app}\PCasa.all-users"
 [Files]
 Source: "..\publish\PCasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
+Source: "Check-DesktopRuntime.ps1"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"
@@ -57,3 +58,32 @@ Name: "{autodesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\PCasa.App.exe"; Description: "{cm:LaunchProgram,PCasa}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// Install the official Microsoft prerequisite BEFORE replacing any PCasa file.
+// Failure/cancel preserves the prior PCasa installation and catalog.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExitCode: Integer;
+  ScriptPath, Args: String;
+begin
+  Result := '';
+  ExtractTemporaryFile('Check-DesktopRuntime.ps1');
+  ScriptPath := ExpandConstant('{tmp}\\Check-DesktopRuntime.ps1');
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"';
+  if not Exec(ExpandConstant('{sys}\\WindowsPowerShell\\v1.0\\powershell.exe'),
+     Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  begin
+    Result := 'Die Microsoft .NET 10 Desktop Runtime konnte nicht geprüft werden.';
+    Exit;
+  end;
+  if (ExitCode <> 0) and (ExitCode <> 3010) then
+  begin
+    Result := 'Microsoft .NET 10 Desktop Runtime x64 fehlt oder konnte nicht installiert werden. ' +
+      'Die bestehende PCasa-Installation wurde nicht verändert. ' +
+      'Bitte die offizielle Desktop Runtime installieren und Setup erneut starten.';
+    Exit;
+  end;
+  if ExitCode = 3010 then
+    NeedsRestart := True;
+end;
