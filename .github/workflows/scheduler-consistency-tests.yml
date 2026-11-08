@@ -1,28 +1,19 @@
 name: Scheduler Consistency Tests
 
-# Public repository: build and test every change to the development branch.
-# Manual dispatch remains available for explicit acceptance runs.
+# Main is the reviewed, stable development baseline. Setup feature branches
+# run the same full Windows acceptance tests before their changes reach main.
+# Manual acceptance remains available without pushing new source commits.
 on:
   push:
     branches:
-      - scheduler-consistency
-      - gallery-read-isolation
-      - backup-progress-pin-label
-      - restore-startup-crash-fix
-      - database-maintenance-visible-progress
-      - restore-folder-previews-themed-dialogs
-      - picasa-gallery-scrollbar
-      - picasa-scrollbar-grip-controls
-      - picasa-scrollbar-fine-tuning
-      - picasa-scrollbar-depth-rowstep
-      - picasa-scrollbar-caption-align
-      - gallery-foreground-guarantee
+      - main
+      - 'setup-*'
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Every source commit on this development branch supersedes its predecessor.
+# Every source commit on main or a setup branch supersedes its predecessor.
 # Test/build only the newest push, avoiding parallel 270 MB ZIP artifacts
 # and conserving the account's limited GitHub Actions storage.
 # Manually dispatched acceptance builds remain independent.
