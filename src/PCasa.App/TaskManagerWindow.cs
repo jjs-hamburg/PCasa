@@ -597,9 +597,11 @@ public sealed class TaskManagerWindow : Window
         // means retry after an actual failure, never resume a paused scan.
         _restart.IsEnabled = !_acting && row is { Status: "Fehler", Retryable: true };
         var canResume = row is { Status: "Angehalten" } &&
-            IsInitialImport(row.Key) && _resumeAutomaticScan is not null;
+            (IsInitialImport(row.Key) && _resumeAutomaticScan is not null ||
+             row.Durable);
         var canPause = row is { Status: "Läuft" or "Wartet" } &&
-            IsInitialImport(row.Key) && _pauseInitialImport is not null;
+            (IsInitialImport(row.Key) && _pauseInitialImport is not null ||
+             row.Durable);
         _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
         _pauseResume.IsEnabled = !_acting && (canResume || canPause);
         _pauseResume.ToolTip = UiLanguage.T(
@@ -755,13 +757,20 @@ public sealed class TaskManagerWindow : Window
     private void PauseResume()
     {
         var row = Selection;
-        if (row is null || !IsInitialImport(row.Key)) return;
-        if (row.Status == "Angehalten" && _resumeAutomaticScan is not null)
+        if (row is null) return;
+        if (row.Durable)
         {
-            _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
+            if (row.Status == "Angehalten")
+                _ = PerformAsync(row.Key, () => Task.Run(() =>
+                    _scheduler.ResumeDurableTask(row.Key)));
+            else if (row.Status is "Läuft" or "Wartet")
+                _ = PerformAsync(row.Key, () => _scheduler.PauseDurableTaskAsync(row.Key));
             return;
         }
-        if (row.Status is "Läuft" or "Wartet" && _pauseInitialImport is not null)
+        if (!IsInitialImport(row.Key)) return;
+        if (row.Status == "Angehalten" && _resumeAutomaticScan is not null)
+            _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
+        else if (row.Status is "Läuft" or "Wartet" && _pauseInitialImport is not null)
             _ = PerformAsync(row.Key, () => _pauseInitialImport(row.Key));
     }
 

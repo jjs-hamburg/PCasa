@@ -416,7 +416,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             {
                 // A deferred package is durable, but not currently executable.
                 // The central retry coordinator owns its next activation.
-                if (record.State == "deferred") continue;
+                if (record.State is "deferred" or "paused") continue;
                 if (!_packageFactories.TryGetValue(record.Type, out var factory))
                 {
                     journal.Defer(record.Key, record.CompletedSteps,
@@ -712,7 +712,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (!_packageFactories.ContainsKey(type))
             throw new InvalidOperationException("Pakettyp ohne Wiederherstellungsfabrik: " + type);
         var record = journal.Put(package.Key, type, payload, priority, workKind);
-        if (record.State is "completed" or "failed" or "canceled")
+        if (record.State is "completed" or "failed" or "canceled" or "paused")
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
         NotifyTaskAccepted();
         package.RestoreCursor(record.CompletedSteps);
@@ -792,7 +792,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // Shutdown is a yield, user cancellation is final. Never
             // resurrect a deliberately canceled destructive operation.
             journal.SetState(record.Key,
-                _shutdown.IsCancellationRequested ? "queued" : "canceled",
+                _shutdown.IsCancellationRequested ? "queued" :
+                journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
+                    ? "paused" : "canceled",
                 package.CompletedSteps);
             throw;
         }
@@ -1070,6 +1072,63 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var task = TrackDurableCompletion(QueueDurableExisting(package, activated));
         try { _durableRestoreObserver?.Invoke(key, task); }
         catch (Exception ex) { PCasaDiagnostics.Write("Taskmanager.RetryObserver", ex); }
+        return true;
+    }
+
+    // The controller commits PAUSED before requesting cooperative worker
+    // cancellation. The journal preserves the original cursor and priority.
+    public async Task<bool> PauseDurableTaskAsync(string key)
+    {
+        var journal = _durableJournal ??
+            throw new InvalidOperationException("Kein Paketjournal.");
+        if (!journal.Pause(key)) return false;
+
+        WorkItem? waiting;
+        WorkItem? executing;
+        lock (_gate)
+        {
+            waiting = _pending.FirstOrDefault(item => item.Key == key);
+            if (waiting is not null)
+            {
+                _pending.Remove(waiting);
+                SetStateUnsafe(waiting, SchedulerJobState.Canceled);
+                waiting.Completion.TrySetCanceled();
+                WakePendingWorkersUnsafe();
+            }
+            executing = _runningWork.FirstOrDefault(item => item.Key == key);
+        }
+        if (executing is not null)
+        {
+            // Never interrupt an atomic original-file write: its existing
+            // cancellation token is observed at the next safe boundary.
+            try { await executing.UserCancellation.CancelAsync(); }
+            catch (ObjectDisposedException) { }
+            try { await executing.Completion.Task; }
+            catch (OperationCanceledException) { }
+        }
+        NotifyTaskViewChanged();
+        return true;
+    }
+
+    // Resume reconstructs the SAME recipe using the persisted step cursor.
+    // It cannot run alongside a still-active worker; Pause awaits its exit.
+    public bool ResumeDurableTask(string key)
+    {
+        var journal = _durableJournal ??
+            throw new InvalidOperationException("Kein Paketjournal.");
+        var record = journal.Pending().FirstOrDefault(row =>
+            row.Key == key && row.State == "paused");
+        if (record is null) return false;
+        if (!_packageFactories.TryGetValue(record.Type, out var factory))
+            throw new InvalidOperationException("Wiederherstellungsrezept fehlt.");
+        var package = factory(record.Key, record.Payload);
+        package.RestoreCursor(record.CompletedSteps);
+        var resumed = journal.ResumePaused(key);
+        if (resumed is null) return false;
+        var task = TrackDurableCompletion(QueueDurableExisting(package, resumed));
+        try { _durableRestoreObserver?.Invoke(key, task); }
+        catch (Exception ex) { PCasaDiagnostics.Write("Taskmanager.ResumeObserver", ex); }
+        NotifyTaskViewChanged();
         return true;
     }
 

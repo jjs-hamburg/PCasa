@@ -145,7 +145,7 @@ public sealed class DurablePackageJournal
         cmd.CommandText = """
             SELECT package_key,package_type,payload_json,priority,work_kind,
                    sequence,completed_steps,state,error,COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END)
-              FROM scheduler_packages WHERE state IN ('queued','running','deferred')
+              FROM scheduler_packages WHERE state IN ('queued','running','deferred','paused')
              ORDER BY priority ASC, queue_order ASC, sequence ASC;
             """;
         using var reader = cmd.ExecuteReader();
@@ -296,11 +296,42 @@ public sealed class DurablePackageJournal
         cmd.CommandText = """
             UPDATE scheduler_packages SET state='canceled',
                    retry_after_utc=NULL,updated_utc=$now
+             WHERE package_key=$key AND state IN ('queued','running','deferred','paused');
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
+    // A real persisted HOLD, distinct from a failure/backoff and from
+    // cancellation. No recovery controller may reactivate this state.
+    public bool Pause(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET state='paused',retry_after_utc=NULL,updated_utc=$now
              WHERE package_key=$key AND state IN ('queued','running','deferred');
             """;
         cmd.Parameters.AddWithValue("$key", key);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
         return cmd.ExecuteNonQuery() == 1;
+    }
+
+    public DurablePackageRecord? ResumePaused(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET state='queued',retry_after_utc=NULL,updated_utc=$now
+             WHERE package_key=$key AND state='paused';
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return cmd.ExecuteNonQuery() == 1
+            ? Pending().FirstOrDefault(p => p.Key == key) : null;
     }
 
     public DurablePackageRecord? RestartDeferred(string key)
@@ -514,7 +545,7 @@ public sealed class DurablePackageJournal
                        retry_after_utc=$retry,
                        error=$error, updated_utc=$now
                  WHERE package_key=$key
-                   AND state NOT IN ('completed','failed','canceled');
+                   AND state NOT IN ('completed','failed','canceled','paused');
                 """;
             command.Parameters.AddWithValue("$key", key);
             command.Parameters.AddWithValue("$step", completed);
@@ -569,8 +600,10 @@ public sealed class DurablePackageJournal
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             UPDATE scheduler_packages
-               SET state=$state, completed_steps=MAX(completed_steps,COALESCE($step,completed_steps)),
-                   error=$error,updated_utc=$now
+               SET state=CASE WHEN state='paused' THEN 'paused' ELSE $state END,
+                   completed_steps=MAX(completed_steps,COALESCE($step,completed_steps)),
+                   error=CASE WHEN state='paused' THEN error ELSE $error END,
+                   updated_utc=$now
              WHERE package_key=$key
                AND state NOT IN ('completed','failed','canceled');
             """;

@@ -82,6 +82,7 @@ public sealed class SchedulerTaskView
                     {
                         "completed" => "Abgeschlossen",
                         "deferred" => "Fehler",
+                        "paused" => "Angehalten",
                         _ when snapshot?.State == SchedulerJobState.Running => "Läuft",
                         _ when snapshot?.State == SchedulerJobState.Failed => "Fehler",
                         _ => "Wartet"
@@ -114,7 +115,7 @@ public sealed class SchedulerTaskView
                     // Tag write intents may already be staged in SQLite. The
                     // scheduler must protect them against accidental deletion;
                     // an unmanageable active task is not shown as actionable.
-                    var deletable = record.State is "queued" or "deferred" or "running" &&
+                    var deletable = record.State is "queued" or "deferred" or "running" or "paused" &&
                         !(record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
                             (record.CompletedSteps > 0 || record.State == "running" ||
                              record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal)));
