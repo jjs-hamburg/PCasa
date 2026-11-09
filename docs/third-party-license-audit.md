@@ -145,3 +145,46 @@ abgeschlossen darstellen.
 Diese Belege sind reproduzierbare Befunde aus dem geprüften Windows-Publish.
 Ein grüner Test dieses Payloads ersetzt nicht die Kontrolle der tatsächlichen
 Installer-Dateien oder eine Prüfung sämtlicher Lizenzpflichten.
+
+
+## Prüfung des tatsächlich installierten Lizenzordners (9. November 2026)
+
+Vom PCasa-Anwender wurde der installierte Ordner als `licenses.zip` bereitgestellt.
+Das Archiv enthält **18 Dateien** (Verzeichniseinträge nicht mitgezählt).
+Diese Stichprobe weist die **lokale Installation** der Lizenzunterlagen nach,
+nicht den vollständigen Inhalt der Setup-EXE.
+
+- `Chromium-Credits.html`: 19.512.304 Byte; SHA-256
+  `822ae39dd655639470d292bd69db6616bfb56ae364f70bde76067d15543a1fe0`.
+- `MPL-1.1.txt`: 25.755 Byte; SHA-256
+  `f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469`.
+  Der Wert stimmt mit dem zuvor dokumentierten Windows-Payload überein.
+- `NATIVE-BUILD-VERSIONS.txt`: 2.555 Byte; SHA-256
+  `8d1ea0875150ac2b86c9972193203b858cc30f263d4566cf06286cea7b19b6c8`.
+  **Korrektur erforderlich:** Die Überschrift sagt noch „Alpha.7“;
+  die Liste ist für den Alpha.8-Lizenzstand dokumentiert.
+- Native Original-Notices: `Packages/NetVips.Native.win-x64-8.18.7/THIRD-PARTY-NOTICES.md`.
+  Ihre Auflistung nennt u. a. `fribidi`, `glib`, `libexif`, `libheif`,
+  `librsvg`, `pango`, `proxy-libintl` sowie `libvips` unter LGPLv3.
+- `exiftool/exiftool_files/LICENSE` und
+  `exiftool/exiftool_files/Licenses_Strawberry_Perl.zip` sind laut
+  `Licenses/README.txt` **außerhalb** des Licenses-Ordners vorgesehen.
+  Ihr Vorhandensein kann aus diesem Teilarchiv nicht geprüft werden.
+
+**Ergebnis:** CEF-Credits und die zentralen Texte sind lokal nachgewiesen.
+Keine abschließende Freigabe für das native Windows-Static-Bundle:
+Die Upstream-Beschreibung von `kleisauke/libvips-packaging` erläutert,
+dass die Windows-Ausgabe die statische „web“-Distribution von
+`libvips/build-win64-mxe` weiterverarbeitet. Für die darin verbundenen
+LGPL-Bibliotheken muss die korrespondierende Quelle und die Möglichkeit,
+geänderte LGPL-Komponenten nach den jeweils einschlägigen Bedingungen
+neu einzubinden, noch konkret nachgewiesen oder die Bibliotheksverteilung
+technisch umgestellt werden. Eine bloße Ersetzung von `libvips-42.dll`
+beweist diese Bedingung für statisch enthaltene Bibliotheken nicht.
+
+Geprüfte Upstream-Herkunft:
+- https://github.com/kleisauke/libvips-packaging/tree/v8.18.7
+- https://github.com/libvips/build-win64-mxe/releases/tag/v8.18.7
+
+Diese offene Feststellung wird ausdrücklich **nicht** durch einen grünen
+Dateiexistenztest aufgehoben.
