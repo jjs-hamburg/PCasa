@@ -327,7 +327,7 @@ jobs:
       # Actions artifacts are always ZIP files. Publish only the directly
       # downloadable EXE as a GitHub prerelease after all Windows tests pass.
       - name: Publish direct PCasa Setup EXE (no Actions ZIP)
-        if: github.ref == 'refs/heads/setup-alpha7-license-compliance' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
