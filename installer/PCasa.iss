@@ -25,6 +25,7 @@ CloseApplicationsFilter=PCasa.App.exe
 RestartApplications=no
 AppMutex=Global\PCasa.Desktop.SingleInstance
 WizardStyle=modern
+SetupIconFile=..\src\PCasa.App\Assets\PCasa.ico
 SetupLogging=yes
 VersionInfoVersion=0.1.0.4
 VersionInfoDescription=PCasa Setup
