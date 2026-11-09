@@ -1,5 +1,6 @@
 """Inspect the exact released libvips Windows variants, never infer linkage from filenames."""
 import csv
+import hashlib
 import pathlib
 import sys
 import pefile
@@ -31,6 +32,7 @@ for variant in ("static", "dynamic"):
                 imports.add(entry.dll.decode("utf-8", errors="replace").lower())
             relative = dll.relative_to(folder).as_posix()
             rows.append({"variant": variant, "dll": relative, "size": dll.stat().st_size,
+                         "sha256": hashlib.sha256(dll.read_bytes()).hexdigest(),
                          "imports": ";".join(sorted(imports))})
             if dll == vips[0]:
                 summary += [f"libvips-42.dll: {dll.stat().st_size} bytes",
@@ -39,7 +41,7 @@ for variant in ("static", "dynamic"):
             pe.close()
     summary += ["Distributed DLL names: " + ", ".join(sorted({p.name for p in dlls})), ""]
 with (root / "comparison.csv").open("w", newline="", encoding="utf-8") as f:
-    writer = csv.DictWriter(f, fieldnames=["variant", "dll", "size", "imports"])
+    writer = csv.DictWriter(f, fieldnames=["variant", "dll", "size", "sha256", "imports"])
     writer.writeheader()
     writer.writerows(rows)
 (root / "summary.md").write_text("\n".join(summary), encoding="utf-8")
