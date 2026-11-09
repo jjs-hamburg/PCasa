@@ -38,4 +38,4 @@ $marker = Test-Path -LiteralPath (Join-Path $target 'PCasa.all-users')
 if ($marker -ne ($Mode -eq 'ALLUSERS')) {
     throw "Installer $Mode wrong all-users marker"
 }
-Write-Host "PASS $Mode: $($publishFiles.Count) published files exactly match installed SHA256; no unexpected payload"
+Write-Host "PASS ${Mode}: $($publishFiles.Count) published files exactly match installed SHA256; no unexpected payload"
