@@ -79,7 +79,7 @@ $summary = @(
     "- Verify Chromium Embedded Framework and Chromium third-party attributions in the actual distribution."
     "- Verify libvips Windows binary bundled codec/component licenses and LGPL replacement/source conditions."
     "- Verify ExifTool + packaged Perl runtime, their Artistic/GPL alternatives and source obligations."
-    "- Verify .NET 10 Windows self-contained redistributable and third party notices."
+    "- Confirm .NET 10 Desktop Runtime is installed separately by the official Microsoft installer."
     "- Include all required notices in the installer AND portable package."
 )
 $summary | Set-Content -Encoding utf8 (Join-Path $OutputDir "README.md")
@@ -87,3 +87,32 @@ Write-Host "Audited $($inventory.Count) output files and $($packages.Count) reso
 Write-Host "Published license/notice named files: $($noticeFiles.Count)"
 $noticeFiles | ForEach-Object { Write-Host "  $($_.Path)" }
 Write-Host "Audit is an inventory only; no automatic license clearance."
+
+# Explicit review queue. A metadata declaration is NOT a legal clearance, and
+# copying an upstream notice is NOT proof that every compiled codec is covered.
+# Keep these entries visible even if the mechanical checks pass.
+$review = @(
+    [pscustomobject]@{ Component = 'Chromium/CEF'; Requirement = 'Match shipped CEF/Chromium binaries to all third-party credits'; Status = 'MANUAL_REVIEW_REQUIRED' }
+    [pscustomobject]@{ Component = 'libvips/native codecs'; Requirement = 'Match actual native codec DLLs to notices; verify LGPL replacement and source obligations'; Status = 'MANUAL_REVIEW_REQUIRED' }
+    [pscustomobject]@{ Component = 'ExifTool/Strawberry Perl'; Requirement = 'Inspect Perl bundle archive contents and redistribution terms'; Status = 'MANUAL_REVIEW_REQUIRED' }
+)
+foreach ($p in $packages) {
+    if ([string]::IsNullOrWhiteSpace($p.LicenseMetadata) -or $p.LicenseMetadata -eq 'UNKNOWN') {
+        $review += [pscustomobject]@{
+            Component = "$($p.Package)/$($p.Version)"
+            Requirement = 'Identify authoritative license text and redistribution conditions; NuGet metadata absent'
+            Status = 'MANUAL_REVIEW_REQUIRED'
+        }
+    }
+}
+$review | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'review-queue.csv')
+$summary += @(
+    ''
+    '## Review queue'
+    ''
+    "Unresolved manual review entries: $($review.Count)"
+    ''
+    'See review-queue.csv. This evidence bundle does not assert compliance.'
+)
+$summary | Set-Content -Encoding utf8 (Join-Path $OutputDir 'README.md')
+Write-Host "Unresolved manual review entries: $($review.Count)"
