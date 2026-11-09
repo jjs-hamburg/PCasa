@@ -55,15 +55,7 @@ public partial class MainWindow
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
 
-        PcasaDialog.Show(this,
-            $"PCasa{Environment.NewLine}" +
-            $"{UiLanguage.T("Version")}: {version}{Environment.NewLine}" +
-            $"{UiLanguage.T("Build")}: {build}{Environment.NewLine}" +
-            $"Windows x64 · .NET 10{Environment.NewLine}{Environment.NewLine}" +
-            "© 2026 Jens-Jürgen Schäfer" + Environment.NewLine +
-            "GNU General Public License v3.0",
-            UiLanguage.T("Über PCasa"),
-            MessageBoxButton.OK, MessageBoxImage.Information);
+        new PcasaAboutWindow(this, version, build).ShowDialog();
     }
 
     private async void HelpCheckForUpdates_Click(object sender, RoutedEventArgs e)
