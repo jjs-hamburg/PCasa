@@ -66,6 +66,9 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-LIBVIPS-COMPONENTS.csv" Link="Licenses/libvips-component-licenses.csv"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Original upstream native codec/copyright/license terms, copied verbatim below their source labels. -->
+    <Content Include="../../native_license_originals/*.txt" Link="Licenses/Native-Original-Texts/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Complete original sources for the statically linked proxy-libintl 0.5, including exact upstream MXE build patch and recipe. -->
     <Content Include="../../third_party_sources/proxy-libintl-0.5/**/*" Link="Licenses/Source/proxy-libintl-0.5/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

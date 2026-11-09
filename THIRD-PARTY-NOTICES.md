@@ -23,6 +23,11 @@ relicense those components.
 The installed directory includes `Licenses/CEF-LIBVIPS-GUIDE.txt` with the
 exact Windows component versions, references to Chromium internal credits,
 LGPL source-build locations, and practical shared-library replacement steps.
+The 20 original native notice/copyright files are installed in
+`Licenses/Native-Original-Texts/`; LLVM, MPL and LGPL license texts
+and the full original proxy-libintl 0.5 source are included separately.
+`Licenses/libvips-component-licenses.csv` maps all 38 native DLLs to
+upstream component versions and licenses.
 The native libvips package's THIRD-PARTY-NOTICES.md names additional LGPL
 and permissively licensed components; the notice list alone is not a substitute
 for each applicable license text or corresponding source obligation.

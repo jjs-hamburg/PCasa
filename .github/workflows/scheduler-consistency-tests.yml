@@ -363,3 +363,11 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw "Release $release already exists; refusing to replace it" }
           gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.9" --prerelease --notes "PCasa Alpha.8: Lizenzhinweise und Quellenprüfung; zuvor persistentes Pausieren und Fortsetzen von GPS-/Tag-Aufträgen und automatischen Scans, Taskmanager-Steuerung sowie verbesserte Scheduler-Priorisierung. Windows x64 Setup; Lizenzinformationen direkt in About erreichbar; Installer überprüft die mitgelieferten Lizenztexte."
           if ($LASTEXITCODE -ne 0) { throw "Direct executable release failed" }
+          New-Item -ItemType Directory -Force -Path release-verify | Out-Null
+          gh release download $release --pattern "PCasa-Setup-0.1.Alpha.9.exe" --dir release-verify
+          if ($LASTEXITCODE -ne 0) { throw "Published installer could not be fetched for byte comparison" }
+          $published = "release-verify/PCasa-Setup-0.1.Alpha.9.exe"
+          if ((Get-FileHash $published -Algorithm SHA256).Hash -ne (Get-FileHash $installer -Algorithm SHA256).Hash) {
+            throw "Published installer bytes differ from Windows-tested setup EXE"
+          }
+          Write-Host "PASS: Published Alpha.9 installer SHA256 exactly matches locally tested setup executable"

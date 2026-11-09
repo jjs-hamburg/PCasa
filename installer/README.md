@@ -1,7 +1,8 @@
-# PCasa Windows Setup (0.1.Alpha.2)
+# PCasa Windows Setup (0.1.Alpha.9)
 
-The Windows acceptance workflow publishes both the existing unpack-and-run
-`PCasa-win-x64` package and `PCasa-Setup-0.1.Alpha.2.exe`.
+The Windows acceptance workflow builds, installs, validates and publishes
+`PCasa-Setup-0.1.Alpha.9.exe`. The published EXE is downloaded again and
+verified against the tested setup's SHA-256 before the workflow succeeds.
 
 The installer offers **Only for me** (no administrator rights, under the
 current user's application directory) and **All users** (requires

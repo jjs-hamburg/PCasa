@@ -28,7 +28,8 @@ Lizenz- und Copyright-Hinweise (about:license bzw. about:credits).
 libvips: LGPL-3.0.txt, 38 einzeln ersetzbare DLLs mit SHA-256-Werten
 in libvips-dynamic-files.csv, komponentenweise Lizenz- und Quellnachweise
 in libvips-component-licenses.csv, zugehörige LLVM-Laufzeitlizenzen in
-LLVM-LICENSE.txt, sowie die Hinweise unter Packages/ und die Quellcode-
+LLVM-LICENSE.txt, sowie die originalen Copyright- und Lizenztexte unter
+Native-Original-Texts/ (20 Dateien mit Herkunftsangaben) und die Hinweise unter Packages/ und die Quellcode-
 und Build-Verweise in THIRD-PARTY-NOTICES.md.
 ExifTool und das mitgelieferte Strawberry Perl:
 ../exiftool/exiftool_files/LICENSE und

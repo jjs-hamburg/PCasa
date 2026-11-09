@@ -11,6 +11,8 @@ on:
       - 'tools/install-dynamic-libvips.ps1'
       - 'THIRD-PARTY-NOTICES.md'
       - 'LICENSES-*'
+      - 'native_license_originals/**'
+      - 'third_party_sources/proxy-libintl-0.5/**'
   workflow_dispatch:
 
 permissions:

@@ -188,3 +188,20 @@ Geprüfte Upstream-Herkunft:
 
 Diese offene Feststellung wird ausdrücklich **nicht** durch einen grünen
 Dateiexistenztest aufgehoben.
+
+
+## Alpha.9 native original attribution evidence (work branch)
+
+The native release now packages the original source license/copyright text
+for aom (including its patent license), cgif, expat, FreeType, Fontconfig,
+HarfBuzz, Highway, libarchive, libffi, libimagequant, libpng, libwebp,
+mozjpeg, UltraHDR, zlib-ng, Little CMS, libtiff, libxml2 and pixman under
+`Licenses/Native-Original-Texts/`. Other LGPL originals are covered by
+`Licenses/LGPL-3.0.txt`, by the complete proxy-libintl source including
+its original LGPL-2 text, and by the component-specific source references.
+Cairo MPL-1.1 and the full LLVM exception text are included separately.
+The machine-readable `libvips-component-licenses.csv` maps every one of
+the 38 dynamic native DLLs to its actual upstream library and license.
+The release audit fails if any named original notice or manifest entry is
+missing. This source-level record supplements, rather than replaces,
+version-specific binaries and user-relink permission checks.
