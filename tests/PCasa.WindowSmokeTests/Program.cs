@@ -29,6 +29,9 @@ internal static class Program
         SynchronizationContext.SetSynchronizationContext(
             new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
 
+        if (args.Length == 2 &&
+            string.Equals(args[0], "--chromium-credits", StringComparison.OrdinalIgnoreCase))
+            return ChromiumCreditsFlow.Run(args[1]);
         if (args.Contains("--tag-flow", StringComparer.OrdinalIgnoreCase))
             return TagFlow.Run();
         if (args.Contains("--folder-removal", StringComparer.OrdinalIgnoreCase))
