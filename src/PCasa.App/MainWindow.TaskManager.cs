@@ -326,6 +326,41 @@ public partial class MainWindow
         return restored;
     }
 
+    private async Task<bool> PauseInitialImportAsync(string key)
+    {
+        if (!TryInitialTaskId(key, out var folderId)) return false;
+        // Persist the pause first. Otherwise cancellation is mistaken for a
+        // scheduler yield and the initial-import pump can restart immediately.
+        var paused = await Task.Run(() =>
+            _scheduler.ChangeTaskIntent(() =>
+                _folderRepository.SetPendingFirstImportPaused(folderId, true)));
+        if (!paused) return false;
+        _initialScanAttempted.Add(folderId);
+        if (_initialScanActive && _activeScanFolderId == folderId &&
+            _initialScanCancellation is { IsCancellationRequested: false } active)
+        {
+            _initialScanStopRequested = true;
+            RequestTaskManagerYield(active);
+        }
+        _scheduler.NotifyTaskViewChanged();
+        return true;
+    }
+
+    private Task<bool> StartTaskNowAsync(string key)
+    {
+        if (!TryInitialTaskId(key, out var folderId))
+            return StartAutomaticScanNowAsync(key);
+        // The durable initial-import request already exists. Give its original
+        // identity a fresh dispatch opportunity without creating a new scan.
+        _initialScanAttempted.Remove(folderId);
+        if (_initialScanActive && _activeScanFolderId != folderId &&
+            _initialScanCancellation is { IsCancellationRequested: false } other)
+            RequestTaskManagerYield(other);
+        QueuePendingInitialScans();
+        _scheduler.NotifyTaskViewChanged();
+        return Task.FromResult(true);
+    }
+
     private void TaskManagerMenu_Click(object sender, RoutedEventArgs e)
     {
         if (_taskManagerWindow is { IsVisible: true } existing)
@@ -338,7 +373,7 @@ public partial class MainWindow
             SnapshotAutomaticScans, StopAutomaticScanAsync,
             () => _backgroundIdleStatus,
             MoveAutomaticScanAsync, ResumeAutomaticScanAsync,
-            StartAutomaticScanNowAsync, MoveGlobalTaskAsync)
+            StartTaskNowAsync, PauseInitialImportAsync, MoveGlobalTaskAsync)
         {
             Owner = this
         };

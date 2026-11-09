@@ -157,7 +157,7 @@ jobs:
             (Resolve-Path "publish/PCasa/PCasa.App.exe").Path)
           $appVersion = $exeVersion.ProductVersion
           $windowsFileVersion = $exeVersion.FileVersion
-          if ($appVersion -ne "0.1.Alpha.5" -or $windowsFileVersion -ne "0.1.0.5") {
+          if ($appVersion -ne "0.1.Alpha.6" -or $windowsFileVersion -ne "0.1.0.6") {
             throw "Published version mismatch: $appVersion / $windowsFileVersion"
           }
           @(
@@ -214,13 +214,13 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not installed" }
           & $iscc installer/PCasa.iss
           if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
-          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.5.exe")) {
+          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.6.exe")) {
             throw "Setup executable missing"
           }
       - name: Smoke-test both Windows installer modes
         shell: pwsh
         run: |
-          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.5.exe").Path
+          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.6.exe").Path
           foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
@@ -297,16 +297,16 @@ jobs:
       # Actions artifacts are always ZIP files. Publish only the directly
       # downloadable EXE as a GitHub prerelease after all Windows tests pass.
       - name: Publish direct PCasa Setup EXE (no Actions ZIP)
-        if: github.ref == 'refs/heads/setup-alpha5-uninstall-count-update' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/setup-alpha6-task-controls' && github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: pwsh
         run: |
-          $release = "v0.1.Alpha.5"
-          $installer = "dist/PCasa-Setup-0.1.Alpha.5.exe"
+          $release = "v0.1.Alpha.6"
+          $installer = "dist/PCasa-Setup-0.1.Alpha.6.exe"
           if (-not (Test-Path $installer)) { throw "Tested installer is missing" }
           gh release view $release 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw "Release $release already exists; refusing to replace it" }
-          gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.5" --prerelease --notes "Windows x64 setup. User-scoped uninstall cleanup is optional; folder catalog count and approved logo improved."
+          gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.6" --prerelease --notes "Windows x64 setup. User-scoped uninstall cleanup is optional; folder catalog count and approved logo improved."
           if ($LASTEXITCODE -ne 0) { throw "Direct executable release failed" }

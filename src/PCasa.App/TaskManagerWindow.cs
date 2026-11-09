@@ -30,6 +30,7 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<string,string,Task<bool>>? _moveAutomaticScan;
     private readonly Func<string,Task<bool>>? _resumeAutomaticScan;
     private readonly Func<string,Task<bool>>? _startAutomaticNow;
+    private readonly Func<string,Task<bool>>? _pauseInitialImport;
     private readonly Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
         _moveGlobalTask;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
@@ -39,7 +40,8 @@ public sealed class TaskManagerWindow : Window
     private readonly CheckBox _running = new(), _waiting = new(),
         _errors = new(), _completed = new();
     private readonly Button _up = new(), _down = new(),
-        _startNow = new(), _restart = new(), _delete = new();
+        _startNow = new(), _restart = new(), _pauseResume = new(), _delete = new();
+    private readonly Button _pauseResume;
     private readonly TextBlock _detail = new();
     private List<TaskRow> _all = [];
     private bool _reading;
@@ -60,6 +62,7 @@ public sealed class TaskManagerWindow : Window
         Func<string,string,Task<bool>>? moveAutomaticScan = null,
         Func<string,Task<bool>>? resumeAutomaticScan = null,
         Func<string,Task<bool>>? startAutomaticNow = null,
+        Func<string,Task<bool>>? pauseInitialImport = null,
         Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
             moveGlobalTask = null)
     {
@@ -76,6 +79,7 @@ public sealed class TaskManagerWindow : Window
         _moveAutomaticScan = moveAutomaticScan;
         _resumeAutomaticScan = resumeAutomaticScan;
         _startAutomaticNow = startAutomaticNow;
+        _pauseInitialImport = pauseInitialImport;
         _moveGlobalTask = moveGlobalTask;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
@@ -164,6 +168,7 @@ public sealed class TaskManagerWindow : Window
         Button(_down, "Nach unten", () => Move(1), actions);
         Button(_startNow, "Jetzt ausführen", StartNow, actions);
         Button(_restart, "Neu starten", Restart, actions);
+        Button(_pauseResume, "Pausieren", PauseResume, actions);
         Button(_delete, "Löschen", Delete, actions);
         var close = new Button
         {
@@ -585,10 +590,22 @@ public sealed class TaskManagerWindow : Window
         var row = Selection;
         _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
         _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
-        _startNow.IsEnabled = !_acting && row is
-            { Priority: 4, Status: "Wartet" } &&
-            IsRootReview(row.Key) && _startAutomaticNow is not null;
-        _restart.IsEnabled = !_acting && row is { Retryable: true };
+        _startNow.IsEnabled = !_acting && row is { Status: "Wartet" } &&
+            _startAutomaticNow is not null &&
+            (IsRootReview(row.Key) || IsInitialImport(row.Key));
+        // Resume is no longer disguised as "Neu starten"; that button
+        // means retry after an actual failure, never resume a paused scan.
+        _restart.IsEnabled = !_acting && row is { Status: "Fehler", Retryable: true };
+        var canResume = row is { Status: "Angehalten" } &&
+            IsInitialImport(row.Key) && _resumeAutomaticScan is not null;
+        var canPause = row is { Status: "Läuft" or "Wartet" } &&
+            IsInitialImport(row.Key) && _pauseInitialImport is not null;
+        _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
+        _pauseResume.IsEnabled = !_acting && (canResume || canPause);
+        _pauseResume.ToolTip = UiLanguage.T(
+            canResume ? "Erstimport mit gespeichertem Fortschritt fortsetzen" :
+            canPause ? "Erstimport am nächsten sicheren Punkt pausieren" :
+            "Für diese Auftragsart ist sicheres Pausieren noch nicht verfügbar");
         _delete.IsEnabled = !_acting && row is { Deletable: true };
         const string moveInfo =
             "Aufträge frei verschieben. Die neue Reihenfolge wird im Scheduler gespeichert; " +
@@ -664,8 +681,8 @@ public sealed class TaskManagerWindow : Window
     private void StartNow()
     {
         var row = Selection;
-        if (row is not { Priority: 4, Status: "Wartet" } ||
-            !IsRootReview(row.Key) || _startAutomaticNow is null) return;
+        if (row is not { Status: "Wartet" } || _startAutomaticNow is null ||
+            (!IsRootReview(row.Key) && !IsInitialImport(row.Key))) return;
         _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
     }
 
@@ -717,11 +734,6 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is not { Retryable: true }) return;
-        if (IsInitialImport(row.Key) && _resumeAutomaticScan is not null)
-        {
-            _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
-            return;
-        }
         if (_failedRows.TryGetValue(row.Key, out var failedFiles))
         {
             _ = PerformAsync(row.Key, async () =>
@@ -738,6 +750,19 @@ public sealed class TaskManagerWindow : Window
                 throw new InvalidOperationException("Der Auftrag ist nicht mehr fehlerhaft.");
             return true;
         }));
+    }
+
+    private void PauseResume()
+    {
+        var row = Selection;
+        if (row is null || !IsInitialImport(row.Key)) return;
+        if (row.Status == "Angehalten" && _resumeAutomaticScan is not null)
+        {
+            _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
+            return;
+        }
+        if (row.Status is "Läuft" or "Wartet" && _pauseInitialImport is not null)
+            _ = PerformAsync(row.Key, () => _pauseInitialImport(row.Key));
     }
 
     private void Delete()
