@@ -56,6 +56,8 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../THIRD-PARTY-NOTICES.md" Link="Licenses/THIRD-PARTY-NOTICES.md"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSES-README.txt" Link="Licenses/README.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Redistributed MapLibre BSD-3 and third-party attributions. -->
     <Content Include="Resources/maplibre-LICENSE.txt"
              Link="Licenses/MapLibre-LICENSE.txt"
