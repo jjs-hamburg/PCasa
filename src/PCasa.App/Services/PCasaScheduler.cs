@@ -90,6 +90,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         NotifyTaskViewChanged();
     }
     private readonly HashSet<Task> _durableCompletions = new();
+    // In-flight durable owners, keyed by the SAME existing package identity.
+    // A pause awaits the journal continuation, not just a worker's callback.
+    private readonly Dictionary<string, Task> _durableActiveTasks =
+        new(StringComparer.Ordinal);
     private bool _restoringDurablePackages;
     // The controller owns deferred activation. A passive probe only reports
     // source readiness; it never starts, ranks, or resumes a package.
@@ -488,7 +492,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     var package = factory(record.Key, record.Payload);
                     package.RestoreCursor(record.CompletedSteps);
                     var completion = TrackDurableCompletion(
-                        QueueDurableExisting(package, record));
+                        QueueDurableExisting(package, record), record.Key);
                     // Observe the SAME scheduler lifetime, not a second
                     // presentation queue. Subscribers may render progress or
                     // clear the view when the original task completes.
@@ -775,7 +779,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
         NotifyTaskAccepted();
         package.RestoreCursor(record.CompletedSteps);
-        return TrackDurableCompletion(QueueDurableExisting(package, record, cancellationToken));
+        return TrackDurableCompletion(QueueDurableExisting(package, record, cancellationToken), record.Key);
     }
 
     // Register immutable intent synchronously. Building thousands of GPS
@@ -814,19 +818,29 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 throw;
             }
         }, CancellationToken.None);
-        return TrackDurableCompletion(completion);
+        return TrackDurableCompletion(completion, key);
     }
 
     // Durable ledger commits are part of scheduler shutdown, not detached
     // fire-and-forget continuations that outlive the database owner.
-    private Task TrackDurableCompletion(Task completion)
+    private Task TrackDurableCompletion(Task completion, string key)
     {
-        lock (_gate) _durableCompletions.Add(completion);
+        lock (_gate)
+        {
+            _durableCompletions.Add(completion);
+            _durableActiveTasks[key] = completion;
+        }
         _ = completion.ContinueWith(task =>
         {
             // Observe exceptions, but retain the original Task for callers.
             _ = task.Exception;
-            lock (_gate) _durableCompletions.Remove(task);
+            lock (_gate)
+            {
+                _durableCompletions.Remove(task);
+                if (_durableActiveTasks.TryGetValue(key, out var current) &&
+                    ReferenceEquals(current, task))
+                    _durableActiveTasks.Remove(key);
+            }
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         return completion;
@@ -839,6 +853,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         package.OnStepCompleted = step => journal.SetState(record.Key, "running", step);
         try
         {
+            // A user may pause immediately after the durable INSERT, before
+            // the asynchronous recipe factory has finished constructing.
+            // Never admit that paused identity as fresh runnable work.
+            if (journal.Pending().Any(p => p.Key == record.Key && p.State == "paused"))
+                return;
             // Durable identity/priority come only from the journal; never
             // substitute a default background priority on restart.
             await EnqueuePackageAsync(package, record.Priority,
@@ -1128,7 +1147,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         package.RestoreCursor(record.CompletedSteps);
         var activated = journal.RestartDeferred(key);
         if (activated is null) return false;
-        var task = TrackDurableCompletion(QueueDurableExisting(package, activated));
+        var task = TrackDurableCompletion(QueueDurableExisting(package, activated), key);
         try { _durableRestoreObserver?.Invoke(key, task); }
         catch (Exception ex) { PCasaDiagnostics.Write("Taskmanager.RetryObserver", ex); }
         return true;
@@ -1140,13 +1159,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         var journal = _durableJournal ??
             throw new InvalidOperationException("Kein Paketjournal.");
-        if (!journal.Pause(key)) return false;
-
-        WorkItem? waiting;
         WorkItem? executing;
+        Task? lifetime;
         lock (_gate)
         {
-            waiting = _pending.FirstOrDefault(item => item.Key == key);
+            if (!journal.Pause(key)) return false;
+            var waiting = _pending.FirstOrDefault(item => item.Key == key);
             if (waiting is not null)
             {
                 _pending.Remove(waiting);
@@ -1155,15 +1173,25 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 WakePendingWorkersUnsafe();
             }
             executing = _runningWork.FirstOrDefault(item => item.Key == key);
+            _durableActiveTasks.TryGetValue(key, out lifetime);
         }
         if (executing is not null)
         {
-            // Never interrupt an atomic original-file write: its existing
-            // cancellation token is observed at the next safe boundary.
+            // Atomic original-file writes finish at their existing safe
+            // cancellation boundary, never midway through an EXIF update.
             try { await executing.UserCancellation.CancelAsync(); }
             catch (ObjectDisposedException) { }
-            try { await executing.Completion.Task; }
+        }
+        if (lifetime is not null)
+        {
+            try { await lifetime; }
             catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                // A concurrent IO failure may have been reported, but the
+                // explicit PAUSED journal marker still owns this task.
+                PCasaDiagnostics.Write("Taskmanager.PauseSettled", ex);
+            }
         }
         NotifyTaskViewChanged();
         return true;
@@ -1175,6 +1203,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         var journal = _durableJournal ??
             throw new InvalidOperationException("Kein Paketjournal.");
+        lock (_gate)
+            if (_durableActiveTasks.ContainsKey(key))
+                return false; // pause journal settlement is still in flight
         var record = journal.Pending().FirstOrDefault(row =>
             row.Key == key && row.State == "paused");
         if (record is null) return false;
@@ -1184,7 +1215,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         package.RestoreCursor(record.CompletedSteps);
         var resumed = journal.ResumePaused(key);
         if (resumed is null) return false;
-        var task = TrackDurableCompletion(QueueDurableExisting(package, resumed));
+        var task = TrackDurableCompletion(QueueDurableExisting(package, resumed), key);
         try { _durableRestoreObserver?.Invoke(key, task); }
         catch (Exception ex) { PCasaDiagnostics.Write("Taskmanager.ResumeObserver", ex); }
         NotifyTaskViewChanged();
