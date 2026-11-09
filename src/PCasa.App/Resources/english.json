@@ -1,4 +1,6 @@
 {
+  "Lizenzen und Dritthinweise öffnen": "Open licenses and third-party notices",
+  "Lizenzinformationen fehlen in dieser Installation.": "License information is missing from this installation.",
   " · {0:N0} Fehler": " · {0:N0} errors",
   " · Fehler: {0:N0}": " · errors: {0:N0}",
   "!  Fehler bei der Aktualisierung": "!  Update failed",
