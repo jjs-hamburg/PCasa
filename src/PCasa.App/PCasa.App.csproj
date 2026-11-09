@@ -46,6 +46,8 @@
     <!-- PCasa copyright/license and distribution notice are packaged with both Setup and ZIP. -->
     <Content Include="../../LICENSE" Link="Licenses/PCasa-GPL-3.0.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSES-LGPL-3.0.txt" Link="Licenses/LGPL-3.0.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../THIRD-PARTY-NOTICES.md" Link="Licenses/THIRD-PARTY-NOTICES.md"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Redistributed MapLibre BSD-3 and third-party attributions. -->
