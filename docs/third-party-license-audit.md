@@ -1,10 +1,12 @@
 # PCasa – Lizenzprüfung der Windows-Distribution
 
-Stand: 9. November 2026 – Alpha.8-Lizenzpaket in Prüfung; veröffentlichte Basis Alpha.7.
+Stand: 9. November 2026 – Alpha.9-Lizenzsanierung auf dem Arbeitszweig; veröffentlichte Basis Alpha.8. Historische Alpha.7/Alpha.8-Befunde bleiben im Anschluss zur Nachvollziehbarkeit erhalten.
 
-**Wichtig:** Die automatische CI-Prüfung beweist die Anwesenheit der benannten
-Lizenzdateien, aber nicht die vollständige juristische Konformität aller darin
-enthaltenen Komponenten. Ein grüner Build ist kein Rechtsgutachten.
+**Prüfmaßstab:** Ein grüner Lizenztest allein genügt nicht. Ab Alpha.9 müssen
+alle 38 separaten libvips-DLLs dem upstream-geprüften Archiv entsprechen,
+die Lizenzzuordnung und Originalnachweise vorliegen sowie der tatsächlich
+installierte Inhalt beider Inno-Setup-Varianten Byte für Byte mit dem
+zuvor geprüften Windows-Publish-Payload übereinstimmen.
 
 ## Eigener Code
 - PCasa: Copyright (c) 2026 Jens-Jürgen Schäfer.
@@ -43,7 +45,7 @@ enthaltenen Komponenten. Ein grüner Build ist kein Rechtsgutachten.
 - [x] Release-Erstellung aus `main` erst nach bestandenem Windows-Build
   (ab Alpha.7).
 
-## Was sich nicht durch bloße Dateiexistenz beweisen lässt
+## Historischer Prüfstand zur statischen Alpha.8-Distribution (nicht Alpha.9)
 
 - [x] Chromium/CEF: Der Windows-Build exportiert die **vollständige, intern
   erzeugte** Drittanbieter-Credits-Seite direkt aus der tatsächlich verwendeten
@@ -53,18 +55,23 @@ enthaltenen Komponenten. Ein grüner Build ist kein Rechtsgutachten.
   versionierten Build-Abhängigkeiten samt Quell- und Buildlinks sind unter
   `Licenses/NATIVE-BUILD-VERSIONS.txt` dokumentiert; die Original-Notices,
   LGPLv3 und Cairo-MPL-1.1-Texte liegen im lokalen Lizenzordner.
-- [ ] Vollständige Prüfung der Copyright-Originaltexte und
-  der korrespondierenden Quellcodeverfügbarkeit sämtlicher **statisch
-  eingebauter** libvips-Abhängigkeiten.
-- [ ] Prüfnachweis für die LGPL-Bedingungen, insbesondere Ersetzbarkeit
-  der DLLs, Quelle/Änderungen und Weitergabebedingungen.
-- [ ] Vollständige rechtliche Beurteilung der ExifTool-/Perl-Distribution,
-  einschließlich der Bestandteile im Perl-Lizenzarchiv.
-- [ ] Finale unabhängige juristische Prüfung vor einer vorbehaltlosen
-  öffentlichen Konformitätsbestätigung.
+- Die frühere statische libvips-Distribution wurde technisch durch die
+  offizielle dynamische Distribution derselben Version ersetzt. Alle
+  38 DLLs werden einzeln ausgeliefert, mit SHA-256 kontrolliert und
+  in einer komponentenweisen Lizenz-/Quellenliste aufgeführt.
+- Die Buildkonfiguration und der Quellstand der weiterhin statisch
+  eingebundenen proxy-libintl 0.5 sind einschließlich Originalquellen,
+  Patch und Buildrezept Bestandteil des Setups.
+- Die fünf ExifTool-/Strawberry-Perl-Laufzeit-DLLs sind konkreten
+  Original-Lizenzdateien im geprüften Archiv zugeordnet.
+- Die endgültige Zuordnung zum veröffentlichten Alpha.9-Installer erfolgt
+  über die zwei Windows-Installations- und Upgrade-Tests und den Vergleich
+  der veröffentlichten EXE mit dem erfolgreich getesteten Installer.
 
-Diese Punkte sind **keine festgestellten Verstöße**. Sie dürfen jedoch auch
-nicht stillschweigend als abgeschlossen markiert werden.
+Die ursprünglichen Alpha.8-Risiken und deren technische Behandlung sind
+hier getrennt dokumentiert. Der Release wird erst nach erfolgreichen
+Binär-, Lizenz- und Installer-Prüfungen auf dem konkreten Alpha.9-Commit
+freigegeben.
 
 ## Quell- und Lizenzreferenzen
 
@@ -80,7 +87,7 @@ nicht stillschweigend als abgeschlossen markiert werden.
 dokumentieren die tatsächlich gepackten Nachweise.
 
 
-## Ergänzende Binärprüfung (9. November 2026)
+## Historische Ergänzung: Alpha.7/Alpha.8-Binärprüfung (9. November 2026)
 
 Der auf Windows erzeugte Inventurlauf für Commit `3fc22cb` wurde erfolgreich
 ausgeführt (GitHub Actions Run 42681145475). Er erfasste **780** veröffentlichte
@@ -109,9 +116,9 @@ NuGet-Metadaten und das Vorhandensein von Lizenzdokumenten im
 Strawberry-Perl-Archiv. Das Ergebnis wird in
 `component-evidence.csv` dokumentiert.
 
-### Warum die rechtliche Konformität noch nicht bestätigt ist
+### Historische offene Nachweise der damaligen statischen Distribution
 
-Die noch erforderlichen Prüfungen sind **inhaltlich**, nicht nur technisch:
+Die damals noch erforderlichen Prüfungen waren **inhaltlich**, nicht nur technisch:
 1. libvips: Copyright-Originaltexte und korrespondierende Quellen aller
    tatsächlich statisch verlinkten Abhängigkeiten vollständig zuordnen.
 2. ExifTool/Perl: den Inhalt aller mitgelieferten Lizenzdateien den
@@ -119,13 +126,12 @@ Die noch erforderlichen Prüfungen sind **inhaltlich**, nicht nur technisch:
 3. Installer: die publizierte Setup-EXE selbst entpacken und die Hashes
    mit dem verifizierten Publish-Payload abgleichen.
 
-Diese Prüfungen sind keine festgestellten Verstöße. Der vorliegende
-Automatismus prüft notwendige Voraussetzungen, keine rechtsverbindliche
-Freigabe. Ein erfolgreicher Build darf dieses Kapitel nicht als
-abgeschlossen darstellen.
+Dieser Abschnitt dokumentiert ausschließlich den früheren Stand.
+Für den Alpha.9-Release gelten die oben genannten neuen technischen
+Prüfungen und die tatsächlichen Installations- und Hashnachweise.
 
 
-## Zusätzliche Windows-Belege (Alpha.8-Vorbereitung)
+## Historische Windows-Belege (Alpha.8-Vorbereitung)
 
 - Der neue CEF-Export liefert 19.512.304 Byte in
   `Licenses/Chromium-Credits.html`; die Datei wurde anhand ihrer SHA-256 im
@@ -147,7 +153,7 @@ Ein grüner Test dieses Payloads ersetzt nicht die Kontrolle der tatsächlichen
 Installer-Dateien oder eine Prüfung sämtlicher Lizenzpflichten.
 
 
-## Prüfung des tatsächlich installierten Lizenzordners (9. November 2026)
+## Historischer Alpha.8-Lizenzordner (9. November 2026)
 
 Vom PCasa-Anwender wurde der installierte Ordner als `licenses.zip` bereitgestellt.
 Das Archiv enthält **18 Dateien** (Verzeichniseinträge nicht mitgezählt).
@@ -190,7 +196,7 @@ Diese offene Feststellung wird ausdrücklich **nicht** durch einen grünen
 Dateiexistenztest aufgehoben.
 
 
-## Alpha.9 native original attribution evidence (work branch)
+## Alpha.9: Originaltexte, Herkunft und Binärnachweise (Arbeitszweig)
 
 The native release now packages the original source license/copyright text
 for aom (including its patent license), cgif, expat, FreeType, Fontconfig,
