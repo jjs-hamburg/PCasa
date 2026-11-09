@@ -176,6 +176,10 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Install SHA-pinned dynamic libvips and all separately replaceable native DLLs
+        shell: pwsh
+        run: |
+          ./tools/install-dynamic-libvips.ps1 -PublishDir publish/PCasa
       - name: Export exact Chromium/CEF third-party credits for offline installation
         shell: pwsh
         timeout-minutes: 3
