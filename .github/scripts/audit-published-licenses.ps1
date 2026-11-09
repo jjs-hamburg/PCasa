@@ -168,6 +168,41 @@ try {
     if ($archiveEntries.Count -eq 0) {
         throw 'Strawberry Perl archive contains no license or notice entries'
     }
+    # Evidence from the real bundled Strawberry Perl archive, not guessed
+    # license names. Validate the relevant Windows runtime binaries against
+    # original licence text paths (including GCC runtime exception and
+    # WinPthreads) and preserve the mapping as a release audit artifact.
+    $perlLicenseMappings = @(
+        [pscustomobject]@{ Runtime='exiftool_files/perl532.dll'; Licenses=@('perl/Artistic','perl/Copying') },
+        [pscustomobject]@{ Runtime='exiftool_files/libgcc_s_seh-1.dll'; Licenses=@('gcc-toolchain/gcc/COPYING.RUNTIME','gcc-toolchain/gcc/COPYING3') },
+        [pscustomobject]@{ Runtime='exiftool_files/libstdc++-6.dll'; Licenses=@('gcc-toolchain/gcc/COPYING.RUNTIME','gcc-toolchain/gcc/COPYING3') },
+        [pscustomobject]@{ Runtime='exiftool_files/libwinpthread-1.dll'; Licenses=@('gcc-toolchain/winpthreads/COPYING') },
+        [pscustomobject]@{ Runtime='exiftool_files/liblzma-5__.dll'; Licenses=@('libxz/COPYING','libxz/_INFO_') }
+    )
+    $perlEvidence = @()
+    foreach ($entry in $perlLicenseMappings) {
+        $relativeRuntime = 'exiftool/' + $entry.Runtime
+        Assert-PublishedFile $relativeRuntime
+        foreach ($licensePath in $entry.Licenses) {
+            $match = @($archive.Entries | Where-Object {
+                $_.FullName -ceq $licensePath -and $_.Length -gt 0
+            })
+            if ($match.Count -ne 1) { throw "Missing Perl runtime license $licensePath for $relativeRuntime" }
+        }
+        $perlEvidence += [pscustomobject]@{
+            Runtime = $relativeRuntime
+            RuntimeSHA256 = $relativePaths[$relativeRuntime.Replace('/','\').ToLowerInvariant()].SHA256
+            LicenseArchive = 'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'
+            ArchiveLicenseEntries = ($entry.Licenses -join '; ')
+        }
+    }
+    # The archive must contain Perl's dual licensing and all source attribution
+    # families used by the shipped native toolchain. Some entries also cover
+    # optional Strawberry components not shipped by this minimal runtime.
+    $zipFiles = @($archive.Entries | Where-Object { $_.Length -gt 0 })
+    if ($zipFiles.Count -lt 150) { throw "Strawberry license archive unexpectedly incomplete: $($zipFiles.Count)" }
+    $perlEvidence | Export-Csv -NoTypeInformation -Encoding utf8 -LiteralPath (Join-Path $OutputDir 'exiftool-runtime-license-map.csv')
+    Write-Host "Verified $($zipFiles.Count) original Strawberry Perl archive files and $($perlEvidence.Count) mapped runtime DLLs."
 } finally { $archive.Dispose() }
 # All package licence metadata must be either an SPDX expression or backed by
 # an upstream licence file copied into the packaged directory.
