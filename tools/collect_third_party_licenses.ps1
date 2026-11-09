@@ -50,6 +50,7 @@ foreach ($path in @(
     'exiftool/exiftool_files/LICENSE',
     'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip',
     'Licenses/PCasa-GPL-3.0.txt',
+    'Licenses/LGPL-3.0.txt',
     'Licenses/THIRD-PARTY-NOTICES.md',
     'Licenses/MapLibre-LICENSE.txt'
 )) {
