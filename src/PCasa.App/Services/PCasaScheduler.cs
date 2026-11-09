@@ -753,7 +753,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 : journal.ActivateDueDeferred(key);
             if (activated is null) continue;
             var completion = TrackDurableCompletion(
-                QueueDurableExisting(package, activated));
+                QueueDurableExisting(package, activated), key);
             try { _durableRestoreObserver?.Invoke(key, completion); }
             catch (Exception ex)
             {
