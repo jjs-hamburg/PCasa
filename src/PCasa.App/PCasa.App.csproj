@@ -60,6 +60,8 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-CEF-LIBVIPS-GUIDE.txt" Link="Licenses/CEF-LIBVIPS-GUIDE.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSES-NATIVE-BUILD-VERSIONS.txt" Link="Licenses/NATIVE-BUILD-VERSIONS.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Redistributed MapLibre BSD-3 and third-party attributions. -->
     <Content Include="Resources/maplibre-LICENSE.txt"
              Link="Licenses/MapLibre-LICENSE.txt"
