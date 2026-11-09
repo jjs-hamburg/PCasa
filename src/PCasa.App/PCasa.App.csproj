@@ -27,6 +27,9 @@
     <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
   
+  <ItemGroup Condition="Exists('Assets/PCasa.ico')">
+    <Resource Include="Assets/PCasa.ico" />
+  </ItemGroup>
   <!-- Single embedded translation catalog; no external deployment dependency. -->
   <ItemGroup>
     <EmbeddedResource Include="Resources/gps-map.html" LogicalName="PCasa.App.Resources.gps-map.html" />
