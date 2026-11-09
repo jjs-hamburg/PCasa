@@ -103,6 +103,12 @@ internal static class DurablePauseFlow
             if (!scheduler.ResumeDurableTask(key))
                 throw new Exception("Resume did not activate original identity");
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(12));
+            // A test-step completion precedes the scheduler continuation's
+            // final SQLite state commit. Wait for that authoritative receipt.
+            for (var attempt = 0;
+                 attempt < 100 && journal.Pending().Any(x => x.Key == key);
+                 attempt++)
+                await Task.Delay(30);
             if (!executed.SequenceEqual(new[] { 1, 2, 3 }))
                 throw new Exception("Resume repeated a committed step");
             if (journal.Pending().Any(x => x.Key == key))
