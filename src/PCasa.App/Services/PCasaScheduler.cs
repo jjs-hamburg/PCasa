@@ -274,6 +274,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate) return _pausedExternalTasks.Contains(key);
     }
 
+    public IReadOnlyList<string> PausedExternalTaskKeys()
+    {
+        lock (_gate) return _pausedExternalTasks.ToArray();
+    }
+
     public bool SetExternalTaskPaused(string key, bool paused)
     {
         var store = _taskOrderStore ??

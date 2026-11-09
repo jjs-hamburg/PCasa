@@ -298,6 +298,24 @@ public partial class MainWindow
             _backgroundReviewOrder.Clear();
             for (var i = 0; i < dueRootReviews.Count; i++)
                 _backgroundReviewOrder[dueRootReviews[i]] = i + 1L;
+            // A paused watcher request may have been queued but not yet
+            // started when PCasa exited. Rebuild its SAME accepted identity
+            // from the scheduler's persisted hold rather than losing the
+            // user's pause or inventing a second scanner.
+            foreach (var pausedKey in _scheduler.PausedExternalTaskKeys())
+            {
+                var request = ParsePausedAutomaticTask(pausedKey);
+                if (request is null) continue;
+                var owner = folders.FirstOrDefault(root =>
+                    root.Id == request.MonitoredFolderId);
+                if (owner is null ||
+                    !FolderExclusionRules.IsAtOrBelow(
+                        request.Path, owner.LocalPath) ||
+                    exclusions.TryGetValue(owner.Id, out var excluded) &&
+                    FolderExclusionRules.IsExcluded(request.Path, excluded))
+                    continue;
+                QueueBackgroundChange(request);
+            }
             _backgroundUrgentReviews.Clear();
             foreach (var id in urgentReviews)
                 _backgroundUrgentReviews.Add(id);
@@ -675,6 +693,23 @@ public partial class MainWindow
     // taskmanager refresh; it is unrelated to a volatile WPF row index.
     private static string AutomaticTaskKey(PendingBackgroundScan task)
         => $"automatic:{task.MonitoredFolderId}:{task.Kind}:{task.Path}";
+
+    private static BackgroundFolderChange? ParsePausedAutomaticTask(string key)
+    {
+        // Only parse our own stable key format, never accept arbitrary paths
+        // as a new source. The calling monitor also validates root ownership.
+        var parts = key.Split(':', 4);
+        if (parts.Length != 4 || parts[0] != "automatic" ||
+            !long.TryParse(parts[1], out var id) ||
+            !Enum.TryParse<BackgroundFolderChangeKind>(parts[2], out var kind) ||
+            kind is not (BackgroundFolderChangeKind.ScanFile or
+                BackgroundFolderChangeKind.ScanDirectory or
+                BackgroundFolderChangeKind.RescanRoot) ||
+            string.IsNullOrWhiteSpace(parts[3]))
+            return null;
+        return new BackgroundFolderChange(id, parts[3], kind,
+            Recursive: kind != BackgroundFolderChangeKind.ScanFile);
+    }
 
     private static string AutomaticTaskTitle(BackgroundFolderChangeKind kind)
         => kind switch
