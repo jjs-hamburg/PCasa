@@ -133,6 +133,7 @@ function Assert-PublishedFile([string]$RelativePath) {
 $requiredFiles = @(
     'Licenses/PCasa-GPL-3.0.txt',
     'Licenses/LGPL-3.0.txt',
+    'Licenses/LLVM-LICENSE.txt',
     'Licenses/MPL-1.1.txt',
     'Licenses/Apache-2.0.txt',
     'Licenses/MIT-Microsoft.txt',
@@ -241,7 +242,7 @@ foreach ($item in $knownNativeHashes.GetEnumerator()) {
         throw "Native library changed without updated version-specific license review: $path"
     }
 }
-Write-Host "Verified pinned CEF and libvips binary hashes."
+Write-Host "Verified pinned CEF binary hash; dynamic libvips verified by 38-DLL manifest."
 
 # All 38 DLLs must match the pinned upstream dynamic archive's installation
 # manifest. The download script first verifies the upstream archive SHA256,

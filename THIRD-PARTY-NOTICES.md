@@ -15,6 +15,8 @@ relicense those components.
 | NetVips 3.2.0 | MIT | https://github.com/kleisauke/net-vips |
 | NetVips.Native.win-x64 8.18.7 | LGPL-3.0-or-later per NuGet; bundled native dependencies may carry additional licenses | https://www.nuget.org/packages/NetVips.Native.win-x64/8.18.7 |
 | MapLibre GL JS 5.9.0 | BSD-3-Clause; detailed attributions in `Licenses/MapLibre-LICENSE.txt` | https://github.com/maplibre/maplibre-gl-js |
+| LLVM libc++ / libunwind (llvm-mingw 20260922 toolchain) | Apache-2.0 WITH LLVM-exception; full `Licenses/LLVM-LICENSE.txt` | https://github.com/mstorsjo/llvm-mingw/releases/tag/20260922 |
+| ExifTool Windows launcher (Oliver Betz) | CC0 as specified by original author | https://oliverbetz.de/pages/Artikel/ExifTool-for-Windows |
 | ExifTool 13.59 | ExifTool's GPL/Artistic dual-licensing; Windows binary includes Perl and its additional third-party terms | https://exiftool.org/ |
 | .NET 10 Desktop Runtime | Installed independently via Microsoft's official runtime installer, not redistributed in PCasa | https://dotnet.microsoft.com/download/dotnet/10.0 |
 

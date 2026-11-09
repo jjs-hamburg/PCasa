@@ -25,7 +25,9 @@ CEF/Chromium: die offline bereitgestellte Chromium-Credits.html wird beim
 Windows-Build aus genau der verwendeten CEF-Version erzeugt.
 CEF/Chromium: Lizenzdateien unter Packages/ sowie Chromium-interne
 Lizenz- und Copyright-Hinweise (about:license bzw. about:credits).
-libvips: LGPL-3.0.txt, die Hinweise unter Packages/ und die Quellcode-
+libvips: LGPL-3.0.txt, 38 einzeln ersetzbare DLLs mit SHA-256-Werten
+in libvips-dynamic-files.csv, zugehörige LLVM-Laufzeitlizenzen in
+LLVM-LICENSE.txt, sowie die Hinweise unter Packages/ und die Quellcode-
 und Build-Verweise in THIRD-PARTY-NOTICES.md.
 ExifTool und das mitgelieferte Strawberry Perl:
 ../exiftool/exiftool_files/LICENSE und
