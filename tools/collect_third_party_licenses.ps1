@@ -54,6 +54,17 @@ foreach ($entry in $assets.libraries.PSObject.Properties) {
     }
 }
 $rows | Sort-Object Package | Export-Csv -LiteralPath (Join-Path $PublishDir 'Licenses/NuGet-license-inventory.csv') -NoTypeInformation -Encoding utf8
+# Cairo's distributed notices select the legacy MPL 1.1 option.
+# Keep the complete original Mozilla license offline in every Windows installer,
+# rather than merely mentioning MPL in a dependency table.
+$mplPath = Join-Path $PublishDir 'Licenses/MPL-1.1.txt'
+Invoke-WebRequest -Uri 'https://www.mozilla.org/media/MPL/1.1/index.0c5913925d40.txt' -OutFile $mplPath -ErrorAction Stop
+$mplText = Get-Content -LiteralPath $mplPath -Raw
+if ($mplText.Length -lt 10000 -or
+    $mplText -notmatch 'MOZILLA PUBLIC LICENSE' -or
+    $mplText -notmatch 'Version 1\\.1') {
+    throw 'Authoritative Mozilla MPL 1.1 text missing or invalid'
+}
 # ExifTool's Strawberry Perl attribution archive must travel with the EXE.
 foreach ($path in @(
     'exiftool/exiftool.exe',
@@ -61,6 +72,7 @@ foreach ($path in @(
     'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip',
     'Licenses/PCasa-GPL-3.0.txt',
     'Licenses/LGPL-3.0.txt',
+    'Licenses/MPL-1.1.txt',
     'Licenses/Apache-2.0.txt',
     'Licenses/MIT-Microsoft.txt',
     'Licenses/MIT-NetVips.txt',
