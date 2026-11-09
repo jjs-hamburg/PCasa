@@ -141,6 +141,7 @@ $requiredFiles = @(
     'Licenses/NuGet-license-inventory.csv',
     'Licenses/CEF-LIBVIPS-GUIDE.txt',
     'Licenses/Chromium-Credits.html',
+    'Licenses/NATIVE-BUILD-VERSIONS.txt',
     'Licenses/Packages/CefSharp.Common.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/CefSharp.Wpf.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/chromiumembeddedframework.runtime-152.0.10/LICENSE.txt',
@@ -188,3 +189,18 @@ $evidence = @(
 )
 $evidence | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'component-evidence.csv')
 Write-Host "Verified $($requiredFiles.Count) mandated published files and $($archiveEntries.Count) Perl licence archive entries."
+
+# Any change in pinned CEF or libvips binary changes the compliance subject;
+# fail rather than silently carrying forward notices from a previous version.
+$knownNativeHashes = @{
+    'libcef.dll' = '08a40295bebd9421468115a09c375f3decce219b6673ff77410c479c03b43603'
+    'libvips-42.dll' = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
+}
+foreach ($item in $knownNativeHashes.GetEnumerator()) {
+    $path = $item.Key.ToLowerInvariant()
+    if (-not $relativePaths.ContainsKey($path)) { throw "Missing pinned native library $path" }
+    if ($relativePaths[$path].SHA256.ToLowerInvariant() -ne $item.Value) {
+        throw "Native library changed without updated version-specific license review: $path"
+    }
+}
+Write-Host "Verified pinned CEF and libvips binary hashes."
