@@ -116,8 +116,8 @@ internal sealed class PcasaAboutWindow : Window
         licenseButton.Click += (_, _) =>
         {
             var folder = Path.Combine(AppContext.BaseDirectory, "Licenses");
-            var summary = Path.Combine(folder, "THIRD-PARTY-NOTICES.md");
-            var target = File.Exists(summary) ? summary : folder;
+            // Opening the folder works even when Windows has no Markdown
+            // file association or text editor configured.
             if (!Directory.Exists(folder))
             {
                 PcasaDialog.Show(this,
@@ -130,7 +130,7 @@ internal sealed class PcasaAboutWindow : Window
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = target,
+                    FileName = folder,
                     UseShellExecute = true
                 });
             }
