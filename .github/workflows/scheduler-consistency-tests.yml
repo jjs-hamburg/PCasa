@@ -238,6 +238,31 @@ jobs:
             if (-not (Test-Path (Join-Path $target "PCasa.App.exe"))) {
               throw "Setup $mode did not install PCasa.App.exe"
             }
+            # License checks must inspect the ACTUAL installed files in
+            # BOTH setup scopes, not only the intermediate publish folder.
+            foreach ($requiredLicense in @(
+              "Licenses/PCasa-GPL-3.0.txt",
+              "Licenses/THIRD-PARTY-NOTICES.md",
+              "Licenses/NuGet-license-inventory.csv",
+              "Licenses/MapLibre-LICENSE.txt",
+              "Licenses/LGPL-3.0.txt",
+              "Licenses/Apache-2.0.txt",
+              "Licenses/MIT-Microsoft.txt",
+              "Licenses/MIT-NetVips.txt",
+              "exiftool/exiftool_files/LICENSE",
+              "exiftool/exiftool_files/Licenses_Strawberry_Perl.zip"
+            )) {
+              $licensePath = Join-Path $target $requiredLicense
+              if (-not (Test-Path $licensePath -PathType Leaf) -or
+                  (Get-Item $licensePath).Length -eq 0) {
+                throw "Setup $mode missing license document: $requiredLicense"
+              }
+            }
+            $packageLicenses = Join-Path $target "Licenses/Packages"
+            if (-not (Test-Path $packageLicenses -PathType Container) -or
+                @(Get-ChildItem $packageLicenses -File -Recurse).Count -eq 0) {
+              throw "Setup $mode missing transitive package license material"
+            }
             $marker = Test-Path (Join-Path $target "PCasa.all-users")
             if ($marker -ne ($mode -eq "ALLUSERS")) {
               throw "Setup $mode selected the wrong catalog data scope"
