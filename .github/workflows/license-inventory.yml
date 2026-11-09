@@ -8,6 +8,7 @@ on:
       - '.github/workflows/license-inventory.yml'
       - '.github/scripts/audit-published-licenses.ps1'
       - 'tools/collect_third_party_licenses.ps1'
+      - 'tools/install-dynamic-libvips.ps1'
       - 'THIRD-PARTY-NOTICES.md'
       - 'LICENSES-*'
   workflow_dispatch:
@@ -38,6 +39,10 @@ jobs:
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           New-Item -ItemType Directory -Force -Path publish/PCasa/exiftool | Out-Null
           Copy-Item tools/exiftool/* publish/PCasa/exiftool -Recurse -Force
+      - name: Install SHA-pinned dynamic libvips and all separately replaceable native DLLs
+        shell: pwsh
+        run: |
+          ./tools/install-dynamic-libvips.ps1 -PublishDir publish/PCasa
       - name: Export complete credits from bundled Chromium/CEF
         shell: pwsh
         timeout-minutes: 3
