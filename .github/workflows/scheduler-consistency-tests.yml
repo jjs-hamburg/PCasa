@@ -169,6 +169,20 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Collect and verify bundled third-party license files
+        shell: pwsh
+        run: |
+          ./tools/collect_third_party_licenses.ps1 -AssetsFile "src/PCasa.App/obj/project.assets.json" -PublishDir "publish/PCasa"
+          foreach ($required in @(
+            "Licenses/PCasa-GPL-3.0.txt",
+            "Licenses/THIRD-PARTY-NOTICES.md",
+            "Licenses/NuGet-license-inventory.csv",
+            "Licenses/MapLibre-LICENSE.txt"
+          )) {
+            if (-not (Test-Path (Join-Path "publish/PCasa" $required))) {
+              throw "License packaging gate failed: $required"
+            }
+          }
       - name: Verify .NET 10 Desktop Runtime prerequisite detection
         shell: pwsh
         run: |
