@@ -15,6 +15,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--durable-pause-probe"))
+            return DurablePauseFlow.Run();
         if (args.Contains("--startup-browse-probe"))
         {
             try
