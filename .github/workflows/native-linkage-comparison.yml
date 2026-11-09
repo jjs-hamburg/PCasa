@@ -44,12 +44,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           dotnet publish tests/PCasa.NativeVipsProbe/PCasa.NativeVipsProbe.csproj --configuration Release --runtime win-x64 --self-contained false --output native-evidence/probe
+          if ($LASTEXITCODE -ne 0) { throw 'NetVips probe publish failed' }
           $nativeDir = Get-ChildItem native-evidence/dynamic -Directory -Recurse |
             Where-Object { $_.Name -eq 'bin' } | Select-Object -First 1
           if ($null -eq $nativeDir) { throw 'Dynamic native bin directory missing' }
           $nativeDlls = @(Get-ChildItem -LiteralPath $nativeDir.FullName -Filter '*.dll' -File)
           if ($nativeDlls.Count -lt 30) { throw 'Unexpected dynamic DLL payload' }
-          Copy-Item -LiteralPath $nativeDlls.FullName -Destination native-evidence/probe -Force
+          foreach ($native in $nativeDlls) {
+            Copy-Item -LiteralPath $native.FullName -Destination native-evidence/probe -Force
+          }
           $copied = @(Get-ChildItem native-evidence/probe -Filter '*.dll')
           foreach ($native in $nativeDlls) {
             $target = Join-Path native-evidence/probe $native.Name
