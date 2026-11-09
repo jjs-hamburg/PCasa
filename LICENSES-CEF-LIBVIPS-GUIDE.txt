@@ -15,6 +15,11 @@ befindet sich unter
   Packages/chromiumembeddedframework.runtime.win-x64-152.0.10/LICENSE.txt
 Die CefSharp-Lizenzen stehen unter Packages/CefSharp.*.
 
+Die mit genau der ausgelieferten CEF-Version erzeugte Chromium-Übersicht
+wird beim Windows-Build aus der internen Seite als
+  Chromium-Credits.html
+in diesem Ordner gespeichert. Fehlt sie oder ist sie leer, stoppt der Build.
+
 Chromium selbst enthält weitere Drittanbieterprogramme und Lizenzbedingungen.
 CEF dokumentiert deren Anzeige über die internen Browseradressen
   about:license
