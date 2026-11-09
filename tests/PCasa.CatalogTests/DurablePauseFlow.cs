@@ -14,7 +14,8 @@ internal static class DurablePauseFlow
         try
         {
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
-            Console.WriteLine("DURABLE PAUSE/RESUME PASS");
+            ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
+            Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
         catch (Exception ex)
@@ -25,6 +26,35 @@ internal static class DurablePauseFlow
         finally
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    private static async Task ExerciseAutomaticControlPersistence(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "pcasa.db"));
+        const string key = @"automatic:1:RescanRoot:G:\Camera Roll";
+        await using (var scheduler = new PCasaScheduler())
+        {
+            scheduler.EnableDurablePackages(database);
+            if (!scheduler.SetExternalTaskPaused(key, true) ||
+                !scheduler.IsExternalTaskPaused(key))
+                throw new Exception("Automatic scan pause was not accepted");
+        }
+        await using (var scheduler = new PCasaScheduler())
+        {
+            scheduler.EnableDurablePackages(database);
+            if (!scheduler.IsExternalTaskPaused(key))
+                throw new Exception("Automatic scan pause was lost on restart");
+            if (!scheduler.SetExternalTaskPaused(key, false) ||
+                scheduler.IsExternalTaskPaused(key))
+                throw new Exception("Automatic scan did not resume");
+            if (!scheduler.PromoteTaskNow(key))
+                throw new Exception("Promote Now rejected the original key");
+            var placement = scheduler.EffectiveTaskPlacement(key,
+                SchedulerPriority.Idle, 15);
+            if (placement.Priority != SchedulerPriority.ManualAction ||
+                placement.QueueOrder != long.MinValue + 1)
+                throw new Exception("Promote Now did not change scheduler rank");
         }
     }
 
