@@ -1,6 +1,6 @@
 # PCasa
 
-**PCasa** ist ein lokaler Fotoverwalter für Windows x64 (.NET 10 / WPF), inspiriert von Picasa und auf große Bildbestände ausgerichtet. Die aktuelle, im Windows-CI geprüfte Entwicklung wird über **[`main`](https://github.com/jjs-hamburg/PCasa/tree/main)** geführt. Fertige Installer und automatische Updates sind **noch nicht vorhanden**; die Setup-Entwicklung beginnt auf eigenen, kurzlebigen Zweigen.
+**PCasa** ist ein lokaler Fotoverwalter für Windows x64 (.NET 10 / WPF), auf große Bildbestände ausgerichtet. Die aktuelle, im Windows-CI geprüfte Entwicklung wird über **[`main`](https://github.com/jjs-hamburg/PCasa/tree/main)** geführt. Ein Windows-Installer mit .NET-Desktop-Runtime-Prüfung und GitHub-Updatefunktion wird auf einem separaten Testzweig geprüft.
 
 > **Stand: 8. November 2026.** Windows-Actions-Pakete sind Test- und Abnahmeversionen. CI-Erfolg ersetzt keine Abnahme mit der eigenen Bibliothek, insbesondere über NAS/Starlink/VPN.
 
@@ -14,7 +14,7 @@
 - **Datenbank:** Sicherung, sichtbare separate Wartung für Restore/Optimize/Reset und automatischer Neustart nach erfolgreicher Wartung.
 - **Oberfläche:** Deutsch und Englisch, einheitliche PCasa-Dialoge.
 
-**Noch nicht umgesetzt:** Vollständiger Windows-Installer für „nur mich“/„alle Benutzer“, integriertes GitHub-Release-Update, Bildbearbeitung und zentrale Mehrclient-Synchronisierung. Die App arbeitet im aktuellen Testpaket weiterhin mit Daten in `%LOCALAPPDATA%\PCasa`.
+**Noch nicht umgesetzt:** Bildbearbeitung und zentrale Mehrclient-Synchronisierung. Die App arbeitet im aktuellen Testpaket weiterhin mit Daten in `%LOCALAPPDATA%\PCasa`.
 
 ## Testpaket herunterladen
 
@@ -24,7 +24,7 @@
 
 Das Paket enthält die benötigten Windows-x64-Komponenten und ExifTool. Bei Updates des entpackten Testpakets den **Datenordner** nicht löschen. Vorsicht bei physischem Dateilöschen und vor einem Restore eine gesonderte Sicherung behalten.
 
-**Quelltext-Build:** `dotnet publish src/PCasa.App/PCasa.App.csproj -c Release -r win-x64 --self-contained true` mit Windows/.NET-10-SDK. Das vollständige Paket einschließlich ExifTool und Texturen wird im Workflow erstellt.
+**Quelltext-Build:** `dotnet publish src/PCasa.App/PCasa.App.csproj -c Release -r win-x64 --self-contained false` mit Windows/.NET-10-SDK. Das vollständige Paket einschließlich ExifTool und Texturen wird im Workflow erstellt.
 
 ## Dokumentation
 

@@ -37,7 +37,17 @@ foreach ($entry in $assets.libraries.PSObject.Properties) {
     if ($name -in $required -and $copied.Count -eq 0) {
         throw "Required upstream license material missing: $name/$version"
     }
+    $nuspec = Get-ChildItem -LiteralPath $folder -Filter '*.nuspec' -File | Select-Object -First 1
+    $expression = ''
+    $copyright = ''
+    if ($null -ne $nuspec) {
+        [xml]$metadata = Get-Content -LiteralPath $nuspec.FullName -Raw
+        $expression = [string]$metadata.package.metadata.license.InnerText
+        $copyright = [string]$metadata.package.metadata.copyright
+    }
     $rows += [pscustomobject]@{
+        DeclaredLicense = $expression
+        Copyright = $copyright
         Package = $name
         Version = $version
         CopiedLicenseFiles = $copied -join '; '
@@ -51,6 +61,9 @@ foreach ($path in @(
     'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip',
     'Licenses/PCasa-GPL-3.0.txt',
     'Licenses/LGPL-3.0.txt',
+    'Licenses/Apache-2.0.txt',
+    'Licenses/MIT-Microsoft.txt',
+    'Licenses/MIT-NetVips.txt',
     'Licenses/THIRD-PARTY-NOTICES.md',
     'Licenses/MapLibre-LICENSE.txt'
 )) {

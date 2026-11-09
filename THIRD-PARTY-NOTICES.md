@@ -35,8 +35,15 @@ Source and compliance information for LGPL components:
 
 CEF/Chromium license files are copied from their exact restored NuGet
 packages into `Licenses/Packages/`. Chromium additional credits are
-available in the embedded browser at `chrome://credits`, with CEF
+available in the embedded browser at `about:credits`, with CEF
 license guidance at https://chromiumembedded.github.io/cef/general_usage.html.
+
+The full Apache-2.0 license text and copyright-bearing MIT texts for
+Microsoft.Data.Sqlite and NetVips are included in `Licenses/` as
+`Apache-2.0.txt`, `MIT-Microsoft.txt`, and `MIT-NetVips.txt`.
+The complete LGPL-3.0 text is in `Licenses/LGPL-3.0.txt`.
+The `Licenses/NuGet-license-inventory.csv` file records resolved NuGet
+package versions, declared licenses and package copyright metadata.
 
 The ExifTool bundle carries its upstream `exiftool/exiftool_files/LICENSE`
 and `exiftool/exiftool_files/Licenses_Strawberry_Perl.zip`.
