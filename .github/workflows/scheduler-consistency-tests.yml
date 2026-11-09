@@ -94,6 +94,11 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --tag-write-probe
+      - name: Verify durable GPS/tag package pause, restart and cursor recovery
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --durable-pause-probe
       - name: Run catalog regression executable
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
