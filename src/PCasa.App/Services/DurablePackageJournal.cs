@@ -325,7 +325,7 @@ public sealed class DurablePackageJournal
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             UPDATE scheduler_packages
-               SET state='queued',retry_after_utc=NULL,updated_utc=$now
+               SET state='queued',error=NULL,retry_after_utc=NULL,updated_utc=$now
              WHERE package_key=$key AND state='paused';
             """;
         cmd.Parameters.AddWithValue("$key", key);
