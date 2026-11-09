@@ -282,6 +282,9 @@ jobs:
             if ($marker -ne ($mode -eq "ALLUSERS")) {
               throw "Setup $mode selected the wrong catalog data scope"
             }
+            # Byte-for-byte inspection of the actual installed files, not just
+            # the intermediate publish directory or notice-file existence.
+            ./.github/scripts/compare-installed-payload.ps1 -PublishDir publish/PCasa -InstalledDir $target -Mode $mode
             # Simulate an older self-contained PCasa installation in-place:
             # the upgrade must remove old Microsoft WPF/.NET DLLs while
             # preserving the application and its packaged dependencies.
@@ -293,6 +296,7 @@ jobs:
             if ($upgrade.ExitCode -ne 0) {
               throw "Setup $mode in-place upgrade failed (exit code $($upgrade.ExitCode))"
             }
+            ./.github/scripts/compare-installed-payload.ps1 -PublishDir publish/PCasa -InstalledDir $target -Mode $mode
             foreach ($legacy in @("hostfxr.dll", "coreclr.dll",
                 "PresentationFramework.dll", "System.Private.CoreLib.dll")) {
               if (Test-Path (Join-Path $target $legacy)) {
