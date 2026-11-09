@@ -41,7 +41,6 @@ public sealed class TaskManagerWindow : Window
         _errors = new(), _completed = new();
     private readonly Button _up = new(), _down = new(),
         _startNow = new(), _restart = new(), _pauseResume = new(), _delete = new();
-    private readonly Button _pauseResume;
     private readonly TextBlock _detail = new();
     private List<TaskRow> _all = [];
     private bool _reading;
