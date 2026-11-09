@@ -69,3 +69,13 @@ jobs:
           path: license-audit/
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload exact verified ExifTool license archives for native redistribution inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExifTool-13.59-Strawberry-Perl-licenses
+          path: |
+            publish/PCasa/exiftool/exiftool_files/LICENSE
+            publish/PCasa/exiftool/exiftool_files/Licenses_Strawberry_Perl.zip
+          if-no-files-found: error
+          retention-days: 1
