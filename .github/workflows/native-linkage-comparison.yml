@@ -6,6 +6,8 @@ on:
       - 'setup-native-license-*'
     paths:
       - '.github/workflows/native-linkage-comparison.yml'
+      - '.github/scripts/inspect-vips-variants.py'
+      - 'tests/PCasa.NativeVipsProbe/**'
   workflow_dispatch:
 
 permissions:
