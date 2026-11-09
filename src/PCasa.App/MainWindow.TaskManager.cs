@@ -93,11 +93,12 @@ public partial class MainWindow
 
         if (TryInitialTaskId(key, out var importId))
         {
-            var unpaused = await Task.Run(() =>
-                _scheduler.ChangeTaskIntent(() =>
-                    _folderRepository.SetPendingFirstImportPaused(
-                        importId, false)));
-            if (unpaused)
+            // Reordering an explicitly paused import changes only its rank.
+            // It must not silently resume the import: "Fortsetzen" and
+            // "Jetzt ausführen" are separate user commands.
+            var paused = _folderRepository.GetPendingFirstImportQueue()
+                .Any(item => item.FolderId == importId && item.Paused);
+            if (!paused)
             {
                 _initialScanAttempted.Remove(importId);
                 if (_initialScanActive && _activeScanFolderId != importId &&
