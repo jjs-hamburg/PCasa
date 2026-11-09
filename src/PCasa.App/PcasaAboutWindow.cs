@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -98,6 +100,49 @@ internal sealed class PcasaAboutWindow : Window
             Text = "GNU General Public License v3.0",
             FontSize = 13
         });
+        // The published installer places all third-party notices next to
+        // PCasa.App.exe. Do not send users to GitHub as a substitute for
+        // license information delivered with their installed application.
+        var licenseButton = new Button
+        {
+            Content = UiLanguage.T("Lizenzen und Dritthinweise öffnen"),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 8, 0, 0),
+            Padding = new Thickness(10, 5, 10, 5),
+            MinHeight = 30
+        };
+        if (Application.Current.TryFindResource("PcasaStatusButtonStyle") is Style licenseStyle)
+            licenseButton.Style = licenseStyle;
+        licenseButton.Click += (_, _) =>
+        {
+            var folder = Path.Combine(AppContext.BaseDirectory, "Licenses");
+            var summary = Path.Combine(folder, "THIRD-PARTY-NOTICES.md");
+            var target = File.Exists(summary) ? summary : folder;
+            if (!Directory.Exists(folder))
+            {
+                PcasaDialog.Show(this,
+                    UiLanguage.T("Lizenzinformationen fehlen in dieser Installation."),
+                    UiLanguage.T("Über PCasa"), MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = target,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("About.OpenLicenses", ex);
+                PcasaDialog.Show(this, ex.Message,
+                    UiLanguage.T("Über PCasa"), MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        };
+        legal.Children.Add(licenseButton);
 
         var ok = new Button
         {
