@@ -247,15 +247,25 @@ public sealed class PCasaScheduler : IAsyncDisposable
             if (_pausedExternalTasks.Contains(key)) return false;
             // This is a control-plane mutation. The existing worker sees
             // its new effective rank; no second package is queued.
-            var order = store.PromoteNow(key);
-            _userDispatchOrder[key] = order;
-            _userPriorityOverrides[key] = SchedulerPriority.ManualAction;
+            store.PromoteNow(key);
+            foreach (var (identity, placement) in store.ReadAll())
+            {
+                if (placement.Order != long.MaxValue)
+                    _userDispatchOrder[identity] = placement.Order;
+                if (placement.PriorityOverride is SchedulerPriority rank)
+                    _userPriorityOverrides[identity] = rank;
+                else
+                    _userPriorityOverrides.Remove(identity);
+            }
             foreach (var item in _pending.Concat(_runningWork))
             {
                 if (!string.Equals(TaskIdentityUnsafe(item.Key), key,
                     StringComparison.Ordinal)) continue;
-                item.Priority = SchedulerPriority.ManualAction;
-                item.QueueOrder = order;
+                var identity = TaskIdentityUnsafe(item.Key);
+                item.Priority = _userPriorityOverrides.GetValueOrDefault(
+                    identity, item.Priority);
+                item.QueueOrder = _userDispatchOrder.GetValueOrDefault(
+                    identity, item.QueueOrder);
                 SetStateUnsafe(item, item.YieldRequested
                     ? SchedulerJobState.YieldRequested :
                     _runningWork.Contains(item) ? SchedulerJobState.Running :
@@ -267,6 +277,31 @@ public sealed class PCasaScheduler : IAsyncDisposable
         foreach (var item in changed) PublishState(item);
         NotifyTaskViewChanged();
         return true;
+    }
+
+    // Revert a one-shot Start Now after successful completion. Repeated
+    // future P4 scans must fall back to idle priority, never remain P0.
+    public void CompleteTaskPromotion(string key)
+    {
+        var store = _taskOrderStore;
+        if (store is null) return;
+        lock (_gate)
+        {
+            if (!store.ClearPromotion(key)) return;
+            var saved = store.ReadAll();
+            if (saved.TryGetValue(key, out var placement) &&
+                placement.Order != long.MaxValue)
+                _userDispatchOrder[key] = placement.Order;
+            else
+                _userDispatchOrder.Remove(key);
+            if (saved.TryGetValue(key, out placement) &&
+                placement.PriorityOverride is SchedulerPriority priority)
+                _userPriorityOverrides[key] = priority;
+            else
+                _userPriorityOverrides.Remove(key);
+            WakePendingWorkersUnsafe();
+        }
+        NotifyTaskViewChanged();
     }
 
     public bool IsExternalTaskPaused(string key)
@@ -871,6 +906,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 isCurrent: () => !journal.Pending().Any(item =>
                     item.Key == record.Key && item.State == "paused"));
             journal.SetState(record.Key, "completed", package.CompletedSteps);
+            CompleteTaskPromotion(record.Key);
         }
         catch (OperationCanceledException)
         {

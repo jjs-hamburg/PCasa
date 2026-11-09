@@ -1529,6 +1529,8 @@ public partial class MainWindow
                         _scheduler.UnregisterTaskAlias(schedulerScanKey);
                     }
                     var result = scanResult ?? throw new OperationCanceledException();
+                    if (!request.NeedsFollowup)
+                        _scheduler.CompleteTaskPromotion(taskKey);
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                     {
                         _backgroundRootReviewYields.Remove(scanPath);

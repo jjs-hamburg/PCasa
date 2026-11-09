@@ -30,6 +30,9 @@ public sealed class SchedulerTaskOrderStore
                 dispatch_order INTEGER NOT NULL,
                 priority_override INTEGER NULL,
                 paused INTEGER NOT NULL DEFAULT 0,
+                promoted_now INTEGER NOT NULL DEFAULT 0,
+                previous_order INTEGER NULL,
+                previous_priority INTEGER NULL,
                 updated_utc TEXT NOT NULL
             );
             """;
@@ -63,6 +66,26 @@ public sealed class SchedulerTaskOrderStore
                 "ALTER TABLE scheduler_task_order ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;";
             migrate.ExecuteNonQuery();
         }
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var query = db.CreateCommand())
+        {
+            query.CommandText = "PRAGMA table_info(scheduler_task_order);";
+            using var reader = query.ExecuteReader();
+            while (reader.Read()) columns.Add(reader.GetString(1));
+        }
+        foreach (var (name, definition) in new[]
+        {
+            ("promoted_now", "INTEGER NOT NULL DEFAULT 0"),
+            ("previous_order", "INTEGER NULL"),
+            ("previous_priority", "INTEGER NULL")
+        })
+        {
+            if (columns.Contains(name)) continue;
+            using var migrate = db.CreateCommand();
+            migrate.CommandText =
+                $"ALTER TABLE scheduler_task_order ADD COLUMN {name} {definition};";
+            migrate.ExecuteNonQuery();
+        }
     }
 
     public IReadOnlySet<string> ReadPaused()
@@ -86,13 +109,40 @@ public sealed class SchedulerTaskOrderStore
     {
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
+        // Existing manual ordering must come back after THIS specific work
+        // finishes; permanent P0 promotion would break idle-only P4 reviews.
+        long? previousOrder = null;
+        int? previousPriority = null;
+        var previouslyPromoted = false;
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT dispatch_order,priority_override,promoted_now,
+                       previous_order,previous_priority
+                  FROM scheduler_task_order WHERE task_key=$key;
+                """;
+            read.Parameters.AddWithValue("$key", key);
+            using var row = read.ExecuteReader();
+            if (row.Read())
+            {
+                previouslyPromoted = row.GetInt32(2) != 0;
+                previousOrder = previouslyPromoted
+                    ? row.IsDBNull(3) ? null : row.GetInt64(3)
+                    : row.GetInt64(0) == long.MaxValue
+                        ? null : row.GetInt64(0);
+                previousPriority = previouslyPromoted
+                    ? row.IsDBNull(4) ? null : row.GetInt32(4)
+                    : row.IsDBNull(1) ? null : row.GetInt32(1);
+            }
+        }
         using (var shift = db.CreateCommand())
         {
             shift.Transaction = tx;
             shift.CommandText = """
                 UPDATE scheduler_task_order
                    SET dispatch_order=dispatch_order+1
-                 WHERE priority_override=0
+                 WHERE promoted_now=1
                    AND dispatch_order < -8000000000000000000;
                 """;
             shift.ExecuteNonQuery();
@@ -102,19 +152,69 @@ public sealed class SchedulerTaskOrderStore
             cmd.Transaction = tx;
             cmd.CommandText = """
                 INSERT INTO scheduler_task_order
-                    (task_key,dispatch_order,priority_override,updated_utc)
-                VALUES ($key,$rank,0,$now)
+                    (task_key,dispatch_order,priority_override,promoted_now,
+                     previous_order,previous_priority,updated_utc)
+                VALUES ($key,$rank,0,1,$priorOrder,$priorPriority,$now)
                 ON CONFLICT(task_key) DO UPDATE SET
-                    dispatch_order=$rank,priority_override=0,
+                    dispatch_order=$rank,priority_override=0,promoted_now=1,
+                    previous_order=$priorOrder,previous_priority=$priorPriority,
                     updated_utc=$now;
                 """;
             cmd.Parameters.AddWithValue("$key", key);
             cmd.Parameters.AddWithValue("$rank", long.MinValue + 1);
+            cmd.Parameters.AddWithValue("$priorOrder",
+                (object?)previousOrder ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$priorPriority",
+                (object?)previousPriority ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             cmd.ExecuteNonQuery();
         }
         tx.Commit();
         return long.MinValue + 1;
+    }
+
+    public bool ClearPromotion(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        long? priorOrder;
+        int? priorPriority;
+        int paused;
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT previous_order,previous_priority,paused
+                  FROM scheduler_task_order
+                 WHERE task_key=$key AND promoted_now=1;
+                """;
+            read.Parameters.AddWithValue("$key", key);
+            using var row = read.ExecuteReader();
+            if (!row.Read()) return false;
+            priorOrder = row.IsDBNull(0) ? null : row.GetInt64(0);
+            priorPriority = row.IsDBNull(1) ? null : row.GetInt32(1);
+            paused = row.GetInt32(2);
+        }
+        using var update = db.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText = priorOrder is null && paused == 0 ? """
+            DELETE FROM scheduler_task_order WHERE task_key=$key;
+            """ : """
+            UPDATE scheduler_task_order
+               SET dispatch_order=$order,priority_override=$priority,
+                   promoted_now=0,previous_order=NULL,
+                   previous_priority=NULL,updated_utc=$now
+             WHERE task_key=$key;
+            """;
+        update.Parameters.AddWithValue("$key", key);
+        update.Parameters.AddWithValue("$order",
+            (object?)priorOrder ?? long.MaxValue);
+        update.Parameters.AddWithValue("$priority",
+            (object?)priorPriority ?? DBNull.Value);
+        update.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        update.ExecuteNonQuery();
+        tx.Commit();
+        return true;
     }
 
     public bool SetPaused(string key, bool paused)

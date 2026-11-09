@@ -55,6 +55,12 @@ internal static class DurablePauseFlow
             if (placement.Priority != SchedulerPriority.ManualAction ||
                 placement.QueueOrder != long.MinValue + 1)
                 throw new Exception("Promote Now did not change scheduler rank");
+            scheduler.CompleteTaskPromotion(key);
+            placement = scheduler.EffectiveTaskPlacement(key,
+                SchedulerPriority.Idle, 15);
+            if (placement.Priority != SchedulerPriority.Idle ||
+                placement.QueueOrder != 15)
+                throw new Exception("Start Now left a permanent P0 override");
         }
     }
 
