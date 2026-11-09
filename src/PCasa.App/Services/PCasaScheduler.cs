@@ -862,7 +862,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // substitute a default background priority on restart.
             await EnqueuePackageAsync(package, record.Priority,
                 cancellationToken, workKind: record.WorkKind,
-                queueOrder: record.QueueOrder);
+                queueOrder: record.QueueOrder,
+                isCurrent: () => !journal.Pending().Any(item =>
+                    item.Key == record.Key && item.State == "paused"));
             journal.SetState(record.Key, "completed", package.CompletedSteps);
         }
         catch (OperationCanceledException)
@@ -956,12 +958,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public Task EnqueuePackageAsync(SchedulerTaskPackage package,
         SchedulerPriority priority, CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
-        long? queueOrder = null)
+        long? queueOrder = null, Func<bool>? isCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(package);
         return EnqueueAsync(package.Key, priority, package.ExecuteAsync,
-            cancellationToken: cancellationToken, workKind: workKind,
-            queueOrder: queueOrder);
+            isCurrent: isCurrent, cancellationToken: cancellationToken,
+            workKind: workKind, queueOrder: queueOrder);
     }
 
     // A dismissed read-only projection must leave no queued scheduler work.
