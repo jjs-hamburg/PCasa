@@ -819,6 +819,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var record = journal.Put(package.Key, type, payload, priority, workKind);
         if (record.State is "completed" or "failed" or "canceled" or "paused")
             throw new InvalidOperationException("Paketidentität bereits abgeschlossen.");
+        // Explicit replay of the SAME immutable recipe after an offline
+        // source comes back must first reactivate its durable journal row.
+        // Otherwise the executor's isCurrent guard rejects "deferred" and
+        // silently cancels this legitimate resume before its first step.
+        if (record.State == "deferred")
+            record = journal.RestartDeferred(package.Key) ??
+                throw new InvalidOperationException("Zurückgestelltes Paket konnte nicht aktiviert werden.");
         NotifyTaskAccepted();
         package.RestoreCursor(record.CompletedSteps);
         return TrackDurableCompletion(QueueDurableExisting(package, record, cancellationToken), record.Key);
