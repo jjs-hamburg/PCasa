@@ -593,8 +593,7 @@ public sealed class TaskManagerWindow : Window
         _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
         _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
         _startNow.IsEnabled = !_acting && row is { Status: "Wartet" } &&
-            _startAutomaticNow is not null &&
-            (IsRootReview(row.Key) || IsInitialImport(row.Key));
+            (_startAutomaticNow is not null || row.Durable);
         // Resume is no longer disguised as "Neu starten"; that button
         // means retry after an actual failure, never resume a paused scan.
         _restart.IsEnabled = !_acting && row is { Status: "Fehler", Retryable: true };
@@ -686,9 +685,12 @@ public sealed class TaskManagerWindow : Window
     private void StartNow()
     {
         var row = Selection;
-        if (row is not { Status: "Wartet" } || _startAutomaticNow is null ||
-            (!IsRootReview(row.Key) && !IsInitialImport(row.Key))) return;
-        _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
+        if (row is not { Status: "Wartet" }) return;
+        if (row.Durable)
+            _ = PerformAsync(row.Key,
+                () => Task.Run(() => _scheduler.PromoteTaskNow(row.Key)));
+        else if (_startAutomaticNow is not null)
+            _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
     }
 
     private void Move(int direction)

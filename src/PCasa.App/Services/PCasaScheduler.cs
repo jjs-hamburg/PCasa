@@ -232,6 +232,39 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
+    public bool PromoteTaskNow(string key)
+    {
+        var store = _taskOrderStore ??
+            throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
+        List<WorkItem> changed = [];
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_pausedExternalTasks.Contains(key)) return false;
+            // This is a control-plane mutation. The existing worker sees
+            // its new effective rank; no second package is queued.
+            var order = store.PromoteNow(key);
+            _userDispatchOrder[key] = order;
+            _userPriorityOverrides[key] = SchedulerPriority.ManualAction;
+            foreach (var item in _pending.Concat(_runningWork))
+            {
+                if (!string.Equals(TaskIdentityUnsafe(item.Key), key,
+                    StringComparison.Ordinal)) continue;
+                item.Priority = SchedulerPriority.ManualAction;
+                item.QueueOrder = order;
+                SetStateUnsafe(item, item.YieldRequested
+                    ? SchedulerJobState.YieldRequested :
+                    _runningWork.Contains(item) ? SchedulerJobState.Running :
+                    SchedulerJobState.Queued);
+                changed.Add(item);
+            }
+            WakePendingWorkersUnsafe();
+        }
+        foreach (var item in changed) PublishState(item);
+        NotifyTaskViewChanged();
+        return true;
+    }
+
     public bool IsExternalTaskPaused(string key)
     {
         lock (_gate) return _pausedExternalTasks.Contains(key);

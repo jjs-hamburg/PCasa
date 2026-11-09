@@ -79,6 +79,44 @@ public sealed class SchedulerTaskOrderStore
     // External scan intents use the SAME persisted scheduler control ledger
     // as their user-defined order. The physical scanner cursor stays with
     // its existing owner; a pause is NOT a canceled or new scan request.
+    // Explicit "Jetzt ausführen" is a one-time scheduler promotion,
+    // not a cloned task. A distinct durable rank outranks ordinary P0
+    // LIFO jobs; earlier promoted jobs shift behind the latest request.
+    public long PromoteNow(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using (var shift = db.CreateCommand())
+        {
+            shift.Transaction = tx;
+            shift.CommandText = """
+                UPDATE scheduler_task_order
+                   SET dispatch_order=dispatch_order+1
+                 WHERE priority_override=0
+                   AND dispatch_order < -8000000000000000000;
+                """;
+            shift.ExecuteNonQuery();
+        }
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO scheduler_task_order
+                    (task_key,dispatch_order,priority_override,updated_utc)
+                VALUES ($key,$rank,0,$now)
+                ON CONFLICT(task_key) DO UPDATE SET
+                    dispatch_order=$rank,priority_override=0,
+                    updated_utc=$now;
+                """;
+            cmd.Parameters.AddWithValue("$key", key);
+            cmd.Parameters.AddWithValue("$rank", long.MinValue + 1);
+            cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            cmd.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return long.MinValue + 1;
+    }
+
     public bool SetPaused(string key, bool paused)
     {
         using var db = _database.OpenConnection();

@@ -349,9 +349,23 @@ public partial class MainWindow
     private Task<bool> StartTaskNowAsync(string key)
     {
         if (!TryInitialTaskId(key, out var folderId))
-            return StartAutomaticScanNowAsync(key);
-        // The durable initial-import request already exists. Give its original
-        // identity a fresh dispatch opportunity without creating a new scan.
+        {
+            if (!key.StartsWith("automatic:", StringComparison.Ordinal))
+                return Task.FromResult(false);
+            if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
+            if (TryRootReviewTaskId(key, out _))
+                return StartAutomaticScanNowAsync(key);
+            _backgroundOrderChanged = _backgroundInFlight is { Length: > 0 };
+            if (_backgroundOrderChanged &&
+                _backgroundCurrentScanCancellation is
+                    { IsCancellationRequested: false } running)
+                RequestTaskManagerYield(running);
+            _backgroundDebounceTimer?.Start();
+            _scheduler.NotifyTaskViewChanged();
+            return Task.FromResult(true);
+        }
+        // The initial import owns the same confirmed scan cursor and key.
+        if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
         _initialScanAttempted.Remove(folderId);
         if (_initialScanActive && _activeScanFolderId != folderId &&
             _initialScanCancellation is { IsCancellationRequested: false } other)
