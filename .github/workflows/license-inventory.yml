@@ -38,6 +38,12 @@ jobs:
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           New-Item -ItemType Directory -Force -Path publish/PCasa/exiftool | Out-Null
           Copy-Item tools/exiftool/* publish/PCasa/exiftool -Recurse -Force
+      - name: Export complete credits from bundled Chromium/CEF
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          if ((Get-Item "publish/PCasa/Licenses/Chromium-Credits.html").Length -lt 50000) { throw "Chromium third-party credits missing" }
       - name: Collect licensing materials and fail on missing essentials
         shell: pwsh
         run: |
