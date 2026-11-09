@@ -190,6 +190,11 @@ jobs:
               throw "License packaging gate failed: $required"
             }
           }
+      - name: Audit actual published licensing evidence before installer or release
+        shell: pwsh
+        run: |
+          ./.github/scripts/audit-published-licenses.ps1 -PublishDir publish/PCasa -ProjectAssetsFile src/PCasa.App/obj/project.assets.json -OutputDir license-audit
+          if (-not (Test-Path license-audit/component-evidence.csv)) { throw 'Missing component evidence' }
       - name: Verify .NET 10 Desktop Runtime prerequisite detection
         shell: pwsh
         run: |
