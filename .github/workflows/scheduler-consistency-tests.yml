@@ -249,6 +249,27 @@ jobs:
             if (-not (Test-Path (Join-Path $target "PCasa.App.exe"))) {
               throw "Setup $mode did not install PCasa.App.exe"
             }
+            # Byte-for-byte evidence that the built installer actually ships
+            # every audited published file. Extra Inno uninstaller/marker files
+            # are intentional and are not part of the publish payload.
+            $publishedRoot = (Resolve-Path "publish/PCasa").Path
+            $publishedFiles = @(Get-ChildItem -LiteralPath $publishedRoot -File -Recurse)
+            if ($publishedFiles.Count -lt 100) {
+              throw "Unexpectedly small publish payload: $($publishedFiles.Count) files"
+            }
+            foreach ($publishedFile in $publishedFiles) {
+              $relative = [System.IO.Path]::GetRelativePath($publishedRoot, $publishedFile.FullName)
+              $installedFile = Join-Path $target $relative
+              if (-not (Test-Path -LiteralPath $installedFile -PathType Leaf)) {
+                throw "Setup $mode omitted published file: $relative"
+              }
+              $expectedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $publishedFile.FullName).Hash
+              $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedFile).Hash
+              if ($actualHash -ne $expectedHash) {
+                throw "Setup $mode changed published file: $relative; expected $expectedHash, found $actualHash"
+              }
+            }
+            Write-Host "PASS: Setup $mode installed all $($publishedFiles.Count) audited publish files byte-for-byte"
             # License checks must inspect the ACTUAL installed files in
             # BOTH setup scopes, not only the intermediate publish folder.
             foreach ($requiredLicense in @(
