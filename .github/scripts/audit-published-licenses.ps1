@@ -143,6 +143,8 @@ $requiredFiles = @(
     'Licenses/CEF-LIBVIPS-GUIDE.txt',
     'Licenses/Chromium-Credits.html',
     'Licenses/NATIVE-BUILD-VERSIONS.txt',
+    'Licenses/libvips-dynamic-files.csv',
+    'Licenses/libvips-dynamic-source.txt',
     'Licenses/Packages/CefSharp.Common.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/CefSharp.Wpf.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/chromiumembeddedframework.runtime-152.0.10/LICENSE.txt',
@@ -195,7 +197,7 @@ Write-Host "Verified $($requiredFiles.Count) mandated published files and $($arc
 # fail rather than silently carrying forward notices from a previous version.
 $knownNativeHashes = @{
     'libcef.dll' = '08a40295bebd9421468115a09c375f3decce219b6673ff77410c479c03b43603'
-    'libvips-42.dll' = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
+
 }
 foreach ($item in $knownNativeHashes.GetEnumerator()) {
     $path = $item.Key.ToLowerInvariant()
@@ -205,3 +207,32 @@ foreach ($item in $knownNativeHashes.GetEnumerator()) {
     }
 }
 Write-Host "Verified pinned CEF and libvips binary hashes."
+
+# All 38 DLLs must match the pinned upstream dynamic archive's installation
+# manifest. The download script first verifies the upstream archive SHA256,
+# and copies each DLL without alteration. Here we verify the final publish.
+$nativeManifest = @(Import-Csv -LiteralPath (Join-Path $publishPath 'Licenses/libvips-dynamic-files.csv'))
+if ($nativeManifest.Count -ne 38) { throw "Expected 38 dynamic libvips DLLs; got $($nativeManifest.Count)" }
+$names = @{}
+foreach ($native in $nativeManifest) {
+    $name = [string]$native.DLL
+    $key = $name.ToLowerInvariant()
+    if ($name -notmatch '^[a-zA-Z0-9_.+\-]+\.dll$' -or $names.ContainsKey($key)) {
+        throw "Invalid or duplicate dynamic DLL in manifest: $name"
+    }
+    $names[$key] = $true
+    if (-not $relativePaths.ContainsKey($key)) { throw "Missing dynamic libvips DLL: $name" }
+    if ($relativePaths[$key].SHA256 -ne $native.SHA256.ToLowerInvariant() -or
+        $relativePaths[$key].Size -ne [long]$native.Size) {
+        throw "Dynamic libvips DLL changed from pinned upstream artifact: $name"
+    }
+}
+if (-not $names.ContainsKey('libvips-42.dll') -or -not $names.ContainsKey('libglib-2.0-0.dll') -or
+    -not $names.ContainsKey('libheif.dll') -or -not $names.ContainsKey('librsvg-2-2.dll')) {
+    throw 'Expected dynamically linked native components missing'
+}
+$origin = Get-Content -LiteralPath (Join-Path $publishPath 'Licenses/libvips-dynamic-source.txt') -Raw
+if ($origin -notmatch '3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241') {
+    throw 'Pinned native upstream archive provenance absent'
+}
+Write-Host "Verified all 38 SHA-pinned dynamic libvips component DLLs."
