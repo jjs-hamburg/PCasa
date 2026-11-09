@@ -145,6 +145,7 @@ $requiredFiles = @(
     'Licenses/Chromium-Credits.html',
     'Licenses/NATIVE-BUILD-VERSIONS.txt',
     'Licenses/libvips-dynamic-files.csv',
+    'Licenses/libvips-component-licenses.csv',
     'Licenses/Source/proxy-libintl-0.5/COPYING',
     'Licenses/Source/proxy-libintl-0.5/libintl.c',
     'Licenses/Source/proxy-libintl-0.5/libintl.h',
@@ -278,3 +279,22 @@ if ($origin -notmatch '3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299
     throw 'Pinned native upstream archive provenance absent'
 }
 Write-Host "Verified all 38 SHA-pinned dynamic libvips component DLLs."
+
+# Every DLL must have a version-specific license and source attribution.
+# Compare the fixed review manifest with the actually distributed DLL names.
+$attributions = @(Import-Csv -LiteralPath (Join-Path $publishPath 'Licenses/libvips-component-licenses.csv'))
+if ($attributions.Count -ne $nativeManifest.Count) {
+    throw "Native license attribution count ($($attributions.Count)) differs from DLL manifest count ($($nativeManifest.Count))"
+}
+$attributed = @{}
+foreach ($attr in $attributions) {
+    $key = ([string]$attr.DLL).ToLowerInvariant()
+    if (-not $names.ContainsKey($key) -or $attributed.ContainsKey($key) -or
+        [string]::IsNullOrWhiteSpace($attr.Component) -or
+        [string]::IsNullOrWhiteSpace($attr.License) -or
+        [string]::IsNullOrWhiteSpace($attr.Upstream)) {
+        throw "Missing/duplicate/invalid native DLL attribution: $($attr.DLL)"
+    }
+    $attributed[$key] = $true
+}
+Write-Host "Verified explicit source and license attribution for all $($attributions.Count) dynamic DLLs."
