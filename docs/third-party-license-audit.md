@@ -73,3 +73,50 @@ nicht stillschweigend als abgeschlossen markiert werden.
 
 `THIRD-PARTY-NOTICES.md` und `tools/collect_third_party_licenses.ps1`
 dokumentieren die tatsächlich gepackten Nachweise.
+
+
+## Ergänzende Binärprüfung (9. November 2026)
+
+Der auf Windows erzeugte Inventurlauf für Commit `3fc22cb` wurde erfolgreich
+ausgeführt (GitHub Actions Run 42681145475). Er erfasste **780** veröffentlichte
+Dateien und **12** aufgelöste NuGet-Pakete, einschließlich transitiver Pakete.
+Die tatsächlich veröffentlichte Alpha.7-EXE wurde dabei nicht entpackt;
+erfasst wurde der aus demselben Quellstand erzeugte Windows-Publish-Payload.
+Deshalb sind die SHA-256-Hashes noch kein Byte-für-Byte-Nachweis des
+bereits veröffentlichten Installers.
+
+Faktisch im Publish-Payload enthalten waren:
+- `libcef.dll` und die Paket-Lizenzdateien zu CefSharp 152.0.100 sowie
+  chromiumembeddedframework.runtime 152.0.10;
+- `libvips-42.dll`, LGPL-3.0 und das Paketdokument
+  `NetVips.Native.win-x64-8.18.7/THIRD-PARTY-NOTICES.md`;
+- ExifTool-13.59-Programmdateien sowie `exiftool_files/LICENSE` und
+  `exiftool_files/Licenses_Strawberry_Perl.zip`.
+
+Die NuGet-Inventur weist fünf Pakete mit Paket-Lizenzdatei und weitere
+Pakete mit MIT, Apache-2.0 beziehungsweise LGPL-3.0-or-later aus.
+Die Paketangaben sind Lizenzmetadaten, noch keine eigene Bewertung
+der jeweiligen Redistribution-Pflichten.
+
+Ab PR #1 wird außerdem vor dem Installer-Bau gegen das **tatsächliche
+Publish-Verzeichnis** geprüft: benannte Lizenztexte, native Laufzeitdateien,
+NuGet-Metadaten und das Vorhandensein von Lizenzdokumenten im
+Strawberry-Perl-Archiv. Das Ergebnis wird in
+`component-evidence.csv` dokumentiert.
+
+### Warum die rechtliche Konformität noch nicht bestätigt ist
+
+Die noch erforderlichen Prüfungen sind **inhaltlich**, nicht nur technisch:
+1. CEF/Chromium: tatsächlich einkompilierte Drittkomponenten und
+   deren konkrete Copyright-Hinweise für die ausgelieferte Version abgleichen.
+2. libvips: kompilierten Codec-Umfang mit den Original-Notices abgleichen;
+   LGPL-Austauschbarkeit und Quellcode-/Änderungsbedingungen nachvollziehen.
+3. ExifTool/Perl: den Inhalt aller mitgelieferten Lizenzdateien den
+   konkreten Perl-Modulen und nativen DLLs zuordnen.
+4. Installer: die publizierte Setup-EXE selbst entpacken und die Hashes
+   mit dem verifizierten Publish-Payload abgleichen.
+
+Diese Prüfungen sind keine festgestellten Verstöße. Der vorliegende
+Automatismus prüft notwendige Voraussetzungen, keine rechtsverbindliche
+Freigabe. Ein erfolgreicher Build darf dieses Kapitel nicht als
+abgeschlossen darstellen.
