@@ -44,6 +44,8 @@ Sie nennt unter anderem aom, cairo, cgif, expat, fontconfig, freetype,
 fribidi, glib, harfbuzz, highway, lcms, libarchive, libexif, libffi,
 libheif, libimagequant, libnsgif, libpng, librsvg, libtiff, libultrahdr,
 libvips, libwebp, libxml2, mozjpeg, pango, pixman, proxy-libintl und zlib-ng.
+Für Cairo ist außerdem die originale Mozilla Public License v1.1 als
+MPL-1.1.txt aus der offiziellen Mozilla-Quelle beigefügt.
 Die jeweiligen Originalbedingungen und Copyright-Angaben müssen ebenfalls
 berücksichtigt werden; die Paketliste allein ersetzt sie nicht.
 
