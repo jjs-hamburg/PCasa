@@ -176,6 +176,12 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Export exact Chromium/CEF third-party credits for offline installation
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          if ((Get-Item "publish/PCasa/Licenses/Chromium-Credits.html").Length -lt 50000) { throw "Chromium credits missing from installer payload" }
       - name: Collect and verify bundled third-party license files
         shell: pwsh
         run: |
