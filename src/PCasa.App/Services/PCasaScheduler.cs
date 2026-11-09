@@ -1250,8 +1250,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
         var journal = _durableJournal ??
             throw new InvalidOperationException("Kein Paketjournal.");
         lock (_gate)
-            if (_durableActiveTasks.ContainsKey(key))
-                return false; // pause journal settlement is still in flight
+        {
+            if (_durableActiveTasks.TryGetValue(key, out var previous))
+            {
+                if (!previous.IsCompleted)
+                    return false; // previous worker still settling
+                _durableActiveTasks.Remove(key);
+            }
+        }
         var record = journal.Pending().FirstOrDefault(row =>
             row.Key == key && row.State == "paused");
         if (record is null) return false;
