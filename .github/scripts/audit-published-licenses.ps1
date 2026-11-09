@@ -139,6 +139,7 @@ $requiredFiles = @(
     'Licenses/MapLibre-LICENSE.txt',
     'Licenses/THIRD-PARTY-NOTICES.md',
     'Licenses/NuGet-license-inventory.csv',
+    'Licenses/CEF-LIBVIPS-GUIDE.txt',
     'Licenses/Packages/CefSharp.Common.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/CefSharp.Wpf.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/chromiumembeddedframework.runtime-152.0.10/LICENSE.txt',
