@@ -35,7 +35,11 @@ libvips / NETVIPS
 -----------------
 PCasa verwendet NetVips 3.2.0 (MIT) mit der nativen
 NetVips.Native.win-x64 8.18.7 (LGPL-3.0-or-later).
-Die native Bibliothek heißt libvips-42.dll und liegt neben PCasa.App.exe.
+Beim Release wird dessen statisch gebündelte Windows-Laufzeit durch
+38 separate DLLs aus der offiziellen dynamischen libvips-8.18.7-x64-
+Distribution ersetzt. Sie liegen neben PCasa.App.exe.
+Die Dateiliste und SHA-256-Werte stehen in libvips-dynamic-files.csv;
+libvips-dynamic-source.txt nennt das geprüfte Originalarchiv.
 Die vollständige LGPLv3 liegt unter LGPL-3.0.txt; die GPLv3, auf die sie
 verweist, unter PCasa-GPL-3.0.txt. Die originale Drittanbieterübersicht des
 Windows-Binärpakets liegt hier:
@@ -57,16 +61,17 @@ Quellen der GENAUEN verwendeten libvips-Version:
 
 AUSTAUSCH UND EIGENE ÄNDERUNGEN
 ------------------------------
-libvips ist hier als separat geladene DLL ausgeliefert. Nutzer dürfen sie
-durch eine selbst gebaute, ABI-kompatible Fassung ersetzen, einschließlich
-der zur Fehlersuche nötigen Untersuchung. Die PCasa-Lizenz darf dies nicht
+libvips und seine 37 mitgelieferten nativen DLLs sind getrennt ausgeliefert.
+Nutzer dürfen die LGPL-Bibliotheken einzeln durch eigene ABI-kompatible
+Fassungen ersetzen, einschließlich der zur Fehlersuche nötigen Untersuchung. Die PCasa-Lizenz darf dies nicht
 einschränken. Zum Austausch PCasa vollständig beenden, die ursprüngliche
 libvips-42.dll sichern und die eigene kompatible DLL an deren Stelle
 kopieren. Die neue DLL muss dieselben exportierten Funktionen und die
 benötigte Architektur (Windows x64) bereitstellen.
 Diese Anweisung garantiert keine Funktionsfähigkeit inkompatibler DLLs.
-Für andere LGPL-Komponenten, die möglicherweise in der nativen DLL
-statisch zusammengefasst wurden, können zusätzliche Bedingungen gelten.
+Dass Komponenten nun getrennt ausgeliefert werden, ist kein Nachweis,
+dass innerhalb einer der 38 DLLs keinerlei weitere Bibliotheken statisch
+enthalten sind. Dafür gelten weiterhin die passenden Lizenzbedingungen.
 
 Ein GitHub-Quellcode-Link allein stellt nicht in allen Fällen die
 erforderliche korrespondierende Quelle für jedes eingebettete Bauteil bereit.
