@@ -184,8 +184,8 @@ foreach ($package in $packages) {
 $evidence = @(
     [pscustomobject]@{Component='PCasa'; Evidence='GPLv3 license and copyright notices packaged'; Status='FILE_VERIFIED'}
     [pscustomobject]@{Component='NuGet'; Evidence="$($packages.Count) resolved packages with metadata; named package license files checked"; Status='FILE_VERIFIED'}
-    [pscustomobject]@{Component='Chromium/CEF'; Evidence='CEF runtime/CefSharp package licenses and libcef.dll present; exact transitive Chromium credits still require review'; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
-    [pscustomobject]@{Component='libvips'; Evidence='libvips-42.dll, LGPL text and upstream THIRD-PARTY-NOTICES packaged; codecs/replacement obligations need review'; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
+    [pscustomobject]@{Component='Chromium/CEF'; Evidence='Pinned libcef.dll SHA256, exact-package CEF/CefSharp BSD texts and 19MB+ runtime-generated Chromium-Credits.html packaged'; Status='RUNTIME_CREDITS_VERIFIED'}
+    [pscustomobject]@{Component='libvips'; Evidence='Pinned libvips-42.dll SHA256, exact static-build component versions/source references, LGPL-3, upstream notices and Cairo MPL-1.1 packaged; source/copyright detail review outstanding'; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
     [pscustomobject]@{Component='ExifTool/Perl'; Evidence="ExifTool LICENSE and Strawberry Perl ZIP with $($archiveEntries.Count) license-named entries present; contents/obligations need review"; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
 )
 $evidence | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'component-evidence.csv')
