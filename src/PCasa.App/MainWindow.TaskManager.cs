@@ -361,6 +361,45 @@ public partial class MainWindow
         return Task.FromResult(true);
     }
 
+    private Task<bool> PauseAutomaticTaskAsync(string key)
+    {
+        if (!key.StartsWith("automatic:", StringComparison.Ordinal))
+            return Task.FromResult(false);
+        var paused = _scheduler.SetExternalTaskPaused(key, true);
+        if (!paused) return Task.FromResult(false);
+        if (_backgroundInFlight is { } inflight &&
+            inflight.Skip(_backgroundInFlightIndex).Any(scan =>
+                string.Equals(AutomaticTaskKey(scan), key, StringComparison.Ordinal)))
+        {
+            _backgroundOrderChanged = true;
+            if (_backgroundCurrentScanCancellation is
+                { IsCancellationRequested: false } running)
+                RequestTaskManagerYield(running);
+        }
+        _scheduler.NotifyTaskViewChanged();
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> ResumePausedTaskAsync(string key)
+    {
+        if (TryInitialTaskId(key, out _))
+            return ResumeAutomaticScanAsync(key);
+        if (!key.StartsWith("automatic:", StringComparison.Ordinal))
+            return Task.FromResult(false);
+        var resumed = _scheduler.SetExternalTaskPaused(key, false);
+        if (resumed)
+        {
+            _backgroundDebounceTimer?.Start();
+            if (_backgroundScanInitialized && !_backgroundMonitorClosing)
+                RefreshBackgroundMonitor();
+        }
+        return Task.FromResult(resumed);
+    }
+
+    private Task<bool> PauseTaskAsync(string key)
+        => TryInitialTaskId(key, out _) ? PauseInitialImportAsync(key)
+         : PauseAutomaticTaskAsync(key);
+
     private void TaskManagerMenu_Click(object sender, RoutedEventArgs e)
     {
         if (_taskManagerWindow is { IsVisible: true } existing)
@@ -373,7 +412,8 @@ public partial class MainWindow
             SnapshotAutomaticScans, StopAutomaticScanAsync,
             () => _backgroundIdleStatus,
             MoveAutomaticScanAsync, ResumeAutomaticScanAsync,
-            StartTaskNowAsync, PauseInitialImportAsync, MoveGlobalTaskAsync)
+            StartTaskNowAsync, PauseTaskAsync, ResumePausedTaskAsync,
+            MoveGlobalTaskAsync)
         {
             Owner = this
         };

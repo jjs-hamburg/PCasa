@@ -29,6 +29,7 @@ public sealed class SchedulerTaskOrderStore
                 task_key TEXT PRIMARY KEY,
                 dispatch_order INTEGER NOT NULL,
                 priority_override INTEGER NULL,
+                paused INTEGER NOT NULL DEFAULT 0,
                 updated_utc TEXT NOT NULL
             );
             """;
@@ -49,6 +50,66 @@ public sealed class SchedulerTaskOrderStore
                 "ALTER TABLE scheduler_task_order ADD COLUMN priority_override INTEGER NULL;";
             migrate.ExecuteNonQuery();
         }
+        using var pausedCheck = db.CreateCommand();
+        pausedCheck.CommandText = "PRAGMA table_info(scheduler_task_order);";
+        var hasPaused = false;
+        using (var reader = pausedCheck.ExecuteReader())
+            while (reader.Read())
+                if (reader.GetString(1) == "paused") hasPaused = true;
+        if (!hasPaused)
+        {
+            using var migrate = db.CreateCommand();
+            migrate.CommandText =
+                "ALTER TABLE scheduler_task_order ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;";
+            migrate.ExecuteNonQuery();
+        }
+    }
+
+    public IReadOnlySet<string> ReadPaused()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = "SELECT task_key FROM scheduler_task_order WHERE paused=1;";
+        using var reader = cmd.ExecuteReader();
+        var paused = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read()) paused.Add(reader.GetString(0));
+        return paused;
+    }
+
+    // External scan intents use the SAME persisted scheduler control ledger
+    // as their user-defined order. The physical scanner cursor stays with
+    // its existing owner; a pause is NOT a canceled or new scan request.
+    public bool SetPaused(string key, bool paused)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = paused ? """
+            INSERT INTO scheduler_task_order
+                (task_key,dispatch_order,paused,updated_utc)
+            VALUES ($key,9223372036854775807,1,$now)
+            ON CONFLICT(task_key) DO UPDATE SET
+                paused=1,updated_utc=excluded.updated_utc;
+            """ : """
+            UPDATE scheduler_task_order
+               SET paused=0,updated_utc=$now
+             WHERE task_key=$key AND paused=1;
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        var changed = cmd.ExecuteNonQuery() == 1;
+        if (!paused && changed)
+        {
+            using var cleanup = db.CreateCommand();
+            cleanup.CommandText = """
+                DELETE FROM scheduler_task_order
+                 WHERE task_key=$key AND paused=0
+                   AND dispatch_order=9223372036854775807
+                   AND priority_override IS NULL;
+                """;
+            cleanup.Parameters.AddWithValue("$key", key);
+            cleanup.ExecuteNonQuery();
+        }
+        return changed;
     }
 
     public IReadOnlyDictionary<string, SchedulerStoredTaskOrder> ReadAll()

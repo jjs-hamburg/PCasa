@@ -723,6 +723,7 @@ public partial class MainWindow
             if ((stopping && !current) || !keys.Add(key)) return;
             var path = task.Kind == BackgroundFolderChangeKind.ScanFile
                 ? Path.GetDirectoryName(task.Path) ?? task.Path : task.Path;
+            var paused = _scheduler.IsExternalTaskPaused(key);
             // The in-flight scheduler snapshot, not merely a queued WPF
             // request, decides whether a scanner is really running.
             var runningSnapshot = current && key == _backgroundLiveTaskKey
@@ -757,7 +758,8 @@ public partial class MainWindow
             rows.Add(new AutomaticScanTask(key,
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
                 progress,
-                runningSnapshot is not null ? "Läuft" : "Wartet",
+                paused ? "Angehalten" :
+                    runningSnapshot is not null ? "Läuft" : "Wartet",
                 task.Kind == BackgroundFolderChangeKind.RescanRoot &&
                     _backgroundUrgentReviews.Contains(task.MonitoredFolderId)
                     ? 2 : AutomaticTaskPriority(task.Kind),
@@ -1082,7 +1084,17 @@ public partial class MainWindow
             return;
         }
 
+        // Keep paused requests with their original cursor and queue identity.
+        // A paused-only queue must not spin the debounce timer.
+        if (!_backgroundPending.Values.Any(request =>
+            !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request))))
+            return;
+        var pausedRequests = _backgroundPending
+            .Where(entry => _scheduler.IsExternalTaskPaused(entry.Key))
+            .ToArray();
         var requests = _backgroundPending.Values
+            .Where(request =>
+                !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)))
             .Select(request =>
             {
                 var defaultPriority = request.Kind ==
@@ -1112,6 +1124,8 @@ public partial class MainWindow
             .Select(item => item.Request)
             .ToArray();
         _backgroundPending.Clear();
+        foreach (var pausedRequest in pausedRequests)
+            _backgroundPending[pausedRequest.Key] = pausedRequest.Value;
         _backgroundInFlight = requests;
         _backgroundInFlightIndex = 0;
         RefreshFolderStatusVisuals();
@@ -1138,6 +1152,12 @@ public partial class MainWindow
                         "Taskmanager changed the pending root-review order.");
                 var request = requests[nextRequestIndex];
                 var taskKey = AutomaticTaskKey(request);
+                if (_scheduler.IsExternalTaskPaused(taskKey))
+                {
+                    _backgroundOrderChanged = true;
+                    throw new OperationCanceledException(
+                        "Automatic scan paused by the scheduler controller.");
+                }
                 if (_backgroundSuppressed.Remove(taskKey))
                 {
                     request.Resume?.Dispose();

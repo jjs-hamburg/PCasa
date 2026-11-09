@@ -98,6 +98,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private bool _deferredRecoveryReady;
     private Action<string, Task>? _durableRestoreObserver;
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _pausedExternalTasks =
+        new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     // All physical executor lanes participate in idle admission, including
     // read/thumbnail lanes that have no catalog-mutation counter.
@@ -219,12 +221,36 @@ public sealed class PCasaScheduler : IAsyncDisposable
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
         _taskOrderStore = new SchedulerTaskOrderStore(database);
+        foreach (var key in _taskOrderStore.ReadPaused())
+            _pausedExternalTasks.Add(key);
         foreach (var (key, placement) in _taskOrderStore.ReadAll())
         {
-            _userDispatchOrder[key] = placement.Order;
+            if (placement.Order != long.MaxValue)
+                _userDispatchOrder[key] = placement.Order;
             if (placement.PriorityOverride is SchedulerPriority chosen)
                 _userPriorityOverrides[key] = chosen;
         }
+    }
+
+    public bool IsExternalTaskPaused(string key)
+    {
+        lock (_gate) return _pausedExternalTasks.Contains(key);
+    }
+
+    public bool SetExternalTaskPaused(string key, bool paused)
+    {
+        var store = _taskOrderStore ??
+            throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
+        bool changed;
+        lock (_gate)
+        {
+            changed = store.SetPaused(key, paused);
+            if (paused) _pausedExternalTasks.Add(key);
+            else _pausedExternalTasks.Remove(key);
+            if (changed) SignalController();
+        }
+        if (changed) NotifyTaskViewChanged();
+        return changed;
     }
 
     // The Taskmanager observes the scheduler's ONE user-defined order.

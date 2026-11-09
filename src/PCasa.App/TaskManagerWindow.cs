@@ -31,6 +31,7 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<string,Task<bool>>? _resumeAutomaticScan;
     private readonly Func<string,Task<bool>>? _startAutomaticNow;
     private readonly Func<string,Task<bool>>? _pauseInitialImport;
+    private readonly Func<string,Task<bool>>? _resumePausedTask;
     private readonly Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
         _moveGlobalTask;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
@@ -62,6 +63,7 @@ public sealed class TaskManagerWindow : Window
         Func<string,Task<bool>>? resumeAutomaticScan = null,
         Func<string,Task<bool>>? startAutomaticNow = null,
         Func<string,Task<bool>>? pauseInitialImport = null,
+        Func<string,Task<bool>>? resumePausedTask = null,
         Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
             moveGlobalTask = null)
     {
@@ -79,6 +81,7 @@ public sealed class TaskManagerWindow : Window
         _resumeAutomaticScan = resumeAutomaticScan;
         _startAutomaticNow = startAutomaticNow;
         _pauseInitialImport = pauseInitialImport;
+        _resumePausedTask = resumePausedTask;
         _moveGlobalTask = moveGlobalTask;
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
@@ -596,11 +599,12 @@ public sealed class TaskManagerWindow : Window
         // means retry after an actual failure, never resume a paused scan.
         _restart.IsEnabled = !_acting && row is { Status: "Fehler", Retryable: true };
         var canResume = row is { Status: "Angehalten" } &&
-            (IsInitialImport(row.Key) && _resumeAutomaticScan is not null ||
-             row.Durable);
+            (row.Durable || _resumePausedTask is not null ||
+             IsInitialImport(row.Key) && _resumeAutomaticScan is not null);
         var canPause = row is { Status: "Läuft" or "Wartet" } &&
-            (IsInitialImport(row.Key) && _pauseInitialImport is not null ||
-             row.Durable);
+            (row.Durable || _pauseInitialImport is not null &&
+             (IsInitialImport(row.Key) ||
+              row.Key.StartsWith("automatic:", StringComparison.Ordinal)));
         _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
         _pauseResume.IsEnabled = !_acting && (canResume || canPause);
         _pauseResume.ToolTip = UiLanguage.T(
@@ -766,10 +770,15 @@ public sealed class TaskManagerWindow : Window
                 _ = PerformAsync(row.Key, () => _scheduler.PauseDurableTaskAsync(row.Key));
             return;
         }
-        if (!IsInitialImport(row.Key)) return;
-        if (row.Status == "Angehalten" && _resumeAutomaticScan is not null)
-            _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
-        else if (row.Status is "Läuft" or "Wartet" && _pauseInitialImport is not null)
+        if (row.Status == "Angehalten")
+        {
+            if (_resumePausedTask is not null)
+                _ = PerformAsync(row.Key, () => _resumePausedTask(row.Key));
+            else if (IsInitialImport(row.Key) && _resumeAutomaticScan is not null)
+                _ = PerformAsync(row.Key, () => _resumeAutomaticScan(row.Key));
+        }
+        else if (row.Status is "Läuft" or "Wartet" &&
+                 _pauseInitialImport is not null)
             _ = PerformAsync(row.Key, () => _pauseInitialImport(row.Key));
     }
 
