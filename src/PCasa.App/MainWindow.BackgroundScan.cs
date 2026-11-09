@@ -1098,8 +1098,11 @@ public partial class MainWindow
         _backgroundDebounceTimer?.Stop();
 
         var urgentQueued = _backgroundPending.Values.Any(request =>
-            request.Kind == BackgroundFolderChangeKind.RescanRoot &&
-            _backgroundUrgentReviews.Contains(request.MonitoredFolderId));
+            !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)) &&
+            _scheduler.EffectiveTaskPlacement(AutomaticTaskKey(request),
+                request.Kind == BackgroundFolderChangeKind.RescanRoot
+                    ? SchedulerPriority.Idle : SchedulerPriority.Background,
+                long.MaxValue).Priority <= SchedulerPriority.UserAction);
         if (_backgroundWorkerRunning ||
             _folderRemovalPending ||
             _backgroundScanSettings?.Enabled != true ||
@@ -1213,8 +1216,10 @@ public partial class MainWindow
                 _backgroundLifetime.Token.ThrowIfCancellationRequested();
                 if ((_manualContextScanActive || _manualScanAllActive ||
                      _manualFileTransferActive) &&
-                    !(request.Kind == BackgroundFolderChangeKind.RescanRoot &&
-                      _backgroundUrgentReviews.Contains(request.MonitoredFolderId)) ||
+                    _scheduler.EffectiveTaskPlacement(taskKey,
+                        request.Kind == BackgroundFolderChangeKind.RescanRoot
+                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
+                        long.MaxValue).Priority > SchedulerPriority.UserAction ||
                     _folderRemovalPending)
                     throw new OperationCanceledException("User-requested folder operation has priority.");
 
