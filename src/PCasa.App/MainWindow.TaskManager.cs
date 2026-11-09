@@ -354,7 +354,7 @@ public partial class MainWindow
                 return Task.FromResult(false);
             if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
             if (TryRootReviewTaskId(key, out _))
-                return StartAutomaticScanNowAsync(key);
+                return StartPromotedRootReviewAsync(key);
             _backgroundOrderChanged = _backgroundInFlight is { Length: > 0 };
             if (_backgroundOrderChanged &&
                 _backgroundCurrentScanCancellation is
@@ -408,6 +408,14 @@ public partial class MainWindow
                 RefreshBackgroundMonitor();
         }
         return Task.FromResult(resumed);
+    }
+
+    private async Task<bool> StartPromotedRootReviewAsync(string key)
+    {
+        var accepted = await StartAutomaticScanNowAsync(key);
+        if (!accepted)
+            _scheduler.CompleteTaskPromotion(key);
+        return accepted;
     }
 
     private Task<bool> PauseTaskAsync(string key)
