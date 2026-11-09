@@ -1,6 +1,6 @@
 # PCasa – Lizenzprüfung der Windows-Distribution
 
-Stand: 9. November 2026 – Alpha.7 in Prüfung.
+Stand: 9. November 2026 – Alpha.8-Lizenzpaket in Prüfung; veröffentlichte Basis Alpha.7.
 
 **Wichtig:** Die automatische CI-Prüfung beweist die Anwesenheit der benannten
 Lizenzdateien, aber nicht die vollständige juristische Konformität aller darin
@@ -45,12 +45,17 @@ enthaltenen Komponenten. Ein grüner Build ist kein Rechtsgutachten.
 
 ## Was sich nicht durch bloße Dateiexistenz beweisen lässt
 
-- [ ] Vollständige Prüfung aller Chromium/CEF-Hinweise der **exakt**
-  ausgelieferten Version einschließlich weiterverteilten nativen Komponenten.
-- [ ] Vollständige Zuordnung aller enthaltenen libvips-Codecs zu deren
-  jeweiligen Lizenz- und Copyright-Anforderungen. Die upstream
-  `THIRD-PARTY-NOTICES.md` liegt im NuGet-Bundle, ist aber keine eigene
-  durchgeführte Binär-zu-Lizenz-Auditierung.
+- [x] Chromium/CEF: Der Windows-Build exportiert die **vollständige, intern
+  erzeugte** Drittanbieter-Credits-Seite direkt aus der tatsächlich verwendeten
+  CEF-Laufzeit (19.512.304 Byte im geprüften Windows-Payload). Außerdem liegen
+  die Original-CEF/CefSharp-Lizenzen vor; der Hash von libcef.dll ist gepinnt.
+- [x] libvips: Der Hash von libvips-42.dll ist gepinnt, die 28
+  versionierten Build-Abhängigkeiten samt Quell- und Buildlinks sind unter
+  `Licenses/NATIVE-BUILD-VERSIONS.txt` dokumentiert; die Original-Notices,
+  LGPLv3 und Cairo-MPL-1.1-Texte liegen im lokalen Lizenzordner.
+- [ ] Vollständige Prüfung der Copyright-Originaltexte und
+  der korrespondierenden Quellcodeverfügbarkeit sämtlicher **statisch
+  eingebauter** libvips-Abhängigkeiten.
 - [ ] Prüfnachweis für die LGPL-Bedingungen, insbesondere Ersetzbarkeit
   der DLLs, Quelle/Änderungen und Weitergabebedingungen.
 - [ ] Vollständige rechtliche Beurteilung der ExifTool-/Perl-Distribution,
@@ -107,16 +112,36 @@ Strawberry-Perl-Archiv. Das Ergebnis wird in
 ### Warum die rechtliche Konformität noch nicht bestätigt ist
 
 Die noch erforderlichen Prüfungen sind **inhaltlich**, nicht nur technisch:
-1. CEF/Chromium: tatsächlich einkompilierte Drittkomponenten und
-   deren konkrete Copyright-Hinweise für die ausgelieferte Version abgleichen.
-2. libvips: kompilierten Codec-Umfang mit den Original-Notices abgleichen;
-   LGPL-Austauschbarkeit und Quellcode-/Änderungsbedingungen nachvollziehen.
-3. ExifTool/Perl: den Inhalt aller mitgelieferten Lizenzdateien den
+1. libvips: Copyright-Originaltexte und korrespondierende Quellen aller
+   tatsächlich statisch verlinkten Abhängigkeiten vollständig zuordnen.
+2. ExifTool/Perl: den Inhalt aller mitgelieferten Lizenzdateien den
    konkreten Perl-Modulen und nativen DLLs zuordnen.
-4. Installer: die publizierte Setup-EXE selbst entpacken und die Hashes
+3. Installer: die publizierte Setup-EXE selbst entpacken und die Hashes
    mit dem verifizierten Publish-Payload abgleichen.
 
 Diese Prüfungen sind keine festgestellten Verstöße. Der vorliegende
 Automatismus prüft notwendige Voraussetzungen, keine rechtsverbindliche
 Freigabe. Ein erfolgreicher Build darf dieses Kapitel nicht als
 abgeschlossen darstellen.
+
+
+## Zusätzliche Windows-Belege (Alpha.8-Vorbereitung)
+
+- Der neue CEF-Export liefert 19.512.304 Byte in
+  `Licenses/Chromium-Credits.html`; die Datei wurde anhand ihrer SHA-256 im
+  Windows-Publish-Inventar erfasst. Der Inhalt stammt aus
+  `chrome://credits/` derselben CEF-Laufzeit, mit der die Software gebaut wird.
+- `libcef.dll` SHA-256:
+  `08a40295bebd9421468115a09c375f3decce219b6673ff77410c479c03b43603`.
+- `libvips-42.dll` SHA-256:
+  `06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f`.
+- Die offizielle Mozilla MPL-1.1-Datei wurde im erfolgreichen Windows-Test
+  mit 25.755 Byte und SHA-256
+  `f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469`
+  in `Licenses/MPL-1.1.txt` gefunden.
+- Die native Buildversion ist dem Upstream-Tag v8.18.7 zugeordnet,
+  einschließlich der tatsächlichen statischen Windows-Variante.
+
+Diese Belege sind reproduzierbare Befunde aus dem geprüften Windows-Publish.
+Ein grüner Test dieses Payloads ersetzt nicht die Kontrolle der tatsächlichen
+Installer-Dateien oder eine Prüfung sämtlicher Lizenzpflichten.
