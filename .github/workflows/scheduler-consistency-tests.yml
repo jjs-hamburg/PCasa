@@ -149,7 +149,7 @@ jobs:
             (Resolve-Path "publish/PCasa/PCasa.App.exe").Path)
           $appVersion = $exeVersion.ProductVersion
           $windowsFileVersion = $exeVersion.FileVersion
-          if ($appVersion -ne "0.1.Alpha.3" -or $windowsFileVersion -ne "0.1.0.3") {
+          if ($appVersion -ne "0.1.Alpha.4" -or $windowsFileVersion -ne "0.1.0.4") {
             throw "Published version mismatch: $appVersion / $windowsFileVersion"
           }
           @(
@@ -192,13 +192,13 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not installed" }
           & $iscc installer/PCasa.iss
           if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
-          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.3.exe")) {
+          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.4.exe")) {
             throw "Setup executable missing"
           }
       - name: Smoke-test both Windows installer modes
         shell: pwsh
         run: |
-          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.3.exe").Path
+          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.4.exe").Path
           foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
@@ -249,8 +249,8 @@ jobs:
       - name: Upload PCasa Setup
         uses: actions/upload-artifact@v4
         with:
-          name: PCasa-Setup-0.1.Alpha.3
-          path: dist/PCasa-Setup-0.1.Alpha.3.exe
+          name: PCasa-Setup-0.1.Alpha.4
+          path: dist/PCasa-Setup-0.1.Alpha.4.exe
           if-no-files-found: error
           retention-days: 7
       - name: Upload scheduler acceptance test package
@@ -272,7 +272,7 @@ jobs:
       - name: Download tested setup executable
         uses: actions/download-artifact@v4
         with:
-          name: PCasa-Setup-0.1.Alpha.3
+          name: PCasa-Setup-0.1.Alpha.4
           path: release
       - name: Publish PCasa Alpha as direct EXE download
         env:
@@ -281,11 +281,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s release/PCasa-Setup-0.1.Alpha.3.exe
-          if gh release view v0.1.Alpha.3 >/dev/null 2>&1; then
-            echo "Release v0.1.Alpha.3 already exists: refusing to silently replace a published installer" >&2
+          test -s release/PCasa-Setup-0.1.Alpha.4.exe
+          if gh release view v0.1.Alpha.4 >/dev/null 2>&1; then
+            echo "Release v0.1.Alpha.4 already exists: refusing to silently replace a published installer" >&2
             exit 1
           fi
-          gh release create v0.1.Alpha.3 release/PCasa-Setup-0.1.Alpha.3.exe \
-            --target "$GITHUB_SHA" --title "PCasa 0.1.Alpha.3" --prerelease \
-            --notes "PCasa 0.1.Alpha.3 – Windows x64 setup. Requires .NET 10 Desktop Runtime; the installer checks and installs the official Microsoft runtime if needed."
+          gh release create v0.1.Alpha.4 release/PCasa-Setup-0.1.Alpha.4.exe \
+            --target "$GITHUB_SHA" --title "PCasa 0.1.Alpha.4" --prerelease \
+            --notes "PCasa 0.1.Alpha.4 – Windows x64 setup. Requires .NET 10 Desktop Runtime; the installer checks and installs the official Microsoft runtime if needed."
