@@ -165,6 +165,7 @@ public partial class MainWindow : Window
     {
         if (_rebuildingFolderTree) return;
         _rebuildingFolderTree = true;
+        UpdateFolderImageTotal();
         try
         {
         var expandedPaths = CaptureExpandedFolderPaths();
@@ -351,8 +352,15 @@ public partial class MainWindow : Window
     // A catalog refresh must update existing tree-node counts as well as new
     // nodes. Never rebuild the TreeView for a numeric change: that would lose
     // expansion, selection and the gallery's scroll anchor during ingestion.
+    private void UpdateFolderImageTotal()
+    {
+        if (FolderImageTotalText is not null)
+            FolderImageTotalText.Text = $"({_lastCatalogImageCount:N0})";
+    }
+
     private void RefreshVisibleFolderCounts()
     {
+        UpdateFolderImageTotal();
         var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var photoFolder in _photoFolders)
         {

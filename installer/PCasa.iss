@@ -1,5 +1,5 @@
 #define MyAppName "PCasa"
-#define MyAppVersion "0.1.Alpha.4"
+#define MyAppVersion "0.1.Alpha.5"
 
 [Setup]
 AppId={{3A78A421-2B72-45E6-8CCB-A1085696E6D1}
@@ -27,14 +27,26 @@ AppMutex=Global\PCasa.Desktop.SingleInstance
 WizardStyle=modern
 SetupIconFile=..\src\PCasa.App\Assets\PCasa.ico
 SetupLogging=yes
-VersionInfoVersion=0.1.0.4
+VersionInfoVersion=0.1.0.5
 VersionInfoDescription=PCasa Setup
 VersionInfoProductName=PCasa
-VersionInfoProductVersion=0.1.0.4
+VersionInfoProductVersion=0.1.0.5
 
 [Languages]
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
+
+[Messages]
+de.PrivilegesRequiredOverrideCurrentUser=Für &aktuellen Benutzer installieren
+de.PrivilegesRequiredOverrideCurrentUserRecommended=Für &aktuellen Benutzer installieren (empfohlen)
+en.PrivilegesRequiredOverrideCurrentUser=Install for &current user
+en.PrivilegesRequiredOverrideCurrentUserRecommended=Install for &current user (recommended)
+
+[CustomMessages]
+de.RemovePCasaData=Auch alle PCasa-Daten löschen (Datenbank, Sicherungen, Cache und Einstellungen)?%n%nJa: PCasa wird bei einer Neuinstallation jungfräulich gestartet.%nNein: Daten für eine spätere Neuinstallation behalten.%nAbbrechen: Deinstallation nicht starten.
+en.RemovePCasaData=Also delete all PCasa data (catalog, backups, cache, settings)?%n%nYes: next PCasa installation starts fresh.%nNo: preserve data for reinstall.%nCancel: do not uninstall.
+de.DataRemovalFailed=PCasa-Daten konnten nicht vollständig gelöscht werden. Bitte prüfen Sie:
+en.DataRemovalFailed=PCasa data could not be completely deleted. Please check:
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -125,4 +137,55 @@ begin
   end;
   if ExitCode = 3010 then
     NeedsRestart := True;
+end;
+
+[Code]
+// Data deletion must be an explicit decision at uninstall, never an update
+// or a silent automation. Do not touch original photos in monitored folders.
+var
+  RemoveUserData: Boolean;
+  RemoveSharedData: Boolean;
+
+function InitializeUninstall(): Boolean;
+var
+  Choice: Integer;
+begin
+  RemoveUserData := False;
+  RemoveSharedData := False;
+  Result := True;
+  if UninstallSilent() then Exit;
+
+  Choice := MsgBox(CustomMessage('RemovePCasaData'), mbConfirmation, MB_YESNOCANCEL);
+  if Choice = IDCANCEL then
+  begin
+    Result := False;
+    Exit;
+  end;
+  if Choice = IDYES then
+  begin
+    RemoveUserData := True;
+    // The ProgramData catalog is only used by the all-users installation.
+    // The installed marker must be checked before [Files] removes it.
+    RemoveSharedData := FileExists(ExpandConstant('{app}\PCasa.all-users'));
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  UserData, SharedData, Failures: String;
+begin
+  if (CurUninstallStep <> usPostUninstall) or not RemoveUserData then Exit;
+  Failures := '';
+  UserData := ExpandConstant('{localappdata}\PCasa');
+  if DirExists(UserData) and not DelTree(UserData, True, True, True) then
+    Failures := UserData;
+  if RemoveSharedData then
+  begin
+    SharedData := ExpandConstant('{commonappdata}\PCasa');
+    if DirExists(SharedData) and not DelTree(SharedData, True, True, True) then
+      Failures := Failures + #13#10 + SharedData;
+  end;
+  if Failures <> '' then
+    MsgBox(CustomMessage('DataRemovalFailed') + #13#10 + Failures,
+      mbError, MB_OK);
 end;

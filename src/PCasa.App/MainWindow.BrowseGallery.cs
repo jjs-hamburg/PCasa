@@ -363,6 +363,7 @@ public partial class MainWindow
         RefreshFolderTree(preserveGalleryAnchor: false);
         _ = RefreshPendingTagDotsAsync();
         _lastCatalogImageCount = imageCount;
+        UpdateFolderImageTotal();
         EmptyPanel.Visibility = imageCount == 0 ? Visibility.Visible : Visibility.Collapsed;
         // Publish the committed catalog BEFORE scheduling cache repair.
         // A P3/P4 missing-thumbnail rebuild can be held by a running NAS

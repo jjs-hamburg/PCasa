@@ -29,9 +29,13 @@ internal sealed class PcasaAboutWindow : Window
         ImageSource? logo = null;
         try
         {
-            logo = BitmapFrame.Create(
+            var frames = BitmapDecoder.Create(
                 new Uri("pack://application:,,,/PCasa.App;component/Assets/PCasa.ico"),
-                BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                BitmapCreateOptions.PreservePixelFormat,
+                BitmapCacheOption.OnLoad).Frames;
+            // A default ICO decoder selects the tiny 16 px frame, which becomes
+            // blurry when enlarged in About. Select the largest image explicitly.
+            logo = frames.OrderByDescending(frame => frame.PixelWidth).FirstOrDefault();
             Icon = logo;
         }
         catch (Exception ex) when (ex is System.IO.IOException or
@@ -57,8 +61,8 @@ internal sealed class PcasaAboutWindow : Window
             var image = new Image
             {
                 Source = logo,
-                Width = 72,
-                Height = 72,
+                Width = 64,
+                Height = 64,
                 Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Top,
