@@ -62,7 +62,7 @@ Invoke-WebRequest -Uri 'https://www.mozilla.org/media/MPL/1.1/index.0c5913925d40
 $mplText = Get-Content -LiteralPath $mplPath -Raw
 if ($mplText.Length -lt 10000 -or
     $mplText -notmatch 'MOZILLA PUBLIC LICENSE' -or
-    $mplText -notmatch 'Version 1\\.1') {
+    $mplText -notmatch 'Version 1\.1') {
     throw 'Authoritative Mozilla MPL 1.1 text missing or invalid'
 }
 # ExifTool's Strawberry Perl attribution archive must travel with the EXE.
