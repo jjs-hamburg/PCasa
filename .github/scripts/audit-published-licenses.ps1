@@ -133,6 +133,7 @@ function Assert-PublishedFile([string]$RelativePath) {
 $requiredFiles = @(
     'Licenses/PCasa-GPL-3.0.txt',
     'Licenses/LGPL-3.0.txt',
+    'Licenses/MPL-1.1.txt',
     'Licenses/Apache-2.0.txt',
     'Licenses/MIT-Microsoft.txt',
     'Licenses/MIT-NetVips.txt',
