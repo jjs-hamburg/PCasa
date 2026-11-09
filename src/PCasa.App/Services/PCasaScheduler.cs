@@ -259,13 +259,15 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
             foreach (var item in _pending.Concat(_runningWork))
             {
-                if (!string.Equals(TaskIdentityUnsafe(item.Key), key,
-                    StringComparison.Ordinal)) continue;
                 var identity = TaskIdentityUnsafe(item.Key);
-                item.Priority = _userPriorityOverrides.GetValueOrDefault(
+                if (!_userDispatchOrder.TryGetValue(identity, out var order))
+                    continue;
+                var effective = _userPriorityOverrides.GetValueOrDefault(
                     identity, item.Priority);
-                item.QueueOrder = _userDispatchOrder.GetValueOrDefault(
-                    identity, item.QueueOrder);
+                if (item.Priority == effective && item.QueueOrder == order)
+                    continue;
+                item.Priority = effective;
+                item.QueueOrder = order;
                 SetStateUnsafe(item, item.YieldRequested
                     ? SchedulerJobState.YieldRequested :
                     _runningWork.Contains(item) ? SchedulerJobState.Running :
@@ -903,8 +905,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
             await EnqueuePackageAsync(package, record.Priority,
                 cancellationToken, workKind: record.WorkKind,
                 queueOrder: record.QueueOrder,
-                isCurrent: () => !journal.Pending().Any(item =>
-                    item.Key == record.Key && item.State == "paused"));
+                isCurrent: () => journal.Pending().Any(item =>
+                    item.Key == record.Key &&
+                    item.State is "queued" or "running"));
             journal.SetState(record.Key, "completed", package.CompletedSteps);
             CompleteTaskPromotion(record.Key);
         }

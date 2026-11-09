@@ -305,7 +305,12 @@ public partial class MainWindow
             foreach (var pausedKey in _scheduler.PausedExternalTaskKeys())
             {
                 var request = ParsePausedAutomaticTask(pausedKey);
-                if (request is null) continue;
+                if (request is null ||
+                    _backgroundPending.ContainsKey(pausedKey) ||
+                    _backgroundInFlight?.Any(inflight =>
+                        string.Equals(AutomaticTaskKey(inflight), pausedKey,
+                            StringComparison.Ordinal)) == true)
+                    continue;
                 var owner = folders.FirstOrDefault(root =>
                     root.Id == request.MonitoredFolderId);
                 if (owner is null ||
@@ -1104,7 +1109,9 @@ public partial class MainWindow
             (!urgentQueued && (_manualFileTransferActive ||
                 _manualContextScanActive || _manualScanAllActive)))
         {
-            if (!_folderRemovalPending && _backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
+            if (!_folderRemovalPending && _backgroundScanSettings?.Enabled == true &&
+                _backgroundPending.Values.Any(request =>
+                    !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request))))
             {
                 _backgroundDebounceTimer?.Start();
             }
