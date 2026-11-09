@@ -261,12 +261,38 @@ jobs:
             if (-not (Test-Path $uninstaller)) {
               throw "Setup $mode did not install an uninstaller"
             }
+            # Silent uninstallation must preserve user data by default.
+            $personalRoot = Join-Path $env:LOCALAPPDATA "PCasa"
+            New-Item -ItemType Directory -Path $personalRoot -Force | Out-Null
+            $personalProbe = Join-Path $personalRoot "pcasa-test-uninstall-retain.txt"
+            Set-Content -Path $personalProbe -Value "retain"
             $remove = Start-Process -FilePath $uninstaller -ArgumentList @(
               "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
             if ($remove.ExitCode -ne 0) {
               throw "Uninstall $mode failed (exit code $($remove.ExitCode))"
             }
-            Write-Host "PASS: $mode installation, scope marker and uninstall"
+            if (-not (Test-Path $personalProbe)) {
+              throw "Silent uninstall $mode deleted personal data without explicit consent"
+            }
+            # Opt-in removal is tested separately, without reusing any
+            # real user data: GitHub runners are disposable isolated VMs.
+            $reinstall = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+            if ($reinstall.ExitCode -ne 0) { throw "Reinstall $mode failed" }
+            $sharedRoot = Join-Path $env:ProgramData "PCasa"
+            if ($mode -eq "ALLUSERS") {
+              New-Item -ItemType Directory -Path $sharedRoot -Force | Out-Null
+              Set-Content -Path (Join-Path $sharedRoot "pcasa-test-uninstall-purge.txt") -Value "purge"
+            }
+            $remove = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/PCASAPURGEDATA") -Wait -PassThru
+            if ($remove.ExitCode -ne 0) { throw "Opt-in purge $mode failed" }
+            if (Test-Path $personalRoot) {
+              throw "Opt-in purge $mode left the PCasa personal data folder"
+            }
+            if ($mode -eq "ALLUSERS" -and (Test-Path $sharedRoot)) {
+              throw "Opt-in purge $mode left the shared PCasa catalog"
+            }
+            Write-Host "PASS: $mode install, update, silent retain, opt-in complete purge"
           }
       # Actions artifacts are always ZIP files. Publish only the directly
       # downloadable EXE as a GitHub prerelease after all Windows tests pass.

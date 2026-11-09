@@ -47,6 +47,8 @@ de.RemovePCasaData=Auch alle PCasa-Daten löschen (Datenbank, Sicherungen, Cache
 en.RemovePCasaData=Also delete all PCasa data (catalog, backups, cache, settings)?%n%nYes: next PCasa installation starts fresh.%nNo: preserve data for reinstall.%nCancel: do not uninstall.
 de.DataRemovalFailed=PCasa-Daten konnten nicht vollständig gelöscht werden. Bitte prüfen Sie:
 en.DataRemovalFailed=PCasa data could not be completely deleted. Please check:
+de.AllUsersRemovalWarning=%nACHTUNG: Der gemeinsame PCasa-Katalog unter ProgramData wird für alle Benutzer entfernt.
+en.AllUsersRemovalWarning=%nWARNING: The shared PCasa catalog under ProgramData will be removed for all users.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -153,9 +155,23 @@ begin
   RemoveUserData := False;
   RemoveSharedData := False;
   Result := True;
-  if UninstallSilent() then Exit;
+  // Silent uninstall retains personal data, unless the caller explicitly
+  // supplies the purge flag (used by controlled installer regression tests).
+  if UninstallSilent() then
+  begin
+    if Pos('/PCASAPURGEDATA', UpperCase(GetCmdTail())) <> 0 then
+    begin
+      RemoveUserData := True;
+      RemoveSharedData := FileExists(ExpandConstant('{app}\PCasa.all-users'));
+    end;
+    Exit;
+  end;
 
-  Choice := MsgBox(CustomMessage('RemovePCasaData'), mbConfirmation, MB_YESNOCANCEL);
+  if FileExists(ExpandConstant('{app}\PCasa.all-users')) then
+    Choice := MsgBox(CustomMessage('RemovePCasaData') +
+      CustomMessage('AllUsersRemovalWarning'), mbConfirmation, MB_YESNOCANCEL)
+  else
+    Choice := MsgBox(CustomMessage('RemovePCasaData'), mbConfirmation, MB_YESNOCANCEL);
   if Choice = IDCANCEL then
   begin
     Result := False;
