@@ -39,6 +39,26 @@ jobs:
           python .github/scripts/inspect-vips-variants.py native-evidence
           if (-not (Test-Path native-evidence/comparison.csv)) { throw 'No comparison created' }
           Get-Content native-evidence/summary.md
+      - name: Check dynamic libvips with PCasa's managed NetVips binding
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish tests/PCasa.NativeVipsProbe/PCasa.NativeVipsProbe.csproj --configuration Release --runtime win-x64 --self-contained false --output native-evidence/probe
+          $nativeDir = Get-ChildItem native-evidence/dynamic -Directory -Recurse |
+            Where-Object { $_.Name -eq 'bin' } | Select-Object -First 1
+          if ($null -eq $nativeDir) { throw 'Dynamic native bin directory missing' }
+          $nativeDlls = @(Get-ChildItem -LiteralPath $nativeDir.FullName -Filter '*.dll' -File)
+          if ($nativeDlls.Count -lt 30) { throw 'Unexpected dynamic DLL payload' }
+          Copy-Item -LiteralPath $nativeDlls.FullName -Destination native-evidence/probe -Force
+          $copied = @(Get-ChildItem native-evidence/probe -Filter '*.dll')
+          foreach ($native in $nativeDlls) {
+            $target = Join-Path native-evidence/probe $native.Name
+            if ((Get-FileHash $native.FullName -Algorithm SHA256).Hash -ne (Get-FileHash $target -Algorithm SHA256).Hash) {
+              throw "Native test DLL differs from downloaded dynamic payload: $($native.Name)"
+            }
+          }
+          dotnet native-evidence/probe/PCasa.NativeVipsProbe.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Managed NetVips smoke test failed with dynamic native variant' }
       - name: Save verifiable dependency comparison (no change to PCasa runtime)
         uses: actions/upload-artifact@v4
         with:
