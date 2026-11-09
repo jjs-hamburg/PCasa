@@ -1,55 +1,66 @@
-name: Third-party license evidence
+name: Third-party license evidence (current source)
 on:
   push:
-    branches: [setup-installer-and-update]
+    branches:
+      - main
+      - 'setup-*'
     paths:
       - '.github/workflows/license-inventory.yml'
       - '.github/scripts/audit-published-licenses.ps1'
+      - 'tools/collect_third_party_licenses.ps1'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'LICENSES-*'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  artifact-license-inventory:
+  license-evidence:
     runs-on: windows-latest
     steps:
-      - name: Check out exact released version
+      - name: Checkout exact source commit, not obsolete Alpha.2
         uses: actions/checkout@v5
-        with:
-          ref: v0.1.Alpha.2
-          path: released
-      - name: Check out audit script
-        uses: actions/checkout@v5
-        with:
-          ref: setup-installer-and-update
-          path: audit-scripts
-      - name: Verify installed .NET 10 SDK
+      - name: Check .NET 10 SDK
         shell: pwsh
         run: |
           if (-not (dotnet --list-sdks | Select-String '^10[.]')) {
-            throw '.NET 10 SDK missing from runner'
+            throw '.NET 10 SDK missing'
           }
-      - name: Build exact tagged app and bundled assets
+      - name: Prepare pinned third-party assets
         shell: pwsh
-        working-directory: released
         run: |
-          ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/released/tools/exiftool"
+          ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
           ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
-          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained true -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
-          New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
-          Copy-Item "tools/exiftool/*" "publish/PCasa/exiftool" -Recurse -Force
-      - name: Generate per-file SHA256 and resolved NuGet license evidence
+      - name: Publish exact Windows x64 software payload
         shell: pwsh
         run: |
-          ./audit-scripts/.github/scripts/audit-published-licenses.ps1 `
-            -PublishDir "released/publish/PCasa" `
-            -ProjectAssetsFile "released/src/PCasa.App/obj/project.assets.json" `
-            -OutputDir "license-audit"
-      - name: Upload inspection evidence (NOT a compliance certificate)
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          New-Item -ItemType Directory -Force -Path publish/PCasa/exiftool | Out-Null
+          Copy-Item tools/exiftool/* publish/PCasa/exiftool -Recurse -Force
+      - name: Export complete credits from bundled Chromium/CEF
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          if ((Get-Item "publish/PCasa/Licenses/Chromium-Credits.html").Length -lt 50000) { throw "Chromium third-party credits missing" }
+      - name: Collect licensing materials and fail on missing essentials
+        shell: pwsh
+        run: |
+          ./tools/collect_third_party_licenses.ps1 -AssetsFile src/PCasa.App/obj/project.assets.json -PublishDir publish/PCasa
+      - name: Produce hashes, complete NuGet inventory and review findings
+        shell: pwsh
+        run: |
+          ./.github/scripts/audit-published-licenses.ps1 -PublishDir publish/PCasa -ProjectAssetsFile src/PCasa.App/obj/project.assets.json -OutputDir license-audit
+          Copy-Item docs/third-party-license-audit.md license-audit/review-status.md
+          Copy-Item THIRD-PARTY-NOTICES.md license-audit/THIRD-PARTY-NOTICES.md
+          Copy-Item publish/PCasa/Licenses/NuGet-license-inventory.csv license-audit/installed-nuget-license-inventory.csv
+          if (-not (Test-Path license-audit/publish-files.csv)) { throw 'No binary file inventory' }
+          if (-not (Test-Path license-audit/nuget-dependency-licenses.csv)) { throw 'No dependency inventory' }
+      - name: Upload evidence - NOT a legal clearance certificate
         uses: actions/upload-artifact@v4
         with:
-          name: PCasa-license-inventory-alpha2
+          name: PCasa-license-evidence-${{ github.sha }}
           path: license-audit/
           if-no-files-found: error
-          retention-days: 10
+          retention-days: 7

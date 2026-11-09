@@ -18,6 +18,13 @@ relicense those components.
 | ExifTool 13.59 | ExifTool's GPL/Artistic dual-licensing; Windows binary includes Perl and its additional third-party terms | https://exiftool.org/ |
 | .NET 10 Desktop Runtime | Installed independently via Microsoft's official runtime installer, not redistributed in PCasa | https://dotnet.microsoft.com/download/dotnet/10.0 |
 
+The installed directory includes `Licenses/CEF-LIBVIPS-GUIDE.txt` with the
+exact Windows component versions, references to Chromium internal credits,
+LGPL source-build locations, and practical shared-library replacement steps.
+The native libvips package's THIRD-PARTY-NOTICES.md names additional LGPL
+and permissively licensed components; the notice list alone is not a substitute
+for each applicable license text or corresponding source obligation.
+
 Source and compliance information for LGPL components:
 
 - libvips source code for the pinned 8.18.7 release:

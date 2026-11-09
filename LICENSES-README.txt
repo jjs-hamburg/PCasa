@@ -18,6 +18,11 @@ THIRD-PARTY-NOTICES.md. Die Originaltexte der NuGet-Pakete sind unter
 Packages/ abgelegt. NuGet-license-inventory.csv enthält ein Inventar der
 tatsächlich aufgelösten NuGet-Pakete.
 
+Details zu CEF/Chromium und libvips einschließlich LGPL-Austauschbedingungen:
+CEF-LIBVIPS-GUIDE.txt.
+
+CEF/Chromium: die offline bereitgestellte Chromium-Credits.html wird beim
+Windows-Build aus genau der verwendeten CEF-Version erzeugt.
 CEF/Chromium: Lizenzdateien unter Packages/ sowie Chromium-interne
 Lizenz- und Copyright-Hinweise (about:license bzw. about:credits).
 libvips: LGPL-3.0.txt, die Hinweise unter Packages/ und die Quellcode-

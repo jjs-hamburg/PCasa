@@ -1,5 +1,5 @@
 #define MyAppName "PCasa"
-#define MyAppVersion "0.1.Alpha.7"
+#define MyAppVersion "0.1.Alpha.8"
 
 [Setup]
 AppId={{3A78A421-2B72-45E6-8CCB-A1085696E6D1}
@@ -27,10 +27,10 @@ AppMutex=Global\PCasa.Desktop.SingleInstance
 WizardStyle=modern
 SetupIconFile=..\src\PCasa.App\Assets\PCasa.ico
 SetupLogging=yes
-VersionInfoVersion=0.1.0.7
+VersionInfoVersion=0.1.0.8
 VersionInfoDescription=PCasa Setup
 VersionInfoProductName=PCasa
-VersionInfoProductVersion=0.1.0.7
+VersionInfoProductVersion=0.1.0.8
 
 [Languages]
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"

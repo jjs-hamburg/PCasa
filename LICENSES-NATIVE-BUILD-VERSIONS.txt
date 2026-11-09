@@ -1,0 +1,68 @@
+PCasa native redistributables – pinned version and binary inventory
+===================================================================
+Windows x64, PCasa Alpha.7 dependency versions, 9 November 2026
+
+This document records provenance and dependency declarations. It is not
+a substitute for upstream third-party license texts and source delivery.
+
+CEF / CHROMIUM
+--------------
+CefSharp.Wpf.NETCore: 152.0.100
+chromiumembeddedframework.runtime.win-x64: 152.0.10
+File: libcef.dll
+SHA256: 08a40295bebd9421468115a09c375f3decce219b6673ff77410c479c03b43603
+Source package: https://www.nuget.org/packages/chromiumembeddedframework.runtime.win-x64/152.0.10
+Upstream: https://github.com/cefsharp/cef-binary
+Credits for actual CEF runtime: Chromium-Credits.html, generated at release build.
+
+LIBVIPS WINDOWS STATIC-BUNDLE BUILD (NetVips.Native.win-x64 8.18.7)
+------------------------------------------------------------------
+File: libvips-42.dll
+SHA256: 06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f
+Package source: https://www.nuget.org/packages/NetVips.Native.win-x64/8.18.7
+Version-locked build metadata:
+https://github.com/kleisauke/libvips-packaging/blob/v8.18.7/versions.properties
+https://github.com/kleisauke/libvips-packaging/blob/v8.18.7/build/win.sh
+https://github.com/libvips/build-win64-mxe/releases/tag/v8.18.7
+https://github.com/libvips/libvips/releases/tag/v8.18.7
+
+Versions from the exact packaging tag v8.18.7:
+aom 3.15.1
+libarchive 3.8.9
+cairo 1.18.6
+cgif 0.5.4
+libexif 0.6.26
+expat 2.8.5
+libffi 3.8.0
+fontconfig 2.18.3
+freetype 2.14.3
+fribidi 1.0.17
+glib 2.90.0
+harfbuzz 14.5.0
+libheif 1.23.5
+highway 1.4.0
+libimagequant 2.4.1
+lcms 2.19.1
+mozjpeg source revision 0826579
+pango 1.58.2
+pixman 0.46.4
+libpng 1.6.58
+proxy-libintl 0.5
+librsvg 2.63.2
+libtiff 4.7.2
+libultrahdr 2.0.2
+libvips 8.18.7
+libwebp 1.6.0
+libxml2 2.15.4
+zlib-ng 2.3.3
+
+NOTE: The exact build/win.sh uses the static-variant archive on Windows,
+so third-party libraries may be linked within libvips-42.dll rather
+than present as separate DLLs. The upstream THIRD-PARTY-NOTICES.md is
+included under Packages/NetVips.Native.win-x64-8.18.7/.
+Because of static aggregation, LGPL compliance cannot be established
+only by replacing the outer libvips-42.dll. Correlative source and
+license obligations for bundled LGPL components must also be satisfied.
+
+The SHA-256 values above are from the audited 780-file Windows publish
+payload, not an extraction of the already published Alpha.7 installer.

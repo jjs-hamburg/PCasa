@@ -1,0 +1,80 @@
+PCasa – Hinweise zu Chromium/CEF und libvips (Windows x64)
+==========================================================
+Stand: 9. November 2026
+
+Diese Datei ist Teil des PCasa-Installers. Die jeweils mitgelieferten
+Original-Lizenztexte haben Vorrang vor dieser Erläuterung.
+
+CEF / CHROMIUM
+--------------
+PCasa verwendet CefSharp.Wpf.NETCore 152.0.100 sowie
+chromiumembeddedframework.runtime.win-x64 152.0.10.
+Der Chromium/CEF-Browserkern wird als libcef.dll einschließlich weiterer
+DLLs und Chromium-Ressourcen weitergegeben. Das CEF-BSD-Lizenzdokument
+befindet sich unter
+  Packages/chromiumembeddedframework.runtime.win-x64-152.0.10/LICENSE.txt
+Die CefSharp-Lizenzen stehen unter Packages/CefSharp.*.
+
+Die mit genau der ausgelieferten CEF-Version erzeugte Chromium-Übersicht
+wird beim Windows-Build aus der internen Seite als
+  Chromium-Credits.html
+in diesem Ordner gespeichert. Fehlt sie oder ist sie leer, stoppt der Build.
+
+Chromium selbst enthält weitere Drittanbieterprogramme und Lizenzbedingungen.
+CEF dokumentiert deren Anzeige über die internen Browseradressen
+  about:license
+  about:credits
+(teilweise auch chrome://credits/).
+Diese Angaben gehören zur tatsächlichen eingebetteten Chromium-Version,
+nicht zu einer beliebigen online verfügbaren Chrome-Version.
+Dokumentation:
+  https://chromiumembedded.github.io/cef/general_usage.html
+  https://github.com/cefsharp/cef-binary
+
+libvips / NETVIPS
+-----------------
+PCasa verwendet NetVips 3.2.0 (MIT) mit der nativen
+NetVips.Native.win-x64 8.18.7 (LGPL-3.0-or-later).
+Die native Bibliothek heißt libvips-42.dll und liegt neben PCasa.App.exe.
+Die vollständige LGPLv3 liegt unter LGPL-3.0.txt; die GPLv3, auf die sie
+verweist, unter PCasa-GPL-3.0.txt. Die originale Drittanbieterübersicht des
+Windows-Binärpakets liegt hier:
+  Packages/NetVips.Native.win-x64-8.18.7/THIRD-PARTY-NOTICES.md
+Sie nennt unter anderem aom, cairo, cgif, expat, fontconfig, freetype,
+fribidi, glib, harfbuzz, highway, lcms, libarchive, libexif, libffi,
+libheif, libimagequant, libnsgif, libpng, librsvg, libtiff, libultrahdr,
+libvips, libwebp, libxml2, mozjpeg, pango, pixman, proxy-libintl und zlib-ng.
+Für Cairo ist außerdem die originale Mozilla Public License v1.1 als
+MPL-1.1.txt aus der offiziellen Mozilla-Quelle beigefügt.
+Die jeweiligen Originalbedingungen und Copyright-Angaben müssen ebenfalls
+berücksichtigt werden; die Paketliste allein ersetzt sie nicht.
+
+Quellen der GENAUEN verwendeten libvips-Version:
+  https://github.com/libvips/libvips/releases/tag/v8.18.7
+  https://github.com/kleisauke/libvips-packaging/releases/tag/v8.18.7
+  https://github.com/kleisauke/libvips-packaging/tree/v8.18.7
+  https://github.com/kleisauke/libvips-packaging/blob/v8.18.7/THIRD-PARTY-NOTICES.md
+
+AUSTAUSCH UND EIGENE ÄNDERUNGEN
+------------------------------
+libvips ist hier als separat geladene DLL ausgeliefert. Nutzer dürfen sie
+durch eine selbst gebaute, ABI-kompatible Fassung ersetzen, einschließlich
+der zur Fehlersuche nötigen Untersuchung. Die PCasa-Lizenz darf dies nicht
+einschränken. Zum Austausch PCasa vollständig beenden, die ursprüngliche
+libvips-42.dll sichern und die eigene kompatible DLL an deren Stelle
+kopieren. Die neue DLL muss dieselben exportierten Funktionen und die
+benötigte Architektur (Windows x64) bereitstellen.
+Diese Anweisung garantiert keine Funktionsfähigkeit inkompatibler DLLs.
+Für andere LGPL-Komponenten, die möglicherweise in der nativen DLL
+statisch zusammengefasst wurden, können zusätzliche Bedingungen gelten.
+
+Ein GitHub-Quellcode-Link allein stellt nicht in allen Fällen die
+erforderliche korrespondierende Quelle für jedes eingebettete Bauteil bereit.
+Dafür sind Version, Build-Konfiguration, Änderungen und Lizenzbedingungen
+der tatsächlich ausgelieferten Binärkomponenten maßgeblich.
+
+HINWEIS
+-------
+Der technische Packagetest überprüft konkrete Dateien. Er kann
+den Quellcode- und Lizenzumfang der einkompilierten nativen Komponenten
+oder den Chromium-internen Drittanbieterkatalog nicht allein beweisen.

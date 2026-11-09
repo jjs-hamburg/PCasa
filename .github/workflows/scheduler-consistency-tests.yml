@@ -162,7 +162,7 @@ jobs:
             (Resolve-Path "publish/PCasa/PCasa.App.exe").Path)
           $appVersion = $exeVersion.ProductVersion
           $windowsFileVersion = $exeVersion.FileVersion
-          if ($appVersion -ne "0.1.Alpha.7" -or $windowsFileVersion -ne "0.1.0.7") {
+          if ($appVersion -ne "0.1.Alpha.8" -or $windowsFileVersion -ne "0.1.0.8") {
             throw "Published version mismatch: $appVersion / $windowsFileVersion"
           }
           @(
@@ -176,6 +176,12 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Export exact Chromium/CEF third-party credits for offline installation
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          if ((Get-Item "publish/PCasa/Licenses/Chromium-Credits.html").Length -lt 50000) { throw "Chromium credits missing from installer payload" }
       - name: Collect and verify bundled third-party license files
         shell: pwsh
         run: |
@@ -190,6 +196,11 @@ jobs:
               throw "License packaging gate failed: $required"
             }
           }
+      - name: Audit actual published licensing evidence before installer or release
+        shell: pwsh
+        run: |
+          ./.github/scripts/audit-published-licenses.ps1 -PublishDir publish/PCasa -ProjectAssetsFile src/PCasa.App/obj/project.assets.json -OutputDir license-audit
+          if (-not (Test-Path license-audit/component-evidence.csv)) { throw 'Missing component evidence' }
       - name: Verify .NET 10 Desktop Runtime prerequisite detection
         shell: pwsh
         run: |
@@ -219,13 +230,13 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not installed" }
           & $iscc installer/PCasa.iss
           if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
-          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.7.exe")) {
+          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.8.exe")) {
             throw "Setup executable missing"
           }
       - name: Smoke-test both Windows installer modes
         shell: pwsh
         run: |
-          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.7.exe").Path
+          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.8.exe").Path
           foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
@@ -245,7 +256,11 @@ jobs:
               "Licenses/THIRD-PARTY-NOTICES.md",
               "Licenses/NuGet-license-inventory.csv",
               "Licenses/MapLibre-LICENSE.txt",
+              "Licenses/CEF-LIBVIPS-GUIDE.txt",
+              "Licenses/NATIVE-BUILD-VERSIONS.txt",
+              "Licenses/Chromium-Credits.html",
               "Licenses/LGPL-3.0.txt",
+              "Licenses/MPL-1.1.txt",
               "Licenses/Apache-2.0.txt",
               "Licenses/MIT-Microsoft.txt",
               "Licenses/MIT-NetVips.txt",
@@ -333,10 +348,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: pwsh
         run: |
-          $release = "v0.1.Alpha.7"
-          $installer = "dist/PCasa-Setup-0.1.Alpha.7.exe"
+          $release = "v0.1.Alpha.8"
+          $installer = "dist/PCasa-Setup-0.1.Alpha.8.exe"
           if (-not (Test-Path $installer)) { throw "Tested installer is missing" }
           gh release view $release 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw "Release $release already exists; refusing to replace it" }
-          gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.7" --prerelease --notes "PCasa Alpha.6: persistentes Pausieren und Fortsetzen von GPS-/Tag-Aufträgen und automatischen Scans, Taskmanager-Steuerung sowie verbesserte Scheduler-Priorisierung. Windows x64 Setup; Lizenzinformationen direkt in About erreichbar; Installer überprüft die mitgelieferten Lizenztexte."
+          gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.8" --prerelease --notes "PCasa Alpha.8: Lizenzhinweise und Quellenprüfung; zuvor persistentes Pausieren und Fortsetzen von GPS-/Tag-Aufträgen und automatischen Scans, Taskmanager-Steuerung sowie verbesserte Scheduler-Priorisierung. Windows x64 Setup; Lizenzinformationen direkt in About erreichbar; Installer überprüft die mitgelieferten Lizenztexte."
           if ($LASTEXITCODE -ne 0) { throw "Direct executable release failed" }
