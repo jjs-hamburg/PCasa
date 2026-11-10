@@ -10,6 +10,8 @@ on:
       - 'tools/collect_third_party_licenses.ps1'
       - 'THIRD-PARTY-NOTICES.md'
       - 'LICENSES-*'
+      - 'license-baseline/**'
+      - 'src/PCasa.App/PCasa.App.csproj'
   pull_request:
     paths:
       - '.github/workflows/license-inventory.yml'
@@ -18,6 +20,8 @@ on:
       - 'THIRD-PARTY-NOTICES.md'
       - 'LICENSES-*'
       - 'docs/third-party-license-audit.md'
+      - 'license-baseline/**'
+      - 'src/PCasa.App/PCasa.App.csproj'
   workflow_dispatch:
 
 permissions:
