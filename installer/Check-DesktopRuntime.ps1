@@ -5,7 +5,12 @@ param(
     [switch]$ProbeOnly,
     [string]$RuntimeRoot = "",
     [switch]$NoDownload,
-    [switch]$VerifyInstallerOnly
+    [switch]$VerifyInstallerOnly,
+    [switch]$ResolveOnly,
+    [switch]$InstallDownloaded,
+    [string]$MetadataPath = '',
+    [string]$InstallerFile = '',
+    [string]$ExpectedHash = ''
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'Continue'
@@ -42,6 +47,15 @@ try {
         exit 10
     }
 
+    if ($InstallDownloaded) {
+        if (-not (Test-Path -LiteralPath $InstallerFile -PathType Leaf)) {
+            throw 'Downloaded Microsoft installer is missing.'
+        }
+        if ($ExpectedHash -notmatch '^[a-fA-F0-9]{128}$') {
+            throw 'Expected SHA-512 hash is invalid.'
+        }
+        $file = @([pscustomobject]@{ hash = $ExpectedHash })
+    } else {
     # Authoritative Microsoft release manifest. No third-party mirrors,
     # winget dependencies or unversioned download guesses.
     Write-Host 'PCasa: Reading official Microsoft .NET 10 Desktop Runtime release information...'
@@ -65,10 +79,20 @@ try {
         throw 'Microsoft runtime download host is not trusted.'
     }
 
-    Write-Host ('PCasa: Downloading Microsoft .NET Desktop Runtime ' + $entry[0].windowsdesktop.version + ' (x64)...')
-    $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('pcasa-desktop-runtime-' + [guid]::NewGuid().ToString('N') + '.exe')
+        if ($ResolveOnly) {
+            if (-not $MetadataPath) { throw 'Metadata output path is missing.' }
+            # A plain ASCII URL and SHA-512 hash; no executable is downloaded here.
+            @([string]$file[0].url, [string]$file[0].hash) |
+                Set-Content -LiteralPath $MetadataPath -Encoding Ascii
+            exit 0
+        }
+        Write-Host ('PCasa: Downloading Microsoft .NET Desktop Runtime ' + $entry[0].windowsdesktop.version + ' (x64)...')
+    }
+    $temp = if ($InstallDownloaded) { $InstallerFile } else {
+        Join-Path ([System.IO.Path]::GetTempPath()) ('pcasa-desktop-runtime-' + [guid]::NewGuid().ToString('N') + '.exe')
+    }
     try {
-        try {
+        if (-not $InstallDownloaded) { try {
             Invoke-WebRequest -Uri $downloadUri -OutFile $temp -TimeoutSec 900
         } catch {
             if ($downloadUri.Host -ne 'builds.dotnet.microsoft.com') { throw }
@@ -79,7 +103,7 @@ try {
                 'https://builds.dotnet.microsoft.com/dotnet/',
                 'https://dotnetcli.blob.core.windows.net/dotnet/')
             Invoke-WebRequest -Uri $alternate -OutFile $temp -TimeoutSec 900
-        }
+        } }
         Write-Host 'PCasa: Verifying SHA-512 and Microsoft Authenticode signature...'
         $expected = ([string]$file[0].hash).Trim().ToLowerInvariant()
         if ($expected -notmatch '^[a-f0-9]{128}$') {
@@ -122,7 +146,9 @@ try {
         if ($process.ExitCode -eq 3010) { exit 3010 }
         exit 0
     } finally {
-        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        if (-not $InstallDownloaded) {
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        }
     }
 } catch {
     Write-Error ('PCasa prerequisite check failed: ' + $_.Exception.Message)
