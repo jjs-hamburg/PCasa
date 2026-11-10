@@ -252,13 +252,15 @@ internal static class Program
             // All bundled textures must be external, discoverable JPGs,
             // selectable by filename and native-sized across DPI settings.
             var textures = PCasa.App.Services.GalleryTextureLibrary.GetFiles();
-            if (textures.Count < 4 ||
+            if (textures.Count != 12 ||
                 textures.Any(p => !p.StartsWith(
                     PCasa.App.Services.GalleryTextureLibrary.DirectoryPath,
                     StringComparison.OrdinalIgnoreCase)) ||
-                !textures.Any(p => p.EndsWith("Leinwand hell - fein.jpg",
+                !textures.Any(p => p.EndsWith("Stein - Nachtblau.jpg",
                     StringComparison.OrdinalIgnoreCase)) ||
-                !textures.Any(p => p.EndsWith("Leinwand dunkel - fein.jpg",
+                !textures.Any(p => p.EndsWith("seide1.jpg",
+                    StringComparison.OrdinalIgnoreCase)) ||
+                textures.Any(p => System.IO.Path.GetFileName(p).StartsWith("Leinwand",
                     StringComparison.OrdinalIgnoreCase)) ||
                 PCasa.App.Services.GalleryTextureLibrary.FindFile("../wrong.jpg") is not null)
                 throw new Exception("External JPG texture directory is missing or unsafe.");
