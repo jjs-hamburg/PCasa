@@ -164,7 +164,7 @@ begin
   // The PowerShell helper downloads and validates the official binary.
   // Microsoft's runtime installer itself is launched with its own visible UI.
   Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"';
-  if not Exec(PowerShellPath, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  if not Exec(PowerShellPath, Args, '', SW_SHOW, ewWaitUntilTerminated, ExitCode) then
   begin
     Result := 'Microsoft .NET 10 Desktop Runtime could not be started.';
     Exit;
