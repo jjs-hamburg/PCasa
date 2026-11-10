@@ -98,6 +98,19 @@ public partial class MainWindow
                     File.ReadAllText(_appearanceFile)) ?? new AppearanceState();
         }
         catch (Exception ex) { PCasaDiagnostics.Write("Appearance.Load", ex); }
+        // Explicit installer language has priority once, without resetting appearance.
+        try
+        {
+            using var setupKey = Registry.CurrentUser.OpenSubKey(@"Software\PCasa", writable: true);
+            var setupLanguage = setupKey?.GetValue("PendingSetupLanguage") as string;
+            if (UiLanguage.IsSupported(setupLanguage))
+            {
+                _appearance.Language = setupLanguage!;
+                setupKey!.DeleteValue("PendingSetupLanguage", throwOnMissingValue: false);
+                SaveAppearance();
+            }
+        }
+        catch (Exception ex) { PCasaDiagnostics.Write("Appearance.SetupLanguage", ex); }
         // Language selection lives in this existing appearance state. It is
         // safe for older profiles that have no Language key (defaults to de).
         UiLanguage.Current.Select(_appearance.Language);
