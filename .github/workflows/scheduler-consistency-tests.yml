@@ -61,6 +61,16 @@ jobs:
       - name: Bundle pinned MapLibre JS and CSS into PCasa.App.dll
         shell: pwsh
         run: ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+      # The former static NetVips NuGet package supplied native DLLs to
+      # test runners implicitly. Dynamic libvips must be present BEFORE
+      # thumbnail/catalog and WPF tests, not only after dotnet publish.
+      - name: Supply pinned dynamic libvips for catalog and WPF regression tests
+        shell: pwsh
+        run: |
+          $nativeDir = Join-Path $env:RUNNER_TEMP 'pcasa-native-regression'
+          New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir $nativeDir -EvidenceDir license-audit/test-native
+          $nativeDir >> $env:GITHUB_PATH
       - name: Verify selected GPS overlay at 6,000 photos and across continents
         shell: pwsh
         run: node tests/gps-map-overlay.test.cjs
@@ -123,7 +133,7 @@ jobs:
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager-global
 
-      - name: Publish self-contained Windows x64 acceptance package
+      - name: Publish framework-dependent Windows x64 acceptance package
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
@@ -162,7 +172,7 @@ jobs:
             (Resolve-Path "publish/PCasa/PCasa.App.exe").Path)
           $appVersion = $exeVersion.ProductVersion
           $windowsFileVersion = $exeVersion.FileVersion
-          if ($appVersion -ne "0.1.Alpha.8" -or $windowsFileVersion -ne "0.1.0.8") {
+          if ($appVersion -ne "0.1.Alpha.9" -or $windowsFileVersion -ne "0.1.0.9") {
             throw "Published version mismatch: $appVersion / $windowsFileVersion"
           }
           @(
@@ -176,6 +186,9 @@ jobs:
           $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
           if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
           Write-Host "Published $($textures.Count) selectable JPG textures"
+      - name: Supply hash-pinned dynamic libvips DLLs for actual release
+        shell: pwsh
+        run: ./tools/prepare-dynamic-libvips.ps1 -PublishDir publish/PCasa -EvidenceDir license-audit/dynamic-libvips
       - name: Export exact Chromium/CEF third-party credits for offline installation
         shell: pwsh
         timeout-minutes: 3
@@ -199,6 +212,7 @@ jobs:
       - name: Audit actual published licensing evidence before installer or release
         shell: pwsh
         run: |
+          ./tools/audit-exiftool-perl-native.ps1 -PublishDir publish/PCasa -OutputDir license-audit
           ./.github/scripts/audit-published-licenses.ps1 -PublishDir publish/PCasa -ProjectAssetsFile src/PCasa.App/obj/project.assets.json -OutputDir license-audit
           if (-not (Test-Path license-audit/component-evidence.csv)) { throw 'Missing component evidence' }
       - name: Verify .NET 10 Desktop Runtime prerequisite detection
@@ -230,13 +244,13 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not installed" }
           & $iscc installer/PCasa.iss
           if ($LASTEXITCODE -ne 0) { throw "PCasa setup compilation failed" }
-          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.8.exe")) {
+          if (-not (Test-Path "dist/PCasa-Setup-0.1.Alpha.9.exe")) {
             throw "Setup executable missing"
           }
       - name: Smoke-test both Windows installer modes
         shell: pwsh
         run: |
-          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.8.exe").Path
+          $installer = (Resolve-Path "dist/PCasa-Setup-0.1.Alpha.9.exe").Path
           foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
@@ -278,6 +292,22 @@ jobs:
                 @(Get-ChildItem $packageLicenses -File -Recurse).Count -eq 0) {
               throw "Setup $mode missing transitive package license material"
             }
+            # Verify the exact release payload, including all dynamic native
+            # libraries and the complete official ExifTool/Perl bundle, for
+            # both Windows installation modes before publishing a release.
+            $sourceRoot = (Resolve-Path "publish/PCasa").Path
+            $sourceFiles = @(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse)
+            foreach ($source in $sourceFiles) {
+              $relative = [IO.Path]::GetRelativePath($sourceRoot,$source.FullName)
+              $installed = Join-Path $target $relative
+              if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
+                throw "Setup $mode missing source payload file: $relative"
+              }
+              $expected = (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash
+              $actual = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash
+              if ($expected -ne $actual) { throw "Setup $mode changed payload file: $relative" }
+            }
+            Write-Host "PASS: setup $mode preserves $($sourceFiles.Count) publish files byte-for-byte"
             $marker = Test-Path (Join-Path $target "PCasa.all-users")
             if ($marker -ne ($mode -eq "ALLUSERS")) {
               throw "Setup $mode selected the wrong catalog data scope"
@@ -348,10 +378,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         shell: pwsh
         run: |
-          $release = "v0.1.Alpha.8"
-          $installer = "dist/PCasa-Setup-0.1.Alpha.8.exe"
+          $release = "v0.1.Alpha.9"
+          $installer = "dist/PCasa-Setup-0.1.Alpha.9.exe"
           if (-not (Test-Path $installer)) { throw "Tested installer is missing" }
           gh release view $release 2>$null | Out-Null
           if ($LASTEXITCODE -eq 0) { throw "Release $release already exists; refusing to replace it" }
-          gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.8" --prerelease --notes "PCasa Alpha.8: Lizenzhinweise und Quellenprüfung; zuvor persistentes Pausieren und Fortsetzen von GPS-/Tag-Aufträgen und automatischen Scans, Taskmanager-Steuerung sowie verbesserte Scheduler-Priorisierung. Windows x64 Setup; Lizenzinformationen direkt in About erreichbar; Installer überprüft die mitgelieferten Lizenztexte."
+          gh release create $release $installer --target $env:GITHUB_SHA --title "PCasa 0.1.Alpha.9" --prerelease --notes "PCasa Alpha.9: Dynamische libvips-Bibliotheken statt des bisherigen statischen Pakets; unverändertes ExifTool/Strawberry Perl und offline installierte Lizenznachweise. Windows x64 Setup mit Prüfung sämtlicher ausgelieferter Dateien für beide Installationsarten. Technische Inventarisierung ist kein unabhängiges juristisches Gesamtgutachten."
           if ($LASTEXITCODE -ne 0) { throw "Direct executable release failed" }
