@@ -1,0 +1,12 @@
+Component,Version,License
+CefSharp.Common.NETCore,152.0.100,LICENSE
+CefSharp.Wpf.NETCore,152.0.100,LICENSE
+chromiumembeddedframework.runtime,152.0.10,LICENSE.txt
+chromiumembeddedframework.runtime.win-x64,152.0.10,LICENSE.txt
+Microsoft.Data.Sqlite,10.0.12,MIT
+Microsoft.Data.Sqlite.Core,10.0.12,MIT
+NetVips,3.2.0,MIT
+SQLitePCLRaw.bundle_e_sqlite3,2.1.12,Apache-2.0
+SQLitePCLRaw.core,2.1.12,Apache-2.0
+SQLitePCLRaw.lib.e_sqlite3,2.1.12,Apache-2.0
+SQLitePCLRaw.provider.e_sqlite3,2.1.12,Apache-2.0
