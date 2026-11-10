@@ -36,6 +36,9 @@ jobs:
       # Prefer the .NET 10 SDK already present on windows-latest. The
       # setup-dotnet CDN currently returns HTTP 409 for both LTS runtime
       # and SDK downloads; use it only if the runner lacks a 10.x SDK.
+      - name: Validate PCasa release version parser and next-version scenarios
+        shell: pwsh
+        run: ./tools/Test-PCasaReleaseVersion.ps1
       - name: Check installed .NET 10 SDK
         id: installed-dotnet
         shell: pwsh
