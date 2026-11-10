@@ -60,10 +60,13 @@ $rows | Sort-Object Package | Export-Csv -LiteralPath (Join-Path $PublishDir 'Li
 $mplPath = Join-Path $PublishDir 'Licenses/MPL-1.1.txt'
 Invoke-WebRequest -Uri 'https://www.mozilla.org/media/MPL/1.1/index.0c5913925d40.txt' -OutFile $mplPath -ErrorAction Stop
 $mplText = Get-Content -LiteralPath $mplPath -Raw
-if ($mplText.Length -lt 10000 -or
+$expectedMplSha256 = 'f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469'
+$actualMplSha256 = (Get-FileHash -LiteralPath $mplPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualMplSha256 -ne $expectedMplSha256 -or
+    $mplText.Length -lt 10000 -or
     $mplText -notmatch 'MOZILLA PUBLIC LICENSE' -or
     $mplText -notmatch 'Version 1\.1') {
-    throw 'Authoritative Mozilla MPL 1.1 text missing or invalid'
+    throw "Pinned MPL 1.1 license bytes changed (actual SHA256: $actualMplSha256). A new license review is required."
 }
 # ExifTool's Strawberry Perl attribution archive must travel with the EXE.
 foreach ($path in @(
