@@ -61,6 +61,16 @@ jobs:
       - name: Bundle pinned MapLibre JS and CSS into PCasa.App.dll
         shell: pwsh
         run: ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+      # The former static NetVips NuGet package supplied native DLLs to
+      # test runners implicitly. Dynamic libvips must be present BEFORE
+      # thumbnail/catalog and WPF tests, not only after dotnet publish.
+      - name: Supply pinned dynamic libvips for catalog and WPF regression tests
+        shell: pwsh
+        run: |
+          $nativeDir = Join-Path $env:RUNNER_TEMP 'pcasa-native-regression'
+          New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir $nativeDir -EvidenceDir license-audit/test-native
+          $nativeDir >> $env:GITHUB_PATH
       - name: Verify selected GPS overlay at 6,000 photos and across continents
         shell: pwsh
         run: node tests/gps-map-overlay.test.cjs
