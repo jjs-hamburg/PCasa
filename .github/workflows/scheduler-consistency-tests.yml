@@ -140,11 +140,19 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
-          python -m pip install --quiet numpy pillow
-          python tools/generate_pcasa_textures.py publish/PCasa/Texturen
-          if (-not (Test-Path "publish/PCasa/Texturen/Stein - Schiefer dunkel.jpg") -or
-              -not (Test-Path "publish/PCasa/Texturen/Stein - Nachtblau.jpg")) {
-            throw "New original textures missing from package"
+          # Only the twelve user-provided default textures belong to this release.
+          $sourceTextures = @(Get-ChildItem "default-textures" -File | Where-Object { $_.Extension -in @(".jpg", ".jpeg") })
+          $publishedTextures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in @(".jpg", ".jpeg") })
+          if ($sourceTextures.Count -ne 12 -or $publishedTextures.Count -ne 12) {
+            throw "Expected exactly twelve supplied JPG textures; found $($sourceTextures.Count) source and $($publishedTextures.Count) published"
+          }
+          foreach ($source in $sourceTextures) {
+            $published = Join-Path "publish/PCasa/Texturen" $source.Name
+            if (-not (Test-Path -LiteralPath $published) -or
+                (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ne
+                (Get-FileHash -LiteralPath $published -Algorithm SHA256).Hash) {
+              throw "Published texture is missing or changed: $($source.Name)"
+            }
           }
           New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
