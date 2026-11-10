@@ -1,10 +1,6 @@
 name: Evaluate libvips 8.18.7 dynamic Windows distribution
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/libvips-dynamic-evaluation.yml'
-      - 'Directory.Packages.props'
   workflow_dispatch:
 
 permissions:
