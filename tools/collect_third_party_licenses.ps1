@@ -67,7 +67,7 @@ if (-not (Test-Path -LiteralPath $mplSource -PathType Leaf)) {
 }
 Copy-Item -LiteralPath $mplSource -Destination $mplPath -Force
 $mplText = Get-Content -LiteralPath $mplPath -Raw
-$expectedMplSha256 = 'f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469'
+$expectedMplSha256 = 'fa01277004aff314888151ea523bdf390992892e13523984f221695d48c7455b'
 $actualMplSha256 = (Get-FileHash -LiteralPath $mplPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualMplSha256 -ne $expectedMplSha256 -or
     $mplText.Length -lt 10000 -or
