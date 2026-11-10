@@ -33,45 +33,50 @@ Dokumentation:
 
 libvips / NETVIPS
 -----------------
-PCasa verwendet NetVips 3.2.0 (MIT) mit der nativen
-NetVips.Native.win-x64 8.18.7 (LGPL-3.0-or-later).
-Die native Bibliothek heißt libvips-42.dll und liegt neben PCasa.App.exe.
-Die vollständige LGPLv3 liegt unter LGPL-3.0.txt; die GPLv3, auf die sie
-verweist, unter PCasa-GPL-3.0.txt. Die originale Drittanbieterübersicht des
-Windows-Binärpakets liegt hier:
-  Packages/NetVips.Native.win-x64-8.18.7/THIRD-PARTY-NOTICES.md
-Sie nennt unter anderem aom, cairo, cgif, expat, fontconfig, freetype,
-fribidi, glib, harfbuzz, highway, lcms, libarchive, libexif, libffi,
-libheif, libimagequant, libnsgif, libpng, librsvg, libtiff, libultrahdr,
-libvips, libwebp, libxml2, mozjpeg, pango, pixman, proxy-libintl und zlib-ng.
-Für Cairo ist außerdem die originale Mozilla Public License v1.1 als
-MPL-1.1.txt aus der offiziellen Mozilla-Quelle beigefügt.
-Die jeweiligen Originalbedingungen und Copyright-Angaben müssen ebenfalls
-berücksichtigt werden; die Paketliste allein ersetzt sie nicht.
+Die PCasa-Windows-Verteilung verwendet NetVips 3.2.0 (MIT) und den
+extern geladenen libvips-Windows-x64-Binärsatz in Version 8.18.7
+(vips-dev-x64-web-8.18.7.zip, dynamische Variante aus
+github.com/libvips/build-win64-mxe). Die frühere NuGet-Abhängigkeit
+NetVips.Native.win-x64 wurde im Projekt entfernt.
 
-Quellen der GENAUEN verwendeten libvips-Version:
+Die offizielle Archivdatei ist anhand SHA-256
+3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241
+gepinnt. Die aus ihr übernommene libvips-42.dll hat SHA-256
+4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555.
+Zusammen werden 38 native DLLs bereitgestellt. Das Paket und die
+exakten Hashes werden im Build kontrolliert; Änderungen erfordern
+eine erneute gezielte Prüfung.
+
+Die vollständige LGPLv3 findet sich unter LGPL-3.0.txt, die GPLv3
+unter PCasa-GPL-3.0.txt. Die Originaltexte, die festgelegten
+Abhängigkeitsversionen, Herkunftsverweise und die ergänzenden
+Copyright-Hinweise stehen im Ordner Native/libvips-8.18.7/.
+Die tatsächliche DLL-Liste steht im Release-Prüfprotokoll
+native-dll-inventory.csv.
+
+Quellen und Buildverfahren der genauen libvips-Version:
+  https://github.com/libvips/build-win64-mxe/tree/v8.18.7
+  https://github.com/libvips/build-win64-mxe/releases/tag/v8.18.7
   https://github.com/libvips/libvips/releases/tag/v8.18.7
-  https://github.com/kleisauke/libvips-packaging/releases/tag/v8.18.7
-  https://github.com/kleisauke/libvips-packaging/tree/v8.18.7
-  https://github.com/kleisauke/libvips-packaging/blob/v8.18.7/THIRD-PARTY-NOTICES.md
 
 AUSTAUSCH UND EIGENE ÄNDERUNGEN
 ------------------------------
-libvips ist hier als separat geladene DLL ausgeliefert. Nutzer dürfen sie
-durch eine selbst gebaute, ABI-kompatible Fassung ersetzen, einschließlich
-der zur Fehlersuche nötigen Untersuchung. Die PCasa-Lizenz darf dies nicht
-einschränken. Zum Austausch PCasa vollständig beenden, die ursprüngliche
-libvips-42.dll sichern und die eigene kompatible DLL an deren Stelle
-kopieren. Die neue DLL muss dieselben exportierten Funktionen und die
-benötigte Architektur (Windows x64) bereitstellen.
-Diese Anweisung garantiert keine Funktionsfähigkeit inkompatibler DLLs.
-Für andere LGPL-Komponenten, die möglicherweise in der nativen DLL
-statisch zusammengefasst wurden, können zusätzliche Bedingungen gelten.
+PCasa verwendet eigenständig geladene, auswechselbare native DLLs;
+es besteht kein proprietärer Sperrmechanismus oder Signaturzwang.
+Nutzer dürfen eine LGPL-DLL durch eine kompatible selbst erstellte
+Fassung ersetzen und die zum Debugging erforderlichen Änderungen
+untersuchen. PCasa vollständig beenden, Original-DLL sichern und
+kompatible neue DLL mit entsprechendem Namen kopieren. Dabei müssen
+alle notwendigen Import-/ABI-Abhängigkeiten berücksichtigt werden.
+Eine neue DLL ist nicht garantiert kompatibel.
 
-Ein GitHub-Quellcode-Link allein stellt nicht in allen Fällen die
-erforderliche korrespondierende Quelle für jedes eingebettete Bauteil bereit.
-Dafür sind Version, Build-Konfiguration, Änderungen und Lizenzbedingungen
-der tatsächlich ausgelieferten Binärkomponenten maßgeblich.
+Der Quellcode von PCasa und die Buildskripte sind über das für die
+Version angegebene GitHub-Release verfügbar. Für die native
+Auslieferung enthält Native/libvips-8.18.7/ alle festgehaltenen
+Lizenz- und Herkunftsdokumente. Die konkreten korrespondierenden
+Quellen und etwaige native Änderungen müssen entsprechend den
+Lizenzpflichten der jeweiligen Komponenten verfügbar bleiben.
+Lizenztexte allein ersetzen diesen Anspruch nicht.
 
 HINWEIS
 -------
