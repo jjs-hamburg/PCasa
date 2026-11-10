@@ -1,6 +1,6 @@
 PCasa native redistributables – pinned version and binary inventory
 ===================================================================
-Windows x64, PCasa Alpha.7 dependency versions, 9 November 2026
+Windows x64, PCasa Alpha.8 dependency baseline, 9 November 2026
 
 This document records provenance and dependency declarations. It is not
 a substitute for upstream third-party license texts and source delivery.
