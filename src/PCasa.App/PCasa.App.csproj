@@ -73,8 +73,10 @@
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- User-editable JPG texture directory beside the published EXE. -->
+  <!-- User-editable texture directory beside the published EXE. -->
   <ItemGroup>
+    <Content Include="../../default-textures/**/*" Link="Texturen/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets/CanvasLight.jpg" Link="Texturen/Leinwand hell.jpg"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets/CanvasDark.jpg" Link="Texturen/Leinwand dunkel.jpg"
