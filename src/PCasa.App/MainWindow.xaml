@@ -1416,13 +1416,6 @@
                                                 ToolTipService.ShowOnDisabled="True">
                                             <TextBlock Text="{loc:Tr Key='GPS → Galerie'}" FontSize="12"/>
                                         </Button>
-                                        <Button x:Name="GpsFilmstripRemoveGpsButton"
-                                                Height="27" Margin="2,1" Padding="6,1"
-                                                IsEnabled="False" Click="GpsFilmstripRemoveGps_Click"
-                                                ToolTip="{loc:Tr Key='Entfernt GPS aus allen markierten GPS-Filmstrip-Fotos. Mehrfachauswahl mit Strg, Umschalt oder Strg+A.'}"
-                                                ToolTipService.ShowOnDisabled="True">
-                                            <TextBlock Text="{loc:Tr Key='GPS entfernen'}" FontSize="12"/>
-                                        </Button>
                                     </StackPanel>
                                 </Grid>
                             <ListBox x:Name="GpsFilmstripList" Grid.Row="1"
