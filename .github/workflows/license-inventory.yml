@@ -14,6 +14,7 @@ on:
       - 'src/PCasa.App/PCasa.App.csproj'
       - 'Directory.Packages.props'
       - 'tools/prepare-dynamic-libvips.ps1'
+      - 'Directory.Packages.props'
   pull_request:
     paths:
       - '.github/workflows/license-inventory.yml'
@@ -79,6 +80,23 @@ jobs:
           Copy-Item publish/PCasa/Licenses/NuGet-license-inventory.csv license-audit/installed-nuget-license-inventory.csv
           if (-not (Test-Path license-audit/publish-files.csv)) { throw 'No binary file inventory' }
           if (-not (Test-Path license-audit/nuget-dependency-licenses.csv)) { throw 'No dependency inventory' }
+      - name: Verify native PCasa image operations from the actual publish folder
+        shell: pwsh
+        run: |
+          dotnet new console --framework net10.0 -o native-probe
+          dotnet add native-probe package NetVips --version 3.2.0
+          @'
+          using NetVips;
+          using var image = Image.Black(4, 4);
+          using var enlarged = image.Resize(2);
+          if (enlarged.Width != 8 || enlarged.Height != 8) throw new Exception("Native resize failed");
+          Console.WriteLine("PASS: installed native libvips in published PCasa folder");
+          '@ | Set-Content native-probe/Program.cs
+          dotnet publish native-probe/native-probe.csproj --configuration Release --runtime win-x64 --self-contained false -o native-probe-out
+          Copy-Item native-probe-out/native-probe.* publish/PCasa -Force
+          & ./publish/PCasa/native-probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "PCasa native image operation failed: $LASTEXITCODE" }
+          Remove-Item publish/PCasa/native-probe.* -Force
       - name: Upload evidence - NOT a legal clearance certificate
         uses: actions/upload-artifact@v4
         with:
