@@ -166,6 +166,29 @@ try {
     if ($archiveEntries.Count -eq 0) {
         throw 'Strawberry Perl archive contains no license or notice entries'
     }
+    # Read and hash EVERY non-directory ZIP entry, not merely names containing
+    # "license". This catches damaged members and records the exact audited
+    # Perl payload for stable subsequent releases.
+    $perlEntries = @(
+        foreach ($entry in $archive.Entries) {
+            if ($entry.FullName.EndsWith('/')) { continue }
+            $stream = $entry.Open()
+            try {
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    $hash = [Convert]::ToHexString($sha.ComputeHash($stream)).ToLowerInvariant()
+                } finally { $sha.Dispose() }
+                [pscustomobject]@{
+                    ArchivePath = $entry.FullName
+                    UncompressedSize = $entry.Length
+                    SHA256 = $hash
+                    IsLicenseCandidate = ($entry.FullName -match '(?i)(license|licence|copying|notice|artistic)')
+                }
+            } finally { $stream.Dispose() }
+        }
+    )
+    if ($perlEntries.Count -eq 0) { throw 'Strawberry Perl licence archive is empty' }
+    $perlEntries | Sort-Object ArchivePath | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'strawberry-perl-archive-files.csv')
 } finally { $archive.Dispose() }
 # All package licence metadata must be either an SPDX expression or backed by
 # an upstream licence file copied into the packaged directory.
@@ -205,3 +228,13 @@ foreach ($item in $knownNativeHashes.GetEnumerator()) {
     }
 }
 Write-Host "Verified pinned CEF and libvips binary hashes."
+
+# Reverify the very same Mozilla text audited for Alpha.8. Merely matching
+# the filename and a few phrases does not make an online download immutable.
+$expectedMplSha256 = 'f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469'
+$mplItem = $relativePaths['licenses\mpl-1.1.txt']
+if ($null -eq $mplItem -or $mplItem.SHA256 -ne $expectedMplSha256) {
+    throw 'MPL-1.1 text differs from audited static baseline'
+}
+Write-Host "Verified pinned Mozilla MPL-1.1 text and indexed $($perlEntries.Count) Perl archive members."
+
