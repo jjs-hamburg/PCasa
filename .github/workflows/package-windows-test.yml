@@ -1,6 +1,10 @@
 name: Package Windows Test
 
 on:
+  push:
+    branches: ['setup-*']
+    paths:
+      - '.github/workflows/package-windows-test.yml'
   pull_request:
     paths:
       - '.github/workflows/package-windows-test.yml'
