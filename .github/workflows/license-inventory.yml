@@ -135,6 +135,20 @@ jobs:
           foreach ($rel in @('Licenses/Native/libvips-8.18.7/README.md','Licenses/Native/exiftool-13.59/README.md','exiftool/exiftool_files/Licenses_Strawberry_Perl.zip')) {
             if (-not (Test-Path -LiteralPath (Join-Path $dest $rel))) { throw "Missing installed license material: $rel" }
           }
+          # ExifTool is redistributed in the exact official Windows bundle;
+          # verify every installed file, not just the separately licensed DLLs.
+          $sourceExif = @(Get-ChildItem -LiteralPath publish/PCasa/exiftool -Recurse -File)
+          if ($sourceExif.Count -ne 509) { throw "Unexpected ExifTool package file count: $($sourceExif.Count)" }
+          $sourceRoot = (Resolve-Path publish/PCasa).Path
+          foreach ($file in $sourceExif) {
+            $relative = [IO.Path]::GetRelativePath($sourceRoot,$file.FullName)
+            $installed = Join-Path $dest $relative
+            if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Missing installed ExifTool file: $relative" }
+            $expected = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $actual = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "Installed ExifTool file altered: $relative" }
+          }
+          Write-Host "PASS: all $($sourceExif.Count) original ExifTool files are unmodified in the actual installer"
           $static = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
           $actual = (Get-FileHash -LiteralPath (Join-Path $dest 'libvips-42.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -eq $static) { throw 'Old static libvips shipped in actual installer' }
