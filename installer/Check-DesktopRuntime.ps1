@@ -98,7 +98,7 @@ try {
             Write-Host ('Verified official Microsoft .NET Desktop Runtime ' + $entry[0].windowsdesktop.version + ' installer, SHA-512 and signature.')
             exit 0
         }
-        $arguments = '/install /quiet /norestart'
+        $arguments = '/install /norestart'
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $admin = (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole(
             [Security.Principal.WindowsBuiltInRole]::Administrator)
