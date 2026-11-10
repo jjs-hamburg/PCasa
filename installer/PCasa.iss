@@ -70,6 +70,13 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "{commonappdata}\PCasa"; Permissions: users-modify; Check: IsAdminInstallMode
 
 [InstallDelete]
+; Retire only the bundled legacy texture names on upgrade. Never clear the whole
+; user-editable Texturen folder (users may have added their own JPGs).
+Type: files; Name: "{app}\\Texturen\\Leinwand hell.jpg"
+Type: files; Name: "{app}\\Texturen\\Leinwand dunkel.jpg"
+Type: files; Name: "{app}\\Texturen\\Leinwand hell - fein.jpg"
+Type: files; Name: "{app}\\Texturen\\Leinwand dunkel - fein.jpg"
+Type: files; Name: "{app}\\Texturen\\Stein - Schiefer dunkel.jpg"
 ; A machine-wide marker must never leak into a per-user installation.
 Type: files; Name: "{app}\PCasa.all-users"
 
@@ -126,10 +133,23 @@ end;
 
 // Install the official Microsoft prerequisite BEFORE replacing any PCasa file.
 // Failure/cancel preserves the prior PCasa installation and catalog.
+var
+  RuntimeDownloadPage: TDownloadWizardPage;
+
+procedure InitializeWizard();
+begin
+  RuntimeDownloadPage := CreateDownloadPage(
+    'Microsoft .NET 10 Desktop Runtime',
+    'Download von Microsoft. Mit Abbrechen wird die PCasa-Installation beendet.',
+    nil);
+  RuntimeDownloadPage.ShowBaseNameInsteadOfUrl := True;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ExitCode: Integer;
-  ScriptPath, Args, PowerShellPath: String;
+  ScriptPath, Args, PowerShellPath, MetadataPath, RuntimeUrl, RuntimeHash: String;
+  MetadataLines: TArrayOfString;
 begin
   Result := '';
   ExtractTemporaryFile('Check-DesktopRuntime.ps1');
@@ -148,8 +168,6 @@ begin
     Exit;
   end;
 
-  // Never download or install a prerequisite before explicit user consent.
-  // Unattended installation must provision the runtime separately.
   if WizardSilent then
   begin
     Result := CustomMessage('RuntimeSilentMissing');
@@ -161,10 +179,55 @@ begin
     Exit;
   end;
 
-  // The PowerShell helper downloads and validates the official binary.
-  // Microsoft's runtime installer itself is launched with its own visible UI.
-  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"';
-  if not Exec(PowerShellPath, Args, '', SW_SHOW, ewWaitUntilTerminated, ExitCode) then
+  // Resolve Microsoft release metadata in a hidden, short-running helper.
+  // The actual download is performed by Inno Setup's native, cancellable UI.
+  MetadataPath := ExpandConstant('{tmp}\\pcasa-runtime-download.txt');
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ScriptPath + '" -ResolveOnly -MetadataPath "' + MetadataPath + '"';
+  if not Exec(PowerShellPath, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or
+    (ExitCode <> 0) or
+    not LoadStringsFromFile(MetadataPath, MetadataLines) then
+  begin
+    Result := 'Microsoft .NET 10 Desktop Runtime download information could not be obtained.';
+    Exit;
+  end;
+  if GetArrayLength(MetadataLines) <> 2 then
+  begin
+    Result := 'Invalid Microsoft .NET Desktop Runtime download information.';
+    Exit;
+  end;
+  RuntimeUrl := Trim(MetadataLines[0]);
+  RuntimeHash := Trim(MetadataLines[1]);
+  if (Pos('https://', RuntimeUrl) <> 1) or (Length(RuntimeHash) <> 128) then
+  begin
+    Result := 'Invalid Microsoft .NET Desktop Runtime download URL or checksum.';
+    Exit;
+  end;
+
+  RuntimeDownloadPage.Clear;
+  RuntimeDownloadPage.Add(RuntimeUrl, 'windowsdesktop-runtime-win-x64.exe', '');
+  RuntimeDownloadPage.Show;
+  try
+    try
+      RuntimeDownloadPage.Download;
+    except
+      if RuntimeDownloadPage.AbortedByUser then
+        Result := CustomMessage('RuntimeDeclined')
+      else
+        Result := 'Microsoft .NET Desktop Runtime download failed: ' + GetExceptionMessage;
+      Exit;
+    end;
+  finally
+    RuntimeDownloadPage.Hide;
+  end;
+
+  // The trusted helper checks Microsoft SHA-512 AND Authenticode before
+  // launching the official installer with its own visible Windows UI.
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ScriptPath + '" -InstallDownloaded -InstallerFile "' +
+    ExpandConstant('{tmp}\\windowsdesktop-runtime-win-x64.exe') +
+    '" -ExpectedHash "' + RuntimeHash + '"';
+  if not Exec(PowerShellPath, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
   begin
     Result := 'Microsoft .NET 10 Desktop Runtime could not be started.';
     Exit;
