@@ -147,7 +147,6 @@ $requiredFiles = @(
     'Licenses/Packages/CefSharp.Wpf.NETCore-152.0.100/LICENSE',
     'Licenses/Packages/chromiumembeddedframework.runtime-152.0.10/LICENSE.txt',
     'Licenses/Packages/chromiumembeddedframework.runtime.win-x64-152.0.10/LICENSE.txt',
-    'Licenses/Packages/NetVips.Native.win-x64-8.18.7/THIRD-PARTY-NOTICES.md',
     'libcef.dll',
     'libvips-42.dll',
     'exiftool/exiftool.exe',
@@ -257,17 +256,36 @@ $evidence = @(
     [pscustomobject]@{Component='PCasa'; Evidence='GPLv3 license and copyright notices packaged'; Status='FILE_VERIFIED'}
     [pscustomobject]@{Component='NuGet'; Evidence="$($packages.Count) resolved packages with metadata; named package license files checked"; Status='FILE_VERIFIED'}
     [pscustomobject]@{Component='Chromium/CEF'; Evidence='Pinned libcef.dll SHA256, exact-package CEF/CefSharp BSD texts and 19MB+ runtime-generated Chromium-Credits.html packaged'; Status='RUNTIME_CREDITS_VERIFIED'}
-    [pscustomobject]@{Component='libvips'; Evidence='Pinned libvips-42.dll SHA256, exact static-build component versions/source references, LGPL-3, upstream notices and Cairo MPL-1.1 packaged; source/copyright detail review outstanding'; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
+    [pscustomobject]@{Component='libvips'; Evidence='Pinned dynamically linked 38-DLL native distribution, library inventory, original component texts, sources and replacement rights; corresponding-source review remains version-scoped'; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
     [pscustomobject]@{Component='ExifTool/Perl'; Evidence="ExifTool LICENSE and Strawberry Perl ZIP with $($archiveEntries.Count) license-named entries present; contents/obligations need review"; Status='PARTIAL_MANUAL_REVIEW_REQUIRED'}
 )
 $evidence | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'component-evidence.csv')
 Write-Host "Verified $($requiredFiles.Count) mandated published files and $($archiveEntries.Count) Perl licence archive entries."
 
+# The exact dynamic DLL set must be present, unaltered and replaceable.
+# This manifests the native distribution actually copied into PCasa, not
+# merely the upstream archive or the old static NuGet package.
+$dynamicManifestPath = Join-Path $OutputDir 'dynamic-libvips/native-dll-inventory.csv'
+if (-not (Test-Path -LiteralPath $dynamicManifestPath)) { throw 'Missing pinned dynamic libvips DLL manifest' }
+$dynamicManifest = @(Import-Csv -LiteralPath $dynamicManifestPath)
+if ($dynamicManifest.Count -ne 38) { throw "Expected 38 dynamic DLLs, found $($dynamicManifest.Count)" }
+foreach ($dll in $dynamicManifest) {
+    Assert-PublishedFile $dll.File
+    $key = $dll.File.ToLowerInvariant()
+    if ($relativePaths[$key].SHA256.ToLowerInvariant() -ne $dll.SHA256.ToLowerInvariant()) {
+        throw "Native dynamic library hash differs from original manifest: $($dll.File)"
+    }
+}
+if ($packages.Package -contains 'NetVips.Native.win-x64') {
+    throw 'Statically aggregated native NuGet package remains a restored dependency'
+}
+Write-Host 'Verified exact 38 dynamically linked native DLLs; static native package absent.'
+
 # Any change in pinned CEF or libvips binary changes the compliance subject;
 # fail rather than silently carrying forward notices from a previous version.
 $knownNativeHashes = @{
     'libcef.dll' = '08a40295bebd9421468115a09c375f3decce219b6673ff77410c479c03b43603'
-    'libvips-42.dll' = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
+    'libvips-42.dll' = '4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555'
 }
 foreach ($item in $knownNativeHashes.GetEnumerator()) {
     $path = $item.Key.ToLowerInvariant()
