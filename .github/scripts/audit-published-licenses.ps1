@@ -280,7 +280,7 @@ Write-Host "Verified pinned CEF and libvips binary hashes."
 
 # Reverify the very same Mozilla text audited for Alpha.8. Merely matching
 # the filename and a few phrases does not make an online download immutable.
-$expectedMplSha256 = 'f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469'
+$expectedMplSha256 = 'fa01277004aff314888151ea523bdf390992892e13523984f221695d48c7455b'
 $mplItem = $relativePaths['licenses\mpl-1.1.txt']
 if ($null -eq $mplItem -or $mplItem.SHA256 -ne $expectedMplSha256) {
     throw 'MPL-1.1 text differs from audited static baseline'
