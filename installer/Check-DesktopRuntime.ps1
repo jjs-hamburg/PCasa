@@ -8,7 +8,7 @@ param(
     [switch]$VerifyInstallerOnly
 )
 $ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
+$ProgressPreference = 'Continue'
 
 function Get-DesktopRuntimeRoot {
     if ($RuntimeRoot) { return $RuntimeRoot }
@@ -44,7 +44,7 @@ try {
 
     # Authoritative Microsoft release manifest. No third-party mirrors,
     # winget dependencies or unversioned download guesses.
-    $manifestUri = 'https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json'
+    Write-Host 'PCasa: Reading official Microsoft .NET 10 Desktop Runtime release information...'\n    $manifestUri = 'https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json'
     $manifest = Invoke-RestMethod -Uri $manifestUri -TimeoutSec 35
     $entry = @($manifest.releases |
         Where-Object { $_.windowsdesktop.version -match '^10\.\d+\.\d+$' } |
@@ -64,7 +64,7 @@ try {
         throw 'Microsoft runtime download host is not trusted.'
     }
 
-    $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('pcasa-desktop-runtime-' + [guid]::NewGuid().ToString('N') + '.exe')
+    Write-Host ('PCasa: Downloading Microsoft .NET Desktop Runtime ' + $entry[0].windowsdesktop.version + ' (x64)...')\n    $temp = Join-Path ([System.IO.Path]::GetTempPath()) ('pcasa-desktop-runtime-' + [guid]::NewGuid().ToString('N') + '.exe')
     try {
         try {
             Invoke-WebRequest -Uri $downloadUri -OutFile $temp -TimeoutSec 900
@@ -78,7 +78,7 @@ try {
                 'https://dotnetcli.blob.core.windows.net/dotnet/')
             Invoke-WebRequest -Uri $alternate -OutFile $temp -TimeoutSec 900
         }
-        $expected = ([string]$file[0].hash).Trim().ToLowerInvariant()
+        Write-Host 'PCasa: Verifying SHA-512 and Microsoft Authenticode signature...'\n        $expected = ([string]$file[0].hash).Trim().ToLowerInvariant()
         if ($expected -notmatch '^[a-f0-9]{128}$') {
             throw 'Microsoft release manifest SHA-512 has an invalid format.'
         }
@@ -98,7 +98,7 @@ try {
             Write-Host ('Verified official Microsoft .NET Desktop Runtime ' + $entry[0].windowsdesktop.version + ' installer, SHA-512 and signature.')
             exit 0
         }
-        $arguments = '/install /norestart'
+        Write-Host 'PCasa: Starting the visible Microsoft installer. Follow its prompts.'\n        $arguments = '/install /norestart'
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $admin = (New-Object Security.Principal.WindowsPrincipal($identity)).IsInRole(
             [Security.Principal.WindowsBuiltInRole]::Administrator)
