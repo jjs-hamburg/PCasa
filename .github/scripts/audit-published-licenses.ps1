@@ -155,6 +155,31 @@ $requiredFiles = @(
     'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'
 )
 foreach ($file in $requiredFiles) { Assert-PublishedFile $file }
+
+# License texts under the checked-in, version-pinned native baseline are the
+# source of truth. Compare every installed copy byte-for-byte (via SHA256),
+# rather than generating fresh third-party notices at release time.
+$baseline = Join-Path (Join-Path $PSScriptRoot '../..') 'license-baseline/libvips-8.18.7'
+if (-not (Test-Path -LiteralPath $baseline -PathType Container)) {
+    throw 'Pinned libvips license baseline not found in checked-out source'
+}
+$baselineRoot = (Resolve-Path -LiteralPath $baseline).Path
+$baselineFiles = @(Get-ChildItem -LiteralPath $baselineRoot -Recurse -File)
+if ($baselineFiles.Count -lt 37) {
+    throw "Incomplete checked-in libvips license baseline: $($baselineFiles.Count) files"
+}
+foreach ($original in $baselineFiles) {
+    $relative = [System.IO.Path]::GetRelativePath($baselineRoot, $original.FullName)
+    $installed = "Licenses/Native/libvips-8.18.7/$relative"
+    Assert-PublishedFile $installed
+    $key = $installed.Replace('/','\').ToLowerInvariant()
+    $sourceHash = (Get-FileHash -LiteralPath $original.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($relativePaths[$key].SHA256.ToLowerInvariant() -ne $sourceHash) {
+        throw "Installed native license differs from pinned source text: $installed"
+    }
+}
+Write-Host "Verified $($baselineFiles.Count) pinned libvips source/license notices in published output."
+
 # Do not treat a nonempty ZIP as proof of actual licence content.
 Add-Type -AssemblyName System.IO.Compression
 $perlZip = Join-Path $publishPath 'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'
