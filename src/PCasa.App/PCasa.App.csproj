@@ -69,6 +69,13 @@
              Link="Licenses/Native/libvips-8.18.7/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
+    <!-- Original ExifTool 13.59 upstream text; the immutable Windows
+         Strawberry Perl bundle's own Licenses_Strawberry_Perl.zip is
+         independently installed next to the bundled executable. -->
+    <Content Include="../../license-baseline/exiftool-13.59/**/*"
+             Link="Licenses/Native/exiftool-13.59/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
     <!-- Redistributed MapLibre BSD-3 and third-party attributions. -->
     <Content Include="Resources/maplibre-LICENSE.txt"
              Link="Licenses/MapLibre-LICENSE.txt"
