@@ -1,0 +1,78 @@
+name: Verify published Alpha.8 installer license payload
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/verify-shipped-installer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Download immutable published PCasa installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/jjs-hamburg/PCasa/releases/download/v0.1.Alpha.8/PCasa-Setup-0.1.Alpha.8.exe'
+          Invoke-WebRequest -Uri $url -OutFile installer.exe
+          $expected = 'eaffe66c18be6cabbce3b7c8e19dba8a0dddd39c1ba09612d3f23811ba7534c5'
+          $actual = (Get-FileHash -LiteralPath installer.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Published setup hash changed: $actual" }
+          "InstallerSHA256,$actual" | Set-Content -Encoding utf8 installed-payload-evidence.csv
+      - name: Install into isolated path in current-user mode and inspect real files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = Join-Path $env:RUNNER_TEMP 'pcasa-installer-audit'
+          $args = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=$target")
+          $process = Start-Process -FilePath ./installer.exe -ArgumentList $args -Wait -PassThru
+          if ($process.ExitCode -notin @(0,3010)) { throw "Installer exited with $($process.ExitCode)" }
+          $required = @(
+            'PCasa.App.exe',
+            'libcef.dll',
+            'libvips-42.dll',
+            'Licenses/PCasa-GPL-3.0.txt',
+            'Licenses/LGPL-3.0.txt',
+            'Licenses/MPL-1.1.txt',
+            'Licenses/Chromium-Credits.html',
+            'Licenses/NATIVE-BUILD-VERSIONS.txt',
+            'Licenses/Packages/NetVips.Native.win-x64-8.18.7/THIRD-PARTY-NOTICES.md',
+            'exiftool/exiftool.exe',
+            'exiftool/exiftool_files/LICENSE',
+            'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'
+          )
+          foreach ($rel in $required) {
+            $path = Join-Path $target $rel
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing installed file: $rel" }
+            $item = Get-Item -LiteralPath $path
+            if ($item.Length -eq 0) { throw "Empty installed file: $rel" }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            """$rel"",$($item.Length),$hash" | Add-Content -Encoding utf8 installed-payload-evidence.csv
+          }
+          $expectedNative = @{
+            'libvips-42.dll' = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
+            'libcef.dll' = '08a40295bebd9421468115a09c375f3decce219b6673ff77410c479c03b43603'
+            'Licenses/MPL-1.1.txt' = 'f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469'
+          }
+          foreach ($name in $expectedNative.Keys) {
+            $actual = (Get-FileHash -LiteralPath (Join-Path $target $name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expectedNative[$name]) { throw "Installer content differs from audited publish: $name" }
+          }
+          Add-Type -AssemblyName System.IO.Compression
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $target 'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'))
+          try {
+            if (@($archive.Entries | Where-Object { $_.Length -gt 0 -and $_.FullName -match '(?i)(license|notice|copying|artistic)' }).Count -eq 0) {
+              throw 'Installed Perl license archive has no relevant content'
+            }
+          } finally { $archive.Dispose() }
+          Write-Host "PASS: verified actual published Alpha.8 EXE installer and installed contents."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alpha8-installed-license-evidence
+          path: installed-payload-evidence.csv
+          if-no-files-found: warn
