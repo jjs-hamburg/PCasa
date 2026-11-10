@@ -52,6 +52,25 @@ foreach ($item in $assets.libraries.PSObject.Properties) {
         BundledLicenseFiles = ($notices -join '; ')
     }
 }
+# Fail closed on any direct/transitive dependency drift. A different library,
+# version, or declared license needs an explicitly reviewed baseline update.
+$approvedSetPath = Join-Path $PSScriptRoot '../../license-baseline/APPROVED-DEPENDENCIES.csv'
+$approvedSet = @(Import-Csv -LiteralPath $approvedSetPath)
+if ($approvedSet.Count -ne $packages.Count) {
+    throw "NuGet dependency set differs from approved baseline: expected $($approvedSet.Count), resolved $($packages.Count)"
+}
+foreach ($approvedItem in $approvedSet) {
+    $matches = @($packages | Where-Object {
+        $_.Package -eq $approvedItem.Component -and
+        $_.Version -eq $approvedItem.Version -and
+        $_.LicenseMetadata -eq $approvedItem.License
+    })
+    if ($matches.Count -ne 1) {
+        throw "NuGet package/version/license changed without license baseline review: $($approvedItem.Component) $($approvedItem.Version) $($approvedItem.License)"
+    }
+}
+$packages | Sort-Object Package | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'approved-dependencies-verified.csv')
+Write-Host "PASS: exact $($approvedSet.Count)-package approved NuGet dependency/license baseline"
 $packages | Sort-Object Package | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir "nuget-dependency-licenses.csv")
 $noticeFiles = @(
     $inventory | Where-Object { $_.Path -match '(?i)(license|licence|notice|third.party|third_party|copying)' }
@@ -191,7 +210,8 @@ $perlZip = Join-Path $publishPath 'exiftool/exiftool_files/Licenses_Strawberry_P
 # The exact official ExifTool 13.59 Windows distribution was inventoried.
 # Freeze the Strawberry Perl attribution ZIP itself; an arbitrary different
 # archive is not interchangeable with the audited redistribution evidence.
-$perlZipSha256 = '8bd5fc8dc0ef3b96881ddad0974b79e86f4043f76ab318a730b084adf0890bd0'
+$approvedNative = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../license-baseline/APPROVED-NATIVE.json') -Raw | ConvertFrom-Json
+$perlZipSha256 = [string]$approvedNative.exiftool.perlLicensesSha256
 $actualPerlZipSha256 = (Get-FileHash -LiteralPath $perlZip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualPerlZipSha256 -ne $perlZipSha256) {
     throw "Strawberry Perl license archive changed from audited ExifTool 13.59 baseline: $actualPerlZipSha256"
@@ -274,7 +294,7 @@ Write-Host "Verified $($requiredFiles.Count) mandated published files and $($arc
 $dynamicManifestPath = Join-Path $OutputDir 'dynamic-libvips/native-dll-inventory.csv'
 if (-not (Test-Path -LiteralPath $dynamicManifestPath)) { throw 'Missing pinned dynamic libvips DLL manifest' }
 $dynamicManifest = @(Import-Csv -LiteralPath $dynamicManifestPath)
-if ($dynamicManifest.Count -ne 38) { throw "Expected 38 dynamic DLLs, found $($dynamicManifest.Count)" }
+if ($dynamicManifest.Count -ne [int]$approvedNative.libvips.dllCount) { throw "Native DLL count differs from approved baseline" }
 foreach ($dll in $dynamicManifest) {
     Assert-PublishedFile $dll.File
     $key = $dll.File.ToLowerInvariant()

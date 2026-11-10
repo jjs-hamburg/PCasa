@@ -1,0 +1,16 @@
+{
+  "exiftool": {
+    "version": "13.59",
+    "archiveSha256": "44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec",
+    "perlLicensesSha256": "8bd5fc8dc0ef3b96881ddad0974b79e86f4043f76ab318a730b084adf0890bd0"
+  },
+  "libvips": {
+    "version": "8.18.7",
+    "archiveSha256": "3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241",
+    "mainDllSha256": "4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555",
+    "dllCount": 38
+  },
+  "maplibre": {
+    "version": "5.9.0"
+  }
+}

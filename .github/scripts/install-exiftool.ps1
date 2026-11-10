@@ -4,8 +4,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$version = '13.59'
-$expectedSha256 = '44b512b25af500724ba579d0a53c8fc5851628b692dd5e5d94ae4a15c2cba9ec'
+$approved = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../license-baseline/APPROVED-NATIVE.json') -Raw | ConvertFrom-Json
+$version = [string]$approved.exiftool.version
+$expectedSha256 = [string]$approved.exiftool.archiveSha256
 $url = "https://community.chocolatey.org/api/v2/package/exiftool/$($version).0"
 $work = Join-Path $env:RUNNER_TEMP ('pcasa-exiftool-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null

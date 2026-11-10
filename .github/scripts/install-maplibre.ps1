@@ -4,7 +4,8 @@ param(
 $ErrorActionPreference = "Stop"
 # Build-time download only. The published application runs bundled MapLibre
 # without relying on CDN availability. Do not update version implicitly.
-$version = "5.9.0"
+$approved = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../license-baseline/APPROVED-NATIVE.json') -Raw | ConvertFrom-Json
+$version = [string]$approved.maplibre.version
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $base = "https://cdn.jsdelivr.net/npm/maplibre-gl@$version/dist"
 $files = @(
