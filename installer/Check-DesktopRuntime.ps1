@@ -38,7 +38,7 @@ function Test-DesktopRuntime {
 }
 
 try {
-    if ((-not $VerifyInstallerOnly) -and (Test-DesktopRuntime)) {
+    if ((-not $VerifyInstallerOnly) -and (-not $ResolveOnly) -and (-not $InstallDownloaded) -and (Test-DesktopRuntime)) {
         Write-Host 'PCasa: .NET 10 Desktop Runtime x64 is already installed.'
         exit 0
     }
