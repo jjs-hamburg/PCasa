@@ -48,6 +48,10 @@ jobs:
         run: |
           ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
           ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+          # Restore the exact previously approved PCasa icon for both EXE and Setup.
+          python -m pip install --disable-pip-version-check pillow
+          python tools/generate_pcasa_icon.py
+          if (-not (Test-Path src/PCasa.App/Assets/PCasa.ico)) { throw 'Approved PCasa icon missing' }
       - name: Publish exact Windows x64 software payload
         shell: pwsh
         run: |
