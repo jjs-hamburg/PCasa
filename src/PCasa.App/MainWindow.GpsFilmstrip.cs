@@ -199,7 +199,6 @@ public partial class MainWindow
             $"{GpsFilmstripList.SelectedItems.Count:N0}/{_gpsFilmstripEntries.Count:N0}";
         var source = GpsFilmstripList.SelectedItem as GpsFilmstripEntry;
         var selectedSources = GpsFilmstripList.SelectedItems.Count;
-        GpsFilmstripRemoveGpsButton.IsEnabled = selectedSources > 0;
         GpsFilmstripToGalleryButton.IsEnabled = source is not null &&
             selectedSources == 1 &&
             _selectedImageIds.Count > 0 &&
@@ -248,18 +247,6 @@ public partial class MainWindow
             $"Key={operationKey}; SourceId={source.Id}; Targets={_selectedImageIds.Count}");
         _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Replace,
             (point.Lat, point.Lon), operationKey: operationKey);
-    }
-
-    private void GpsFilmstripRemoveGps_Click(object sender, RoutedEventArgs e)
-    {
-        var sources = GpsFilmstripList.SelectedItems
-            .OfType<GpsFilmstripEntry>().Select(entry => entry.Id)
-            .Distinct().ToArray();
-        if (sources.Length == 0) return;
-        // Immutable filmstrip IDs are handed to the existing durable P0
-        // GPS writer. Never substitute/clear the gallery target selection.
-        _ = CommitGpsEditAsync(GpsMetadataRepository.EditMode.Remove,
-            explicitTargetIds: sources);
     }
 
     private void GpsFilmstrip_PreviewKeyDown(object sender, KeyEventArgs e)
