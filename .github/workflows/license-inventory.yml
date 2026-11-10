@@ -97,6 +97,39 @@ jobs:
           & ./publish/PCasa/native-probe.exe
           if ($LASTEXITCODE -ne 0) { throw "PCasa native image operation failed: $LASTEXITCODE" }
           Remove-Item publish/PCasa/native-probe.* -Force
+      - name: Compile real Windows installer using tested dynamic package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup 6 compiler not installed' }
+          & $iscc installer/PCasa.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
+          if (-not (Test-Path dist/PCasa-Setup-0.1.Alpha.8.exe)) { throw 'No built installer' }
+      - name: Install built installer and verify actual dynamic DLLs and notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = Join-Path $env:RUNNER_TEMP 'pcasa-license-setup-check'
+          $p = Start-Process -FilePath (Resolve-Path dist/PCasa-Setup-0.1.Alpha.8.exe).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$dest") -Wait -PassThru
+          if ($p.ExitCode -notin @(0,3010)) { throw "Installer exited $($p.ExitCode)" }
+          $manifest = Import-Csv license-audit/dynamic-libvips/native-dll-inventory.csv
+          foreach ($dll in $manifest) {
+            $path = Join-Path $dest $dll.File
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing installed dynamic DLL: $($dll.File)" }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne $dll.SHA256.ToLowerInvariant()) { throw "Incorrect installed DLL: $($dll.File)" }
+          }
+          foreach ($rel in @('Licenses/Native/libvips-8.18.7/README.md','Licenses/Native/exiftool-13.59/README.md','exiftool/exiftool_files/Licenses_Strawberry_Perl.zip')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dest $rel))) { throw "Missing installed license material: $rel" }
+          }
+          $static = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
+          $actual = (Get-FileHash -LiteralPath (Join-Path $dest 'libvips-42.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -eq $static) { throw 'Old static libvips shipped in actual installer' }
+          Write-Host "PASS: real Windows installer contains $($manifest.Count) dynamic DLLs, exact hashes and original license texts"
       - name: Upload evidence - NOT a legal clearance certificate
         uses: actions/upload-artifact@v4
         with:
