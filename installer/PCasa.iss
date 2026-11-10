@@ -54,6 +54,12 @@ de.DataRemovalFailed=PCasa-Daten konnten nicht vollständig gelöscht werden. Bi
 en.DataRemovalFailed=PCasa data could not be completely deleted. Please check:
 de.AllUsersRemovalWarning=%nACHTUNG: Der gemeinsame PCasa-Katalog unter ProgramData wird für alle Benutzer entfernt.
 en.AllUsersRemovalWarning=%nWARNING: The shared PCasa catalog under ProgramData will be removed for all users.
+de.RuntimeConsent=PCasa benötigt die Microsoft .NET 10 Desktop Runtime (x64). Sie ist auf diesem Computer nicht installiert.%n%nSoll sie jetzt von Microsoft heruntergeladen und mit sichtbarem Microsoft-Installationsprogramm installiert werden? Der Download kann einige Zeit dauern.%n%nNein bricht die PCasa-Installation ab, ohne die bestehende Installation zu verändern.
+en.RuntimeConsent=PCasa requires the Microsoft .NET 10 Desktop Runtime (x64), which is not installed.%n%nDownload it from Microsoft and run the visible Microsoft installer now? Downloading may take some time.%n%nNo cancels PCasa setup without changing the existing installation.
+de.RuntimeDeclined=Die Microsoft .NET 10 Desktop Runtime wird benötigt. Die PCasa-Installation wurde nicht gestartet.
+en.RuntimeDeclined=Microsoft .NET 10 Desktop Runtime is required. PCasa installation has not started.
+de.RuntimeSilentMissing=Microsoft .NET 10 Desktop Runtime fehlt. Bei einer unbeaufsichtigten Installation muss sie vorher installiert werden.
+en.RuntimeSilentMissing=Microsoft .NET 10 Desktop Runtime is missing. Install it before running unattended setup.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -123,27 +129,53 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ExitCode: Integer;
-  ScriptPath, Args: String;
+  ScriptPath, Args, PowerShellPath: String;
 begin
   Result := '';
   ExtractTemporaryFile('Check-DesktopRuntime.ps1');
   ScriptPath := ExpandConstant('{tmp}\\Check-DesktopRuntime.ps1');
-  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"';
-  if not Exec(ExpandConstant('{sys}\\WindowsPowerShell\\v1.0\\powershell.exe'),
-     Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  PowerShellPath := ExpandConstant('{sys}\\WindowsPowerShell\\v1.0\\powershell.exe');
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '" -ProbeOnly';
+  if not Exec(PowerShellPath, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
   begin
-    Result := 'Die Microsoft .NET 10 Desktop Runtime konnte nicht geprüft werden.';
+    Result := 'Microsoft .NET 10 Desktop Runtime could not be checked.';
+    Exit;
+  end;
+  if ExitCode = 0 then Exit;
+  if ExitCode <> 10 then
+  begin
+    Result := 'Microsoft .NET 10 Desktop Runtime prerequisite check failed.';
+    Exit;
+  end;
+
+  // Never download or install a prerequisite before explicit user consent.
+  // Unattended installation must provision the runtime separately.
+  if WizardSilent then
+  begin
+    Result := CustomMessage('RuntimeSilentMissing');
+    Exit;
+  end;
+  if MsgBox(CustomMessage('RuntimeConsent'), mbConfirmation, MB_YESNO) <> IDYES then
+  begin
+    Result := CustomMessage('RuntimeDeclined');
+    Exit;
+  end;
+
+  // The PowerShell helper downloads and validates the official binary.
+  // Microsoft's runtime installer itself is launched with its own visible UI.
+  Args := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '"';
+  if not Exec(PowerShellPath, Args, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
+  begin
+    Result := 'Microsoft .NET 10 Desktop Runtime could not be started.';
     Exit;
   end;
   if (ExitCode <> 0) and (ExitCode <> 3010) then
   begin
-    Result := 'Microsoft .NET 10 Desktop Runtime x64 fehlt oder konnte nicht installiert werden. ' +
-      'Die bestehende PCasa-Installation wurde nicht verändert. ' +
-      'Bitte die offizielle Desktop Runtime installieren und Setup erneut starten.';
+    Result := 'Microsoft .NET 10 Desktop Runtime installation failed or was cancelled. ' +
+      'The existing PCasa installation has not been changed.';
     Exit;
   end;
-  if ExitCode = 3010 then
-    NeedsRestart := True;
+  if ExitCode = 3010 then NeedsRestart := True;
 end;
 
 [Code]
