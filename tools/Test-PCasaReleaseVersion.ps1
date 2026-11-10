@@ -11,10 +11,11 @@ $cases = @(
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("PCasa-version-test-" + [guid]::NewGuid().ToString('N') + '.props')
 try {
     foreach ($case in $cases) {
-        $content = ($source -replace '<Version>[^<]*</Version>', "<Version>$($case.Semver)</Version>"
-            -replace '<AssemblyVersion>[^<]*</AssemblyVersion>', "<AssemblyVersion>$($case.Assembly)</AssemblyVersion>"
-            -replace '<FileVersion>[^<]*</FileVersion>', "<FileVersion>$($case.File)</FileVersion>"
-            -replace '<InformationalVersion>[^<]*</InformationalVersion>', "<InformationalVersion>$($case.Product)</InformationalVersion>")
+        $content = $source
+        $content = $content -replace '<Version>[^<]*</Version>', "<Version>$($case.Semver)</Version>"
+        $content = $content -replace '<AssemblyVersion>[^<]*</AssemblyVersion>', "<AssemblyVersion>$($case.Assembly)</AssemblyVersion>"
+        $content = $content -replace '<FileVersion>[^<]*</FileVersion>', "<FileVersion>$($case.File)</FileVersion>"
+        $content = $content -replace '<InformationalVersion>[^<]*</InformationalVersion>', "<InformationalVersion>$($case.Product)</InformationalVersion>"
         Set-Content -LiteralPath $temp -Value $content -Encoding utf8
         $version = & $getVersion -VersionFile $temp
         if ($version.Product -ne $case.Product -or $version.File -ne $case.File -or
