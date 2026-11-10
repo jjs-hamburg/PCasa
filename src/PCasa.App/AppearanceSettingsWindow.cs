@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -103,8 +104,8 @@ public sealed class AppearanceSettingsWindow : Window
         })
             Radio(background, "background", option.Item1, option.Item2, values.Background);
 
-        // The gallery's existing JPG directory is the one texture source.
-        // All selectable JPGs are displayed in the strip; no folder picker.
+        // The gallery's existing texture directory is the one texture source.
+        // All supported textures are displayed in the strip; no folder picker.
         var stripRow = new Grid { Margin = new Thickness(0, 7, 0, 0) };
         stripRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         stripRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -137,6 +138,32 @@ public sealed class AppearanceSettingsWindow : Window
         Grid.SetColumn(next, 2);
         stripRow.Children.Add(next);
         background.Children.Add(stripRow);
+        var openTextureFolder = new Button
+        {
+            Content = UiLanguage.T("Texturen Ordner"),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(12, 5, 12, 5),
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        openTextureFolder.Click += (_, _) =>
+        {
+            try
+            {
+                Directory.CreateDirectory(GalleryTextureLibrary.DirectoryPath);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "\"" + GalleryTextureLibrary.DirectoryPath + "\"",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                PcasaDialog.Show(this, ex.Message, UiLanguage.T("Texturordner"),
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        };
+        background.Children.Add(openTextureFolder);
         PopulateTextures();
 
         // One filename card owns all three choices, including the font sizes.
