@@ -58,12 +58,22 @@ $rows | Sort-Object Package | Export-Csv -LiteralPath (Join-Path $PublishDir 'Li
 # Keep the complete original Mozilla license offline in every Windows installer,
 # rather than merely mentioning MPL in a dependency table.
 $mplPath = Join-Path $PublishDir 'Licenses/MPL-1.1.txt'
-Invoke-WebRequest -Uri 'https://www.mozilla.org/media/MPL/1.1/index.0c5913925d40.txt' -OutFile $mplPath -ErrorAction Stop
+# Frozen official upstream Mozilla MPL 1.1 text is checked in, rather than
+# downloading potentially changed text again for every release build.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$mplSource = Join-Path $repoRoot 'license-baseline/libvips-8.18.7/components/cairo-COPYING-MPL.txt'
+if (-not (Test-Path -LiteralPath $mplSource -PathType Leaf)) {
+    throw 'Pinned source license file for Cairo MPL 1.1 missing'
+}
+Copy-Item -LiteralPath $mplSource -Destination $mplPath -Force
 $mplText = Get-Content -LiteralPath $mplPath -Raw
-if ($mplText.Length -lt 10000 -or
+$expectedMplSha256 = 'fa01277004aff314888151ea523bdf390992892e13523984f221695d48c7455b'
+$actualMplSha256 = (Get-FileHash -LiteralPath $mplPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualMplSha256 -ne $expectedMplSha256 -or
+    $mplText.Length -lt 10000 -or
     $mplText -notmatch 'MOZILLA PUBLIC LICENSE' -or
     $mplText -notmatch 'Version 1\.1') {
-    throw 'Authoritative Mozilla MPL 1.1 text missing or invalid'
+    throw "Pinned MPL 1.1 license bytes changed (actual SHA256: $actualMplSha256). A new license review is required."
 }
 # ExifTool's Strawberry Perl attribution archive must travel with the EXE.
 foreach ($path in @(

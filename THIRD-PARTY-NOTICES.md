@@ -21,9 +21,19 @@ relicense those components.
 The installed directory includes `Licenses/CEF-LIBVIPS-GUIDE.txt` with the
 exact Windows component versions, references to Chromium internal credits,
 LGPL source-build locations, and practical shared-library replacement steps.
+The original, version-locked libvips 8.18.7 licensing texts are now
+included offline at `Licenses/Native/libvips-8.18.7/`. They include the
+upstream dependency list, 29 named upstream components (including embedded
+libnsgif), exact-version license/COPYING/NOTICE material, AOM patent terms,
+and LLVM libc++/libunwind runtime license references. The source files
+are committed to `license-baseline/libvips-8.18.7/` and checked against
+the installed copies by SHA-256. Original rights documents, not only
+license identifiers, are preserved.
+
 The native libvips package's THIRD-PARTY-NOTICES.md names additional LGPL
-and permissively licensed components; the notice list alone is not a substitute
-for each applicable license text or corresponding source obligation.
+and permissively licensed components; a notice list alone is not a substitute
+for corresponding source and replacement/relinking obligations. The precise
+LLVM toolchain revision for the dynamic DLL set remains to be verified.
 
 Source and compliance information for LGPL components:
 
@@ -52,8 +62,11 @@ The complete LGPL-3.0 text is in `Licenses/LGPL-3.0.txt`.
 The `Licenses/NuGet-license-inventory.csv` file records resolved NuGet
 package versions, declared licenses and package copyright metadata.
 
-The ExifTool bundle carries its upstream `exiftool/exiftool_files/LICENSE`
-and `exiftool/exiftool_files/Licenses_Strawberry_Perl.zip`.
+The ExifTool 13.59 original license and upstream README are additionally
+shipped at `Licenses/Native/exiftool-13.59/`. The original bundle still
+carries `exiftool/exiftool_files/LICENSE` and the complete
+`exiftool/exiftool_files/Licenses_Strawberry_Perl.zip` (153 files, including
+63 license/notice-name entries), pinned to its audited SHA-256.
 These files must remain present when distributing the executable.
 
 **Known outstanding release compliance work:** For the exact published files,

@@ -188,3 +188,43 @@ Geprüfte Upstream-Herkunft:
 
 Diese offene Feststellung wird ausdrücklich **nicht** durch einen grünen
 Dateiexistenztest aufgehoben.
+
+
+## Eingesammelte feste Originaldokumente (10. November 2026)
+
+Der Quellstand `license-static-verification` archiviert unter
+`license-baseline/` **43 feste Original- und Provenienzdateien**:
+
+- `libvips-8.18.7/`: Upstream-Lizenz, exakt versionierte Build- und
+  Drittanbieter-Notices, die Copyright-/Lizenztexte der 29 erfassten
+  Bibliotheken und zusätzliche LLVM-Laufzeit-Lizenztexte für die zwei
+  gesonderten DLLs `libc++.dll` und `libunwind.dll`.
+- `exiftool-13.59/`: Original-LICENSE und README aus dem
+  ExifTool-Tag `13.59`, sowie der genaue Herkunfts- und Lizenzarchiv-Nachweis.
+- Die Dateien werden beim normalen Publish unverändert unter
+  `Licenses/Native/` installiert und gegen den im Git-Repository
+  versionierten Originalbestand per SHA-256 verglichen.
+- Der bisherige erneute Mozilla-MPL-Download entfällt. Für künftige
+  Releases wird die originale `COPYING-MPL-1.1` aus Cairo 1.18.6
+  verwendet (SHA-256 `fa01277004aff314888151ea523bdf390992892e13523984f221695d48c7455b`).
+  Das ist nicht die bytegleiche Datei der bereits veröffentlichten Alpha.8.
+- Die ExifTool-Windows-Distribution bleibt unverändert; das mitgelieferte
+  `Licenses_Strawberry_Perl.zip` (SHA-256
+  `8bd5fc8dc0ef3b96881ddad0974b79e86f4043f76ab318a730b084adf0890bd0`)
+  enthält 153 Dateien einschließlich 63 Lizenz-/NOTICE-Kandidaten.
+  Der vollständige Inhalt wird beim Build gehasht und inventarisiert.
+- Die dynamische libvips 8.18.7 wurde mit NetVips 3.2.0 unter Windows
+  erfolgreich funktionsgeprüft (38 native DLLs). Sie ersetzt die
+  bislang produktiv ausgelieferte statische NuGet-Bibliothek noch nicht.
+
+**Grenze:** Sammlung und Mitlieferung aller bekannten Originaldokumente
+ist nicht identisch mit dem Nachweis aller Lizenzpflichten.
+Insbesondere sind die vollständigen korrespondierenden Quellen und
+Austausch-/Relinking-Bedingungen des noch produktiv ausgelieferten
+statischen libvips-Pakets nicht erledigt; außerdem ist die genaue
+LLVM-Toolchain-Revision für die dynamische Alternative noch zuzuordnen.
+Die Perl-Lizenzdateien sind vollständig im Originalarchiv enthalten,
+aber die Zuordnung sämtlicher betroffener Perl-Binärbestandteile ist
+nicht unabhängig abschließend bestätigt. Dies sind die **konkreten**
+noch offenen technischen Nachweise, keine fehlenden allgemeinen
+GPL- oder LGPL-Mustertexte.

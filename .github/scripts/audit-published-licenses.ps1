@@ -155,9 +155,54 @@ $requiredFiles = @(
     'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'
 )
 foreach ($file in $requiredFiles) { Assert-PublishedFile $file }
+
+# License texts under the checked-in, version-pinned native baseline are the
+# source of truth. Compare every installed copy byte-for-byte (via SHA256),
+# rather than generating fresh third-party notices at release time.
+$baseline = Join-Path (Join-Path $PSScriptRoot '../..') 'license-baseline/libvips-8.18.7'
+if (-not (Test-Path -LiteralPath $baseline -PathType Container)) {
+    throw 'Pinned libvips license baseline not found in checked-out source'
+}
+$baselineRoot = (Resolve-Path -LiteralPath $baseline).Path
+$baselineFiles = @(Get-ChildItem -LiteralPath $baselineRoot -Recurse -File)
+if ($baselineFiles.Count -lt 37) {
+    throw "Incomplete checked-in libvips license baseline: $($baselineFiles.Count) files"
+}
+foreach ($original in $baselineFiles) {
+    $relative = [System.IO.Path]::GetRelativePath($baselineRoot, $original.FullName)
+    $installed = "Licenses/Native/libvips-8.18.7/$relative"
+    Assert-PublishedFile $installed
+    $key = $installed.Replace('/','\').ToLowerInvariant()
+    $sourceHash = (Get-FileHash -LiteralPath $original.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($relativePaths[$key].SHA256.ToLowerInvariant() -ne $sourceHash) {
+        throw "Installed native license differs from pinned source text: $installed"
+    }
+}
+Write-Host "Verified $($baselineFiles.Count) pinned libvips source/license notices in published output."
+
 # Do not treat a nonempty ZIP as proof of actual licence content.
 Add-Type -AssemblyName System.IO.Compression
 $perlZip = Join-Path $publishPath 'exiftool/exiftool_files/Licenses_Strawberry_Perl.zip'
+# The exact official ExifTool 13.59 Windows distribution was inventoried.
+# Freeze the Strawberry Perl attribution ZIP itself; an arbitrary different
+# archive is not interchangeable with the audited redistribution evidence.
+$perlZipSha256 = '8bd5fc8dc0ef3b96881ddad0974b79e86f4043f76ab318a730b084adf0890bd0'
+$actualPerlZipSha256 = (Get-FileHash -LiteralPath $perlZip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actualPerlZipSha256 -ne $perlZipSha256) {
+    throw "Strawberry Perl license archive changed from audited ExifTool 13.59 baseline: $actualPerlZipSha256"
+}
+$exiftoolLicenseSource = Join-Path (Join-Path $PSScriptRoot '../..') 'license-baseline/exiftool-13.59'
+$exiftoolTextFiles = @(Get-ChildItem -LiteralPath $exiftoolLicenseSource -File)
+if ($exiftoolTextFiles.Count -lt 2) { throw 'Pinned ExifTool 13.59 original license/README missing' }
+foreach ($source in $exiftoolTextFiles) {
+    $target = "Licenses/Native/exiftool-13.59/$($source.Name)"
+    Assert-PublishedFile $target
+    $key = $target.Replace('/','\').ToLowerInvariant()
+    $expected = (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($relativePaths[$key].SHA256.ToLowerInvariant() -ne $expected) {
+        throw "ExifTool original license text differs in installed package: $target"
+    }
+}
 $archive = [System.IO.Compression.ZipFile]::OpenRead($perlZip)
 try {
     $archiveEntries = @($archive.Entries | Where-Object {
@@ -166,7 +211,34 @@ try {
     if ($archiveEntries.Count -eq 0) {
         throw 'Strawberry Perl archive contains no license or notice entries'
     }
+    # Read and hash EVERY non-directory ZIP entry, not merely names containing
+    # "license". This catches damaged members and records the exact audited
+    # Perl payload for stable subsequent releases.
+    $perlEntries = @(
+        foreach ($entry in $archive.Entries) {
+            if ($entry.FullName.EndsWith('/')) { continue }
+            $stream = $entry.Open()
+            try {
+                $sha = [System.Security.Cryptography.SHA256]::Create()
+                try {
+                    $hash = [Convert]::ToHexString($sha.ComputeHash($stream)).ToLowerInvariant()
+                } finally { $sha.Dispose() }
+                [pscustomobject]@{
+                    ArchivePath = $entry.FullName
+                    UncompressedSize = $entry.Length
+                    SHA256 = $hash
+                    IsLicenseCandidate = ($entry.FullName -match '(?i)(license|licence|copying|notice|artistic)')
+                }
+            } finally { $stream.Dispose() }
+        }
+    )
+    if ($perlEntries.Count -eq 0) { throw 'Strawberry Perl licence archive is empty' }
+    $perlEntries | Sort-Object ArchivePath | Export-Csv -NoTypeInformation -Encoding utf8 -Path (Join-Path $OutputDir 'strawberry-perl-archive-files.csv')
 } finally { $archive.Dispose() }
+if ($perlEntries.Count -ne 153 -or $archiveEntries.Count -ne 63) {
+    throw "Strawberry Perl attribution archive changed: $($perlEntries.Count) members, $($archiveEntries.Count) matching license entries"
+}
+Write-Host "Verified ExifTool 13.59 original license text, pinned Perl ZIP SHA256, 153 members and 63 license/notice entries."
 # All package licence metadata must be either an SPDX expression or backed by
 # an upstream licence file copied into the packaged directory.
 foreach ($package in $packages) {
@@ -205,3 +277,13 @@ foreach ($item in $knownNativeHashes.GetEnumerator()) {
     }
 }
 Write-Host "Verified pinned CEF and libvips binary hashes."
+
+# Reverify the very same Mozilla text audited for Alpha.8. Merely matching
+# the filename and a few phrases does not make an online download immutable.
+$expectedMplSha256 = 'fa01277004aff314888151ea523bdf390992892e13523984f221695d48c7455b'
+$mplItem = $relativePaths['licenses\mpl-1.1.txt']
+if ($null -eq $mplItem -or $mplItem.SHA256 -ne $expectedMplSha256) {
+    throw 'MPL-1.1 text differs from audited static baseline'
+}
+Write-Host "Verified pinned Mozilla MPL-1.1 text and indexed $($perlEntries.Count) Perl archive members."
+

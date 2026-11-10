@@ -1,0 +1,99 @@
+name: Evaluate libvips 8.18.7 dynamic Windows distribution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dynamic-libvips-probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Obtain upstream version-matched dynamic DLL distribution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/libvips/build-win64-mxe/releases/download/v8.18.7/vips-dev-x64-web-8.18.7.zip'
+          $expected = '3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241'
+          Invoke-WebRequest -Uri $url -OutFile dynamic.zip
+          $actual = (Get-FileHash -Algorithm SHA256 dynamic.zip).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Dynamic upstream distribution changed: $actual" }
+          Expand-Archive -LiteralPath dynamic.zip -DestinationPath dynamic -Force
+          $dll = @(Get-ChildItem dynamic -Recurse -File -Filter libvips-42.dll)
+          if ($dll.Count -ne 1) { throw "Expected one libvips-42.dll, found $($dll.Count)" }
+          $directory = $dll[0].Directory.FullName
+          $dlls = @(Get-ChildItem -LiteralPath $directory -Filter '*.dll' -File)
+          if ($dlls.Count -lt 2) { throw "Expected a dynamic dependency set, found $($dlls.Count) DLLs in $directory" }
+          $dlls | Sort-Object Name | ForEach-Object {
+            "$($_.Name),$((Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant())"
+          } | Set-Content -Encoding utf8 dynamic-dll-hashes.csv
+          Write-Host "Dynamic DLL inventory: $($dlls.Count) libraries"
+          "LIBVIPS_DLL_DIR=$directory" >> $env:GITHUB_ENV
+      - name: Probe actual NetVips 3.2.0 image operation against dynamic DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet new console --framework net10.0 -o probe
+          dotnet add probe package NetVips --version 3.2.0
+          @'
+          using NetVips;
+          using var image = Image.Black(2, 2);
+          if (image.Width != 2 || image.Height != 2) throw new Exception("Invalid libvips result");
+          using var resized = image.Resize(2);
+          if (resized.Width != 4 || resized.Height != 4) throw new Exception("Resize failed");
+          Console.WriteLine("PASS: NetVips 3.2.0 with native dynamic libvips 8.18.7");
+          '@ | Set-Content -Encoding utf8 probe/Program.cs
+          dotnet publish probe/probe.csproj -c Release -r win-x64 --self-contained false -o probe-out
+          Copy-Item -Path (Join-Path $env:LIBVIPS_DLL_DIR '*.dll') -Destination probe-out -Force
+          & ./probe-out/probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Dynamic NetVips smoke test failed: $LASTEXITCODE" }
+      - name: Verify PCasa Windows x64 builds with dynamically linked libvips
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release --runtime win-x64 --self-contained false -o pcasa-smoke
+          Copy-Item -Path (Join-Path $env:LIBVIPS_DLL_DIR '*.dll') -Destination pcasa-smoke -Force
+          $dllHash = (Get-FileHash -Algorithm SHA256 -LiteralPath pcasa-smoke/libvips-42.dll).Hash.ToLowerInvariant()
+          Write-Host "PCasa test native libvips SHA256: $dllHash"
+          # The existing WPF tag-flow test depends on UI labels, not native
+          # imaging. Probe the native stack inside the actual PCasa output
+          # instead, avoiding an unrelated GUI selector failure.
+          Copy-Item probe-out/probe.exe -Destination pcasa-smoke -Force
+          Copy-Item probe-out/probe.dll -Destination pcasa-smoke -Force
+          Copy-Item probe-out/probe.runtimeconfig.json -Destination pcasa-smoke -Force
+          Copy-Item probe-out/probe.deps.json -Destination pcasa-smoke -Force
+          & ./pcasa-smoke/probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "Native image processing failed in PCasa output: $LASTEXITCODE" }
+      - name: Prepare exact native distribution for eventual installer integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -o dynamic-publish
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir dynamic-publish -EvidenceDir dynamic-package-evidence
+          $dlls = @(Get-ChildItem -LiteralPath dynamic-publish -Filter '*.dll' -File | Where-Object {
+            $_.Name -in ((Import-Csv dynamic-package-evidence/native-dll-inventory.csv).File)
+          })
+          if ($dlls.Count -ne 38) { throw "Dynamic publish native DLL set incomplete: $($dlls.Count)" }
+          $expected = '4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555'
+          $actual = (Get-FileHash -LiteralPath dynamic-publish/libvips-42.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Static libvips unexpectedly retained" }
+          Write-Host "PASS: PCasa publishing includes exact verified dynamic DLL set"
+      - name: Upload native dynamic distribution provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcasa-dynamic-native-distribution
+          path: dynamic-package-evidence/
+          if-no-files-found: warn
+      - name: Retain exact DLL manifest for analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynamic-libvips-8.18.7-evidence
+          path: dynamic-dll-hashes.csv
+          if-no-files-found: warn
