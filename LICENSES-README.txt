@@ -34,5 +34,22 @@ ExifTool und das mitgelieferte Strawberry Perl:
 Die .NET 10 Desktop Runtime wird über den offiziellen Microsoft-Installer
 separat bezogen und ist nicht Teil der PCasa-Binärdateien.
 
+FESTE QUELLTEXTE / ORIGINALHINWEISE (STAND 8.18.7 / 13.59)
+-------------------------------------------------------------
+Im installierten Unterordner Native/libvips-8.18.7/ liegen die
+versionsgebundenen Original-Lizenztexte und Hinweise für libvips und
+29 erfasste Komponenten einschließlich libnsgif. Native/exiftool-13.59/
+enthält die Original-Lizenz und README von ExifTool 13.59 sowie die
+Herkunftsnachweise zum vollständigen Strawberry-Perl-Lizenzarchiv.
+Diese Quellen werden aus dem PCasa-Repository übernommen, nicht bei
+jedem Release erneut aus dem Internet geladen.
+
+Die Originalarchive von ExifTool/Strawberry Perl liegen weiterhin bei
+exiftool/exiftool_files/ (siehe oben); die Dokumentation im Ordner
+Native/ ist kein Ersatz für dieses Lizenzarchiv.
+Für LGPL-Bibliotheken sind die separaten Anforderungen zur
+Quellcodeverfügbarkeit und Austauschbarkeit zu beachten. Das Vorliegen
+eines Lizenztextes allein erfüllt diese nicht.
+
 Die Lizenztexte sind Bestandteil des Windows-Installers und bleiben nach
 der Installation neben PCasa.App.exe unter Licenses/ zugänglich.
