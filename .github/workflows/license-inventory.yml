@@ -115,15 +115,16 @@ jobs:
             choco install innosetup -y --no-progress
           }
           if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup 6 compiler not installed' }
-          & $iscc installer/PCasa.iss
+          ./tools/Build-PCasaInstaller.ps1 -IsccPath $iscc
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
-          if (-not (Test-Path dist/PCasa-Setup-0.1.Alpha.9.exe)) { throw 'No built installer' }
+          $releaseVersion = ./tools/Get-PCasaReleaseVersion.ps1
+          if (-not (Test-Path -LiteralPath $releaseVersion.InstallerPath)) { throw 'No built installer' }
       - name: Install built installer and verify actual dynamic DLLs and notices
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $dest = Join-Path $env:RUNNER_TEMP 'pcasa-license-setup-check'
-          $p = Start-Process -FilePath (Resolve-Path dist/PCasa-Setup-0.1.Alpha.9.exe).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$dest") -Wait -PassThru
+          $p = Start-Process -FilePath (Resolve-Path -LiteralPath (./tools/Get-PCasaReleaseVersion.ps1).InstallerPath).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$dest") -Wait -PassThru
           if ($p.ExitCode -notin @(0,3010)) { throw "Installer exited $($p.ExitCode)" }
           $manifest = Import-Csv license-audit/dynamic-libvips/native-dll-inventory.csv
           foreach ($dll in $manifest) {
@@ -156,7 +157,7 @@ jobs:
           # Both supported installation scopes must contain the same rights
           # materials and native runtime. Test on the disposable CI machine.
           $allDir = Join-Path $env:RUNNER_TEMP 'pcasa-license-all-users'
-          $q = Start-Process -FilePath (Resolve-Path dist/PCasa-Setup-0.1.Alpha.9.exe).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',"/DIR=$allDir") -Wait -PassThru
+          $q = Start-Process -FilePath (Resolve-Path -LiteralPath (./tools/Get-PCasaReleaseVersion.ps1).InstallerPath).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',"/DIR=$allDir") -Wait -PassThru
           if ($q.ExitCode -notin @(0,3010)) { throw "All-users installer exited $($q.ExitCode)" }
           foreach ($dll in $manifest) {
             $target = Join-Path $allDir $dll.File
