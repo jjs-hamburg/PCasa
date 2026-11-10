@@ -5,9 +5,10 @@ param(
 $ErrorActionPreference = 'Stop'
 # Pinned official, dynamically linked libvips Windows x64 web package.
 # Never silently substitute the static NuGet build or a newer upstream build.
-$version = '8.18.7'
-$archiveSha256 = '3a122eb3d588690008216f786338e2f9329dba3c3c2768b5933cf7299d549241'
-$nativeSha256 = '4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555'
+$approved = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../license-baseline/APPROVED-NATIVE.json') -Raw | ConvertFrom-Json
+$version = [string]$approved.libvips.version
+$archiveSha256 = [string]$approved.libvips.archiveSha256
+$nativeSha256 = [string]$approved.libvips.mainDllSha256
 $url = "https://github.com/libvips/build-win64-mxe/releases/download/v$version/vips-dev-x64-web-$version.zip"
 $work = Join-Path $env:RUNNER_TEMP ("pcasa-libvips-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work, $EvidenceDir | Out-Null
@@ -23,7 +24,7 @@ try {
     $actualNative = (Get-FileHash -LiteralPath $main[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualNative -ne $nativeSha256) { throw "Unexpected dynamic libvips binary: $actualNative" }
     $dlls = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.dll' -File)
-    if ($dlls.Count -ne 38) { throw "Expected audited 38 dynamic DLLs, got $($dlls.Count)" }
+    if ($dlls.Count -ne [int]$approved.libvips.dllCount) { throw "Dynamic library count differs from approved baseline: $($dlls.Count)" }
     $dest = (Resolve-Path -LiteralPath $PublishDir).Path
     $manifest = @(
         foreach ($dll in $dlls) {
