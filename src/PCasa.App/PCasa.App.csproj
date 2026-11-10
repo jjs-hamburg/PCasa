@@ -77,14 +77,7 @@
   <ItemGroup>
     <Content Include="../../default-textures/**/*" Link="Texturen/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Assets/CanvasLight.jpg" Link="Texturen/Leinwand hell.jpg"
-             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Assets/CanvasDark.jpg" Link="Texturen/Leinwand dunkel.jpg"
-             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Assets/CanvasLightFine.jpg" Link="Texturen/Leinwand hell - fein.jpg"
-             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Assets/CanvasDarkFine.jpg" Link="Texturen/Leinwand dunkel - fein.jpg"
-             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>
