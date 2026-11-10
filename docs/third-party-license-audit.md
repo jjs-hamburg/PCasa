@@ -1,5 +1,18 @@
 # PCasa – Lizenzprüfung der Windows-Distribution
 
+> **Aktueller Status: Alpha.9 (10. November 2026).** Frühere Abschnitte
+> beschreiben historische Alpha.7/8-Befunde und dürfen nicht als aktuelle
+> Alpha.9-Blockerliste gelesen werden. Der geprüfte Alpha.9-Installer liefert
+> 38 dynamische libvips-DLLs statt der statischen NuGet-Variante; der
+> korrekte libvips-Quelltag, die Toolchain und die Chromium-Credits sind
+> dokumentiert. Die technische Auslieferung ist für beide Setup-Modi
+> getestet. Eine noch offene **inhaltliche** Prüfung betrifft vor allem
+> die individuellen Lizenzbedingungen der 31 kompilierten Perl-XS-Module.
+> Ein allgemeiner Perl-Lizenzverweis allein ist dafür kein Einzelbeleg.
+> Die weitergehenden jeweiligen Source-Redistribution-Pflichten sind
+> anhand der konkreten Komponenten und Quellen zu prüfen, nicht allein
+> anhand der Dateihashes.
+
 Stand: 9. November 2026 – Alpha.8-Lizenzpaket in Prüfung; veröffentlichte Basis Alpha.7.
 
 **Wichtig:** Die automatische CI-Prüfung beweist die Anwesenheit der benannten
