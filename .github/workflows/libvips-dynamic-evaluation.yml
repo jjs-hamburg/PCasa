@@ -73,6 +73,27 @@ jobs:
           Copy-Item probe-out/probe.deps.json -Destination pcasa-smoke -Force
           & ./pcasa-smoke/probe.exe
           if ($LASTEXITCODE -ne 0) { throw "Native image processing failed in PCasa output: $LASTEXITCODE" }
+      - name: Prepare exact native distribution for eventual installer integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -o dynamic-publish
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir dynamic-publish -EvidenceDir dynamic-package-evidence
+          $dlls = @(Get-ChildItem -LiteralPath dynamic-publish -Filter '*.dll' -File | Where-Object {
+            $_.Name -in ((Import-Csv dynamic-package-evidence/native-dll-inventory.csv).File)
+          })
+          if ($dlls.Count -ne 38) { throw "Dynamic publish native DLL set incomplete: $($dlls.Count)" }
+          $expected = '4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555'
+          $actual = (Get-FileHash -LiteralPath dynamic-publish/libvips-42.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Static libvips unexpectedly retained" }
+          Write-Host "PASS: PCasa publishing includes exact verified dynamic DLL set"
+      - name: Upload native dynamic distribution provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcasa-dynamic-native-distribution
+          path: dynamic-package-evidence/
+          if-no-files-found: warn
       - name: Retain exact DLL manifest for analysis
         if: always()
         uses: actions/upload-artifact@v4
