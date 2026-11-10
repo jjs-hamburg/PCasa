@@ -228,3 +228,53 @@ aber die Zuordnung sämtlicher betroffener Perl-Binärbestandteile ist
 nicht unabhängig abschließend bestätigt. Dies sind die **konkreten**
 noch offenen technischen Nachweise, keine fehlenden allgemeinen
 GPL- oder LGPL-Mustertexte.
+
+
+## Neuer Auslieferungsweg: dynamische libvips-Bibliotheken (10.11.2026)
+
+**Dieser Abschnitt ersetzt die obigen statischen libvips-Befunde für
+künftige Builds aus diesem Quellstand.** Historische Aussagen zu den
+bereits veröffentlichten Alpha.7/Alpha.8-Installern bleiben gültig.
+
+- Die Referenz auf `NetVips.Native.win-x64` wurde aus
+  `Directory.Packages.props` und dem PCasa-Projekt entfernt.
+- `tools/prepare-dynamic-libvips.ps1` legt die offizielle,
+  SHA-256-gepinnte libvips-8.18.7-Windows-Distribution (38 einzelne DLLs)
+  direkt in das tatsächliche PCasa-Publish-Verzeichnis.
+- `.github/scripts/audit-published-licenses.ps1` überprüft alle
+  38 nativen DLLs gegen das vom festgelegten Archiv erzeugte
+  Dateimanifest und verweigert die alte statische NuGet-Abhängigkeit.
+- Aus diesem Publish wird ein echter Inno-Setup-Installer gebaut.
+  Installation, Dateien und Lizenzmaterialien werden auf dem
+  Windows-Testrechner kontrolliert. Die beiden angebotenen
+  Installationsarten werden separat überprüft.
+- Das verwendete llvm-mingw-Release ist `20260922`, der von dessen
+  Buildskript vorgegebene LLVM-Quelltag `llvmorg-23.1.2`.
+  Die Lizenztexte zu `libc++.dll` und `libunwind.dll` sind
+  versionsunabhängig gleichlautend, ihr genaues Herkunftsmanifest
+  ist jetzt unter `license-baseline/libvips-8.18.7/README.md` hinterlegt.
+
+## ExifTool/Strawberry Perl: unveränderte Binärdateien
+
+`tools/audit-exiftool-perl-native.ps1` erstellt für die offizielle
+ExIfTool-Windows-Verteilung eine CSV-Zuordnung sämtlicher **38**
+EXE-/DLL-Dateien zu der tatsächlich mitgelieferten Original-Lizenz,
+dem unveränderten Strawberry-Perl-Lizenzarchiv und gegebenenfalls
+den unveränderten Perl-Modulquellen. Der Archivinhalt ist durch
+vollständige Einzeldatei-Inventur und ZIP-Prüfsumme fixiert.
+Der Windows-Installer-Test vergleicht zusätzlich sämtliche
+**509** ExifTool-Dateien mit den Dateien aus dem geprüften Publish,
+bytegenau per SHA-256.
+
+Die Original-Lizenzdateien liegen im Installer; der Nutzer muss keine
+zusätzlichen Texte von GitHub herunterladen. Das genaue Ergebnis der
+Komponentenprüfung wird im CI-Prüfartefakt
+`exiftool-perl-native-license-map.csv` protokolliert.
+
+**Reichweite:** Diese Prüfungen zeigen unveränderte Weitergabe,
+Identität und Lizenzzuordnung. Sie behaupten nicht, dass jedes
+zusätzliche CPAN-Modul in rechtlichem Sinn durch die Perl-Standardlizenz
+abgedeckt sei. Für die LGPL-Bibliotheken bleiben die originalen
+Quell- und Austauschrechte maßgeblich. Die unveränderten Original-
+Quellstände und Buildverweise der Drittbibliotheken sind unter
+`license-baseline/` dokumentiert.
