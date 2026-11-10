@@ -102,13 +102,15 @@ public partial class MainWindow
         // safe for older profiles that have no Language key (defaults to de).
         UiLanguage.Current.Select(_appearance.Language);
         SyncLanguageMenu();
-        // Preserve older Leinwand selections in the single configurable
-        // texture path. Start with the finer supplied JPGs.
-        if (_appearance.Background is "Canvas" or "CanvasDark")
+        // The shipped Leinwand textures were retired. Existing installations
+        // must not keep a dangling reference to a now-deleted built-in file.
+        // Preserve every independent user-supplied texture selection.
+        if (_appearance.Background is "Canvas" or "CanvasDark" ||
+            _appearance.TextureFileName?.StartsWith("Leinwand ",
+                StringComparison.OrdinalIgnoreCase) == true)
         {
-            _appearance.TextureFileName = _appearance.Background == "Canvas"
-                ? "Leinwand hell - fein.jpg" : "Leinwand dunkel - fein.jpg";
-            _appearance.Background = "Texture";
+            _appearance.TextureFileName = null;
+            _appearance.Background = "Auto";
             SaveAppearance();
         }
         if (_appearance.ShowThumbnailShadows is null)
