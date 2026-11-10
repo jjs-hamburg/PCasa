@@ -153,6 +153,23 @@ jobs:
           $actual = (Get-FileHash -LiteralPath (Join-Path $dest 'libvips-42.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -eq $static) { throw 'Old static libvips shipped in actual installer' }
           Write-Host "PASS: real Windows installer contains $($manifest.Count) dynamic DLLs, exact hashes and original license texts"
+          # Both supported installation scopes must contain the same rights
+          # materials and native runtime. Test on the disposable CI machine.
+          $allDir = Join-Path $env:RUNNER_TEMP 'pcasa-license-all-users'
+          $q = Start-Process -FilePath (Resolve-Path dist/PCasa-Setup-0.1.Alpha.8.exe).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',"/DIR=$allDir") -Wait -PassThru
+          if ($q.ExitCode -notin @(0,3010)) { throw "All-users installer exited $($q.ExitCode)" }
+          foreach ($dll in $manifest) {
+            $target = Join-Path $allDir $dll.File
+            if (-not (Test-Path -LiteralPath $target)) { throw "Missing all-users native DLL: $($dll.File)" }
+            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $dll.SHA256.ToLowerInvariant()) {
+              throw "All-users native DLL altered: $($dll.File)"
+            }
+          }
+          foreach ($rel in @('Licenses/Native/libvips-8.18.7/README.md','Licenses/Native/exiftool-13.59/README.md','exiftool/exiftool_files/Licenses_Strawberry_Perl.zip')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $allDir $rel))) { throw "Missing all-users licensing: $rel" }
+          }
+          Write-Host "PASS: all-users installer preserves identical 38 native DLL hashes and original licensing materials."
+
       - name: Upload evidence - NOT a legal clearance certificate
         uses: actions/upload-artifact@v4
         with:
