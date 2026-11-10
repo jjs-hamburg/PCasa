@@ -62,6 +62,13 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-NATIVE-BUILD-VERSIONS.txt" Link="Licenses/NATIVE-BUILD-VERSIONS.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Fixed, version-specific native license baseline: copied as files, not
+         fetched at every build. This is evidence for the pinned Windows native
+         component set and travels in both the portable and setup payload. -->
+    <Content Include="../../license-baseline/libvips-8.18.7/**/*"
+             Link="Licenses/Native/libvips-8.18.7/%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
     <!-- Redistributed MapLibre BSD-3 and third-party attributions. -->
     <Content Include="Resources/maplibre-LICENSE.txt"
              Link="Licenses/MapLibre-LICENSE.txt"
