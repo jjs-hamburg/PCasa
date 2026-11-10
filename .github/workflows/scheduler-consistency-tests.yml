@@ -326,6 +326,12 @@ jobs:
             if ($marker -ne ($mode -eq "ALLUSERS")) {
               throw "Setup $mode selected the wrong catalog data scope"
             }
+            # Simulate an installed legacy default texture. Upgrades must remove
+            # retired bundled files without deleting user-supplied textures.
+            $retiredTexture = Join-Path $target "Texturen/Leinwand hell.jpg"
+            $customTexture = Join-Path $target "Texturen/My Custom Texture.jpg"
+            Set-Content -LiteralPath $retiredTexture -Value "legacy shipped texture"
+            Set-Content -LiteralPath $customTexture -Value "user-owned texture"
             # Simulate an older self-contained PCasa installation in-place:
             # the upgrade must remove old Microsoft WPF/.NET DLLs while
             # preserving the application and its packaged dependencies.
@@ -342,6 +348,12 @@ jobs:
               if (Test-Path (Join-Path $target $legacy)) {
                 throw "Setup $mode failed to remove legacy self-contained $legacy"
               }
+            }
+            if (Test-Path -LiteralPath $retiredTexture) {
+              throw "Setup $mode left retired bundled Leinwand texture installed"
+            }
+            if (-not (Test-Path -LiteralPath $customTexture)) {
+              throw "Setup $mode deleted a user-supplied texture"
             }
             if (-not (Test-Path (Join-Path $target "Microsoft.Data.Sqlite.dll"))) {
               throw "Setup $mode lost application dependencies during runtime cleanup"
