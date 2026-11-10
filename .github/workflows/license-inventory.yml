@@ -168,7 +168,17 @@ jobs:
           foreach ($rel in @('Licenses/Native/libvips-8.18.7/README.md','Licenses/Native/exiftool-13.59/README.md','exiftool/exiftool_files/Licenses_Strawberry_Perl.zip')) {
             if (-not (Test-Path -LiteralPath (Join-Path $allDir $rel))) { throw "Missing all-users licensing: $rel" }
           }
-          Write-Host "PASS: all-users installer preserves identical 38 native DLL hashes and original licensing materials."
+          # The all-users mode must also preserve every file in the official
+          # ExifTool/Strawberry Perl bundle, not only the native libvips DLLs.
+          foreach ($file in $sourceExif) {
+            $relative = [IO.Path]::GetRelativePath($sourceRoot,$file.FullName)
+            $installed = Join-Path $allDir $relative
+            if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Missing all-users ExifTool file: $relative" }
+            $expected = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $actual = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "All-users ExifTool file altered: $relative" }
+          }
+          Write-Host "PASS: all-users installer preserves identical $($sourceExif.Count) ExifTool files, 38 dynamic libvips DLLs and original licensing materials."
 
       - name: Upload evidence - NOT a legal clearance certificate
         uses: actions/upload-artifact@v4
