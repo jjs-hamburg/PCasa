@@ -35,8 +35,9 @@ in a replacement-friendly form without the previous statically aggregated
 NetVips.Native.win-x64 NuGet binary. The native DLL hashes are checked against
 the pinned upstream archive, and the licenses are included under
 `Licenses/Native/libvips-8.18.7/`. These notices do not replace source code
-availability obligations where applicable. The precise
-LLVM toolchain revision for the dynamic DLL set remains to be verified.
+availability obligations where applicable. The dynamic DLL toolchain is pinned to llvm-mingw release `20260922`
+with LLVM tag `llvmorg-23.1.2`, as recorded in the fixed native license
+baseline. This is not an unresolved version-identification item.
 
 Source and compliance information for LGPL components:
 
