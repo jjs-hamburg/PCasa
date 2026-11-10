@@ -60,6 +60,8 @@ de.RuntimeDeclined=Die Microsoft .NET 10 Desktop Runtime wird benötigt. Die PCa
 en.RuntimeDeclined=Microsoft .NET 10 Desktop Runtime is required. PCasa installation has not started.
 de.RuntimeSilentMissing=Microsoft .NET 10 Desktop Runtime fehlt. Bei einer unbeaufsichtigten Installation muss sie vorher installiert werden.
 en.RuntimeSilentMissing=Microsoft .NET 10 Desktop Runtime is missing. Install it before running unattended setup.
+de.RuntimeDownloadDescription=Download von Microsoft. Mit Abbrechen wird die PCasa-Installation beendet.
+en.RuntimeDownloadDescription=Downloading from Microsoft. Cancel ends PCasa Setup.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -77,6 +79,7 @@ Type: files; Name: "{app}\\Texturen\\Leinwand dunkel.jpg"
 Type: files; Name: "{app}\\Texturen\\Leinwand hell - fein.jpg"
 Type: files; Name: "{app}\\Texturen\\Leinwand dunkel - fein.jpg"
 Type: files; Name: "{app}\\Texturen\\Stein - Schiefer dunkel.jpg"
+Type: files; Name: "{app}\\Texturen\\seide1.webp"
 ; A machine-wide marker must never leak into a per-user installation.
 Type: files; Name: "{app}\PCasa.all-users"
 
@@ -118,6 +121,9 @@ Source: "..\publish\PCasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 Source: "PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
 Source: "Check-DesktopRuntime.ps1"; Flags: dontcopy
 
+[Registry]
+Root: HKCU; Subkey: "Software\\PCasa"; ValueType: string; ValueName: "PendingSetupLanguage"; ValueData: "{language}"
+
 [Icons]
 Name: "{autoprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"
 Name: "{autodesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon
@@ -140,7 +146,7 @@ procedure InitializeWizard();
 begin
   RuntimeDownloadPage := CreateDownloadPage(
     'Microsoft .NET 10 Desktop Runtime',
-    'Download von Microsoft. Mit Abbrechen wird die PCasa-Installation beendet.',
+    CustomMessage('RuntimeDownloadDescription'),
     nil);
   RuntimeDownloadPage.ShowBaseNameInsteadOfUrl := True;
 end;
