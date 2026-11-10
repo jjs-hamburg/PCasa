@@ -15,6 +15,7 @@ on:
       - 'Directory.Packages.props'
       - 'PCasa.Version.props'
       - 'tools/Get-PCasaReleaseVersion.ps1'
+      - 'tools/Test-PCasaReleaseVersion.ps1'
       - 'tools/Build-PCasaInstaller.ps1'
       - 'license-baseline/APPROVED-*'
       - '.github/scripts/install-exiftool.ps1'
@@ -35,6 +36,7 @@ on:
       - 'PCasa.Version.props'
       - 'Directory.Packages.props'
       - 'tools/Get-PCasaReleaseVersion.ps1'
+      - 'tools/Test-PCasaReleaseVersion.ps1'
       - 'tools/Build-PCasaInstaller.ps1'
       - 'tools/prepare-dynamic-libvips.ps1'
       - 'tools/audit-exiftool-perl-native.ps1'
@@ -46,12 +48,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: pcasa-license-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   license-evidence:
     runs-on: windows-latest
     steps:
       - name: Checkout exact source commit, not obsolete Alpha.2
         uses: actions/checkout@v5
+      - name: Validate release version for future PCasa versions
+        shell: pwsh
+        run: ./tools/Test-PCasaReleaseVersion.ps1
       - name: Check .NET 10 SDK
         shell: pwsh
         run: |
