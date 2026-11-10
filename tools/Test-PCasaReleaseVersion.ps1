@@ -24,7 +24,7 @@ try {
             throw "Release parser rejected valid test version $($case.Product)"
         }
     }
-    $bad = $source -replace '<InformationalVersion>[^<]*</InformationalVersion>', '<InformationalVersion>0.1.Alpha.10</InformationalVersion>'
+    $bad = $source -replace '<InformationalVersion>[^<]*</InformationalVersion>', '<InformationalVersion>0.1.Alpha.999</InformationalVersion>'
     Set-Content -LiteralPath $temp -Value $bad -Encoding utf8
     $failedAsExpected = $false
     try { $null = & $getVersion -VersionFile $temp } catch { $failedAsExpected = $true }
