@@ -58,7 +58,14 @@ $rows | Sort-Object Package | Export-Csv -LiteralPath (Join-Path $PublishDir 'Li
 # Keep the complete original Mozilla license offline in every Windows installer,
 # rather than merely mentioning MPL in a dependency table.
 $mplPath = Join-Path $PublishDir 'Licenses/MPL-1.1.txt'
-Invoke-WebRequest -Uri 'https://www.mozilla.org/media/MPL/1.1/index.0c5913925d40.txt' -OutFile $mplPath -ErrorAction Stop
+# Frozen official upstream Mozilla MPL 1.1 text is checked in, rather than
+# downloading potentially changed text again for every release build.
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$mplSource = Join-Path $repoRoot 'license-baseline/libvips-8.18.7/components/cairo-COPYING-MPL.txt'
+if (-not (Test-Path -LiteralPath $mplSource -PathType Leaf)) {
+    throw 'Pinned source license file for Cairo MPL 1.1 missing'
+}
+Copy-Item -LiteralPath $mplSource -Destination $mplPath -Force
 $mplText = Get-Content -LiteralPath $mplPath -Raw
 $expectedMplSha256 = 'f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469'
 $actualMplSha256 = (Get-FileHash -LiteralPath $mplPath -Algorithm SHA256).Hash.ToLowerInvariant()
