@@ -33,8 +33,7 @@ public static class GalleryTextureLibrary
 
     private static bool IsSupportedTexture(string extension)
         => extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
-           extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
-           extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
+           extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
 
     public static BitmapSource LoadBitmap(string path)
     {
