@@ -56,6 +56,16 @@ jobs:
           Copy-Item -Path (Join-Path $env:LIBVIPS_DLL_DIR '*.dll') -Destination probe-out -Force
           & ./probe-out/probe.exe
           if ($LASTEXITCODE -ne 0) { throw "Dynamic NetVips smoke test failed: $LASTEXITCODE" }
+      - name: Verify PCasa Windows x64 builds with dynamically linked libvips
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet publish tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release --runtime win-x64 --self-contained false -o pcasa-smoke
+          Copy-Item -Path (Join-Path $env:LIBVIPS_DLL_DIR '*.dll') -Destination pcasa-smoke -Force
+          $dllHash = (Get-FileHash -Algorithm SHA256 -LiteralPath pcasa-smoke/libvips-42.dll).Hash.ToLowerInvariant()
+          Write-Host "PCasa test native libvips SHA256: $dllHash"
+          & ./pcasa-smoke/PCasa.WindowSmokeTests.exe --tag-flow
+          if ($LASTEXITCODE -ne 0) { throw "PCasa WPF tag flow failed with dynamic libvips: $LASTEXITCODE" }
       - name: Retain exact DLL manifest for analysis
         if: always()
         uses: actions/upload-artifact@v4
