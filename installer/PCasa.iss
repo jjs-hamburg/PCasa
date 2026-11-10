@@ -1,5 +1,10 @@
 #define MyAppName "PCasa"
-#define MyAppVersion "0.1.Alpha.9"
+#ifndef MyAppVersion
+  #error MyAppVersion must be passed by tools/Build-PCasaInstaller.ps1
+#endif
+#ifndef MyFileVersion
+  #error MyFileVersion must be passed by tools/Build-PCasaInstaller.ps1
+#endif
 
 [Setup]
 AppId={{3A78A421-2B72-45E6-8CCB-A1085696E6D1}
@@ -27,10 +32,10 @@ AppMutex=Global\PCasa.Desktop.SingleInstance
 WizardStyle=modern
 SetupIconFile=..\src\PCasa.App\Assets\PCasa.ico
 SetupLogging=yes
-VersionInfoVersion=0.1.0.9
+VersionInfoVersion={#MyFileVersion}
 VersionInfoDescription=PCasa Setup
 VersionInfoProductName=PCasa
-VersionInfoProductVersion=0.1.0.9
+VersionInfoProductVersion={#MyFileVersion}
 
 [Languages]
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
