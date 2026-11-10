@@ -1,9 +1,6 @@
 name: Verify published Alpha.8 installer license payload
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/verify-shipped-installer.yml'
   workflow_dispatch:
 
 permissions:
