@@ -59,7 +59,7 @@ public partial class MainWindow
         public double? WindowTop { get; set; }
         public double? WindowWidth { get; set; }
         public double? WindowHeight { get; set; }
-        public bool WindowMaximized { get; set; }
+        public bool WindowMaximized { get; set; } = true;
         // Relative proportions of the resizable three-column workspace.
         // The folder's user preference stays intact while expanded GPS hides it.
         public bool FolderSidebarVisible { get; set; } = true;
