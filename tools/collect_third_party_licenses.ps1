@@ -11,8 +11,7 @@ $required = @(
     'CefSharp.Common.NETCore',
     'CefSharp.Wpf.NETCore',
     'chromiumembeddedframework.runtime',
-    'chromiumembeddedframework.runtime.win-x64',
-    'NetVips.Native.win-x64'
+    'chromiumembeddedframework.runtime.win-x64'
 )
 $rows = @()
 foreach ($entry in $assets.libraries.PSObject.Properties) {
