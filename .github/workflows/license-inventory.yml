@@ -12,6 +12,8 @@ on:
       - 'LICENSES-*'
       - 'license-baseline/**'
       - 'src/PCasa.App/PCasa.App.csproj'
+      - 'Directory.Packages.props'
+      - 'tools/prepare-dynamic-libvips.ps1'
   pull_request:
     paths:
       - '.github/workflows/license-inventory.yml'
@@ -50,6 +52,14 @@ jobs:
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           New-Item -ItemType Directory -Force -Path publish/PCasa/exiftool | Out-Null
           Copy-Item tools/exiftool/* publish/PCasa/exiftool -Recurse -Force
+      - name: Install pinned dynamically linked libvips into actual PCasa publish
+        shell: pwsh
+        run: |
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir publish/PCasa -EvidenceDir license-audit/dynamic-libvips
+          $actual = (Get-FileHash -LiteralPath publish/PCasa/libvips-42.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555') {
+            throw 'Old static native DLL remains in published PCasa'
+          }
       - name: Export complete credits from bundled Chromium/CEF
         shell: pwsh
         timeout-minutes: 3
