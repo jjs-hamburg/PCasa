@@ -10,6 +10,14 @@ on:
       - 'tools/collect_third_party_licenses.ps1'
       - 'THIRD-PARTY-NOTICES.md'
       - 'LICENSES-*'
+  pull_request:
+    paths:
+      - '.github/workflows/license-inventory.yml'
+      - '.github/scripts/audit-published-licenses.ps1'
+      - 'tools/collect_third_party_licenses.ps1'
+      - 'THIRD-PARTY-NOTICES.md'
+      - 'LICENSES-*'
+      - 'docs/third-party-license-audit.md'
   workflow_dispatch:
 
 permissions:
