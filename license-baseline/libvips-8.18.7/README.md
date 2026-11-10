@@ -58,6 +58,26 @@ The version-tagged sources should be checked against the official
 upstream distribution and any version-specific additions before
 unconditional public reuse.
 
+## Additional DLL-level license texts
+
+The 38-DLL dynamic Windows payload also contains `libc++.dll` and
+`libunwind.dll`, which were **not individually listed** in the vips-web
+codec dependency table. Their LLVM-project licensing texts are stored
+as `components/llvm-libcxx-LICENSE.txt` and
+`components/llvm-libunwind-LICENSE.txt`, retrieved from the LLVM
+`llvmorg-21.1.8` reference. The precise LLVM toolchain revision used
+by the v8.18.7 Windows builder has **not yet been independently
+verified**; these texts are preserved here for coverage, not claimed
+as proof of that version's exact corresponding source.
+
+For Cairo the full upstream `COPYING-MPL-1.1` text from the version
+1.18.6 mirror is authoritative for the pinned baseline. Its SHA256
+is `fa01277004aff314888151ea523bdf390992892e13523984f221695d48c7455b`.
+This differs byte-for-byte from the equally complete Mozilla-hosted
+MPL-1.1 text used by the previously published Alpha.8 installer.
+The build deliberately pins the Cairo-origin text for future releases;
+it does not retroactively change the signed Alpha.8 installer.
+
 ## LGPL / source and user modification
 
 A dynamic libvips build with 38 native DLLs was tested against
