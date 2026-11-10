@@ -13,6 +13,12 @@ on:
       - 'license-baseline/**'
       - 'src/PCasa.App/PCasa.App.csproj'
       - 'Directory.Packages.props'
+      - 'PCasa.Version.props'
+      - 'tools/Get-PCasaReleaseVersion.ps1'
+      - 'tools/Build-PCasaInstaller.ps1'
+      - 'license-baseline/APPROVED-*'
+      - '.github/scripts/install-exiftool.ps1'
+      - '.github/scripts/install-maplibre.ps1'
       - 'tools/prepare-dynamic-libvips.ps1'
       - 'tools/audit-exiftool-perl-native.ps1'
       - 'Directory.Packages.props'
@@ -26,6 +32,15 @@ on:
       - 'docs/third-party-license-audit.md'
       - 'license-baseline/**'
       - 'src/PCasa.App/PCasa.App.csproj'
+      - 'PCasa.Version.props'
+      - 'Directory.Packages.props'
+      - 'tools/Get-PCasaReleaseVersion.ps1'
+      - 'tools/Build-PCasaInstaller.ps1'
+      - 'tools/prepare-dynamic-libvips.ps1'
+      - 'tools/audit-exiftool-perl-native.ps1'
+      - '.github/scripts/install-exiftool.ps1'
+      - '.github/scripts/install-maplibre.ps1'
+      - 'installer/PCasa.iss'
   workflow_dispatch:
 
 permissions:
