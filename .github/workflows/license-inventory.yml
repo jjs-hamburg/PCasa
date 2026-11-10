@@ -14,6 +14,7 @@ on:
       - 'src/PCasa.App/PCasa.App.csproj'
       - 'Directory.Packages.props'
       - 'tools/prepare-dynamic-libvips.ps1'
+      - 'tools/audit-exiftool-perl-native.ps1'
       - 'Directory.Packages.props'
   pull_request:
     paths:
@@ -71,6 +72,10 @@ jobs:
         shell: pwsh
         run: |
           ./tools/collect_third_party_licenses.ps1 -AssetsFile src/PCasa.App/obj/project.assets.json -PublishDir publish/PCasa
+      - name: Map all executable Perl and Strawberry native components to original rights evidence
+        shell: pwsh
+        run: |
+          ./tools/audit-exiftool-perl-native.ps1 -PublishDir publish/PCasa -OutputDir license-audit
       - name: Produce hashes, complete NuGet inventory and review findings
         shell: pwsh
         run: |
