@@ -9,7 +9,7 @@ public sealed class FolderTreeDisplaySettings
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PCasa", "folder-tree.json");
 
-    public bool Compressed { get; set; }
+    public bool Compressed { get; set; } = true;
 
     public static FolderTreeDisplaySettings Load()
     {
