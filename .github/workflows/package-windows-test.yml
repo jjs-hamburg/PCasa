@@ -1,6 +1,15 @@
 name: Package Windows Test
 
 on:
+  push:
+    branches: ['setup-*']
+    paths:
+      - '.github/workflows/package-windows-test.yml'
+  pull_request:
+    paths:
+      - '.github/workflows/package-windows-test.yml'
+      - 'tools/prepare-dynamic-libvips.ps1'
+      - 'tools/audit-exiftool-perl-native.ps1'
   workflow_dispatch:
 
 permissions:
@@ -19,17 +28,22 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Prepare pinned resources and approved icon
+        shell: pwsh
+        run: |
+          ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+          python -m pip install --disable-pip-version-check pillow
+          python tools/generate_pcasa_icon.py
       - name: Restore
         run: dotnet restore src/PCasa.App/PCasa.App.csproj -r win-x64
 
-      - name: Publish self-contained Windows x64 test build
+      - name: Publish framework-dependent Windows x64 package with original licensing
         run: >-
           dotnet publish src/PCasa.App/PCasa.App.csproj
           --configuration Release
           --runtime win-x64
-          --self-contained true
+          --self-contained false
           --no-restore
-          -p:Version=0.1.0-preview.1
           -p:DebugType=None
           -p:DebugSymbols=false
           -o publish/PCasa
@@ -40,6 +54,23 @@ jobs:
       - name: Bundle verified lossless metadata tool
         shell: pwsh
         run: ./.github/scripts/install-exiftool.ps1 -Destination "publish/PCasa/exiftool"
+
+      - name: Supply exact dynamic libvips DLLs
+        shell: pwsh
+        run: ./tools/prepare-dynamic-libvips.ps1 -PublishDir publish/PCasa -EvidenceDir license-audit/dynamic-libvips
+
+      - name: Generate actual Chromium/CefSharp third-party credits
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          if ((Get-Item publish/PCasa/Licenses/Chromium-Credits.html).Length -lt 50000) { throw 'Incomplete Chromium credits' }
+
+      - name: Collect and verify unchanged native and ExifTool license materials
+        shell: pwsh
+        run: |
+          ./tools/collect_third_party_licenses.ps1 -AssetsFile src/PCasa.App/obj/project.assets.json -PublishDir publish/PCasa
+          ./tools/audit-exiftool-perl-native.ps1 -PublishDir publish/PCasa -OutputDir license-audit
+          ./.github/scripts/audit-published-licenses.ps1 -PublishDir publish/PCasa -ProjectAssetsFile src/PCasa.App/obj/project.assets.json -OutputDir license-audit
 
       - name: Verify publish directory
         shell: pwsh

@@ -24,7 +24,6 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="CefSharp.Wpf.NETCore" />
     <PackageReference Include="NetVips" />
-    <PackageReference Include="NetVips.Native.win-x64" />
   </ItemGroup>
   
   <ItemGroup Condition="Exists('Assets/PCasa.ico')">

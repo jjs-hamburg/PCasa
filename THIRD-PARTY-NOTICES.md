@@ -13,7 +13,7 @@ relicense those components.
 | Microsoft.Data.Sqlite 10.0.12 | MIT; includes transitive SQLitePCLRaw/native SQLite dependencies | https://www.nuget.org/packages/Microsoft.Data.Sqlite/10.0.12 |
 | CefSharp.Wpf.NETCore 152.0.100 | BSD-family; CEF and Chromium third-party notices apply | https://github.com/cefsharp/CefSharp |
 | NetVips 3.2.0 | MIT | https://github.com/kleisauke/net-vips |
-| NetVips.Native.win-x64 8.18.7 | LGPL-3.0-or-later per NuGet; bundled native dependencies may carry additional licenses | https://www.nuget.org/packages/NetVips.Native.win-x64/8.18.7 |
+| libvips Windows dynamic web distribution 8.18.7 | LGPL-3.0-or-later for libvips; 38 separate native DLLs with individual licenses | https://github.com/libvips/build-win64-mxe/releases/tag/v8.18.7 |
 | MapLibre GL JS 5.9.0 | BSD-3-Clause; detailed attributions in `Licenses/MapLibre-LICENSE.txt` | https://github.com/maplibre/maplibre-gl-js |
 | ExifTool 13.59 | ExifTool's GPL/Artistic dual-licensing; Windows binary includes Perl and its additional third-party terms | https://exiftool.org/ |
 | .NET 10 Desktop Runtime | Installed independently via Microsoft's official runtime installer, not redistributed in PCasa | https://dotnet.microsoft.com/download/dotnet/10.0 |
@@ -30,9 +30,12 @@ are committed to `license-baseline/libvips-8.18.7/` and checked against
 the installed copies by SHA-256. Original rights documents, not only
 license identifiers, are preserved.
 
-The native libvips package's THIRD-PARTY-NOTICES.md names additional LGPL
-and permissively licensed components; a notice list alone is not a substitute
-for corresponding source and replacement/relinking obligations. The precise
+The original libvips dynamic Windows distribution contains 38 native DLLs, packaged
+in a replacement-friendly form without the previous statically aggregated
+NetVips.Native.win-x64 NuGet binary. The native DLL hashes are checked against
+the pinned upstream archive, and the licenses are included under
+`Licenses/Native/libvips-8.18.7/`. These notices do not replace source code
+availability obligations where applicable. The precise
 LLVM toolchain revision for the dynamic DLL set remains to be verified.
 
 Source and compliance information for LGPL components:
@@ -46,9 +49,9 @@ Source and compliance information for LGPL components:
   End users must be allowed to replace LGPL libraries with a modified,
   ABI-compatible version. Packaging and signed-binary restrictions must
   not inhibit this.
-- The package's upstream THIRD-PARTY-NOTICES.md, including dependent
-  codec and native library licensing information, is copied to
-  `Licenses/Packages/NetVips.Native.win-x64-8.18.7/`.
+- The source-specific original license and provenance files are shipped
+  under `Licenses/Native/libvips-8.18.7/`, with exact component inventory
+  in the Windows release audit artifact.
 
 CEF/Chromium license files are copied from their exact restored NuGet
 packages into `Licenses/Packages/`. Chromium additional credits are

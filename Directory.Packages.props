@@ -6,6 +6,5 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="CefSharp.Wpf.NETCore" Version="152.0.100" />
     <PackageVersion Include="NetVips" Version="3.2.0" />
-    <PackageVersion Include="NetVips.Native.win-x64" Version="8.18.7" />
   </ItemGroup>
 </Project>

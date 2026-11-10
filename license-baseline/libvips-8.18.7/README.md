@@ -65,10 +65,16 @@ The 38-DLL dynamic Windows payload also contains `libc++.dll` and
 codec dependency table. Their LLVM-project licensing texts are stored
 as `components/llvm-libcxx-LICENSE.txt` and
 `components/llvm-libunwind-LICENSE.txt`, retrieved from the LLVM
-`llvmorg-21.1.8` reference. The precise LLVM toolchain revision used
-by the v8.18.7 Windows builder has **not yet been independently
-verified**; these texts are preserved here for coverage, not claimed
-as proof of that version's exact corresponding source.
+`llvmorg-23.1.2` reference. This version is specified by
+`build-llvm.sh` in the llvm-mingw `20260922` toolchain, itself pinned
+as `llvm-mingw` version `20260922` with SHA-256
+`9e430702df67673bb9632253d3f63868e1c13d15ef21deb350b953282b767627`
+in `kleisauke/mxe` branch `llvm-mingw-20260924`, which the
+libvips Windows v8.18.7 `container/base.Dockerfile` selects.
+Upstream references:
+https://github.com/mstorsjo/llvm-mingw/blob/20260922/build-llvm.sh
+https://github.com/kleisauke/mxe/blob/llvm-mingw-20260924/plugins/llvm-mingw/llvm-mingw.mk
+https://github.com/libvips/build-win64-mxe/blob/v8.18.7/container/base.Dockerfile
 
 For Cairo the full upstream `COPYING-MPL-1.1` text from the version
 1.18.6 mirror is authoritative for the pinned baseline. Its SHA256

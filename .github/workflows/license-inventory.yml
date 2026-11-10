@@ -12,6 +12,10 @@ on:
       - 'LICENSES-*'
       - 'license-baseline/**'
       - 'src/PCasa.App/PCasa.App.csproj'
+      - 'Directory.Packages.props'
+      - 'tools/prepare-dynamic-libvips.ps1'
+      - 'tools/audit-exiftool-perl-native.ps1'
+      - 'Directory.Packages.props'
   pull_request:
     paths:
       - '.github/workflows/license-inventory.yml'
@@ -44,12 +48,24 @@ jobs:
         run: |
           ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
           ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+          # Restore the exact previously approved PCasa icon for both EXE and Setup.
+          python -m pip install --disable-pip-version-check pillow
+          python tools/generate_pcasa_icon.py
+          if (-not (Test-Path src/PCasa.App/Assets/PCasa.ico)) { throw 'Approved PCasa icon missing' }
       - name: Publish exact Windows x64 software payload
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
           New-Item -ItemType Directory -Force -Path publish/PCasa/exiftool | Out-Null
           Copy-Item tools/exiftool/* publish/PCasa/exiftool -Recurse -Force
+      - name: Install pinned dynamically linked libvips into actual PCasa publish
+        shell: pwsh
+        run: |
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir publish/PCasa -EvidenceDir license-audit/dynamic-libvips
+          $actual = (Get-FileHash -LiteralPath publish/PCasa/libvips-42.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '4d3a83e136eb6f63fa8f4062e8343f87bfdc65afaab2eb30175d9ac844b88555') {
+            throw 'Old static native DLL remains in published PCasa'
+          }
       - name: Export complete credits from bundled Chromium/CEF
         shell: pwsh
         timeout-minutes: 3
@@ -60,6 +76,10 @@ jobs:
         shell: pwsh
         run: |
           ./tools/collect_third_party_licenses.ps1 -AssetsFile src/PCasa.App/obj/project.assets.json -PublishDir publish/PCasa
+      - name: Map all executable Perl and Strawberry native components to original rights evidence
+        shell: pwsh
+        run: |
+          ./tools/audit-exiftool-perl-native.ps1 -PublishDir publish/PCasa -OutputDir license-audit
       - name: Produce hashes, complete NuGet inventory and review findings
         shell: pwsh
         run: |
@@ -69,6 +89,87 @@ jobs:
           Copy-Item publish/PCasa/Licenses/NuGet-license-inventory.csv license-audit/installed-nuget-license-inventory.csv
           if (-not (Test-Path license-audit/publish-files.csv)) { throw 'No binary file inventory' }
           if (-not (Test-Path license-audit/nuget-dependency-licenses.csv)) { throw 'No dependency inventory' }
+      - name: Verify native PCasa image operations from the actual publish folder
+        shell: pwsh
+        run: |
+          dotnet new console --framework net10.0 -o native-probe
+          dotnet add native-probe package NetVips --version 3.2.0
+          @'
+          using NetVips;
+          using var image = Image.Black(4, 4);
+          using var enlarged = image.Resize(2);
+          if (enlarged.Width != 8 || enlarged.Height != 8) throw new Exception("Native resize failed");
+          Console.WriteLine("PASS: installed native libvips in published PCasa folder");
+          '@ | Set-Content native-probe/Program.cs
+          dotnet publish native-probe/native-probe.csproj --configuration Release --runtime win-x64 --self-contained false -o native-probe-out
+          Copy-Item native-probe-out/native-probe.* publish/PCasa -Force
+          & ./publish/PCasa/native-probe.exe
+          if ($LASTEXITCODE -ne 0) { throw "PCasa native image operation failed: $LASTEXITCODE" }
+          Remove-Item publish/PCasa/native-probe.* -Force
+      - name: Compile real Windows installer using tested dynamic package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup 6 compiler not installed' }
+          & $iscc installer/PCasa.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
+          if (-not (Test-Path dist/PCasa-Setup-0.1.Alpha.8.exe)) { throw 'No built installer' }
+      - name: Install built installer and verify actual dynamic DLLs and notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = Join-Path $env:RUNNER_TEMP 'pcasa-license-setup-check'
+          $p = Start-Process -FilePath (Resolve-Path dist/PCasa-Setup-0.1.Alpha.8.exe).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER',"/DIR=$dest") -Wait -PassThru
+          if ($p.ExitCode -notin @(0,3010)) { throw "Installer exited $($p.ExitCode)" }
+          $manifest = Import-Csv license-audit/dynamic-libvips/native-dll-inventory.csv
+          foreach ($dll in $manifest) {
+            $path = Join-Path $dest $dll.File
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing installed dynamic DLL: $($dll.File)" }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne $dll.SHA256.ToLowerInvariant()) { throw "Incorrect installed DLL: $($dll.File)" }
+          }
+          foreach ($rel in @('Licenses/Native/libvips-8.18.7/README.md','Licenses/Native/exiftool-13.59/README.md','exiftool/exiftool_files/Licenses_Strawberry_Perl.zip')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dest $rel))) { throw "Missing installed license material: $rel" }
+          }
+          # ExifTool is redistributed in the exact official Windows bundle;
+          # verify every installed file, not just the separately licensed DLLs.
+          $sourceExif = @(Get-ChildItem -LiteralPath publish/PCasa/exiftool -Recurse -File)
+          if ($sourceExif.Count -ne 509) { throw "Unexpected ExifTool package file count: $($sourceExif.Count)" }
+          $sourceRoot = (Resolve-Path publish/PCasa).Path
+          foreach ($file in $sourceExif) {
+            $relative = [IO.Path]::GetRelativePath($sourceRoot,$file.FullName)
+            $installed = Join-Path $dest $relative
+            if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { throw "Missing installed ExifTool file: $relative" }
+            $expected = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $actual = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "Installed ExifTool file altered: $relative" }
+          }
+          Write-Host "PASS: all $($sourceExif.Count) original ExifTool files are unmodified in the actual installer"
+          $static = '06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f'
+          $actual = (Get-FileHash -LiteralPath (Join-Path $dest 'libvips-42.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -eq $static) { throw 'Old static libvips shipped in actual installer' }
+          Write-Host "PASS: real Windows installer contains $($manifest.Count) dynamic DLLs, exact hashes and original license texts"
+          # Both supported installation scopes must contain the same rights
+          # materials and native runtime. Test on the disposable CI machine.
+          $allDir = Join-Path $env:RUNNER_TEMP 'pcasa-license-all-users'
+          $q = Start-Process -FilePath (Resolve-Path dist/PCasa-Setup-0.1.Alpha.8.exe).Path -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',"/DIR=$allDir") -Wait -PassThru
+          if ($q.ExitCode -notin @(0,3010)) { throw "All-users installer exited $($q.ExitCode)" }
+          foreach ($dll in $manifest) {
+            $target = Join-Path $allDir $dll.File
+            if (-not (Test-Path -LiteralPath $target)) { throw "Missing all-users native DLL: $($dll.File)" }
+            if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant() -ne $dll.SHA256.ToLowerInvariant()) {
+              throw "All-users native DLL altered: $($dll.File)"
+            }
+          }
+          foreach ($rel in @('Licenses/Native/libvips-8.18.7/README.md','Licenses/Native/exiftool-13.59/README.md','exiftool/exiftool_files/Licenses_Strawberry_Perl.zip')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $allDir $rel))) { throw "Missing all-users licensing: $rel" }
+          }
+          Write-Host "PASS: all-users installer preserves identical 38 native DLL hashes and original licensing materials."
+
       - name: Upload evidence - NOT a legal clearance certificate
         uses: actions/upload-artifact@v4
         with:
