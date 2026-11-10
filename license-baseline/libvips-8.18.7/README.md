@@ -87,11 +87,13 @@ it does not retroactively change the signed Alpha.8 installer.
 ## LGPL / source and user modification
 
 A dynamic libvips build with 38 native DLLs was tested against
-NetVips 3.2.0 on Windows x64. The package currently being *released*
-from `main` uses the **static native NuGet distribution**, not this
-dynamically linked alternative. Do not mix their manifests or claim
-that the static bundle's LGPL issue is closed by merely including
-these texts.
+NetVips 3.2.0 on Windows x64. Starting with **PCasa Alpha.9** (released 10 November 2026),
+`main` distributes the **38 dynamically linked, replaceable DLLs**, not
+`NetVips.Native.win-x64`. The previous static NuGet package belongs to
+the historical Alpha.8 and earlier shipping record. The exact DLLs,
+corresponding upstream version/build recipe, licenses, and replacement
+instructions are recorded here and audited in the Alpha.9 Windows CI.
+Do not conflate the historical static build with the current installer.
 
 Full corresponding sources, any local modifications, the specific
 build configuration, and the ability to replace every LGPL library
