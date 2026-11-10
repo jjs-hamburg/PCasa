@@ -291,3 +291,37 @@ abgedeckt sei. Für die LGPL-Bibliotheken bleiben die originalen
 Quell- und Austauschrechte maßgeblich. Die unveränderten Original-
 Quellstände und Buildverweise der Drittbibliotheken sind unter
 `license-baseline/` dokumentiert.
+
+
+## Dauerhafte Freigabe-Baseline (ab Alpha.9)
+
+PCasa behandelt die geprüfte Auslieferung mit **unveränderten Abhängigkeiten**
+als wiederverwendbare technische Lizenz-Baseline. Dafür gelten künftig
+folgende maschinell erzwungene Regeln:
+
+1. `PCasa.Version.props` enthält die eine Release-Identität. App,
+   Installer und `gh release create` lesen sie ohne unabhängig
+   einprogrammierte Alpha-Nummern.
+2. `license-baseline/APPROVED-DEPENDENCIES.csv` enthält **sämtliche**
+   aufgelösten direkten und transitiven NuGet-Pakete samt Version und
+   Lizenzmetadaten. Jede Abweichung stoppt die Lizenzprüfung.
+3. `license-baseline/APPROVED-NATIVE.json` ist die Versions-/Hashfreigabe
+   für die unveränderten ExifTool-, libvips- und MapLibre-Pakete. Ihre
+   Installationsskripte lesen direkt aus dieser Datei. Die vollständigen
+   Originaltexte und tatsächlichen auszuliefernden Dateien bleiben weiterhin
+   verpflichtend.
+4. Der veröffentlichte Installer wird für beide Installationsmodi erzeugt
+   und mit dem auditierten Publish-Payload (Datei für Datei, SHA-256)
+   verglichen. Nicht vorhandene oder veränderte Lizenztexte stoppen CI.
+5. Eine Änderung an den Abhängigkeiten, der originalen Distribution,
+   der Bibliotheksversion, ihren Lizenzbedingungen oder dem Packaging
+   erfordert eine **explizite Aktualisierung der Baseline und
+   Überprüfung der dann einschlägigen Rechte**. Änderungen allein an der
+   PCasa-Versionsnummer erfordern dagegen keine erneute Lizenzsammlung.
+
+Diese Regeln gelten für **künftige** Releases auf Basis der unveränderten
+Bibliotheken. Historisch bereits veröffentlichte, anders gebaute
+Installer werden dadurch nicht rückwirkend geändert. Der automatische
+Vergleich von Dateien und Lizenzmetadaten ist ein technischer Nachweis,
+keine Feststellung, dass sämtliche Quellcodebereitstellungsrechte ohne
+weitere Bedingungen erfüllt wären.
