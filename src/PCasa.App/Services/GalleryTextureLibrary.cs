@@ -16,7 +16,7 @@ public static class GalleryTextureLibrary
     {
         if (!Directory.Exists(DirectoryPath)) return [];
         return Directory.EnumerateFiles(DirectoryPath, "*", SearchOption.TopDirectoryOnly)
-            .Where(path => IsJpeg(Path.GetExtension(path)))
+            .Where(path => IsSupportedTexture(Path.GetExtension(path)))
             .OrderBy(path => Path.GetFileName(path), StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
     }
@@ -25,15 +25,16 @@ public static class GalleryTextureLibrary
     {
         if (string.IsNullOrWhiteSpace(fileName) ||
             !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal) ||
-            !IsJpeg(Path.GetExtension(fileName))) return null;
+            !IsSupportedTexture(Path.GetExtension(fileName))) return null;
         return GetFiles().FirstOrDefault(file =>
             string.Equals(Path.GetFileName(file), fileName,
                 StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsJpeg(string extension)
+    private static bool IsSupportedTexture(string extension)
         => extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
-           extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+           extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+           extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
 
     public static BitmapSource LoadBitmap(string path)
     {
