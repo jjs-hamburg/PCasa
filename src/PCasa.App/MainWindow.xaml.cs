@@ -51,6 +51,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("gps-edit-v1", BuildGpsEditPackage);
         _scheduler.RegisterDurablePackageType("gps-edit-v2", BuildGpsEditPackageV2);
         _scheduler.RegisterDurablePackageType("gpx-write-v1", BuildGpxWritePackage);
+        _scheduler.RegisterDurablePackageType("undo-restore-v1", BuildUndoRestorePackage);
         _scheduler.RegisterDurablePackageType("manual-folder-scan-v1", BuildManualFolderScanPackage);
         _scheduler.RegisterDurablePackageType("manual-scan-all-v1", BuildScanAllPackage);
         _scheduler.RegisterDurablePackageType("gallery-transfer-v1", BuildDurableGalleryTransferPackage);
