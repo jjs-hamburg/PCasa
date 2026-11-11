@@ -202,7 +202,9 @@ public partial class MainWindow
             PCasaDiagnostics.Write("Help.CheckForUpdates", ex);
             PcasaDialog.Show(this,
                 UiLanguage.T("Die Updateprüfung ist momentan nicht möglich.") +
-                Environment.NewLine + ex.Message,
+                Environment.NewLine + ex.Message +
+                (ex.InnerException is null ? "" :
+                    Environment.NewLine + ex.InnerException.Message),
                 UiLanguage.T("Nach Updates suchen"),
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
@@ -225,12 +227,21 @@ public partial class MainWindow
         try
         {
             Directory.CreateDirectory(folder);
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
             // The 12-second metadata timeout must not terminate a 200 MB
             // installer download over a slower or intermittent connection.
-            using var installerClient = new HttpClient
+                using var installerClient = new HttpClient
             {
-                Timeout = TimeSpan.FromMinutes(30)
-            };
+                    Timeout = TimeSpan.FromMinutes(30),
+                    // GitHub CDN downloads through VPN/HTTPS gateways can fail
+                    // during HTTP/2 stream decryption. Prefer HTTP/1.1 without
+                    // changing TLS certificate validation or minimum security.
+                    DefaultRequestVersion = HttpVersion.Version11,
+                    DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+                };
             installerClient.DefaultRequestHeaders.UserAgent.ParseAdd("PCasa-Windows/0.1");
             using var response = await installerClient.GetAsync(
                 url, HttpCompletionOption.ResponseHeadersRead, downloadWindow.Cancellation);
@@ -269,7 +280,18 @@ public partial class MainWindow
                     throw new CryptographicException("Installer SHA-256 verification failed.");
             }
             File.Move(partial, destination);
-            return destination;
+                return destination;
+                }
+                catch (Exception ex) when (attempt == 0 &&
+                    !downloadWindow.Cancellation.IsCancellationRequested &&
+                    ex is HttpRequestException or IOException or CryptographicException)
+                {
+                    PCasaDiagnostics.Write("Update.Download.Retry", ex);
+                    if (File.Exists(partial)) File.Delete(partial);
+                    await Task.Delay(500, downloadWindow.Cancellation);
+                }
+            }
+            throw new IOException("PCasa installer download failed after retry.");
         }
         catch (OperationCanceledException)
         {
