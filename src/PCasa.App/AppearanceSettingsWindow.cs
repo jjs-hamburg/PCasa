@@ -289,7 +289,7 @@ public sealed class AppearanceSettingsWindow : Window
         ConfirmButton.Click += (_, _) => Accept();
         DockPanel.SetDock(ConfirmButton, Dock.Right);
         footer.Children.Add(ConfirmButton);
-        var apply = new Button { Content = UiLanguage.T("Übernehmen"), MinWidth = 100,
+        var apply = new Button { Content = UiLanguage.T("Anwenden"), MinWidth = 100,
             Height = 30, Padding = new Thickness(8, 3, 8, 3),
             Margin = new Thickness(0, 0, 8, 0) };
         apply.Click += (_, _) => { CaptureValues(); ApplyRequested?.Invoke(Values); };
