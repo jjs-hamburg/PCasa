@@ -95,7 +95,12 @@ public partial class MainWindow
         CropRedoButton.Click += (_, _) => MoveCropHistory(1);
         CropHorizontalButton.Click += (_, _) => FlipCropOrientation(true);
         CropVerticalButton.Click += (_, _) => FlipCropOrientation(false);
-        CropBackButton.Click += (_, _) => EndCrop();
+        CropBackButton.Click += (_, _) =>
+        {
+            ViewerToolsOverview.Visibility = Visibility.Visible;
+            ViewerCropOptions.Visibility = Visibility.Collapsed;
+            ViewerCropOverlay.Visibility = Visibility.Collapsed;
+        };
         CropSaveButton.Click += (_, _) => SaveCrop();
         CropCancelButton.Click += (_, _) => EndCrop();
     }
@@ -113,6 +118,14 @@ public partial class MainWindow
         }
         if (PhotoViewerImage.Source is not BitmapSource bitmap || bitmap.PixelWidth == 0)
             return;
+        if (_cropActive)
+        {
+            ViewerToolsOverview.Visibility = Visibility.Collapsed;
+            ViewerCropOptions.Visibility = Visibility.Visible;
+            ViewerCropOverlay.Visibility = Visibility.Visible;
+            DrawCropFrame();
+            return;
+        }
         _cropActive = true;
         _cropRatioMode = "Original";
         _cropRatio = bitmap.PixelWidth / (double)bitmap.PixelHeight;
