@@ -1137,6 +1137,9 @@ public partial class MainWindow
 
     private void PhotoViewerPanel_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        // While cropping, the crop overlay owns mouse capture; the ordinary
+        // viewer pan must not intercept PreviewMouseLeftButtonDown.
+        if (_cropActive && ViewerCropOverlay.IsVisible) return;
         if (_comparisonActive) { e.Handled = true; return; }
         if (!_viewerOpen || Environment.TickCount64 < _viewerSuppressMouseUntil ||
             ViewerMouseIsChrome(e.OriginalSource as DependencyObject, sender))
@@ -1283,6 +1286,21 @@ public partial class MainWindow
         }
         if (_comparisonActive && (e.Key == Key.Left || e.Key == Key.Right)) { e.Handled = true; return; }
 
+        if (_cropActive)
+        {
+            if (e.Key == Key.Escape)
+            {
+                EndCrop();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key is Key.Left or Key.Right)
+            {
+                // Arrow keys should not silently abandon a crop session.
+                e.Handled = true;
+                return;
+            }
+        }
         switch (e.Key)
         {
             case Key.Left:
