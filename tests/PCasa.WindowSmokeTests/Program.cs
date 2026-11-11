@@ -319,6 +319,66 @@ internal static class Program
                     throw new Exception("JPG texture choice did not persist.");
             }
             Console.WriteLine("PASS: Editable JPG textures, native pixels and one persisted menu entry.");
+            // GPX interpolation uses UTC, a configurable camera offset and a
+            // hard gap cutoff; no catalog or source file is changed.
+            var gpxTestRoot = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "pcasa-gpx-undo-tests-" +
+                Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(gpxTestRoot);
+            try
+            {
+                var gpxFile = System.IO.Path.Combine(gpxTestRoot, "track.gpx");
+                System.IO.File.WriteAllText(gpxFile,
+                    "<gpx><trk><trkseg>" +
+                    "<trkpt lat='10' lon='20'><time>2026-11-10T10:00:00Z</time></trkpt>" +
+                    "<trkpt lat='11' lon='21'><time>2026-11-10T10:00:10Z</time></trkpt>" +
+                    "</trkseg></trk></gpx>");
+                var points = PCasa.App.Services.GpxTrackReader.Read(gpxFile);
+                if (points.Count != 2) throw new Exception("GPX parser lost time points.");
+                var midpoint = PCasa.App.Services.GpxTrackReader.Match(points,
+                    new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),60);
+                if (midpoint is not { } p ||
+                    Math.Abs(p.Latitude-10.5)>0.0001 ||
+                    Math.Abs(p.Longitude-20.5)>0.0001 ||
+                    PCasa.App.Services.GpxTrackReader.Match(points,
+                        new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),5) is not null)
+                    throw new Exception("GPX interpolation or gap limit is wrong.");
+                var options = new PCasa.App.Services.GpxOptions
+                {
+                    DirectoryPath = gpxTestRoot, CameraTimeZoneId = "UTC",
+                    CameraOffsetSeconds = 10, MaximumGapSeconds = 60
+                };
+                if (PCasa.App.Services.GpxTrackReader.CameraToUtc(
+                    new DateTime(2026,11,10,10,0,10),options) !=
+                    new DateTimeOffset(2026,11,10,10,0,0,TimeSpan.Zero))
+                    throw new Exception("Camera clock offset is applied in the wrong direction.");
+                Console.WriteLine("PASS: Secure GPX reader, UTC alignment, time offset and interpolation gap.");
+
+                var sourcePhoto = System.IO.Path.Combine(gpxTestRoot,"photo.jpg");
+                var undoOptions = new PCasa.App.Services.UndoOptions
+                {
+                    DirectoryPath = System.IO.Path.Combine(gpxTestRoot,"Undo"),
+                    MaximumVersionsPerImage = 2,
+                    MaximumBytes = 16*1024*1024
+                };
+                var archive = new PCasa.App.Services.UndoHistoryService(undoOptions);
+                foreach (var value in new[] { "first", "second", "third" })
+                {
+                    System.IO.File.WriteAllText(sourcePhoto,value);
+                    archive.CaptureBeforeSave(sourcePhoto,CancellationToken.None);
+                }
+                var saved = archive.GetVersions(sourcePhoto);
+                if (saved.Count != 2 ||
+                    System.IO.File.ReadAllText(saved[0].SnapshotPath) != "third" ||
+                    System.IO.File.ReadAllText(saved[1].SnapshotPath) != "second")
+                    throw new Exception("Central Undo archive did not retain the last two full states.");
+                Console.WriteLine("PASS: Central Undo full-file backups, SHA-256 and per-image retention.");
+            }
+            finally
+            {
+                System.IO.Directory.Delete(gpxTestRoot,recursive:true);
+            }
+
 
             // Exercise the real graphical picker: each JPG is represented by
             // an actual clickable swatch. One click selects and closes.
