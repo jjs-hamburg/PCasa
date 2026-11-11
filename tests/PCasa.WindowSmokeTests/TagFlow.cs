@@ -1923,23 +1923,23 @@ internal static class TagFlow
                 filmList.SelectedItem = entries[0];
                 var keepSelection = selected.ToHashSet();
 
-                var stripRemove = (Button?)window.FindName("GpsFilmstripRemoveGpsButton")
-                    ?? throw new Exception("GPS Filmstrip Remove GPS action missing.");
+                if (window.FindName("GpsFilmstripRemoveGpsButton") is not null)
+                    throw new Exception("GPS Filmstrip is read-only and must not offer Remove GPS.");
                 var stripTransfer = (Button?)window.FindName("GpsFilmstripToGalleryButton")
                     ?? throw new Exception("GPS Filmstrip copy-to-gallery action missing.");
                 if (filmList.SelectionMode != SelectionMode.Extended ||
                     window.FindName("GpsFilmstripClearButton") is not null)
                     throw new Exception("GPS Filmstrip must support Explorer multiselect without a Clear button.");
                 filmList.SelectAll(); // standard Ctrl+A in an extended WPF ListBox
-                if (filmList.SelectedItems.Count != 2 || !stripRemove.IsEnabled ||
+                if (filmList.SelectedItems.Count != 2 ||
                     stripTransfer.IsEnabled || !selected.SetEquals(keepSelection))
                     throw new Exception("GPS Filmstrip multi-selection or action enablement is incorrect.");
                 filmList.UnselectAll();
                 filmList.SelectedItem = entries[0];
-                if (filmList.SelectedItems.Count != 1 || !stripRemove.IsEnabled ||
+                if (filmList.SelectedItems.Count != 1 ||
                     !stripTransfer.IsEnabled || !selected.SetEquals(keepSelection))
                     throw new Exception("One GPS Filmstrip source must enable copy without changing gallery targets.");
-                Console.WriteLine("PASS: Extended GPS source multi-selection enables Remove GPS and disables copy-to-gallery.");
+                Console.WriteLine("PASS: Extended read-only GPS source multi-selection disables copy-to-gallery.");
                 var doubleClick = new MouseButtonEventArgs(
                     InputManager.Current.PrimaryMouseDevice,
                     Environment.TickCount, MouseButton.Left);
