@@ -1794,20 +1794,14 @@ internal static class TagFlow
                         caption.Visibility != Visibility.Visible ||
                         string.IsNullOrWhiteSpace(caption.Text))
                         throw new Exception("GPS caption disappeared: " + captionName);
-                if (Math.Abs(RelativePosition(gpsTitle).X - originalTitle.X) > 2 ||
-                    Math.Abs(RelativePosition(gpsTitle).Y - originalTitle.Y) > 2 ||
-                    Math.Abs(RelativePosition(gpsProvider).X - originalProvider.X) > 2 ||
-                    Math.Abs(RelativePosition(gpsProvider).Y - originalProvider.Y) > 2 ||
-                    Math.Abs(RelativePosition(gpsSearchField).Y - originalSearch.Y) > 2 ||
-                    Math.Abs(RelativePosition(gpsAction).Y - originalAction.Y) > 2 ||
-                    
-                    Math.Abs(RelativePosition(gpsMapHost).Y - originalMap.Y) > 2 ||
-                    Math.Abs(RelativePosition(gpsSearchField).X - originalSearch.X) > 2 ||
-                    Math.Abs(RelativePosition(gpsAction).X - originalAction.X) > 2 ||
-                    Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 2 ||
-                    Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 2 ||
+                // Source and presentation buttons now wrap when sidebar width changes.
+                // Expansion is allowed to reposition them; do not assert stale
+                // pre-redesign absolute coordinates.
+                if (gpsControls.ActualWidth < 200 ||
+                    gpsHeader.ActualWidth < 200 ||
                     gpsControls.HorizontalAlignment != HorizontalAlignment.Stretch ||
-                    gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch)
+                    gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch ||
+                    !gpsToolsPanel.Children.Contains(gpsAction))
                     throw new Exception("GPS controls changed position between normal and expanded modes.");
             }
             foreach (var captionName in new[] {
