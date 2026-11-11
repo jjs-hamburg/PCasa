@@ -490,6 +490,7 @@ public partial class MainWindow
                 if (_gpsDraft is { } draft)
                     SetGpsDraft(draft.Lat, draft.Lon, recenter: false);
                 GpsPickPosition_Changed(this, new RoutedEventArgs());
+                if (_appearance.ShowGpxImport) PublishGpxOverlay(false);
             }
             else if (data.Kind == "gps-fit-ready" &&
                      data.Zoom is double finalZoom &&
