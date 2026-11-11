@@ -617,6 +617,8 @@
                                               IsCheckable="True" Click="GalleryAttributeFilterOption_Click"/>
                                     <MenuItem x:Name="GalleryAttributeRawMenu" Header="{loc:Tr Key='Nur RAW'}" Tag="Raw"
                                               IsCheckable="True" Click="GalleryAttributeFilterOption_Click"/>
+                                    <MenuItem x:Name="GalleryAttributeVideoMenu" Header="Nur Videos" Tag="Video"
+                                              IsCheckable="True" Click="GalleryAttributeFilterOption_Click"/>
                                 </ContextMenu></Button.ContextMenu>
                             </Button>
                             <Button x:Name="GalleryAttributeFilterClearButton" Width="27" Height="27" Padding="3,0"
