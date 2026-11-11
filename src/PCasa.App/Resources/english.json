@@ -581,5 +581,21 @@
   "Zur vorherigen Position zurück": "Return to previous position",
   "Zurücksetzen abgeschlossen": "Reset completed",
   "Zurücksetzen fehlgeschlagen": "Reset failed",
-  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images"
+  "Zwei ausgewählte Bilder vergleichen": "Compare two selected images",
+  "GPS-Quellen": "GPS sources",
+  "GPS Pick": "GPS Pick",
+  "Zuschneiden": "Crop",
+  "Seitenverhältnis": "Aspect ratio",
+  "Querformat": "Landscape",
+  "Hochformat": "Portrait",
+  "Ausrichtung": "Orientation",
+  "Aus": "Off",
+  "Dezent": "Subtle",
+  "Normal": "Normal",
+  "Stark": "Strong",
+  "Anwenden": "Apply",
+  "Speichern": "Save",
+  "Keine GPX-Dateien.": "No GPX files.",
+  "Ansicht": "View",
+  "Zuschneiden ohne Speichern verlassen?": "Leave cropping without saving?"
 }
