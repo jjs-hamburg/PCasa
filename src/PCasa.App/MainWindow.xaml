@@ -526,6 +526,10 @@
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
                         <MenuItem Header="GPX..." Click="GpxOptions_Click"/>
+                        <MenuItem Header="Bildbearbeitung">
+                            <MenuItem Header="Undo..." Click="UndoOptions_Click"/>
+                            <MenuItem Header="Bild wiederherstellen..." Click="UndoRestore_Click"/>
+                        </MenuItem>
                         <MenuItem x:Name="TaskManagerMenuItem"
                                   Header="{loc:Tr Key='Taskmanager...'}"
                                   Click="TaskManagerMenu_Click"/>
