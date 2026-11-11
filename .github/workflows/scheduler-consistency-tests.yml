@@ -264,7 +264,7 @@ jobs:
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
             $args = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-                      "/$mode", "/DIR=$target")
+                      "/PCASASCOPE=$mode", "/DIR=$target")
             $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
             if ($process.ExitCode -ne 0) {
               throw "Setup $mode failed (exit code $($process.ExitCode))"
