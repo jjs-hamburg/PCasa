@@ -435,23 +435,8 @@ public partial class MainWindow
         var dy = (pt.Y - _cropMouseStart.Y) / h;
         if (_cropResizing)
         {
-            var original = _cropOriginalRect;
-            var left = (_cropResizeEdges & 1) != 0
-                ? Math.Clamp(original.Left + dx, 0, original.Right - .04)
-                : original.Left;
-            var right = (_cropResizeEdges & 2) != 0
-                ? Math.Clamp(original.Right + dx, original.Left + .04, 1)
-                : original.Right;
-            var top = (_cropResizeEdges & 4) != 0
-                ? Math.Clamp(original.Top + dy, 0, original.Bottom - .04)
-                : original.Top;
-            var bottom = (_cropResizeEdges & 8) != 0
-                ? Math.Clamp(original.Bottom + dy, original.Top + .04, 1)
-                : original.Bottom;
-            // Eight grips (corners and edge midpoints) share a single
-            // normalized geometry and stay within the original image.
-            _cropRect = FitToImageAspect(new Rect(left, top,
-                right - left, bottom - top));
+            _cropRect = ResizeCropByEdges(_cropOriginalRect,
+                _cropResizeEdges, dx, dy);
         }
         else
         {
@@ -477,6 +462,77 @@ public partial class MainWindow
 
     // Invisible magnetic hit target; no corner handles. Corners win when
     // both edges are within the 15-pixel tolerance.
+    // Fixed-aspect crop keeps the opposite border/corner anchored. A resize
+    // on a single side grows the other axis symmetrically, rather than being
+    // silently limited by the previous height/width.
+    private Rect ResizeCropByEdges(Rect original, int edges, double dx, double dy)
+    {
+        bool left = (edges & 1) != 0, right = (edges & 2) != 0;
+        bool top = (edges & 4) != 0, bottom = (edges & 8) != 0;
+        var l = left ? Math.Clamp(original.Left + dx, 0, original.Right - .02)
+            : original.Left;
+        var r = right ? Math.Clamp(original.Right + dx, original.Left + .02, 1)
+            : original.Right;
+        var t = top ? Math.Clamp(original.Top + dy, 0, original.Bottom - .02)
+            : original.Top;
+        var b = bottom ? Math.Clamp(original.Bottom + dy, original.Top + .02, 1)
+            : original.Bottom;
+
+        if (_cropRatio <= 0 || PhotoViewerImage.Source is not BitmapSource source)
+            return new Rect(l, t, r - l, b - t);
+
+        double normalizedRatio = _cropRatio *
+            source.PixelHeight / (double)source.PixelWidth;
+        if (normalizedRatio <= 0) return original;
+        double xAnchor = left ? original.Right : original.Left;
+        double yAnchor = top ? original.Bottom : original.Top;
+        double desiredWidth;
+        double maxWidth;
+
+        if (left || right)
+        {
+            desiredWidth = r - l;
+            maxWidth = left ? xAnchor : 1 - xAnchor;
+        }
+        else
+        {
+            desiredWidth = (b - t) * normalizedRatio;
+            maxWidth = 2 * Math.Min(original.Left + original.Width / 2,
+                1 - (original.Left + original.Width / 2));
+        }
+
+        if (top || bottom)
+        {
+            double fromHeight = (b - t) * normalizedRatio;
+            if (left || right)
+            {
+                // In a corner, use whichever mouse displacement dominates.
+                if (Math.Abs(fromHeight - original.Width) >
+                    Math.Abs(desiredWidth - original.Width))
+                    desiredWidth = fromHeight;
+            }
+            maxWidth = Math.Min(maxWidth,
+                normalizedRatio * (top ? yAnchor : 1 - yAnchor));
+        }
+        else
+        {
+            double midY = original.Top + original.Height / 2;
+            maxWidth = Math.Min(maxWidth,
+                normalizedRatio * 2 * Math.Min(midY, 1 - midY));
+        }
+        double width = Math.Clamp(desiredWidth,
+            Math.Min(.02, maxWidth), Math.Max(.02, maxWidth));
+        double height = width / normalizedRatio;
+
+        double x = left ? xAnchor - width : right ? xAnchor
+            : original.Left + (original.Width - width) / 2;
+        double y = top ? yAnchor - height : bottom ? yAnchor
+            : original.Top + (original.Height - height) / 2;
+        return new Rect(Math.Clamp(x, 0, Math.Max(0, 1 - width)),
+            Math.Clamp(y, 0, Math.Max(0, 1 - height)),
+            Math.Min(1, width), Math.Min(1, height));
+    }
+
     private static int CropEdgesAt(Point point, Rect rect)
     {
         const double magnet = 15;
