@@ -154,7 +154,11 @@ public partial class MainWindow
         ViewerCropOverlay.MouseMove += Crop_MouseMove;
         ViewerCropOverlay.MouseLeave += (_, _) =>
         {
-            if (!_cropDragging) ViewerCropOverlay.Cursor = Cursors.Arrow;
+            if (!_cropDragging)
+            {
+                ViewerCropOverlay.Cursor = Cursors.Arrow;
+                ShowCropHoverEdges(0);
+            }
         };
         CropPreviewButton.PreviewMouseLeftButtonDown += (_, e) =>
         {
@@ -360,6 +364,7 @@ public partial class MainWindow
         if (!_cropDragging)
         {
             var edges = CropEdgesAt(pt, PixelCropRect());
+            ShowCropHoverEdges(edges);
             ViewerCropOverlay.Cursor = edges switch
             {
                 1 or 2 => Cursors.SizeWE,
@@ -403,6 +408,7 @@ public partial class MainWindow
                 _cropOriginalRect.Width, _cropOriginalRect.Height);
         }
         DrawCropFrame();
+        ShowCropHoverEdges(_cropResizeEdges);
         e.Handled = true;
     }
 
@@ -411,6 +417,7 @@ public partial class MainWindow
         if (!_cropDragging) return;
         _cropDragging = false;
         ViewerCropOverlay.ReleaseMouseCapture();
+        ShowCropHoverEdges(0);
         AddCropHistory(_cropRect);
         e.Handled = true;
     }
@@ -431,6 +438,14 @@ public partial class MainWindow
         return edges;
     }
 
+    private void ShowCropHoverEdges(int edges)
+    {
+        ViewerCropHoverLeft.Visibility = (edges & 1) != 0 ? Visibility.Visible : Visibility.Collapsed;
+        ViewerCropHoverRight.Visibility = (edges & 2) != 0 ? Visibility.Visible : Visibility.Collapsed;
+        ViewerCropHoverTop.Visibility = (edges & 4) != 0 ? Visibility.Visible : Visibility.Collapsed;
+        ViewerCropHoverBottom.Visibility = (edges & 8) != 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private Rect PixelCropRect()
     {
         var w = ViewerCropOverlay.ActualWidth;
@@ -447,6 +462,18 @@ public partial class MainWindow
         Canvas.SetTop(ViewerCropOutline, rect.Y);
         ViewerCropOutline.Width = rect.Width;
         ViewerCropOutline.Height = rect.Height;
+        ViewerCropHoverLeft.X1 = ViewerCropHoverLeft.X2 = rect.Left;
+        ViewerCropHoverLeft.Y1 = rect.Top;
+        ViewerCropHoverLeft.Y2 = rect.Bottom;
+        ViewerCropHoverRight.X1 = ViewerCropHoverRight.X2 = rect.Right;
+        ViewerCropHoverRight.Y1 = rect.Top;
+        ViewerCropHoverRight.Y2 = rect.Bottom;
+        ViewerCropHoverTop.X1 = rect.Left;
+        ViewerCropHoverTop.X2 = rect.Right;
+        ViewerCropHoverTop.Y1 = ViewerCropHoverTop.Y2 = rect.Top;
+        ViewerCropHoverBottom.X1 = rect.Left;
+        ViewerCropHoverBottom.X2 = rect.Right;
+        ViewerCropHoverBottom.Y1 = ViewerCropHoverBottom.Y2 = rect.Bottom;
         // Four shaded regions leave only the selected rectangle bright.
         SetCropShade(ViewerCropShadeTop, 0, 0,
             ViewerCropOverlay.ActualWidth, rect.Top);
