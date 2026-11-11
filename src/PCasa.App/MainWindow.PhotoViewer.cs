@@ -65,6 +65,17 @@ public partial class MainWindow
         if (_viewerOpen || _browseCacheBuilding || _displayedBrowseIndex.Count == 0)
             return;
 
+        // Videos share the gallery index but have their own read-only player.
+        // Do not enter the photo viewer or activate crop/edit controls.
+        var openedEntry = _displayedBrowseIndex.FirstOrDefault(x => x.ImageId == e.ImageId);
+        if (openedEntry is not null && VideoFormats.IsVideo(openedEntry.FileName))
+        {
+            var item = new PCasa.App.Data.ImageViewerRepository(_database).Get(e.ImageId);
+            if (item is not null)
+                new VideoPlayerWindow(item.LocalPath) { Owner = this }.Show();
+            return;
+        }
+
         // Capture the SAME gallery projection as on screen, including search,
         // sorting and collapsed-folder visibility. No second tree traversal.
         _viewerSequence = PhotoSequence.Create(_displayedBrowseIndex,
