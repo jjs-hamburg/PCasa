@@ -179,9 +179,9 @@ begin
     CustomMessage('ScopeDescription'), '', True, False);
   InstallScopePage.Add(CustomMessage('ScopeCurrent'));
   InstallScopePage.Add(CustomMessage('ScopeAll'));
-  if Pos('/ALLUSERS', UpperCase(GetCmdTail())) > 0 then
+  if Pos('/PCASASCOPE=ALLUSERS', UpperCase(GetCmdTail())) > 0 then
     InstallScopePage.SelectedValueIndex := 1
-  else if Pos('/CURRENTUSER', UpperCase(GetCmdTail())) > 0 then
+  else if Pos('/PCASASCOPE=CURRENTUSER', UpperCase(GetCmdTail())) > 0 then
     InstallScopePage.SelectedValueIndex := 0
   else if FileExists(ExpandConstant('{autopf}\PCasa\PCasa.all-users')) then
     InstallScopePage.SelectedValueIndex := 1
