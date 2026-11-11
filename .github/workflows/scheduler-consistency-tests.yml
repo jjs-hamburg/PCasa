@@ -21,7 +21,7 @@ permissions:
 # Pull-request updates supersede previous attempts, too. Manual acceptance
 # runs stay independent and are never cancelled by later PR commits.
 concurrency:
-  group: pcasa-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: pcasa-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 # Use the same verified metadata tool for catalog AND all real-WPF runs.
