@@ -6,10 +6,7 @@ on:
     paths:
       - '.github/workflows/package-windows-test.yml'
   pull_request:
-    paths:
-      - '.github/workflows/package-windows-test.yml'
-      - 'tools/prepare-dynamic-libvips.ps1'
-      - 'tools/audit-exiftool-perl-native.ps1'
+    branches: [main]
   workflow_dispatch:
 
 permissions:
