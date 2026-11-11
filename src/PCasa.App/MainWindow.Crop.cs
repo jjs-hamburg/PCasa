@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ShapePath = System.Windows.Shapes.Path;
 using System.Windows.Shapes;
 using PCasa.App.Data;
 using PCasa.App.Services;
@@ -40,7 +41,7 @@ public partial class MainWindow
         };
         var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
         var frame = new Viewbox { Width = 46, Height = 43, Margin = new Thickness(0, 0, 0, 4) };
-        frame.Child = new Path
+        frame.Child = new ShapePath
         {
             Data = Geometry.Parse("M4,3 L4,24 L25,24 M3,9 L24,9 L24,29 M9,3 L9,24 M3,19 L24,19"),
             StrokeThickness = 1.25, Stroke = Brushes.SlateGray,
@@ -108,7 +109,7 @@ public partial class MainWindow
     private void BeginCrop()
     {
         if (!_viewerOpen || _viewerImageInfo is not { LocalPath: { } path } ||
-            !Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
+            !System.IO.Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
             !Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
             PcasaDialog.Show(this,
