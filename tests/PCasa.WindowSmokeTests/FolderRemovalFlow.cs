@@ -37,7 +37,8 @@ internal static class FolderRemovalFlow
                 string.Equals(f.LocalPath, testRoot, StringComparison.OrdinalIgnoreCase));
             var scanner = new FolderScanner(new ImageCatalogRepository(db),
                 new ThumbnailCache(), roots, new BrowseThumbnailProfileRepository(db));
-            scanner.Scan(root);
+            var seeded = scanner.Scan(root);
+            Console.WriteLine($"Folder removal seed: seen={seeded.ImageFilesSeen}, updated={seeded.Updated}, failed={seeded.Failed}");
             new BackgroundScanSettings { Enabled = false }.Save();
             var catalog = new ImageCatalogRepository(db);
             var groups = catalog.GetPhotoFolders();
