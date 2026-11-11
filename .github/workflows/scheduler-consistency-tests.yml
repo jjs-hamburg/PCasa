@@ -86,6 +86,10 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
+      - name: Test real MTA JPEG crop, central Undo and preserved photo metadata
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --crop-flow
       - name: Verify taskmanager durable ordering, retry and safe cancellation
         timeout-minutes: 2
         shell: pwsh
