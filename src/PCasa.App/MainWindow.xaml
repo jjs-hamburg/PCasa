@@ -938,11 +938,15 @@
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                                     <Button x:Name="CropHorizontalButton" Width="49" Height="33"
-                                            Content="▭" FontSize="21" Margin="0,0,6,0"
-                                            ToolTip="{loc:Tr Key='Querformat'}"/>
+                                            Margin="0,0,6,0" ToolTip="{loc:Tr Key='Querformat'}">
+                                        <Rectangle Width="27" Height="17" Stroke="#374151"
+                                                   StrokeThickness="1.6" Fill="Transparent"/>
+                                    </Button>
                                     <Button x:Name="CropVerticalButton" Width="49" Height="33"
-                                            Content="▯" FontSize="21"
-                                            ToolTip="{loc:Tr Key='Hochformat'}"/>
+                                            ToolTip="{loc:Tr Key='Hochformat'}">
+                                        <Rectangle Width="17" Height="27" Stroke="#374151"
+                                                   StrokeThickness="1.6" Fill="Transparent"/>
+                                    </Button>
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
                                     <Button x:Name="CropUndoButton" Width="37" Height="29" Content="↶"
@@ -952,7 +956,7 @@
                                             FontSize="18" ToolTip="{loc:Tr Key='Wiederholen'}"/>
                                 </StackPanel>
                                 <Button x:Name="CropPreviewButton" Height="29" Padding="12,3"
-                                        Content="Vorschau · Original gedrückt halten"
+                                        Content="{loc:Tr Key='Vorschau · Original gedrückt halten'}"
                                         HorizontalAlignment="Left"/>
                             </StackPanel>
                         </Grid>
@@ -1166,6 +1170,10 @@
                                     <Rectangle x:Name="ViewerCropShadeBottom" Fill="#99000000" IsHitTestVisible="False"/>
                                     <Rectangle x:Name="ViewerCropShadeLeft" Fill="#99000000" IsHitTestVisible="False"/>
                                     <Rectangle x:Name="ViewerCropShadeRight" Fill="#99000000" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverLeft" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverRight" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverTop" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverBottom" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
                                     <Rectangle x:Name="ViewerCropOutline" Stroke="#F1F1F1"
                                                StrokeThickness="1.2" Fill="#0AFFFFFF"
                                                IsHitTestVisible="False"/>
