@@ -101,6 +101,7 @@ public partial class MainWindow
         GpsFilmstripToggle.IsChecked = _appearance.ShowGpsFilmstrip;
         _gpsFilmstripUpdating = false;
         ApplyGpsFilmstripVisibility();
+        InitializeGpxUi();
         UpdateGpsFilmstripControls();
         SourceInitialized += GpsFilmstrip_SourceInitialized;
         Closed += GpsFilmstrip_WindowClosed;
@@ -172,6 +173,15 @@ public partial class MainWindow
     {
         if (_gpsFilmstripUpdating) return;
         _appearance.ShowGpsFilmstrip = GpsFilmstripToggle.IsChecked == true;
+        if (_appearance.ShowGpsFilmstrip && _appearance.ShowGpxImport)
+        {
+            _gpxUiUpdating = true;
+            _appearance.ShowGpxImport = false;
+            GpsGpxToggle.IsChecked = false;
+            _gpxUiUpdating = false;
+            ApplyGpsGpxVisibility();
+            ClearGpxOverlay();
+        }
         ApplyGpsFilmstripVisibility();
         if (_appearance.ShowGpsFilmstrip)
             GpsPhotoPopup.Visibility = Visibility.Collapsed;
@@ -278,6 +288,15 @@ public partial class MainWindow
         if (!_appearance.ShowGpsFilmstrip)
         {
             _appearance.ShowGpsFilmstrip = true;
+            if (_appearance.ShowGpxImport)
+            {
+                _gpxUiUpdating = true;
+                _appearance.ShowGpxImport = false;
+                GpsGpxToggle.IsChecked = false;
+                _gpxUiUpdating = false;
+                ApplyGpsGpxVisibility();
+                ClearGpxOverlay();
+            }
             _gpsFilmstripUpdating = true;
             GpsFilmstripToggle.IsChecked = true;
             _gpsFilmstripUpdating = false;
