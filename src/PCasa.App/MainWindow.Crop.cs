@@ -30,6 +30,56 @@ public partial class MainWindow
     private double _cropRatio; // 0 = free
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
+    private string? _viewerCachedCameraDetails;
+
+    // Use the ONE persisted EXIF catalog, never re-open the original
+    // over a potentially slow network just to fill the editor footer.
+    private string? ReadCachedViewerCameraDetails(long imageId)
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText =
+            "SELECT camera_model, exif_json FROM image_exif WHERE image_id=$id";
+        command.Parameters.AddWithValue("$id", imageId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var model = reader.IsDBNull(0) ? "" : reader.GetString(0);
+        if (reader.IsDBNull(1)) return model;
+        using var json = JsonDocument.Parse(reader.GetString(1));
+        var obj = json.RootElement;
+        if (obj.ValueKind == JsonValueKind.Array && obj.GetArrayLength() == 1)
+            obj = obj[0];
+        if (obj.ValueKind != JsonValueKind.Object) return model;
+
+        static double? Get(JsonElement root, params string[] tags)
+        {
+            foreach (var tag in tags)
+                foreach (var prop in root.EnumerateObject())
+                    if ((prop.Name.EndsWith(":" + tag, StringComparison.OrdinalIgnoreCase) ||
+                         prop.Name.Equals(tag, StringComparison.OrdinalIgnoreCase)) &&
+                        prop.Value.ValueKind == JsonValueKind.Number &&
+                        prop.Value.TryGetDouble(out var number))
+                        return number;
+            return null;
+        }
+        var exposure = Get(obj, "ExposureTime");
+        var aperture = Get(obj, "FNumber");
+        var iso = Get(obj, "ISO");
+        var focal = Get(obj, "FocalLength");
+        var parts = new List<string>();
+        if (exposure is > 0)
+            parts.Add(exposure < 1
+                ? "1/" + Math.Round(1 / exposure.Value).ToString("0") + " s"
+                : exposure.Value.ToString("0.###") + " s");
+        if (aperture is > 0) parts.Add("f/" + aperture.Value.ToString("0.#"));
+        if (iso is > 0) parts.Add("ISO " + iso.Value.ToString("0"));
+        if (focal is > 0) parts.Add(focal.Value.ToString("0.#") + " mm");
+        if (model.Length == 0 && parts.Count == 0) return null;
+        return model + (parts.Count > 0
+            ? (model.Length > 0 ? Environment.NewLine : "") +
+              string.Join("   ·   ", parts)
+            : "");
+    }
 
     // Histogram is sampled from the decoded in-memory preview; do not open the
     // original (particularly important for slow/offline NAS paths).
@@ -37,11 +87,14 @@ public partial class MainWindow
     {
         ViewerHistogramCanvas.Children.Clear();
         ViewerCameraDetails.Text = _viewerImageInfo is { } info
-            ? info.FileName + "  ·  " + info.Width + " × " + info.Height
+            ? (_viewerCachedCameraDetails is { Length: > 0 } details
+                ? details + Environment.NewLine : string.Empty) +
+                info.FileName + "  ·  " + info.Width + " × " + info.Height
             : string.Empty;
         if (source is null || source.PixelWidth < 1 || source.PixelHeight < 1)
             return;
-        if (source is BitmapFrame frame &&
+        if (_viewerCachedCameraDetails is null &&
+            source is BitmapFrame frame &&
             frame.Metadata is BitmapMetadata metadata &&
             !string.IsNullOrWhiteSpace(metadata.CameraModel))
             ViewerCameraDetails.Text = metadata.CameraModel + "  ·  " +
