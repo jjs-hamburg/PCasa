@@ -258,6 +258,8 @@ jobs:
         run: |
           $releaseVersion = ./tools/Get-PCasaReleaseVersion.ps1
           $installer = (Resolve-Path -LiteralPath $releaseVersion.InstallerPath).Path
+          $sourceTextures = @(Get-ChildItem "default-textures" -File |
+            Where-Object { $_.Extension -in @(".jpg", ".jpeg") })
           foreach ($mode in @("CURRENTUSER", "ALLUSERS")) {
             $scope = $mode.ToLowerInvariant()
             $target = Join-Path $env:RUNNER_TEMP "pcasa-probe-$scope"
