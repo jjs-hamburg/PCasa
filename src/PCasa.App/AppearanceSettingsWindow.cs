@@ -16,7 +16,7 @@ public sealed record AppearanceDialogValues(
     string Theme, string Background, string? Texture,
     string FolderStatus, bool RestorePosition, bool HideCollapsed,
     bool FileNames, bool BoldFileNames, bool Icons, bool Shadows,
-    bool Tooltips, string SequenceScope, int CaptionSize);
+    bool Tooltips, string SequenceScope, int CaptionSize, string ShadowStrength = "Aus");
 
 public sealed class AppearanceSettingsWindow : Window
 {
@@ -32,7 +32,8 @@ public sealed class AppearanceSettingsWindow : Window
     public CheckBox FileNamesCheck { get; } = new();
     public CheckBox BoldFileNamesCheck { get; } = new();
     public CheckBox IconsCheck { get; } = new();
-    public CheckBox ShadowsCheck { get; } = new();
+    public event Action<AppearanceDialogValues>? PreviewChanged;
+    public event Action<AppearanceDialogValues>? ApplyRequested;
     public CheckBox TooltipsCheck { get; } = new();
     public Button ConfirmButton { get; } = new();
     public Button CancelButton { get; } = new();
@@ -184,7 +185,14 @@ public sealed class AppearanceSettingsWindow : Window
         var options = Section(right, "Galerieoptionen");
         AddCheck(options, RestorePositionCheck, "Galerieposition beim Start wiederherstellen", values.RestorePosition);
         AddCheck(options, HideCollapsedCheck, "Eingeklappte Ordner in Galerie ausblenden", values.HideCollapsed);
-        AddCheck(options, ShadowsCheck, "Thumbnail-Schatten", values.Shadows);
+        var shadows = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var (key, name) in new[] { ("Aus", "Aus"), ("Dezent", "Dezent"),
+            ("Normal", "Normal"), ("Stark", "Stark") })
+            Radio(shadows, "shadow", key, name,
+                values.Shadows ? (values.ShadowStrength == "Aus" ? "Dezent" : values.ShadowStrength) : "Aus");
+        options.Children.Add(new TextBlock { Text = UiLanguage.T("Thumbnail-Schatten"),
+            FontSize = 12, Margin = new Thickness(0, 3, 0, 2) });
+        options.Children.Add(shadows);
         AddCheck(options, IconsCheck, "GPS-, Tag- und RAW-Symbole", values.Icons);
         AddCheck(options, TooltipsCheck, "Tooltips", values.Tooltips);
 
@@ -281,6 +289,16 @@ public sealed class AppearanceSettingsWindow : Window
         ConfirmButton.Click += (_, _) => Accept();
         DockPanel.SetDock(ConfirmButton, Dock.Right);
         footer.Children.Add(ConfirmButton);
+        var apply = new Button { Content = UiLanguage.T("Übernehmen"), MinWidth = 100,
+            Height = 30, Padding = new Thickness(8, 3, 8, 3),
+            Margin = new Thickness(0, 0, 8, 0) };
+        apply.Click += (_, _) => { CaptureValues(); ApplyRequested?.Invoke(Values); };
+        DockPanel.SetDock(apply, Dock.Right);
+        footer.Children.Add(apply);
+        AddHandler(System.Windows.Controls.Primitives.ToggleButton.CheckedEvent,
+            new RoutedEventHandler((_, _) => PublishPreview()));
+        AddHandler(System.Windows.Controls.Primitives.ToggleButton.UncheckedEvent,
+            new RoutedEventHandler((_, _) => PublishPreview()));
     }
 
     private static StackPanel Section(Panel parent, string label)
@@ -374,6 +392,7 @@ public sealed class AppearanceSettingsWindow : Window
                     _texture = name;
                     _choices["background:Texture"].IsChecked = true;
                     UpdateTextureSelection();
+                    PublishPreview();
                 };
                 _textureItems.Children.Add(button);
             }
@@ -418,26 +437,42 @@ public sealed class AppearanceSettingsWindow : Window
         FileNamesCheck.IsChecked = true;
         BoldFileNamesCheck.IsChecked = false;
         IconsCheck.IsChecked = true;
-        ShadowsCheck.IsChecked = false;
+        _choices["shadow:Aus"].IsChecked = true;
         TooltipsCheck.IsChecked = true;
     }
 
     private void Accept()
     {
+        CaptureValues();
+        DialogResult = true;
+    }
+
+    private void PublishPreview()
+    {
+        if (!IsLoaded) return;
+        try
+        {
+            var old = Values;
+            CaptureValues();
+            PreviewChanged?.Invoke(Values);
+            Values = old;
+        }
+        catch (Exception ex) { PCasaDiagnostics.Write("Appearance.LivePreview", ex); }
+    }
+
+    private void CaptureValues()
+    {
         Values = new AppearanceDialogValues(
             Choice("theme", "Light", "Dark", "System"),
             Choice("background", "Auto", "Dark", "Light", "Texture"),
-            _texture,
-            Choice("status", "Always", "Problems", "None"),
-            RestorePositionCheck.IsChecked == true,
-            HideCollapsedCheck.IsChecked == true,
-            FileNamesCheck.IsChecked == true,
-            BoldFileNamesCheck.IsChecked == true,
+            _texture, Choice("status", "Always", "Problems", "None"),
+            RestorePositionCheck.IsChecked == true, HideCollapsedCheck.IsChecked == true,
+            FileNamesCheck.IsChecked == true, BoldFileNamesCheck.IsChecked == true,
             IconsCheck.IsChecked == true,
-            ShadowsCheck.IsChecked == true,
+            Choice("shadow", "Aus", "Dezent", "Normal", "Stark") != "Aus",
             TooltipsCheck.IsChecked == true,
             Choice("sequence", "CurrentFolder", "Gallery"),
-            int.Parse(Choice("caption", "10", "12", "14")));
-        DialogResult = true;
+            int.Parse(Choice("caption", "10", "12", "14")),
+            Choice("shadow", "Aus", "Dezent", "Normal", "Stark"));
     }
 }
