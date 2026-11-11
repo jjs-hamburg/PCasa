@@ -909,10 +909,12 @@
                     <!-- Navigation belongs at the upper-right, not inside a scrolling tool. -->
                     <DockPanel Grid.Row="0" Margin="10,6,9,7">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="CropUndoButton" Width="34" Height="29" Content="↶"
-                                    FontSize="18" ToolTip="{loc:Tr Key='Rückgängig machen'}" Margin="0,0,4,0"/>
-                            <Button x:Name="CropRedoButton" Width="34" Height="29" Content="↷"
-                                    FontSize="18" ToolTip="{loc:Tr Key='Wiederholen'}"/>
+                            <Button Width="34" Height="29" Content="‹"
+                                    ToolTip="{loc:Tr Key='Vorheriges Bild'}" Margin="0,0,4,0"
+                                    Click="PhotoViewerPrev_Click"/>
+                            <Button Width="34" Height="29" Content="›"
+                                    ToolTip="{loc:Tr Key='Nächstes Bild'}"
+                                    Click="PhotoViewerNext_Click"/>
                         </StackPanel>
                         <TextBlock Text="{loc:Tr Key='Bearbeiten'}" FontSize="15" FontWeight="SemiBold"
                                    VerticalAlignment="Center"/>
@@ -942,6 +944,13 @@
                                             Content="▯" FontSize="21"
                                             ToolTip="{loc:Tr Key='Hochformat'}"/>
                                 </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+                                    <Button x:Name="CropUndoButton" Width="37" Height="29" Content="↶"
+                                            FontSize="18" Margin="0,0,5,0"
+                                            ToolTip="{loc:Tr Key='Rückgängig machen'}"/>
+                                    <Button x:Name="CropRedoButton" Width="37" Height="29" Content="↷"
+                                            FontSize="18" ToolTip="{loc:Tr Key='Wiederholen'}"/>
+                                </StackPanel>
                                 <Button x:Name="CropPreviewButton" Height="29" Padding="12,3"
                                         Content="Vorschau · Original gedrückt halten"
                                         HorizontalAlignment="Left"/>
@@ -959,7 +968,8 @@
                                        TextWrapping="Wrap" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Border>
-                    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right"
+                    <StackPanel x:Name="ViewerCropFooter" Grid.Row="3" Visibility="Collapsed"
+                                Orientation="Horizontal" HorizontalAlignment="Right"
                                 Margin="9,8,9,9">
                         <Button x:Name="CropCancelButton" Content="{loc:Tr Key='Abbrechen'}"
                                 Height="30" Padding="12,3" Margin="0,0,7,0"/>
