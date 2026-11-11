@@ -1525,23 +1525,28 @@ internal static class Program
                 !Uri.UnescapeDataString(googleUrl).Contains("53.502345,10.123456"))
                 throw new Exception("Google Maps URL does not address the current GPS point.");
             Console.WriteLine("PASS: Info GPS-copy control, shared coordinate format and external Maps URL.");
-            // GPS rows never wrap or get locked to the old sidebar width.
+            // Three labeled groups are deliberately allowed to wrap on narrow sidebars.
             var gpsControls = window.FindName("GpsControlsPanel") as Grid
-                ?? throw new Exception("GPS controls must use a fixed-row grid.");
+                ?? throw new Exception("GPS controls grid missing.");
             var gpsHeader = window.FindName("InfoSidebarHeader") as Grid
                 ?? throw new Exception("GPS header must be a grid.");
             var gpsCoords = window.FindName("GpsCoordinatesText") as TextBlock
                 ?? throw new Exception("GPS coordinates missing.");
-            var gpsActions = window.FindName("GpsEditPanel") as Grid
-                ?? throw new Exception("GPS action row missing.");
+            var gpsActions = window.FindName("GpsEditPanel") as WrapPanel
+                ?? throw new Exception("GPS actions must wrap instead of clipping.");
+            var headerCopy = window.FindName("GpsCopyButton") as Button
+                ?? throw new Exception("Copy GPS icon missing next to coordinates.");
+            var gpxEmpty = window.FindName("GpsGpxEmptyText") as TextBlock
+                ?? throw new Exception("GPX empty-folder message missing.");
             if (Grid.GetColumn(gpsCoords) != 1 ||
-                gpsControls.RowDefinitions.Count != 4 ||
-                gpsActions.ColumnDefinitions.Count != 3 ||
-                Grid.GetRow(gpsActions) != 1 ||
+                gpsControls.RowDefinitions.Count != 8 ||
+                Grid.GetRow(gpsActions) != 2 ||
                 gpsActions.Visibility != Visibility.Visible ||
                 gpsControls.HorizontalAlignment != HorizontalAlignment.Stretch ||
-                gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch)
-                throw new Exception("GPS controls are not fixed and compact.");
+                gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch ||
+                !Equals(gpxEmpty.Text, "Keine GPX-Dateien.") ||
+                headerCopy.IsEnabled)
+                throw new Exception("GPS grouped controls or coordinate copy are inconsistent.");
             var gpsPin = window.FindName("GpsFilmstripFreezeToggle") as ToggleButton;
             var gpsTransfer = window.FindName("GpsFilmstripToGalleryButton") as Button;
             var gpsReplace = window.FindName("GpsReplaceButton") as Button;
@@ -1555,7 +1560,8 @@ internal static class Program
                 window.FindName("GpsApplyMissingButton") is not null ||
                 window.FindName("GpsFilmstripClearButton") is not null ||
                 gpsStrip.SelectionMode != SelectionMode.Extended ||
-                Grid.GetColumn(gpsReplace) != 1 || Grid.GetColumn(gpsRemove) != 2 ||
+                !gpsActions.Children.Contains(gpsReplace) ||
+                !gpsActions.Children.Contains(gpsRemove) ||
                 Grid.GetRow(gpsStrip) != 1 ||
                 !ToolTipService.GetShowOnDisabled(gpsReplace) ||
                 !ToolTipService.GetShowOnDisabled(gpsRemove) ||
@@ -1564,7 +1570,7 @@ internal static class Program
                 !ToolTipService.GetShowOnDisabled(departureJump))
                 throw new Exception("GPS filmstrip actions or disabled-button tooltips are missing.");
             Console.WriteLine("PASS: GPS filmstrip actions and disabled-button explanations are present.");
-            Console.WriteLine("PASS: GPS header/controls stay in fixed rows.");
+            Console.WriteLine("PASS: GPS edit/source/view grouping, responsive buttons and header coordinate copy.");
 
 
             var tagButton = Descendants<Button>(window)
