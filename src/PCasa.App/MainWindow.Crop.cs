@@ -116,7 +116,7 @@ public partial class MainWindow
         _cropActive = true;
         _cropRatioMode = "Original";
         _cropRatio = bitmap.PixelWidth / (double)bitmap.PixelHeight;
-        _cropRect = FitCrop(new Rect(.08, .08, .84, .84), _cropRatio);
+        _cropRect = FitToImageAspect(new Rect(.08, .08, .84, .84));
         _cropHistory.Clear();
         _cropHistory.Add(_cropRect);
         _cropHistoryIndex = 0;
@@ -169,7 +169,7 @@ public partial class MainWindow
                 double.TryParse(numbers[0], out var w) &&
                 double.TryParse(numbers[1], out var h) && h > 0) _cropRatio = w / h;
         }
-        _cropRect = FitCrop(_cropRect, _cropRatio);
+        _cropRect = FitToImageAspect(_cropRect);
         AddCropHistory(_cropRect);
     }
 
