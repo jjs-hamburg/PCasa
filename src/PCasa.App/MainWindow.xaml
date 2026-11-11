@@ -525,6 +525,7 @@
                             <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
+                        <MenuItem Header="GPX..." Click="GpxOptions_Click"/>
                         <MenuItem x:Name="TaskManagerMenuItem"
                                   Header="{loc:Tr Key='Taskmanager...'}"
                                   Click="TaskManagerMenu_Click"/>
