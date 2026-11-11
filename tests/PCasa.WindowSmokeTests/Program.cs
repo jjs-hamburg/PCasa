@@ -343,13 +343,13 @@ internal static class Program
                     PCasa.App.Services.GpxTrackReader.Match(points,
                         new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),5) is not null)
                     throw new Exception("GPX interpolation or gap limit is wrong.");
-                var options = new PCasa.App.Services.GpxOptions
+                var gpxTestOptions = new PCasa.App.Services.GpxOptions
                 {
                     DirectoryPath = gpxTestRoot, CameraTimeZoneId = "UTC",
                     CameraOffsetSeconds = 10, MaximumGapSeconds = 60
                 };
                 if (PCasa.App.Services.GpxTrackReader.CameraToUtc(
-                    new DateTime(2026,11,10,10,0,10),options) !=
+                    new DateTime(2026,11,10,10,0,10),gpxTestOptions) !=
                     new DateTimeOffset(2026,11,10,10,0,0,TimeSpan.Zero))
                     throw new Exception("Camera clock offset is applied in the wrong direction.");
                 Console.WriteLine("PASS: Secure GPX reader, UTC alignment, time offset and interpolation gap.");
