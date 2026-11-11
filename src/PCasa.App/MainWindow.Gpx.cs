@@ -92,6 +92,8 @@ public partial class MainWindow
                 .OrderBy(f => Path.GetFileName(f), StringComparer.CurrentCultureIgnoreCase)
                 .Select(f => new GpxEntry(Path.GetFileName(f), f)).ToArray();
             GpsGpxList.ItemsSource = files;
+            GpsGpxEmptyText.Visibility = files.Length == 0
+                ? Visibility.Visible : Visibility.Collapsed;
             foreach (var file in files)
                 if (old.Contains(file.FullPath)) GpsGpxList.SelectedItems.Add(file);
             GpsGpxHeader.Text = "GPX Import (" + files.Length + ")";
@@ -99,7 +101,8 @@ public partial class MainWindow
             _ = LoadGpxTooltipsAsync(files, ++_gpxListRevision);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        { GpsGpxHeader.Text = ex.Message; }
+        { GpsGpxHeader.Text = ex.Message;
+          GpsGpxEmptyText.Visibility = Visibility.Collapsed; }
     }
 
     private async Task LoadGpxTooltipsAsync(GpxEntry[] files, long revision)
