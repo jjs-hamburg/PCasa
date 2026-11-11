@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Text.Json;
@@ -11,9 +12,18 @@ namespace PCasa.App;
 
 public partial class MainWindow
 {
-    private sealed record GpxEntry(string Name, string FullPath)
+    private sealed class GpxEntry(string name, string fullPath) : INotifyPropertyChanged
     {
-        public string Tooltip => FullPath;
+        public string Name { get; } = name;
+        public string FullPath { get; } = fullPath;
+        private string _tooltip = fullPath;
+        public string Tooltip
+        {
+            get => _tooltip;
+            set { _tooltip = value; PropertyChanged?.Invoke(this,
+                new PropertyChangedEventArgs(nameof(Tooltip))); }
+        }
+        public event PropertyChangedEventHandler? PropertyChanged;
     }
     private sealed record GpxAssignment(long Id, string Name, double? Lat,
         double? Lon, string Status, bool ExistingGps);
@@ -22,6 +32,8 @@ public partial class MainWindow
     private GpxOptions _gpxOptions = GpxOptions.Load();
     private bool _gpxUiUpdating;
     private long _gpxLoadRevision;
+    private long _gpxListRevision;
+    private IReadOnlyList<GpxTrackPoint>[] _gpxSourceTracks = [];
     private List<GpxTrackPoint> _gpxCurrentPoints = [];
 
     private void InitializeGpxUi()
@@ -84,9 +96,44 @@ public partial class MainWindow
                 if (old.Contains(file.FullPath)) GpsGpxList.SelectedItems.Add(file);
             GpsGpxHeader.Text = "GPX Import (" + files.Length + ")";
             ResizeGpxEntries();
+            _ = LoadGpxTooltipsAsync(files, ++_gpxListRevision);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { GpsGpxHeader.Text = ex.Message; }
+    }
+
+    private async Task LoadGpxTooltipsAsync(GpxEntry[] files, long revision)
+    {
+        await Task.Run(() =>
+        {
+            foreach (var file in files)
+            {
+                if (revision != _gpxListRevision || _shutdownStarted) return;
+                try
+                {
+                    var points = GpxTrackReader.Read(file.FullPath);
+                    var text = points.Count == 0 ? file.FullPath + "\\nKeine GPS-Punkte" :
+                        file.FullPath + "\\n" +
+                        points[0].UtcTime.LocalDateTime.ToString("g") + " – " +
+                        points[^1].UtcTime.LocalDateTime.ToString("g") + "\\n" +
+                        points.Count.ToString("N0") + " GPS-Punkte · " +
+                        (points[^1].UtcTime - points[0].UtcTime).ToString(@"hh\\:mm\\:ss");
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (revision == _gpxListRevision) file.Tooltip = text;
+                    }));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                    or System.Xml.XmlException or InvalidDataException)
+                {
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (revision == _gpxListRevision)
+                            file.Tooltip = file.FullPath + "\\n" + ex.Message;
+                    }));
+                }
+            }
+        });
     }
 
     private void GpsGpx_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -113,8 +160,8 @@ public partial class MainWindow
             var tracks = await Task.Run(() =>
                 selected.Select(x => GpxTrackReader.Read(x.FullPath)).ToArray());
             if (revision != _gpxLoadRevision || !_appearance.ShowGpxImport) return;
-            _gpxCurrentPoints = tracks.SelectMany(x => x)
-                .OrderBy(x => x.UtcTime).DistinctBy(x => x.UtcTime).ToList();
+            _gpxSourceTracks = tracks;
+            _gpxCurrentPoints = tracks.SelectMany(x => x).ToList();
             GpsGpxHeader.Text = $"GPX ({selected.Length}, {_gpxCurrentPoints.Count:N0} Punkte)";
             PublishGpxOverlay(true);
         }
@@ -130,21 +177,25 @@ public partial class MainWindow
     {
         if (_gpsBrowser is null || !_gpsBrowserReady || _gpsGoogleWebsiteActive) return;
         var segments = new List<List<double[]>>();
-        List<double[]>? current = null;
-        GpxTrackPoint? prev = null;
-        int count = 0;
-        foreach (var point in _gpxCurrentPoints)
+        foreach (var track in _gpxSourceTracks)
         {
-            if (prev is null || (point.UtcTime - prev.UtcTime).TotalSeconds >
-                _gpxOptions.MaximumGapSeconds)
+            List<double[]>? current = null;
+            GpxTrackPoint? prev = null;
+            var count = 0;
+            var stride = Math.Max(1, track.Count / 12000);
+            foreach (var point in track)
             {
-                current = [];
-                segments.Add(current);
-                count = 0;
+                if (prev is null || (point.UtcTime - prev.UtcTime).TotalSeconds >
+                    _gpxOptions.MaximumGapSeconds)
+                {
+                    current = [];
+                    segments.Add(current);
+                    count = 0;
+                }
+                if (++count % stride == 0 || count == 1)
+                    current!.Add([point.Longitude, point.Latitude]);
+                prev = point;
             }
-            if (++count % Math.Max(1, _gpxCurrentPoints.Count / 12000) == 0 || count == 1)
-                current!.Add([point.Longitude, point.Latitude]);
-            prev = point;
         }
         _gpsBrowser.ExecuteScriptAsync("window.pcasaShowGpx?.(" +
             JsonSerializer.Serialize(segments.Where(s => s.Count >= 2).ToArray()) +
@@ -155,6 +206,7 @@ public partial class MainWindow
     {
         ++_gpxLoadRevision;
         _gpxCurrentPoints = [];
+        _gpxSourceTracks = [];
         if (_gpsBrowser is not null && _gpsBrowserReady && !_gpsGoogleWebsiteActive)
             _gpsBrowser.ExecuteScriptAsync("window.pcasaShowGpx?.([],false)");
     }
@@ -174,7 +226,7 @@ public partial class MainWindow
             return;
         }
         var assignments = new List<GpxAssignment>();
-        var track = _gpxCurrentPoints.ToArray();
+        var tracks = _gpxSourceTracks.ToArray();
         var options = _gpxOptions;
         GpsGpxToGalleryButton.IsEnabled = false;
         try
@@ -209,12 +261,21 @@ public partial class MainWindow
                         try
                         {
                             var utc = GpxTrackReader.CameraToUtc(local, options);
-                            var matched = GpxTrackReader.Match(track, utc,
-                                options.MaximumGapSeconds);
-                            assignments.Add(matched is { } p
-                                ? new(id,name,p.Latitude,p.Longitude,
-                                    hasGps ? "GPS vorhanden" : "Zuordnung möglich",hasGps)
-                                : new(id,name,null,null,"Keine passende GPX-Position",hasGps));
+                            var matches = tracks.Select(t => GpxTrackReader.Match(t,
+                                    utc, options.MaximumGapSeconds))
+                                .Where(m => m.HasValue).Select(m => m!.Value).ToArray();
+                            if (matches.Length > 1 &&
+                                matches.Skip(1).Any(m =>
+                                    GpxDistanceMeters(matches[0],m) > 35))
+                                assignments.Add(new(id,name,null,null,
+                                    "Mehrere widersprüchliche GPX-Tracks",hasGps));
+                            else if (matches.Length > 0)
+                                assignments.Add(new(id,name,matches[0].Latitude,
+                                    matches[0].Longitude,
+                                    hasGps ? "GPS vorhanden" : "Zuordnung möglich",hasGps));
+                            else
+                                assignments.Add(new(id,name,null,null,
+                                    "Keine passende GPX-Position",hasGps));
                         }
                         catch (ArgumentException)
                         { assignments.Add(new(id,name,null,null,"Ungültige Aufnahmezeit",hasGps)); }
@@ -253,6 +314,19 @@ public partial class MainWindow
             PcasaDialog.Show(this,ex.Message,"GPX",MessageBoxButton.OK,MessageBoxImage.Error);
         }
         finally { GpsGpxToGalleryButton.IsEnabled = true; }
+    }
+
+    private static double GpxDistanceMeters(
+        (double Latitude,double Longitude) a,
+        (double Latitude,double Longitude) b)
+    {
+        const double rad = Math.PI/180;
+        var dLat=(b.Latitude-a.Latitude)*rad;
+        var dLon=(b.Longitude-a.Longitude)*rad;
+        var x=Math.Pow(Math.Sin(dLat/2),2)+
+            Math.Cos(a.Latitude*rad)*Math.Cos(b.Latitude*rad)*
+            Math.Pow(Math.Sin(dLon/2),2);
+        return 12742000*Math.Asin(Math.Min(1,Math.Sqrt(x)));
     }
 
     private static bool TryParseCameraTime(string? text, out DateTime value)
