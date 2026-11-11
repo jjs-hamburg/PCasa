@@ -8,6 +8,9 @@ on:
     branches:
       - main
       - 'setup-*'
+      - ui-crop-live-alpha14
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
