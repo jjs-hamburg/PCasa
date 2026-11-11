@@ -21,8 +21,10 @@ SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=dialog
-UsePreviousPrivileges=yes
+PrivilegesRequiredOverridesAllowed=
+UsePreviousPrivileges=no
+UsePreviousAppDir=no
+DisableDirPage=yes
 UsePreviousAppDir=yes
 UninstallDisplayIcon={app}\PCasa.App.exe
 CloseApplications=yes
@@ -62,6 +64,14 @@ de.RuntimeSilentMissing=Microsoft .NET 10 Desktop Runtime fehlt. Bei einer unbea
 en.RuntimeSilentMissing=Microsoft .NET 10 Desktop Runtime is missing. Install it before running unattended setup.
 de.RuntimeDownloadDescription=Download von Microsoft. Mit Abbrechen wird die PCasa-Installation beendet.
 en.RuntimeDownloadDescription=Downloading from Microsoft. Cancel ends PCasa Setup.
+de.ScopeTitle=Datenbereich
+en.ScopeTitle=Data scope
+de.ScopeDescription=Das Programm wird unter Programme installiert. Wer darf die PCasa-Datenbank gemeinsam verwenden?
+en.ScopeDescription=The program is installed under Program Files. Who may share the PCasa catalog?
+de.ScopeCurrent=Nur aktueller Benutzer (private Datenbank)
+en.ScopeCurrent=Current user only (private catalog)
+de.ScopeAll=Alle Benutzer (gemeinsame Datenbank)
+en.ScopeAll=All users (shared catalog)
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -69,7 +79,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Dirs]
 ; Both elevated and ordinary PCasa users need to write the same SQLite WAL,
 ; journal and thumbnail packs. Never put user preferences in this directory.
-Name: "{commonappdata}\PCasa"; Permissions: users-modify; Check: IsAdminInstallMode
+Name: "{commonappdata}\PCasa"; Permissions: users-modify; Check: IsAllUsersSelected
+Name: "{commonappdata}\PCasa\Texturen"; Permissions: users-modify; Check: IsAllUsersSelected
+Name: "{commonappdata}\PCasa\GPX"; Permissions: users-modify; Check: IsAllUsersSelected
+Name: "{commonappdata}\PCasa\Undo"; Permissions: users-modify; Check: IsAllUsersSelected
+Name: "{localappdata}\PCasa"; Check: IsCurrentUserSelected
+Name: "{localappdata}\PCasa\Texturen"; Check: IsCurrentUserSelected
+Name: "{localappdata}\PCasa\GPX"; Check: IsCurrentUserSelected
+Name: "{localappdata}\PCasa\Undo"; Check: IsCurrentUserSelected
 
 [InstallDelete]
 ; Retire only the bundled legacy texture names on upgrade. Never clear the whole
@@ -118,15 +135,19 @@ Type: files; Name: "{app}\hostfxr.dll"; Check: OldSelfContainedInstallation
 
 [Files]
 Source: "..\publish\PCasa\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAdminInstallMode
+Source: "PCasa.all-users"; DestDir: "{app}"; Flags: ignoreversion; Check: IsAllUsersSelected
+Source: "..\default-textures\*.jpg"; DestDir: "{commonappdata}\PCasa\Texturen"; Flags: ignoreversion onlyifdoesntexist; Check: IsAllUsersSelected
+Source: "..\default-textures\*.jpg"; DestDir: "{localappdata}\PCasa\Texturen"; Flags: ignoreversion onlyifdoesntexist; Check: IsCurrentUserSelected
 Source: "Check-DesktopRuntime.ps1"; Flags: dontcopy
 
 [Registry]
 Root: HKCU; Subkey: "Software\\PCasa"; ValueType: string; ValueName: "PendingSetupLanguage"; ValueData: "{language}"
 
 [Icons]
-Name: "{autoprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"
-Name: "{autodesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon
+Name: "{commonprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"; Check: IsAllUsersSelected
+Name: "{userprograms}\PCasa"; Filename: "{app}\PCasa.App.exe"; Check: IsCurrentUserSelected
+Name: "{commondesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon; Check: IsAllUsersSelected
+Name: "{userdesktop}\PCasa"; Filename: "{app}\PCasa.App.exe"; Tasks: desktopicon; Check: IsCurrentUserSelected
 
 [Run]
 Filename: "{app}\PCasa.App.exe"; Description: "{cm:LaunchProgram,PCasa}"; Flags: nowait postinstall skipifsilent
@@ -141,9 +162,33 @@ end;
 // Failure/cancel preserves the prior PCasa installation and catalog.
 var
   RuntimeDownloadPage: TDownloadWizardPage;
+  InstallScopePage: TInputOptionWizardPage;
+
+function IsAllUsersSelected(): Boolean;
+begin
+  Result := InstallScopePage.SelectedValueIndex = 1;
+end;
+
+function IsCurrentUserSelected(): Boolean;
+begin
+  Result := not IsAllUsersSelected();
+end;
 
 procedure InitializeWizard();
 begin
+  InstallScopePage := CreateInputOptionPage(wpWelcome,
+    'PCasa – ' + CustomMessage('ScopeTitle'),
+    CustomMessage('ScopeDescription'), '', True, False);
+  InstallScopePage.Add(CustomMessage('ScopeCurrent'));
+  InstallScopePage.Add(CustomMessage('ScopeAll'));
+  if Pos('/ALLUSERS', UpperCase(GetCmdTail())) > 0 then
+    InstallScopePage.SelectedValueIndex := 1
+  else if Pos('/CURRENTUSER', UpperCase(GetCmdTail())) > 0 then
+    InstallScopePage.SelectedValueIndex := 0
+  else if FileExists(ExpandConstant('{autopf}\PCasa\PCasa.all-users')) then
+    InstallScopePage.SelectedValueIndex := 1
+  else
+    InstallScopePage.SelectedValueIndex := 0;
   RuntimeDownloadPage := CreateDownloadPage(
     'Microsoft .NET 10 Desktop Runtime',
     CustomMessage('RuntimeDownloadDescription'),
