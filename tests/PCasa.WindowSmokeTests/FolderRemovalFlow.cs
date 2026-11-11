@@ -39,6 +39,16 @@ internal static class FolderRemovalFlow
                 new ThumbnailCache(), roots, new BrowseThumbnailProfileRepository(db));
             var seeded = scanner.Scan(root);
             Console.WriteLine($"Folder removal seed: seen={seeded.ImageFilesSeen}, updated={seeded.Updated}, failed={seeded.Failed}");
+            if (seeded.Failed > 0)
+            {
+                var logPath = PCasaDiagnostics.LogPath;
+                if (File.Exists(logPath))
+                    foreach (var line in File.ReadLines(logPath)
+                        .Where(line => line.Contains("[Scan.FileSkipped]", StringComparison.Ordinal))
+                        .TakeLast(3))
+                        Console.WriteLine("Folder removal seed failure: " + line);
+                throw new Exception("Folder removal smoke fixture did not create a valid catalog.");
+            }
             new BackgroundScanSettings { Enabled = false }.Save();
             var catalog = new ImageCatalogRepository(db);
             var groups = catalog.GetPhotoFolders();
