@@ -7683,6 +7683,11 @@ internal static class Program
             File.WriteAllBytes(original, new byte[] { 0, 0, 0, 8, 0x66, 0x74, 0x79, 0x70 });
             var bytes = File.ReadAllBytes(original);
             var stamp = File.GetLastWriteTimeUtc(original);
+            var rejectedVideoWrite = false;
+            try { ExifToolKeywordWriter.Write(original, ["PCasa-test"]); }
+            catch (NotSupportedException) { rejectedVideoWrite = true; }
+            if (!rejectedVideoWrite)
+                throw new Exception("Video keyword edits must be refused.");
             var preview = VideoThumbnailSource.Resolve(original);
             if (!File.Exists(preview) || !preview.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
                 throw new Exception("No local JPEG preview for unsupported video.");
