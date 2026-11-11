@@ -140,19 +140,14 @@ jobs:
         shell: pwsh
         run: |
           dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
-          # Only the twelve user-provided default textures belong to this release.
-          $sourceTextures = @(Get-ChildItem "default-textures" -File | Where-Object { $_.Extension -in @(".jpg", ".jpeg") })
-          $publishedTextures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in @(".jpg", ".jpeg") })
-          if ($sourceTextures.Count -ne 12 -or $publishedTextures.Count -ne 12) {
-            throw "Expected exactly twelve supplied JPG textures; found $($sourceTextures.Count) source and $($publishedTextures.Count) published"
+          # Default textures are installed in writable PCasa DATA, not Program Files.
+          $sourceTextures = @(Get-ChildItem "default-textures" -File |
+              Where-Object { $_.Extension -in @(".jpg", ".jpeg") })
+          if ($sourceTextures.Count -ne 12) {
+            throw "Expected exactly twelve supplied JPG textures"
           }
-          foreach ($source in $sourceTextures) {
-            $published = Join-Path "publish/PCasa/Texturen" $source.Name
-            if (-not (Test-Path -LiteralPath $published) -or
-                (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash -ne
-                (Get-FileHash -LiteralPath $published -Algorithm SHA256).Hash) {
-              throw "Published texture is missing or changed: $($source.Name)"
-            }
+          if (Test-Path -LiteralPath "publish/PCasa/Texturen") {
+            throw "Published executable folder must not contain user-editable textures"
           }
           New-Item -ItemType Directory -Force -Path "publish/PCasa/exiftool" | Out-Null
           Copy-Item -Path "tools/exiftool/*" -Destination "publish/PCasa/exiftool" -Recurse -Force
@@ -195,9 +190,7 @@ jobs:
             "PCasa.App.dll.SHA256=$dllHash"
           ) | Set-Content -Path "publish/PCasa/BUILD-INFO.txt" -Encoding UTF8
           Write-Host "Build identity: commit=$env:GITHUB_SHA DLL SHA256=$dllHash"
-          $textures = @(Get-ChildItem "publish/PCasa/Texturen" -File | Where-Object { $_.Extension -in ".jpg", ".jpeg" })
-          if ($textures.Count -lt 6) { throw "JPG texture directory is incomplete" }
-          Write-Host "Published $($textures.Count) selectable JPG textures"
+          Write-Host "Verified twelve source textures; Inno Setup installs them into PCasa data root"
       - name: Supply hash-pinned dynamic libvips DLLs for actual release
         shell: pwsh
         run: ./tools/prepare-dynamic-libvips.ps1 -PublishDir publish/PCasa -EvidenceDir license-audit/dynamic-libvips
@@ -326,8 +319,27 @@ jobs:
             if ($marker -ne ($mode -eq "ALLUSERS")) {
               throw "Setup $mode selected the wrong catalog data scope"
             }
+            $dataRoot = if ($mode -eq "ALLUSERS") {
+              Join-Path $env:ProgramData "PCasa"
+            } else {
+              Join-Path $env:LOCALAPPDATA "PCasa"
+            }
+            foreach ($folder in @("GPX","Undo","Texturen")) {
+              if (-not (Test-Path -LiteralPath (Join-Path $dataRoot $folder) -PathType Container)) {
+                throw "Setup $mode missing $folder data folder"
+              }
+            }
+            foreach ($texture in $sourceTextures) {
+              $installedTexture = Join-Path (Join-Path $dataRoot "Texturen") $texture.Name
+              if (-not (Test-Path -LiteralPath $installedTexture) -or
+                  (Get-FileHash -LiteralPath $texture.FullName -Algorithm SHA256).Hash -ne
+                  (Get-FileHash -LiteralPath $installedTexture -Algorithm SHA256).Hash) {
+                throw "Setup $mode missing or changed texture $($texture.Name)"
+              }
+            }
             # Simulate an installed legacy default texture. Upgrades must remove
             # retired bundled files without deleting user-supplied textures.
+            New-Item -ItemType Directory -Path (Join-Path $target "Texturen") -Force | Out-Null
             $retiredTexture = Join-Path $target "Texturen/Leinwand hell.jpg"
             $customTexture = Join-Path $target "Texturen/My Custom Texture.jpg"
             Set-Content -LiteralPath $retiredTexture -Value "legacy shipped texture"
