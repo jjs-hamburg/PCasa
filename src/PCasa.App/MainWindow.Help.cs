@@ -227,7 +227,7 @@ public partial class MainWindow
         try
         {
             Directory.CreateDirectory(folder);
-            for (var attempt = 0; attempt < 2; attempt++)
+            while (!downloadWindow.Cancellation.IsCancellationRequested)
             {
                 try
                 {
@@ -282,16 +282,20 @@ public partial class MainWindow
             File.Move(partial, destination);
                 return destination;
                 }
-                catch (Exception ex) when (attempt == 0 &&
+                catch (Exception ex) when (
                     !downloadWindow.Cancellation.IsCancellationRequested &&
-                    ex is HttpRequestException or IOException or CryptographicException)
+                    ex is HttpRequestException or IOException or
+                        CryptographicException or InvalidDataException or TaskCanceledException)
                 {
-                    PCasaDiagnostics.Write("Update.Download.Retry", ex);
+                    PCasaDiagnostics.Write("Update.Download.Interrupted", ex);
+                    // A failed attempt must not leave an executable or a stale
+                    // partial. Reuse the vetted release URL and SHA-256.
                     if (File.Exists(partial)) File.Delete(partial);
-                    await Task.Delay(500, downloadWindow.Cancellation);
+                    if (!await downloadWindow.AskRetryAsync(ex))
+                        return null;
                 }
             }
-            throw new IOException("PCasa installer download failed after retry.");
+            return null;
         }
         catch (OperationCanceledException)
         {
