@@ -73,11 +73,5 @@
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- User-editable texture directory beside the published EXE. -->
-  <ItemGroup>
-    <Content Include="../../default-textures/**/*" Link="Texturen/%(RecursiveDir)%(Filename)%(Extension)"
-             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-
-  </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>
