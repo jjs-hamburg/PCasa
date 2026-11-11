@@ -44,11 +44,11 @@ public sealed class FolderScanner
     {
         ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif",
         ".webp", ".heic", ".heif", ".avif", ".jxl",
-        ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv",
-        ".mpg", ".mpeg", ".m2v", ".mts", ".m2ts", ".3gp", ".3g2", ".webm",
         ".arw", ".nef", ".nrw", ".cr2", ".cr3", ".dng",
         ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
     };
+
+    static FolderScanner() => SupportedExtensions.UnionWith(VideoFormats.SupportedExtensions);
 
     /// <summary>
     /// Durable-for-this-session enumeration cursor. Scanner yields may restart
