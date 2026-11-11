@@ -31,6 +31,66 @@ public partial class MainWindow
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
 
+    // Histogram is sampled from the decoded in-memory preview; do not open the
+    // original (particularly important for slow/offline NAS paths).
+    private void UpdateViewerHistogram(BitmapSource? source)
+    {
+        ViewerHistogramCanvas.Children.Clear();
+        ViewerCameraDetails.Text = _viewerImageInfo is { } info
+            ? info.FileName + "  ·  " + info.Width + " × " + info.Height
+            : string.Empty;
+        if (source is null || source.PixelWidth < 1 || source.PixelHeight < 1)
+            return;
+        if (source.Metadata is BitmapMetadata metadata &&
+            !string.IsNullOrWhiteSpace(metadata.CameraModel))
+            ViewerCameraDetails.Text = metadata.CameraModel + "  ·  " +
+                ViewerCameraDetails.Text;
+        try
+        {
+            var factor = Math.Min(1.0,
+                192.0 / Math.Max(source.PixelWidth, source.PixelHeight));
+            BitmapSource sampled = factor < 1
+                ? new TransformedBitmap(source, new ScaleTransform(factor, factor))
+                : source;
+            var argb = new FormatConvertedBitmap(sampled, PixelFormats.Bgra32,
+                null, 0);
+            int width = argb.PixelWidth, height = argb.PixelHeight;
+            if (width < 1 || height < 1) return;
+            var bytes = new byte[checked(width * height * 4)];
+            argb.CopyPixels(bytes, width * 4, 0);
+            var bins = new int[3, 256];
+            for (int i = 0; i < bytes.Length; i += 4)
+            {
+                bins[0, bytes[i + 2]]++;
+                bins[1, bytes[i + 1]]++;
+                bins[2, bytes[i]]++;
+            }
+            int peak = 1;
+            foreach (var count in bins) peak = Math.Max(peak, count);
+            var colors = new[] { Colors.IndianRed, Colors.MediumSeaGreen,
+                Colors.CornflowerBlue };
+            for (int channel = 0; channel < 3; channel++)
+            {
+                var poly = new Polyline
+                {
+                    Stroke = new SolidColorBrush(colors[channel]),
+                    StrokeThickness = 1.1,
+                    Opacity = .8,
+                    IsHitTestVisible = false
+                };
+                for (int n = 0; n < 256; n++)
+                    poly.Points.Add(new Point(n / 255.0 * 256,
+                        73 - 70.0 * bins[channel, n] / peak));
+                ViewerHistogramCanvas.Children.Add(poly);
+            }
+            ViewerHistogramCanvas.Width = 256;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Viewer.Histogram", ex);
+        }
+    }
+
     private void InitializeCropTools()
     {
         if (_cropToolsReady) return;
