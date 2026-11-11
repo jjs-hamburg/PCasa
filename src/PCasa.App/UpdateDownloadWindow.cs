@@ -11,6 +11,9 @@ internal sealed class UpdateDownloadWindow : Window
     private readonly ProgressBar _bar;
     private readonly CancellationTokenSource _cancel = new();
     private bool _finished;
+    private readonly Button _retry;
+    private readonly Button _cancelButton;
+    private TaskCompletionSource<bool>? _retryDecision;
 
     internal CancellationToken Cancellation => _cancel.Token;
 
@@ -43,19 +46,55 @@ internal sealed class UpdateDownloadWindow : Window
         content.Children.Add(_status);
         _bar = new ProgressBar { Height = 12, IsIndeterminate = true, Minimum = 0, Maximum = 100 };
         content.Children.Add(_bar);
-        var cancel = new Button
+        _retry = new Button
+        {
+            Content = UiLanguage.T("Download wiederholen"), MinWidth = 94, Height = 30,
+            Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 8, 0)
+        };
+        _retry.Click += (_, _) => _retryDecision?.TrySetResult(true);
+        _cancelButton = new Button
         {
             Content = UiLanguage.T("Abbrechen"),
             MinWidth = 94, Height = 30,
             HorizontalAlignment = HorizontalAlignment.Right,
             Margin = new Thickness(0, 13, 0, 0)
         };
-        cancel.Click += (_, _) => Close();
-        content.Children.Add(cancel);
+        _cancelButton.Click += (_, _) => Close();
+        var actions = new StackPanel { Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 13, 0, 0) };
+        actions.Children.Add(_retry);
+        actions.Children.Add(_cancelButton);
+        content.Children.Add(actions);
         Closing += (_, e) =>
         {
             if (!_finished) _cancel.Cancel();
+            _retryDecision?.TrySetResult(false);
         };
+    }
+
+    internal async Task<bool> AskRetryAsync(Exception failure)
+    {
+        if (_finished || _cancel.IsCancellationRequested) return false;
+        _bar.IsIndeterminate = false;
+        _status.Text = UiLanguage.T("Download unterbrochen. Die Verbindung kann erneut versucht werden.")
+            + Environment.NewLine + failure.Message;
+        _retry.Visibility = Visibility.Visible;
+        _retry.IsEnabled = true;
+        _retryDecision = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = _cancel.Token.Register(
+            () => _retryDecision?.TrySetResult(false));
+        bool retry = await _retryDecision.Task;
+        _retryDecision = null;
+        _retry.Visibility = Visibility.Collapsed;
+        if (retry)
+        {
+            _bar.Value = 0;
+            _bar.IsIndeterminate = true;
+            _status.Text = UiLanguage.T("Installer wird heruntergeladen …");
+        }
+        return retry && !_cancel.IsCancellationRequested;
     }
 
     internal void Update(long transferred, long? total)

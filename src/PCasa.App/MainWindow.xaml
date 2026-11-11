@@ -900,17 +900,30 @@
                     </TreeView>
                 </Grid>
                 <Grid x:Name="ViewerEditingPanel" Visibility="Collapsed">
-                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                    <Border Grid.Row="0" BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="0,0,0,1"
-                            Padding="10,8">
-                        <TextBlock Text="{loc:Tr Key='Bearbeiten'}" FontSize="15" FontWeight="SemiBold"/>
-                    </Border>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <!-- Navigation belongs at the upper-right, not inside a scrolling tool. -->
+                    <DockPanel Grid.Row="0" Margin="10,6,9,7">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="CropUndoButton" Width="34" Height="29" Content="↶"
+                                    FontSize="18" ToolTip="{loc:Tr Key='Rückgängig machen'}"
+                                    Margin="0,0,4,0"/>
+                            <Button x:Name="CropRedoButton" Width="34" Height="29" Content="↷"
+                                    FontSize="18" ToolTip="{loc:Tr Key='Wiederholen'}"/>
+                        </StackPanel>
+                        <TextBlock Text="{loc:Tr Key='Bearbeiten'}" FontSize="15" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                    </DockPanel>
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                        <Grid Margin="7,6,7,5">
+                        <Grid Margin="9,6,9,5">
                             <WrapPanel x:Name="ViewerToolsOverview" HorizontalAlignment="Left">
                                 <WrapPanel x:Name="ViewerToolsList"/>
                             </WrapPanel>
-                            <StackPanel x:Name="ViewerCropOptions" Visibility="Collapsed" Margin="3,0,3,0">
+                            <StackPanel x:Name="ViewerCropOptions" Visibility="Collapsed" Margin="2,0,2,0">
                                 <DockPanel Margin="0,0,0,9">
                                     <Button x:Name="CropBackButton" Content="‹" Width="26" Height="26"
                                             DockPanel.Dock="Left" Margin="0,0,6,0" ToolTip="{loc:Tr Key='Zurück'}"/>
@@ -923,29 +936,42 @@
                                 <TextBlock Text="{loc:Tr Key='Ausrichtung'}" FontSize="11" Margin="0,9,0,3"
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                    <Button x:Name="CropHorizontalButton" Width="37" Height="29"
-                                            Content="▭" FontSize="21" Margin="0,0,5,0"
-                                            ToolTip="{loc:Tr Key='Querformat'}"/>
-                                    <Button x:Name="CropVerticalButton" Width="37" Height="29"
-                                            Content="▯" FontSize="21"
-                                            ToolTip="{loc:Tr Key='Hochformat'}"/>
+                                    <Button x:Name="CropHorizontalButton" Width="49" Height="33"
+                                            Margin="0,0,6,0" ToolTip="{loc:Tr Key='Querformat'}">
+                                        <Rectangle Width="27" Height="17" Stroke="#374151"
+                                                   StrokeThickness="1.6" Fill="Transparent"/>
+                                    </Button>
+                                    <Button x:Name="CropVerticalButton" Width="49" Height="33"
+                                            ToolTip="{loc:Tr Key='Hochformat'}">
+                                        <Rectangle Width="17" Height="27" Stroke="#374151"
+                                                   StrokeThickness="1.6" Fill="Transparent"/>
+                                    </Button>
                                 </StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                    <Button x:Name="CropUndoButton" Height="28" Width="37" Content="↶"
-                                            FontSize="18" Margin="0,0,5,0"
-                                            ToolTip="{loc:Tr Key='Rückgängig machen'}"/>
-                                    <Button x:Name="CropRedoButton" Height="28" Width="37" Content="↷"
-                                            FontSize="18" ToolTip="{loc:Tr Key='Wiederholen'}"/>
-                                </StackPanel>
-                                <WrapPanel>
-                                    <Button x:Name="CropSaveButton" Content="{loc:Tr Key='Speichern'}"
-                                            Height="29" Padding="9,2" Margin="0,0,6,0"/>
-                                    <Button x:Name="CropCancelButton" Content="{loc:Tr Key='Abbrechen'}"
-                                            Height="29" Padding="9,2"/>
-                                </WrapPanel>
+                                <Button x:Name="CropPreviewButton" Height="29" Padding="12,3"
+                                        Content="{loc:Tr Key='Vorschau · Original gedrückt halten'}"
+                                        HorizontalAlignment="Left"/>
                             </StackPanel>
                         </Grid>
                     </ScrollViewer>
+                    <Border Grid.Row="2" Padding="9,7" BorderThickness="0,1,0,1"
+                            BorderBrush="{DynamicResource PcasaDividerBrush}">
+                        <StackPanel>
+                            <TextBlock Text="{loc:Tr Key='Histogramm &amp; Kamera-Informationen'}" FontSize="12"
+                                       FontWeight="SemiBold" Margin="0,0,0,4"/>
+                            <Canvas x:Name="ViewerHistogramCanvas" Height="74" ClipToBounds="True"
+                                    Background="{DynamicResource PcasaPanelBrush}"/>
+                            <TextBlock x:Name="ViewerCameraDetails" FontSize="11"
+                                       TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <StackPanel x:Name="ViewerCropFooter" Grid.Row="3" Visibility="Collapsed"
+                                Orientation="Horizontal" HorizontalAlignment="Right"
+                                Margin="9,8,9,9">
+                        <Button x:Name="CropCancelButton" Content="{loc:Tr Key='Abbrechen'}"
+                                Height="30" Padding="12,3" Margin="0,0,7,0"/>
+                        <Button x:Name="CropSaveButton" Content="{loc:Tr Key='Speichern'}"
+                                Height="30" Padding="12,3"/>
+                    </StackPanel>
                 </Grid>
                 </Grid>
             </Border>
@@ -1132,6 +1158,14 @@
                                         Height="{Binding ActualHeight, ElementName=PhotoViewerImage}"
                                         HorizontalAlignment="Center" VerticalAlignment="Center"
                                         Panel.ZIndex="2" Background="Transparent">
+                                    <Rectangle x:Name="ViewerCropShadeTop" Fill="#99000000" IsHitTestVisible="False"/>
+                                    <Rectangle x:Name="ViewerCropShadeBottom" Fill="#99000000" IsHitTestVisible="False"/>
+                                    <Rectangle x:Name="ViewerCropShadeLeft" Fill="#99000000" IsHitTestVisible="False"/>
+                                    <Rectangle x:Name="ViewerCropShadeRight" Fill="#99000000" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverLeft" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverRight" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverTop" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
+                                    <Line x:Name="ViewerCropHoverBottom" Stroke="#FFFFFF" StrokeThickness="2.4" Visibility="Collapsed" IsHitTestVisible="False"/>
                                     <Rectangle x:Name="ViewerCropOutline" Stroke="#F1F1F1"
                                                StrokeThickness="1.2" Fill="#0AFFFFFF"
                                                IsHitTestVisible="False"/>
@@ -1139,9 +1173,6 @@
                                     <Line x:Name="ViewerCropThirdV2" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                     <Line x:Name="ViewerCropThirdH1" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                     <Line x:Name="ViewerCropThirdH2" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
-                                    <Rectangle x:Name="ViewerCropCorner" Width="10" Height="10"
-                                               Fill="#D3FFFFFF" Stroke="#333333"
-                                               StrokeThickness=".7" IsHitTestVisible="False"/>
                                 </Canvas>
                             </Grid>
                         </ScrollViewer>
@@ -1236,11 +1267,14 @@
                     <Grid x:Name="InfoSidebarHeader" Margin="4,0,0,9">
  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
  <TextBlock x:Name="SidePanelHeading" Grid.Column="0" Text="{loc:Tr Key='Bildinformationen'}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center"/>
- <TextBlock x:Name="GpsCoordinatesText" Grid.Column="1" Visibility="Collapsed" Margin="11,0,7,0" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Text="{loc:Tr Key='GPS-Positionen werden geladen'}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
- <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
- <Button x:Name="GpsCopyButton" Height="29" Padding="3,1" Margin="0,0,4,2" IsEnabled="False" Width="27" Click="GpsCopy_Click" ToolTip="{loc:Tr Key='Kopiert die GPS-Koordinaten eines ausgewählten Fotos. Ohne gültige Koordinaten nicht verfügbar.'}" ToolTipService.ShowOnDisabled="True"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource PcasaStatusButtonStyle}"><Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Visibility" Value="Collapsed"/></Trigger></Style.Triggers></Style></Button.Style>
+ <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+ <TextBlock x:Name="GpsCoordinatesText" Visibility="Collapsed" Margin="11,0,2,0" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Text="{loc:Tr Key='GPS-Positionen werden geladen'}" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+  <Button x:Name="GpsCopyButton" Height="29" Padding="3,1" Margin="2,0,5,0" IsEnabled="False" Width="27" Click="GpsCopy_Click" ToolTip="{loc:Tr Key='Kopiert die GPS-Koordinaten eines ausgewählten Fotos. Ohne gültige Koordinaten nicht verfügbar.'}" ToolTipService.ShowOnDisabled="True"><Button.Style><Style TargetType="Button" BasedOn="{StaticResource PcasaStatusButtonStyle}"><Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Visibility" Value="Collapsed"/></Trigger></Style.Triggers></Style></Button.Style>
  <Viewbox Width="17" Height="17"><Canvas Width="24" Height="24"><Rectangle Canvas.Left="7" Canvas.Top="7" Width="13" Height="14" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/><Path Data="M4,17 V3 H17 V5" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7" Fill="Transparent"/></Canvas></Viewbox>
  </Button>
+ </StackPanel>
+ <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+
  <Button x:Name="GpsExpandButton" Width="33" Height="31" Padding="0" Margin="0,0,4,0" Visibility="Collapsed" ToolTip="{loc:Tr Key='GPS-Leiste vergrößern'}" Style="{StaticResource PcasaStatusButtonStyle}" Click="GpsExpand_Click">
  <Viewbox Width="20" Height="20"><Canvas Width="32" Height="32"><Path Data="M28,5 L28,27" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6"/><Path x:Name="GpsExpandArrow" Data="M25,16 L6,16 M15,7 L6,16 L15,25" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.65" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas></Viewbox>
  </Button>

@@ -1289,11 +1289,17 @@ internal static class Program
                 // folder. Null here means INTERIOR, not an empty gallery.
                 scroller.ScrollToVerticalOffset(2200);
                 Flush(window);
-                if (surface.GetLiveFolderEdge(
-                        scroller.VerticalOffset, scroller.ViewportHeight, 100)
-                        is not null ||
-                    !(bool)scrollDefer.Invoke(window, new object?[] { 100L })!)
-                    throw new Exception("Folder interior was mistaken for an empty/live gallery.");
+                var interiorEdge = surface.GetLiveFolderEdge(
+                    scroller.VerticalOffset, scroller.ViewportHeight, 100);
+                var interiorDeferred = (bool)scrollDefer.Invoke(
+                    window, new object?[] { 100L })!;
+                if (interiorEdge is not null || !interiorDeferred)
+                    throw new Exception(
+                        $"Folder interior was mistaken for an empty/live gallery: " +
+                        $"Offset={scroller.VerticalOffset:F1}, Viewport={scroller.ViewportHeight:F1}, " +
+                        $"FolderStart={surface.GetFolderOffset(100):F1}, " +
+                        $"FolderEnd={surface.GetFolderBottomOffset(100):F1}, " +
+                        $"Edge={interiorEdge}, Deferred={interiorDeferred}");
 
                 // Top and bottom remain live. Do not flush the synthetic
                 // index into the actual empty runner database during this
@@ -1542,7 +1548,9 @@ internal static class Program
                 ?? throw new Exception("Copy GPS icon missing next to coordinates.");
             var gpxEmpty = window.FindName("GpsGpxEmptyText") as TextBlock
                 ?? throw new Exception("GPX empty-folder message missing.");
-            if (Grid.GetColumn(gpsCoords) != 1 ||
+            if (gpsCoords.Parent is not StackPanel coordinateGroup ||
+                Grid.GetColumn(coordinateGroup) != 1 ||
+                !coordinateGroup.Children.Contains(headerCopy) ||
                 gpsControls.RowDefinitions.Count != 8 ||
                 Grid.GetRow(gpsActions) != 2 ||
                 gpsActions.Visibility != Visibility.Visible ||

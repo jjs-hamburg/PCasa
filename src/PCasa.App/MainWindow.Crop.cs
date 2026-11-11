@@ -30,6 +30,120 @@ public partial class MainWindow
     private double _cropRatio; // 0 = free
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
+    private string? _viewerCachedCameraDetails;
+
+    // Use the ONE persisted EXIF catalog, never re-open the original
+    // over a potentially slow network just to fill the editor footer.
+    private string? ReadCachedViewerCameraDetails(long imageId)
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText =
+            "SELECT camera_model, exif_json FROM image_exif WHERE image_id=$id";
+        command.Parameters.AddWithValue("$id", imageId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var model = reader.IsDBNull(0) ? "" : reader.GetString(0);
+        if (reader.IsDBNull(1)) return model;
+        using var json = JsonDocument.Parse(reader.GetString(1));
+        var obj = json.RootElement;
+        if (obj.ValueKind == JsonValueKind.Array && obj.GetArrayLength() == 1)
+            obj = obj[0];
+        if (obj.ValueKind != JsonValueKind.Object) return model;
+
+        static double? Get(JsonElement root, params string[] tags)
+        {
+            foreach (var tag in tags)
+                foreach (var prop in root.EnumerateObject())
+                    if ((prop.Name.EndsWith(":" + tag, StringComparison.OrdinalIgnoreCase) ||
+                         prop.Name.Equals(tag, StringComparison.OrdinalIgnoreCase)) &&
+                        prop.Value.ValueKind == JsonValueKind.Number &&
+                        prop.Value.TryGetDouble(out var number))
+                        return number;
+            return null;
+        }
+        var exposure = Get(obj, "ExposureTime");
+        var aperture = Get(obj, "FNumber");
+        var iso = Get(obj, "ISO");
+        var focal = Get(obj, "FocalLength");
+        var parts = new List<string>();
+        if (exposure is > 0)
+            parts.Add(exposure < 1
+                ? "1/" + Math.Round(1 / exposure.Value).ToString("0") + " s"
+                : exposure.Value.ToString("0.###") + " s");
+        if (aperture is > 0) parts.Add("f/" + aperture.Value.ToString("0.#"));
+        if (iso is > 0) parts.Add("ISO " + iso.Value.ToString("0"));
+        if (focal is > 0) parts.Add(focal.Value.ToString("0.#") + " mm");
+        if (model.Length == 0 && parts.Count == 0) return null;
+        return model + (parts.Count > 0
+            ? (model.Length > 0 ? Environment.NewLine : "") +
+              string.Join("   ·   ", parts)
+            : "");
+    }
+
+    // Histogram is sampled from the decoded in-memory preview; do not open the
+    // original (particularly important for slow/offline NAS paths).
+    private void UpdateViewerHistogram(BitmapSource? source)
+    {
+        ViewerHistogramCanvas.Children.Clear();
+        ViewerCameraDetails.Text = _viewerImageInfo is { } info
+            ? (_viewerCachedCameraDetails is { Length: > 0 } details
+                ? details + Environment.NewLine : string.Empty) +
+                info.FileName + "  ·  " + info.Width + " × " + info.Height
+            : string.Empty;
+        if (source is null || source.PixelWidth < 1 || source.PixelHeight < 1)
+            return;
+        if (_viewerCachedCameraDetails is null &&
+            source is BitmapFrame frame &&
+            frame.Metadata is BitmapMetadata metadata &&
+            !string.IsNullOrWhiteSpace(metadata.CameraModel))
+            ViewerCameraDetails.Text = metadata.CameraModel + "  ·  " +
+                ViewerCameraDetails.Text;
+        try
+        {
+            var factor = Math.Min(1.0,
+                192.0 / Math.Max(source.PixelWidth, source.PixelHeight));
+            BitmapSource sampled = factor < 1
+                ? new TransformedBitmap(source, new ScaleTransform(factor, factor))
+                : source;
+            var argb = new FormatConvertedBitmap(sampled, PixelFormats.Bgra32,
+                null, 0);
+            int width = argb.PixelWidth, height = argb.PixelHeight;
+            if (width < 1 || height < 1) return;
+            var bytes = new byte[checked(width * height * 4)];
+            argb.CopyPixels(bytes, width * 4, 0);
+            var bins = new int[3, 256];
+            for (int i = 0; i < bytes.Length; i += 4)
+            {
+                bins[0, bytes[i + 2]]++;
+                bins[1, bytes[i + 1]]++;
+                bins[2, bytes[i]]++;
+            }
+            int peak = 1;
+            foreach (var count in bins) peak = Math.Max(peak, count);
+            var colors = new[] { Colors.IndianRed, Colors.MediumSeaGreen,
+                Colors.CornflowerBlue };
+            for (int channel = 0; channel < 3; channel++)
+            {
+                var poly = new Polyline
+                {
+                    Stroke = new SolidColorBrush(colors[channel]),
+                    StrokeThickness = 1.1,
+                    Opacity = .8,
+                    IsHitTestVisible = false
+                };
+                for (int n = 0; n < 256; n++)
+                    poly.Points.Add(new Point(n / 255.0 * 256,
+                        73 - 70.0 * bins[channel, n] / peak));
+                ViewerHistogramCanvas.Children.Add(poly);
+            }
+            ViewerHistogramCanvas.Width = 256;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Viewer.Histogram", ex);
+        }
+    }
 
     private void InitializeCropTools()
     {
@@ -91,6 +205,28 @@ public partial class MainWindow
         }
         ViewerCropOverlay.MouseLeftButtonDown += Crop_MouseDown;
         ViewerCropOverlay.MouseMove += Crop_MouseMove;
+        ViewerCropOverlay.MouseLeave += (_, _) =>
+        {
+            if (!_cropDragging)
+            {
+                ViewerCropOverlay.Cursor = Cursors.Arrow;
+                ShowCropHoverEdges(0);
+            }
+        };
+        CropPreviewButton.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            ViewerCropOverlay.Visibility = Visibility.Hidden;
+            e.Handled = true;
+        };
+        CropPreviewButton.PreviewMouseLeftButtonUp += (_, e) =>
+        {
+            if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
+            e.Handled = true;
+        };
+        CropPreviewButton.LostMouseCapture += (_, _) =>
+        {
+            if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
+        };
         ViewerCropOverlay.MouseLeftButtonUp += Crop_MouseUp;
         ViewerCropOverlay.LostMouseCapture += (_, _) => _cropDragging = false;
         PhotoViewerImage.SizeChanged += (_, _) => DrawCropFrame();
@@ -102,6 +238,7 @@ public partial class MainWindow
         {
             ViewerToolsOverview.Visibility = Visibility.Visible;
             ViewerCropOptions.Visibility = Visibility.Collapsed;
+            ViewerCropFooter.Visibility = Visibility.Collapsed;
             ViewerCropOverlay.Visibility = Visibility.Collapsed;
         };
         CropSaveButton.Click += (_, _) => SaveCrop();
@@ -125,6 +262,7 @@ public partial class MainWindow
         {
             ViewerToolsOverview.Visibility = Visibility.Collapsed;
             ViewerCropOptions.Visibility = Visibility.Visible;
+            ViewerCropFooter.Visibility = Visibility.Visible;
             ViewerCropOverlay.Visibility = Visibility.Visible;
             DrawCropFrame();
             return;
@@ -138,9 +276,11 @@ public partial class MainWindow
         _cropHistoryIndex = 0;
         ViewerToolsOverview.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Visible;
+        ViewerCropFooter.Visibility = Visibility.Visible;
         ViewerCropOverlay.Visibility = Visibility.Visible;
         DrawCropFrame();
         UpdateCropHistoryControls();
+        UpdateCropSelectionButtons();
     }
 
     private void EndCrop()
@@ -150,6 +290,7 @@ public partial class MainWindow
         ViewerCropOverlay.ReleaseMouseCapture();
         ViewerCropOverlay.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
+        ViewerCropFooter.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         _cropHistory.Clear();
         _cropHistoryIndex = -1;
@@ -187,6 +328,7 @@ public partial class MainWindow
         }
         _cropRect = FitToImageAspect(_cropRect);
         AddCropHistory(_cropRect);
+        UpdateCropSelectionButtons();
     }
 
     private void FlipCropOrientation(bool horizontal)
@@ -198,6 +340,30 @@ public partial class MainWindow
         _cropRatioMode = "Fixed";
         _cropRect = FitToImageAspect(_cropRect);
         AddCropHistory(_cropRect);
+        UpdateCropSelectionButtons();
+    }
+
+    private void UpdateCropSelectionButtons()
+    {
+        foreach (var item in CropAspectButtons.Children.OfType<Button>())
+        {
+            var chosen = string.Equals(item.Tag as string, _cropRatioMode,
+                StringComparison.Ordinal);
+            item.BorderThickness = new Thickness(chosen ? 2.5 : 1);
+            item.BorderBrush = chosen ? Brushes.DodgerBlue : Brushes.SlateGray;
+            item.Background = chosen ? Brushes.LightSteelBlue : Brushes.Transparent;
+            item.FontWeight = chosen ? FontWeights.Bold : FontWeights.Normal;
+        }
+        bool landscape = _cropRatio > 0 ? _cropRatio >= 1 :
+            _cropRect.Width >= _cropRect.Height;
+        foreach (var pair in new[] { (CropHorizontalButton, landscape),
+                                     (CropVerticalButton, !landscape) })
+        {
+            pair.Item1.BorderThickness = new Thickness(pair.Item2 ? 2.5 : 1);
+            pair.Item1.BorderBrush = pair.Item2 ? Brushes.DodgerBlue : Brushes.SlateGray;
+            pair.Item1.Background = pair.Item2 ? Brushes.LightSteelBlue : Brushes.Transparent;
+            pair.Item1.FontWeight = pair.Item2 ? FontWeights.Bold : FontWeights.Normal;
+        }
     }
 
     private static Rect FitCrop(Rect rect, double ratio)
@@ -234,15 +400,10 @@ public partial class MainWindow
         if (!_cropActive || e.ChangedButton != MouseButton.Left) return;
         var actual = PixelCropRect();
         var pt = e.GetPosition(ViewerCropOverlay);
-        if (!actual.Contains(pt)) return;
+        _cropResizeEdges = CropEdgesAt(pt, actual);
+        if (_cropResizeEdges == 0 && !actual.Contains(pt)) return;
         _cropMouseStart = pt;
         _cropOriginalRect = _cropRect;
-        const double grip = 12;
-        _cropResizeEdges = 0;
-        if (Math.Abs(pt.X - actual.Left) < grip) _cropResizeEdges |= 1;
-        else if (Math.Abs(pt.X - actual.Right) < grip) _cropResizeEdges |= 2;
-        if (Math.Abs(pt.Y - actual.Top) < grip) _cropResizeEdges |= 4;
-        else if (Math.Abs(pt.Y - actual.Bottom) < grip) _cropResizeEdges |= 8;
         _cropResizing = _cropResizeEdges != 0;
         _cropDragging = true;
         ViewerCropOverlay.CaptureMouse();
@@ -251,8 +412,22 @@ public partial class MainWindow
 
     private void Crop_MouseMove(object sender, MouseEventArgs e)
     {
-        if (!_cropActive || !_cropDragging) return;
+        if (!_cropActive) return;
         var pt = e.GetPosition(ViewerCropOverlay);
+        if (!_cropDragging)
+        {
+            var edges = CropEdgesAt(pt, PixelCropRect());
+            ShowCropHoverEdges(edges);
+            ViewerCropOverlay.Cursor = edges switch
+            {
+                1 or 2 => Cursors.SizeWE,
+                4 or 8 => Cursors.SizeNS,
+                5 or 10 => Cursors.SizeNWSE,
+                6 or 9 => Cursors.SizeNESW,
+                _ => PixelCropRect().Contains(pt) ? Cursors.SizeAll : Cursors.Arrow
+            };
+            return;
+        }
         var w = ViewerCropOverlay.ActualWidth;
         var h = ViewerCropOverlay.ActualHeight;
         if (w < 1 || h < 1) return;
@@ -260,23 +435,8 @@ public partial class MainWindow
         var dy = (pt.Y - _cropMouseStart.Y) / h;
         if (_cropResizing)
         {
-            var original = _cropOriginalRect;
-            var left = (_cropResizeEdges & 1) != 0
-                ? Math.Clamp(original.Left + dx, 0, original.Right - .04)
-                : original.Left;
-            var right = (_cropResizeEdges & 2) != 0
-                ? Math.Clamp(original.Right + dx, original.Left + .04, 1)
-                : original.Right;
-            var top = (_cropResizeEdges & 4) != 0
-                ? Math.Clamp(original.Top + dy, 0, original.Bottom - .04)
-                : original.Top;
-            var bottom = (_cropResizeEdges & 8) != 0
-                ? Math.Clamp(original.Bottom + dy, original.Top + .04, 1)
-                : original.Bottom;
-            // Eight grips (corners and edge midpoints) share a single
-            // normalized geometry and stay within the original image.
-            _cropRect = FitToImageAspect(new Rect(left, top,
-                right - left, bottom - top));
+            _cropRect = ResizeCropByEdges(_cropOriginalRect,
+                _cropResizeEdges, dx, dy);
         }
         else
         {
@@ -286,6 +446,7 @@ public partial class MainWindow
                 _cropOriginalRect.Width, _cropOriginalRect.Height);
         }
         DrawCropFrame();
+        ShowCropHoverEdges(_cropResizeEdges);
         e.Handled = true;
     }
 
@@ -294,8 +455,104 @@ public partial class MainWindow
         if (!_cropDragging) return;
         _cropDragging = false;
         ViewerCropOverlay.ReleaseMouseCapture();
+        ShowCropHoverEdges(0);
         AddCropHistory(_cropRect);
         e.Handled = true;
+    }
+
+    // Invisible magnetic hit target; no corner handles. Corners win when
+    // both edges are within the 15-pixel tolerance.
+    // Fixed-aspect crop keeps the opposite border/corner anchored. A resize
+    // on a single side grows the other axis symmetrically, rather than being
+    // silently limited by the previous height/width.
+    private Rect ResizeCropByEdges(Rect original, int edges, double dx, double dy)
+    {
+        bool left = (edges & 1) != 0, right = (edges & 2) != 0;
+        bool top = (edges & 4) != 0, bottom = (edges & 8) != 0;
+        var l = left ? Math.Clamp(original.Left + dx, 0, original.Right - .02)
+            : original.Left;
+        var r = right ? Math.Clamp(original.Right + dx, original.Left + .02, 1)
+            : original.Right;
+        var t = top ? Math.Clamp(original.Top + dy, 0, original.Bottom - .02)
+            : original.Top;
+        var b = bottom ? Math.Clamp(original.Bottom + dy, original.Top + .02, 1)
+            : original.Bottom;
+
+        if (_cropRatio <= 0 || PhotoViewerImage.Source is not BitmapSource source)
+            return new Rect(l, t, r - l, b - t);
+
+        double normalizedRatio = _cropRatio *
+            source.PixelHeight / (double)source.PixelWidth;
+        if (normalizedRatio <= 0) return original;
+        double xAnchor = left ? original.Right : original.Left;
+        double yAnchor = top ? original.Bottom : original.Top;
+        double desiredWidth;
+        double maxWidth;
+
+        if (left || right)
+        {
+            desiredWidth = r - l;
+            maxWidth = left ? xAnchor : 1 - xAnchor;
+        }
+        else
+        {
+            desiredWidth = (b - t) * normalizedRatio;
+            maxWidth = 2 * Math.Min(original.Left + original.Width / 2,
+                1 - (original.Left + original.Width / 2));
+        }
+
+        if (top || bottom)
+        {
+            double fromHeight = (b - t) * normalizedRatio;
+            if (left || right)
+            {
+                // In a corner, use whichever mouse displacement dominates.
+                if (Math.Abs(fromHeight - original.Width) >
+                    Math.Abs(desiredWidth - original.Width))
+                    desiredWidth = fromHeight;
+            }
+            maxWidth = Math.Min(maxWidth,
+                normalizedRatio * (top ? yAnchor : 1 - yAnchor));
+        }
+        else
+        {
+            double midY = original.Top + original.Height / 2;
+            maxWidth = Math.Min(maxWidth,
+                normalizedRatio * 2 * Math.Min(midY, 1 - midY));
+        }
+        double width = Math.Clamp(desiredWidth,
+            Math.Min(.02, maxWidth), Math.Max(.02, maxWidth));
+        double height = width / normalizedRatio;
+
+        double x = left ? xAnchor - width : right ? xAnchor
+            : original.Left + (original.Width - width) / 2;
+        double y = top ? yAnchor - height : bottom ? yAnchor
+            : original.Top + (original.Height - height) / 2;
+        return new Rect(Math.Clamp(x, 0, Math.Max(0, 1 - width)),
+            Math.Clamp(y, 0, Math.Max(0, 1 - height)),
+            Math.Min(1, width), Math.Min(1, height));
+    }
+
+    private static int CropEdgesAt(Point point, Rect rect)
+    {
+        const double magnet = 15;
+        if (point.X < rect.Left - magnet || point.X > rect.Right + magnet ||
+            point.Y < rect.Top - magnet || point.Y > rect.Bottom + magnet)
+            return 0;
+        int edges = 0;
+        if (Math.Abs(point.X - rect.Left) <= magnet) edges |= 1;
+        else if (Math.Abs(point.X - rect.Right) <= magnet) edges |= 2;
+        if (Math.Abs(point.Y - rect.Top) <= magnet) edges |= 4;
+        else if (Math.Abs(point.Y - rect.Bottom) <= magnet) edges |= 8;
+        return edges;
+    }
+
+    private void ShowCropHoverEdges(int edges)
+    {
+        ViewerCropHoverLeft.Visibility = (edges & 1) != 0 ? Visibility.Visible : Visibility.Collapsed;
+        ViewerCropHoverRight.Visibility = (edges & 2) != 0 ? Visibility.Visible : Visibility.Collapsed;
+        ViewerCropHoverTop.Visibility = (edges & 4) != 0 ? Visibility.Visible : Visibility.Collapsed;
+        ViewerCropHoverBottom.Visibility = (edges & 8) != 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private Rect PixelCropRect()
@@ -314,8 +571,27 @@ public partial class MainWindow
         Canvas.SetTop(ViewerCropOutline, rect.Y);
         ViewerCropOutline.Width = rect.Width;
         ViewerCropOutline.Height = rect.Height;
-        Canvas.SetLeft(ViewerCropCorner, rect.Right - 5);
-        Canvas.SetTop(ViewerCropCorner, rect.Bottom - 5);
+        ViewerCropHoverLeft.X1 = ViewerCropHoverLeft.X2 = rect.Left;
+        ViewerCropHoverLeft.Y1 = rect.Top;
+        ViewerCropHoverLeft.Y2 = rect.Bottom;
+        ViewerCropHoverRight.X1 = ViewerCropHoverRight.X2 = rect.Right;
+        ViewerCropHoverRight.Y1 = rect.Top;
+        ViewerCropHoverRight.Y2 = rect.Bottom;
+        ViewerCropHoverTop.X1 = rect.Left;
+        ViewerCropHoverTop.X2 = rect.Right;
+        ViewerCropHoverTop.Y1 = ViewerCropHoverTop.Y2 = rect.Top;
+        ViewerCropHoverBottom.X1 = rect.Left;
+        ViewerCropHoverBottom.X2 = rect.Right;
+        ViewerCropHoverBottom.Y1 = ViewerCropHoverBottom.Y2 = rect.Bottom;
+        // Four shaded regions leave only the selected rectangle bright.
+        SetCropShade(ViewerCropShadeTop, 0, 0,
+            ViewerCropOverlay.ActualWidth, rect.Top);
+        SetCropShade(ViewerCropShadeBottom, 0, rect.Bottom,
+            ViewerCropOverlay.ActualWidth,
+            ViewerCropOverlay.ActualHeight - rect.Bottom);
+        SetCropShade(ViewerCropShadeLeft, 0, rect.Top, rect.Left, rect.Height);
+        SetCropShade(ViewerCropShadeRight, rect.Right, rect.Top,
+            ViewerCropOverlay.ActualWidth - rect.Right, rect.Height);
         foreach (var (line, fraction, vertical) in new[]
         {
             (ViewerCropThirdV1, 1.0/3, true), (ViewerCropThirdV2, 2.0/3, true),
@@ -327,6 +603,15 @@ public partial class MainWindow
             line.Y1 = vertical ? rect.Y : rect.Y + fraction * rect.Height;
             line.Y2 = vertical ? rect.Bottom : line.Y1;
         }
+    }
+
+    private static void SetCropShade(Rectangle shade, double x, double y,
+        double width, double height)
+    {
+        Canvas.SetLeft(shade, x);
+        Canvas.SetTop(shade, y);
+        shade.Width = Math.Max(0, width);
+        shade.Height = Math.Max(0, height);
     }
 
     private void AddCropHistory(Rect rect)
@@ -363,6 +648,7 @@ public partial class MainWindow
         _cropRatio = _cropHistory[next].AspectRatio;
         _cropRatioMode = _cropHistory[next].Mode;
         UpdateCropHistoryControls();
+        UpdateCropSelectionButtons();
         DrawCropFrame();
     }
 

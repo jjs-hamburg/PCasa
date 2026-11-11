@@ -1,10 +1,15 @@
 name: WPF Window Smoke Tests
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
 
 jobs:
   window-smoke:
@@ -15,6 +20,16 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+      - name: Install verified ExifTool required by WPF gallery fixture
+        shell: pwsh
+        run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
+      - name: Supply pinned dynamic libvips for real WPF image decoding
+        shell: pwsh
+        run: |
+          $nativeDir = Join-Path $env:RUNNER_TEMP 'pcasa-native-wpf'
+          New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir $nativeDir -EvidenceDir license-audit/test-native
+          $nativeDir >> $env:GITHUB_PATH
       - name: Exercise real WPF window and sidebar transitions
         run: dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
       - name: Exercise actual folder-tree context menu removal and immediate visual update

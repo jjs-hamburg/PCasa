@@ -227,49 +227,82 @@ public partial class MainWindow
         try
         {
             Directory.CreateDirectory(folder);
-            for (var attempt = 0; attempt < 2; attempt++)
+            while (!downloadWindow.Cancellation.IsCancellationRequested)
             {
                 try
                 {
-            // The 12-second metadata timeout must not terminate a 200 MB
-            // installer download over a slower or intermittent connection.
-                using var installerClient = new HttpClient
-            {
-                    Timeout = TimeSpan.FromMinutes(30),
-                    // GitHub CDN downloads through VPN/HTTPS gateways can fail
-                    // during HTTP/2 stream decryption. Prefer HTTP/1.1 without
-                    // changing TLS certificate validation or minimum security.
-                    DefaultRequestVersion = HttpVersion.Version11,
-                    DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
-                };
-            installerClient.DefaultRequestHeaders.UserAgent.ParseAdd("PCasa-Windows/0.1");
-            using var response = await installerClient.GetAsync(
-                url, HttpCompletionOption.ResponseHeadersRead, downloadWindow.Cancellation);
-            response.EnsureSuccessStatusCode();
-            if (response.Content.Headers.ContentLength is { } length &&
-                length != expectedBytes)
-                throw new InvalidDataException("Installer download size differs from GitHub release metadata.");
-            await using (var input = await response.Content.ReadAsStreamAsync(
-                downloadWindow.Cancellation))
-            await using (var output = new FileStream(partial, FileMode.CreateNew,
-                FileAccess.Write, FileShare.None, 131072, useAsync: true))
-            {
-                var buffer = new byte[131072];
-                long transferred = 0;
-                int read;
-                while ((read = await input.ReadAsync(buffer, downloadWindow.Cancellation)) > 0)
+                // Keep previously received bytes across a recoverable interruption.
+                // A server may decline Range; then restart safely from byte zero.
+                long offset = File.Exists(partial) ? new FileInfo(partial).Length : 0;
+                if (offset > expectedBytes)
                 {
-                    await output.WriteAsync(buffer.AsMemory(0, read),
-                        downloadWindow.Cancellation);
-                    transferred += read;
-                    downloadWindow.Update(transferred, expectedBytes);
-                    if (transferred > expectedBytes)
-                        throw new InvalidDataException("Installer exceeds declared size.");
+                    File.Delete(partial);
+                    offset = 0;
                 }
-                await output.FlushAsync(downloadWindow.Cancellation);
-                if (transferred != expectedBytes)
-                    throw new InvalidDataException("Incomplete PCasa installer download.");
-            }
+                if (offset < expectedBytes)
+                {
+                    using var installerClient = new HttpClient
+                    {
+                        Timeout = TimeSpan.FromMinutes(30),
+                        DefaultRequestVersion = HttpVersion.Version11,
+                        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+                    };
+                    installerClient.DefaultRequestHeaders.UserAgent.ParseAdd("PCasa-Windows/0.1");
+                    using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    if (offset > 0)
+                        request.Headers.Range =
+                            new System.Net.Http.Headers.RangeHeaderValue(offset, null);
+                    using var response = await installerClient.SendAsync(request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        downloadWindow.Cancellation);
+                    response.EnsureSuccessStatusCode();
+
+                    bool resumed = offset > 0 &&
+                        response.StatusCode == HttpStatusCode.PartialContent &&
+                        response.Content.Headers.ContentRange?.From == offset &&
+                        response.Content.Headers.ContentRange?.Length == expectedBytes;
+                    if (response.StatusCode == HttpStatusCode.PartialContent && !resumed)
+                        throw new InvalidDataException("Invalid installer Range response.");
+                    if (!resumed)
+                    {
+                        // The response is the complete resource, not a partial.
+                        // Discard old bytes only after the new response is accepted.
+                        offset = 0;
+                    }
+
+                    var remaining = expectedBytes - offset;
+                    if (response.Content.Headers.ContentLength is { } length &&
+                        length != remaining)
+                        throw new InvalidDataException(
+                            "Installer download size differs from GitHub release metadata.");
+
+                    await using (var input = await response.Content.ReadAsStreamAsync(
+                        downloadWindow.Cancellation))
+                    await using (var output = new FileStream(partial,
+                        resumed ? FileMode.Append : FileMode.Create,
+                        FileAccess.Write, FileShare.None, 131072, useAsync: true))
+                    {
+                        var buffer = new byte[131072];
+                        long transferred = offset;
+                        downloadWindow.Update(transferred, expectedBytes);
+                        int read;
+                        while ((read = await input.ReadAsync(buffer,
+                            downloadWindow.Cancellation)) > 0)
+                        {
+                            await output.WriteAsync(buffer.AsMemory(0, read),
+                                downloadWindow.Cancellation);
+                            transferred += read;
+                            downloadWindow.Update(transferred, expectedBytes);
+                            if (transferred > expectedBytes)
+                                throw new InvalidDataException(
+                                    "Installer exceeds declared size.");
+                        }
+                        await output.FlushAsync(downloadWindow.Cancellation);
+                        if (transferred != expectedBytes)
+                            throw new InvalidDataException(
+                                "Incomplete PCasa installer download.");
+                    }
+                }
             downloadWindow.Cancellation.ThrowIfCancellationRequested();
             await using (var verify = File.OpenRead(partial))
             {
@@ -282,16 +315,23 @@ public partial class MainWindow
             File.Move(partial, destination);
                 return destination;
                 }
-                catch (Exception ex) when (attempt == 0 &&
+                catch (Exception ex) when (
                     !downloadWindow.Cancellation.IsCancellationRequested &&
-                    ex is HttpRequestException or IOException or CryptographicException)
+                    ex is HttpRequestException or IOException or
+                        CryptographicException or InvalidDataException or TaskCanceledException)
                 {
-                    PCasaDiagnostics.Write("Update.Download.Retry", ex);
-                    if (File.Exists(partial)) File.Delete(partial);
-                    await Task.Delay(500, downloadWindow.Cancellation);
+                    PCasaDiagnostics.Write("Update.Download.Interrupted", ex);
+                    // A failed attempt must not leave an executable or a stale
+                    // partial. Reuse the vetted release URL and SHA-256.
+                    // A failed SHA-256 digest invalidates the entire prefix;
+                    // other transport failures can preserve verified byte count.
+                    if (ex is CryptographicException && File.Exists(partial))
+                        File.Delete(partial);
+                    if (!await downloadWindow.AskRetryAsync(ex))
+                        return null;
                 }
             }
-            throw new IOException("PCasa installer download failed after retry.");
+            return null;
         }
         catch (OperationCanceledException)
         {

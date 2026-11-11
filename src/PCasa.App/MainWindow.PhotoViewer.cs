@@ -189,6 +189,7 @@ public partial class MainWindow
             return;
         }
         _viewerImageInfo = null;
+        _viewerCachedCameraDetails = null;
         UpdateViewerSequenceTitle();
         if (_viewerNavigatorImageId != entry.ImageId)
         {
@@ -200,6 +201,7 @@ public partial class MainWindow
         // A blocked SQLite reader must not freeze navigation/zoom on WPF.
         // The request version fences asynchronous metadata from an older photo.
         PhotoViewerImageInfo? resolvedInfo = null;
+        string? cameraDetails = null;
         try
         {
             await _galleryCatalogReader.ReadAsync(
@@ -207,6 +209,8 @@ public partial class MainWindow
                 {
                     readToken.ThrowIfCancellationRequested();
                     resolvedInfo = new PhotoViewerImageRepository(_database).Get(entry.ImageId);
+                    try { cameraDetails = ReadCachedViewerCameraDetails(entry.ImageId); }
+                    catch (Exception ex) { PCasaDiagnostics.Write("Viewer.CachedCamera", ex); }
                     return Task.CompletedTask;
                 }, cancellationToken: token);
         }
@@ -214,6 +218,7 @@ public partial class MainWindow
         catch (Exception) { /* The prepared preview remains usable. */ }
         if (!IsCurrentViewerRequest(version, token)) return;
         _viewerImageInfo = resolvedInfo;
+        _viewerCachedCameraDetails = cameraDetails;
 
         if (_viewerImageInfo is { } infoForTitle)
         {
@@ -400,6 +405,7 @@ public partial class MainWindow
             ApplyViewerImageLayout();
         }
         PhotoViewerImage.Source = bitmap;
+        UpdateViewerHistogram(bitmap);
         if (_viewerFullscreenImage is not null)
         {
             _viewerFullscreenImage.Source = bitmap;

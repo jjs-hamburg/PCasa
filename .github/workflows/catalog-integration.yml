@@ -1,6 +1,8 @@
 name: Catalog Integration Tests
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -18,6 +20,13 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
 
+      - name: Supply pinned dynamic libvips for catalog image decoding
+        shell: pwsh
+        run: |
+          $nativeDir = Join-Path $env:RUNNER_TEMP 'pcasa-native-catalog'
+          New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+          ./tools/prepare-dynamic-libvips.ps1 -PublishDir $nativeDir -EvidenceDir license-audit/test-native
+          $nativeDir >> $env:GITHUB_PATH
       - name: Run catalog integration tests with isolated SQLite database
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe

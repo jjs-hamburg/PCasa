@@ -37,7 +37,20 @@ internal static class FolderRemovalFlow
                 string.Equals(f.LocalPath, testRoot, StringComparison.OrdinalIgnoreCase));
             var scanner = new FolderScanner(new ImageCatalogRepository(db),
                 new ThumbnailCache(), roots, new BrowseThumbnailProfileRepository(db));
-            scanner.Scan(root);
+            var seeded = scanner.Scan(root);
+            Console.WriteLine($"Folder removal seed: seen={seeded.ImageFilesSeen}, updated={seeded.Updated}, failed={seeded.Failed}");
+            if (seeded.Failed > 0)
+            {
+                var logPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "PCasa", "logs", "pcasa-errors.log");
+                if (File.Exists(logPath))
+                    foreach (var line in File.ReadLines(logPath)
+                        .Where(line => line.Contains("[Scan.FileSkipped]", StringComparison.Ordinal))
+                        .TakeLast(3))
+                        Console.WriteLine("Folder removal seed failure: " + line);
+                throw new Exception("Folder removal smoke fixture did not create a valid catalog.");
+            }
             new BackgroundScanSettings { Enabled = false }.Save();
             var catalog = new ImageCatalogRepository(db);
             var groups = catalog.GetPhotoFolders();
