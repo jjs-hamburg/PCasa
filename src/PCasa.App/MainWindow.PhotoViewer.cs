@@ -96,6 +96,7 @@ public partial class MainWindow
         _viewerZoomPercent = 100;
         FolderTreePanel.Visibility = Visibility.Collapsed;
         ViewerEditingPanel.Visibility = Visibility.Visible;
+        InitializeCropTools();
         ThumbnailSizeToolbar.Visibility = Visibility.Collapsed;
         BrowseToolbar.Visibility = Visibility.Collapsed;
         ViewerToolbar.Visibility = Visibility.Visible;
@@ -894,6 +895,7 @@ public partial class MainWindow
 
     private void ViewerNavigate(int direction)
     {
+        if (!ConfirmCropExit()) return;
         CancelViewerPendingClose();
         ReleaseViewerPan();
         if (!_viewerOpen || direction == 0)
@@ -1311,6 +1313,7 @@ public partial class MainWindow
 
     private void ClosePhotoViewer()
     {
+        if (!ConfirmCropExit()) return;
         var comparisonSelection = _comparisonActive ? _comparisonImageIds.Distinct().ToArray() : null;
         HideComparison();
         CancelViewerPendingClose();
