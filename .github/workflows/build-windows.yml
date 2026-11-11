@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# A newer PR commit supersedes older Windows build checks.
+# Keep manually started runs independent.
+concurrency:
+  group: pcasa-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: windows-latest
