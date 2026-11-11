@@ -45,7 +45,7 @@ public sealed class VideoPlayerWindow : Window
 
         var buttons = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
         controls.Children.Add(buttons);
-        _playPause = new Button { Content = "Pause", Width = 80, Height = 30 };
+        _playPause = new Button { Content = Services.UiLanguage.T("Pause"), Width = 80, Height = 30 };
         _playPause.Click += (_, _) => TogglePlayback();
         DockPanel.SetDock(_playPause, Dock.Left);
         buttons.Children.Add(_playPause);
@@ -59,7 +59,7 @@ public sealed class VideoPlayerWindow : Window
         DockPanel.SetDock(_elapsed, Dock.Left);
         buttons.Children.Add(_elapsed);
 
-        var fullscreen = new Button { Content = "Vollbild", Width = 90, Height = 30 };
+        var fullscreen = new Button { Content = Services.UiLanguage.T("Vollbild"), Width = 90, Height = 30 };
         fullscreen.Click += (_, _) => WindowState =
             WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
         DockPanel.SetDock(fullscreen, Dock.Right);
@@ -69,7 +69,7 @@ public sealed class VideoPlayerWindow : Window
         {
             Minimum = 0, Maximum = 1, Value = 0.75, Width = 120,
             VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = "Lautstärke"
+            ToolTip = Services.UiLanguage.T("Lautstärke")
         };
         DockPanel.SetDock(volume, Dock.Right);
         buttons.Children.Add(volume);
@@ -98,10 +98,10 @@ public sealed class VideoPlayerWindow : Window
         _player.MediaFailed += (_, e) =>
         {
             _playing = false;
-            _playPause.Content = "Abspielen";
+            _playPause.Content = Services.UiLanguage.T("Abspielen");
             MessageBox.Show(this,
-                "Dieses Video kann mit den installierten Windows-Codecs nicht abgespielt werden.\n" +
-                e.ErrorException?.Message, "PCasa – Videowiedergabe",
+                Services.UiLanguage.T("Dieses Video kann mit den installierten Windows-Codecs nicht abgespielt werden.") + "\n" +
+                e.ErrorException?.Message, "PCasa – " + Services.UiLanguage.T("Videowiedergabe"),
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         };
         _player.MediaEnded += (_, _) =>
@@ -154,7 +154,7 @@ public sealed class VideoPlayerWindow : Window
         if (_playing) _player.Pause();
         else _player.Play();
         _playing = !_playing;
-        _playPause.Content = _playing ? "Pause" : "Abspielen";
+        _playPause.Content = Services.UiLanguage.T(_playing ? "Pause" : "Abspielen");
     }
 
     private void UpdateClock()
