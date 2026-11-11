@@ -178,6 +178,16 @@ public partial class MainWindow
         _viewerPrefetchCancellation = null;
         _viewerHasOriginal = false;
         var entry = _viewerSequence.At(_viewerCurrentIndex);
+        if (VideoFormats.IsVideo(entry.FileName))
+        {
+            // Navigating from a still photo to a movie must never submit the
+            // movie to the image decoder or crop tools.
+            var video = new PCasa.App.Data.ImageViewerRepository(_database).Get(entry.ImageId);
+            ClosePhotoViewer();
+            if (video is not null)
+                new VideoPlayerWindow(video.LocalPath) { Owner = this }.Show();
+            return;
+        }
         _viewerImageInfo = null;
         UpdateViewerSequenceTitle();
         if (_viewerNavigatorImageId != entry.ImageId)
@@ -334,6 +344,7 @@ public partial class MainWindow
                 return;
 
             var index = sequence.Move(origin, direction);
+            if (VideoFormats.IsVideo(sequence.At(index).FileName)) continue;
             var id = sequence.At(index).ImageId;
             if (TryGetViewerOriginal(id, requiredSize, out _))
             {
