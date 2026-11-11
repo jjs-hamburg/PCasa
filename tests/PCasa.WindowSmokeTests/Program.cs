@@ -251,6 +251,23 @@ internal static class Program
 
             // All bundled textures must be external, discoverable JPGs,
             // selectable by filename and native-sized across DPI settings.
+            // In the installer, default textures belong to scope-specific DATA,
+            // not the build/output directory. Seed the isolated WPF test profile.
+            var defaultTextures = System.IO.Path.GetFullPath(
+                System.IO.Path.Combine(AppContext.BaseDirectory,
+                    "..","..","..","..","..","default-textures"));
+            if (System.IO.Directory.Exists(defaultTextures))
+            {
+                System.IO.Directory.CreateDirectory(
+                    PCasa.App.Services.GalleryTextureLibrary.DirectoryPath);
+                foreach (var original in System.IO.Directory.GetFiles(defaultTextures,"*.jpg"))
+                {
+                    var dest = System.IO.Path.Combine(
+                        PCasa.App.Services.GalleryTextureLibrary.DirectoryPath,
+                        System.IO.Path.GetFileName(original));
+                    System.IO.File.Copy(original,dest,overwrite:true);
+                }
+            }
             var textures = PCasa.App.Services.GalleryTextureLibrary.GetFiles();
             if (textures.Count != 12 ||
                 textures.Any(p => !p.StartsWith(
