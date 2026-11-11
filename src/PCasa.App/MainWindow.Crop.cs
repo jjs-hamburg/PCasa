@@ -16,7 +16,8 @@ public partial class MainWindow
 {
     private sealed record CropWriteRecipe(long ImageId, long FolderId, string Path,
         double X, double Y, double Width, double Height);
-    private readonly List<Rect> _cropHistory = [];
+    private sealed record CropStep(Rect Bounds, double AspectRatio, string Mode);
+    private readonly List<CropStep> _cropHistory = [];
     private int _cropHistoryIndex = -1;
     private bool _cropActive;
     private bool _cropDragging;
@@ -132,7 +133,7 @@ public partial class MainWindow
         _cropRatio = bitmap.PixelWidth / (double)bitmap.PixelHeight;
         _cropRect = FitToImageAspect(new Rect(.08, .08, .84, .84));
         _cropHistory.Clear();
-        _cropHistory.Add(_cropRect);
+        _cropHistory.Add(new CropStep(_cropRect, _cropRatio, _cropRatioMode));
         _cropHistoryIndex = 0;
         ViewerToolsOverview.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Visible;
@@ -312,7 +313,8 @@ public partial class MainWindow
     private void AddCropHistory(Rect rect)
     {
         if (!_cropActive) return;
-        if (_cropHistoryIndex >= 0 && _cropHistory[_cropHistoryIndex] == rect)
+        if (_cropHistoryIndex >= 0 && _cropHistory[_cropHistoryIndex] ==
+            new CropStep(rect, _cropRatio, _cropRatioMode))
         {
             DrawCropFrame();
             return;
@@ -320,7 +322,7 @@ public partial class MainWindow
         if (_cropHistoryIndex + 1 < _cropHistory.Count)
             _cropHistory.RemoveRange(_cropHistoryIndex + 1,
                 _cropHistory.Count - _cropHistoryIndex - 1);
-        _cropHistory.Add(rect);
+        _cropHistory.Add(new CropStep(rect, _cropRatio, _cropRatioMode));
         _cropHistoryIndex++;
         UpdateCropHistoryControls();
         DrawCropFrame();
@@ -338,7 +340,9 @@ public partial class MainWindow
         var next = _cropHistoryIndex + delta;
         if (next < 0 || next >= _cropHistory.Count) return;
         _cropHistoryIndex = next;
-        _cropRect = _cropHistory[next];
+        _cropRect = _cropHistory[next].Bounds;
+        _cropRatio = _cropHistory[next].AspectRatio;
+        _cropRatioMode = _cropHistory[next].Mode;
         UpdateCropHistoryControls();
         DrawCropFrame();
     }
