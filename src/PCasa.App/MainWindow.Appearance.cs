@@ -72,6 +72,7 @@ public partial class MainWindow
         public double ExpandedGpsFraction { get; set; } = 0.55;
         public bool GpsExpanded { get; set; }
         public bool ShowGpsFilmstrip { get; set; }
+        public bool ShowGpxImport { get; set; }
         public double? GpsMapCenterLat { get; set; }
         public double? GpsMapCenterLon { get; set; }
         public double? GpsMapZoom { get; set; }
