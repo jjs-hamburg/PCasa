@@ -22,6 +22,7 @@ public partial class MainWindow
     private bool _cropActive;
     private bool _cropDragging;
     private bool _cropResizing;
+    private int _cropResizeEdges; // 1 left, 2 right, 4 top, 8 bottom
     private bool _cropIgnoreChanges;
     private Point _cropMouseStart;
     private Rect _cropOriginalRect;
@@ -236,8 +237,13 @@ public partial class MainWindow
         if (!actual.Contains(pt)) return;
         _cropMouseStart = pt;
         _cropOriginalRect = _cropRect;
-        _cropResizing = Math.Abs(pt.X - actual.Right) < 14 &&
-            Math.Abs(pt.Y - actual.Bottom) < 14;
+        const double grip = 12;
+        _cropResizeEdges = 0;
+        if (Math.Abs(pt.X - actual.Left) < grip) _cropResizeEdges |= 1;
+        else if (Math.Abs(pt.X - actual.Right) < grip) _cropResizeEdges |= 2;
+        if (Math.Abs(pt.Y - actual.Top) < grip) _cropResizeEdges |= 4;
+        else if (Math.Abs(pt.Y - actual.Bottom) < grip) _cropResizeEdges |= 8;
+        _cropResizing = _cropResizeEdges != 0;
         _cropDragging = true;
         ViewerCropOverlay.CaptureMouse();
         e.Handled = true;
@@ -254,10 +260,23 @@ public partial class MainWindow
         var dy = (pt.Y - _cropMouseStart.Y) / h;
         if (_cropResizing)
         {
-            var next = new Rect(_cropOriginalRect.X, _cropOriginalRect.Y,
-                Math.Clamp(_cropOriginalRect.Width + dx, .04, 1 - _cropOriginalRect.X),
-                Math.Clamp(_cropOriginalRect.Height + dy, .04, 1 - _cropOriginalRect.Y));
-            _cropRect = FitToImageAspect(next);
+            var original = _cropOriginalRect;
+            var left = (_cropResizeEdges & 1) != 0
+                ? Math.Clamp(original.Left + dx, 0, original.Right - .04)
+                : original.Left;
+            var right = (_cropResizeEdges & 2) != 0
+                ? Math.Clamp(original.Right + dx, original.Left + .04, 1)
+                : original.Right;
+            var top = (_cropResizeEdges & 4) != 0
+                ? Math.Clamp(original.Top + dy, 0, original.Bottom - .04)
+                : original.Top;
+            var bottom = (_cropResizeEdges & 8) != 0
+                ? Math.Clamp(original.Bottom + dy, original.Top + .04, 1)
+                : original.Bottom;
+            // Eight grips (corners and edge midpoints) share a single
+            // normalized geometry and stay within the original image.
+            _cropRect = FitToImageAspect(new Rect(left, top,
+                right - left, bottom - top));
         }
         else
         {
