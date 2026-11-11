@@ -180,6 +180,7 @@ public partial class MainWindow
         {
             ViewerToolsOverview.Visibility = Visibility.Visible;
             ViewerCropOptions.Visibility = Visibility.Collapsed;
+        ViewerCropFooter.Visibility = Visibility.Collapsed;
             ViewerCropOverlay.Visibility = Visibility.Collapsed;
         };
         CropSaveButton.Click += (_, _) => SaveCrop();
@@ -203,6 +204,8 @@ public partial class MainWindow
         {
             ViewerToolsOverview.Visibility = Visibility.Collapsed;
             ViewerCropOptions.Visibility = Visibility.Visible;
+        ViewerCropFooter.Visibility = Visibility.Visible;
+            ViewerCropFooter.Visibility = Visibility.Visible;
             ViewerCropOverlay.Visibility = Visibility.Visible;
             DrawCropFrame();
             return;
