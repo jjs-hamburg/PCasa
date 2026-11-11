@@ -41,7 +41,8 @@ public partial class MainWindow
             : string.Empty;
         if (source is null || source.PixelWidth < 1 || source.PixelHeight < 1)
             return;
-        if (source.Metadata is BitmapMetadata metadata &&
+        if (source is BitmapFrame frame &&
+            frame.Metadata is BitmapMetadata metadata &&
             !string.IsNullOrWhiteSpace(metadata.CameraModel))
             ViewerCameraDetails.Text = metadata.CameraModel + "  ·  " +
                 ViewerCameraDetails.Text;
