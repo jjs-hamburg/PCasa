@@ -10,10 +10,43 @@ namespace PCasa.App.Services;
 public static class GalleryTextureLibrary
 {
     public static string DirectoryPath =>
-        Path.Combine(AppContext.BaseDirectory, "Texturen");
+        Path.Combine(PcasaDataPaths.SharedDataRoot, "Texturen");
+
+    private static readonly object MigrationGate = new();
+    private static bool _migrationChecked;
+    private static void EnsureTexturesDirectory()
+    {
+        if (_migrationChecked) return;
+        lock (MigrationGate)
+        {
+            if (_migrationChecked) return;
+            Directory.CreateDirectory(DirectoryPath);
+            // One-way migration of user-created JPGs from older installers.
+            // Never copy discontinued shipped Leinwand/Schiefer textures.
+            var old = Path.Combine(AppContext.BaseDirectory, "Texturen");
+            if (Directory.Exists(old) &&
+                !string.Equals(old, DirectoryPath,StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var path in Directory.EnumerateFiles(old))
+                {
+                    var name = Path.GetFileName(path);
+                    if (!IsSupportedTexture(Path.GetExtension(path)) ||
+                        name.StartsWith("Leinwand ",StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("Stein - Schiefer dunkel.jpg",
+                            StringComparison.OrdinalIgnoreCase)) continue;
+                    var target = Path.Combine(DirectoryPath,name);
+                    if (!File.Exists(target)) File.Copy(path,target);
+                }
+            }
+            _migrationChecked = true;
+        }
+    }
 
     public static IReadOnlyList<string> GetFiles()
     {
+        try { EnsureTexturesDirectory(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { PCasaDiagnostics.Write("Textures.Migration",ex); }
         if (!Directory.Exists(DirectoryPath)) return [];
         return Directory.EnumerateFiles(DirectoryPath, "*", SearchOption.TopDirectoryOnly)
             .Where(path => IsSupportedTexture(Path.GetExtension(path)))
