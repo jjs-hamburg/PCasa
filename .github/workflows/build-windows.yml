@@ -1,6 +1,10 @@
 name: Build Windows
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [ui-crop-live-alpha14]
   workflow_dispatch:
 
 permissions:
