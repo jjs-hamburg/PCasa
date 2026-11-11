@@ -605,5 +605,9 @@
   "Abspielen": "Play",
   "Pause": "Pause",
   "Videowiedergabe": "Video playback",
-  "Dieses Video kann mit den installierten Windows-Codecs nicht abgespielt werden.": "This video cannot be played using the installed Windows codecs."
+  "Dieses Video kann mit den installierten Windows-Codecs nicht abgespielt werden.": "This video cannot be played using the installed Windows codecs.",
+  "Vorschau · Original gedrückt halten": "Preview · hold to show original",
+  "Wiederholen": "Retry",
+  "Download unterbrochen. Die Verbindung kann erneut versucht werden.": "Download interrupted. You can retry the connection.",
+  "Histogramm & Kamera-Informationen": "Histogram & camera information"
 }
