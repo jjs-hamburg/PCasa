@@ -48,6 +48,8 @@ public sealed class FolderScanner
         ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
     };
 
+    static FolderScanner() => SupportedExtensions.UnionWith(VideoFormats.SupportedExtensions);
+
     /// <summary>
     /// Durable-for-this-session enumeration cursor. Scanner yields may restart
     /// the worker delegate, but never restart already traversed NAS folders.
@@ -542,8 +544,9 @@ public sealed class FolderScanner
                         cancellationToken.ThrowIfCancellationRequested();
 
                         scanSession.FlushPending();
-                        var renderPath = RawImageSource.Resolve(localPath,
-                            cancellationToken);
+                        var renderPath = VideoFormats.IsVideo(localPath)
+                            ? VideoThumbnailSource.Resolve(localPath, cancellationToken)
+                            : RawImageSource.Resolve(localPath, cancellationToken);
                         var thumbnail = _thumbnailCache.CreateOrUpdate(
                             renderPath,
                             canonicalPath,

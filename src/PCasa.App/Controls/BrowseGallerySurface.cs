@@ -863,6 +863,24 @@ public sealed class BrowseGallerySurface : FrameworkElement
                     }
 
                     drawingContext.DrawImage(bitmap, imageRect);
+                    if (VideoFormats.IsVideo(entry.FileName))
+                    {
+                        // Always recognizable by shape, independent of color settings.
+                        var buttonRect = new Rect(imageRect.X + 7, imageRect.Y + 7, 25, 23);
+                        drawingContext.DrawRoundedRectangle(
+                            new SolidColorBrush(Color.FromArgb(220, 0, 0, 0)), null,
+                            buttonRect, 4, 4);
+                        var triangle = new StreamGeometry();
+                        using (var context = triangle.Open())
+                        {
+                            context.BeginFigure(new Point(buttonRect.X + 9, buttonRect.Y + 5),
+                                true, true);
+                            context.LineTo(new Point(buttonRect.X + 9, buttonRect.Y + 18), true, false);
+                            context.LineTo(new Point(buttonRect.X + 19, buttonRect.Y + 11.5), true, false);
+                        }
+                        triangle.Freeze();
+                        drawingContext.DrawGeometry(Brushes.White, null, triangle);
+                    }
                     if (_showStatusIcons)
                         ThumbnailStatusIconRenderer.Draw(drawingContext, imageRect,
                             entry.HasGps, entry.HasTags, entry.IsRaw, pixelsPerDip);

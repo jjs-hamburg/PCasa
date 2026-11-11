@@ -65,6 +65,17 @@ public partial class MainWindow
         if (_viewerOpen || _browseCacheBuilding || _displayedBrowseIndex.Count == 0)
             return;
 
+        // Videos share the gallery index but have their own read-only player.
+        // Do not enter the photo viewer or activate crop/edit controls.
+        var openedEntry = _displayedBrowseIndex.FirstOrDefault(x => x.ImageId == e.ImageId);
+        if (openedEntry is not null && VideoFormats.IsVideo(openedEntry.FileName))
+        {
+            var item = new PCasa.App.Data.ImageViewerRepository(_database).Get(e.ImageId);
+            if (item is not null)
+                new VideoPlayerWindow(item.LocalPath) { Owner = this }.Show();
+            return;
+        }
+
         // Capture the SAME gallery projection as on screen, including search,
         // sorting and collapsed-folder visibility. No second tree traversal.
         _viewerSequence = PhotoSequence.Create(_displayedBrowseIndex,
@@ -167,6 +178,16 @@ public partial class MainWindow
         _viewerPrefetchCancellation = null;
         _viewerHasOriginal = false;
         var entry = _viewerSequence.At(_viewerCurrentIndex);
+        if (VideoFormats.IsVideo(entry.FileName))
+        {
+            // Navigating from a still photo to a movie must never submit the
+            // movie to the image decoder or crop tools.
+            var video = new PCasa.App.Data.ImageViewerRepository(_database).Get(entry.ImageId);
+            ClosePhotoViewer();
+            if (video is not null)
+                new VideoPlayerWindow(video.LocalPath) { Owner = this }.Show();
+            return;
+        }
         _viewerImageInfo = null;
         UpdateViewerSequenceTitle();
         if (_viewerNavigatorImageId != entry.ImageId)
@@ -323,6 +344,7 @@ public partial class MainWindow
                 return;
 
             var index = sequence.Move(origin, direction);
+            if (VideoFormats.IsVideo(sequence.At(index).FileName)) continue;
             var id = sequence.At(index).ImageId;
             if (TryGetViewerOriginal(id, requiredSize, out _))
             {

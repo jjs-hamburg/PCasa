@@ -597,5 +597,13 @@
   "Speichern": "Save",
   "Keine GPX-Dateien.": "No GPX files.",
   "Ansicht": "View",
-  "Zuschneiden ohne Speichern verlassen?": "Leave cropping without saving?"
+  "Zuschneiden ohne Speichern verlassen?": "Leave cropping without saving?",
+  "Nur Videos": "Videos only",
+  "Nur Fotos": "Photos only",
+  "Vollbild": "Full screen",
+  "Lautstärke": "Volume",
+  "Abspielen": "Play",
+  "Pause": "Pause",
+  "Videowiedergabe": "Video playback",
+  "Dieses Video kann mit den installierten Windows-Codecs nicht abgespielt werden.": "This video cannot be played using the installed Windows codecs."
 }

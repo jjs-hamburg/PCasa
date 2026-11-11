@@ -56,6 +56,8 @@ internal static class Program
             }
         }
         var failures = new List<string>();
+        Run("Video containers enter the shared catalog and their cached previews never touch originals",
+            VideoCatalogAndPreviewSmoke, failures);
         Run("GPS clusters group nearby originals by kilometres, preserve every ID and work across ±180°",
             GpsGeographicClustersPreserveIdentity, failures);
         Run("One UI translation catalog switches de/en and preserves user metadata", LanguageSwitchPreservesUserMetadata, failures);
@@ -7655,5 +7657,62 @@ internal static class Program
             result.Sum(g => g.Count) != 7200)
             throw new Exception("World-scale grouping dropped photographs or failed.");
     }
+
+    private static void VideoCatalogAndPreviewSmoke()
+    {
+        foreach (var extension in new[] {
+            ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".mpg",
+            ".mpeg", ".m2v", ".mts", ".m2ts", ".3gp", ".3g2", ".webm"
+        })
+        {
+            if (!VideoFormats.IsVideo("movie" + extension) ||
+                !FolderScanner.IsSupportedImagePath("movie" + extension))
+                throw new Exception("Video extension missing from catalog: " + extension);
+        }
+        if (VideoFormats.IsVideo("photo.jpg") || VideoFormats.IsVideo("photo.png"))
+            throw new Exception("Still images were misclassified as videos.");
+
+        var directory = Path.Combine(Path.GetTempPath(),
+            "PCasa-video-smoke-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var original = Path.Combine(directory, "test.mp4");
+        try
+        {
+            // Deliberately invalid content: unknown codecs must still produce
+            // a placeholder and retain the file in the catalog.
+            File.WriteAllBytes(original, new byte[] { 0, 0, 0, 8, 0x66, 0x74, 0x79, 0x70 });
+            var bytes = File.ReadAllBytes(original);
+            var stamp = File.GetLastWriteTimeUtc(original);
+            var rejectedVideoWrite = false;
+            try { ExifToolKeywordWriter.Write(original, ["PCasa-test"]); }
+            catch (NotSupportedException) { rejectedVideoWrite = true; }
+            if (!rejectedVideoWrite)
+                throw new Exception("Video keyword edits must be refused.");
+            var preview = VideoThumbnailSource.Resolve(original);
+            if (!File.Exists(preview) || !preview.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("No local JPEG preview for unsupported video.");
+            if (Path.GetDirectoryName(preview)!.Equals(directory, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Video preview is a forbidden original-directory sidecar.");
+            var resolved = VideoThumbnailSource.Resolve(original);
+            if (!string.Equals(preview, resolved, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Unchanged videos must reuse the same cached preview.");
+            using (var stream = File.OpenRead(preview))
+            {
+                var decoder = new JpegBitmapDecoder(stream,
+                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+                if (decoder.Frames.Count != 1 || decoder.Frames[0].PixelWidth < 16)
+                    throw new Exception("Invalid cached video preview.");
+            }
+            if (!File.ReadAllBytes(original).SequenceEqual(bytes) ||
+                File.GetLastWriteTimeUtc(original) != stamp ||
+                Directory.GetFiles(directory).Length != 1)
+                throw new Exception("Video original or its directory was modified.");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
 
 }

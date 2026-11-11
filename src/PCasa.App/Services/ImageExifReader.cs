@@ -44,9 +44,19 @@ public sealed class ImageExifReader : IDisposable
             // Every response carries the request identity. A timeout may
             // leave an outstanding ReadLineAsync and a delayed ExifTool reply;
             // NEVER allow that reply to be stored under the next photo ID.
-            foreach (var arg in new[] { "-j", "-G1", "-n", "-EXIF:All",
+            var arguments = new List<string> { "-j", "-G1", "-n", "-EXIF:All",
                 "-GPS:All", "-XMP:GPSLatitude", "-XMP:GPSLongitude",
-                "-XMP:Make", "-XMP:Model", path, "-execute" + request })
+                "-XMP:Make", "-XMP:Model" };
+            // ExifTool video metadata lives in container groups rather than
+            // EXIF. Preserve the native raw tags in the SAME catalog column.
+            if (VideoFormats.IsVideo(path))
+                arguments.AddRange(new[] {
+                    "-QuickTime:All", "-Matroska:All", "-RIFF:All",
+                    "-Composite:Duration", "-Composite:GPSLatitude",
+                    "-Composite:GPSLongitude" });
+            arguments.Add(path);
+            arguments.Add("-execute" + request);
+            foreach (var arg in arguments)
                 process.StandardInput.WriteLine(arg);
             process.StandardInput.Flush();
 

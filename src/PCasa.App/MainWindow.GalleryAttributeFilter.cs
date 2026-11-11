@@ -12,7 +12,7 @@ public partial class MainWindow
     // The existing gallery index already carries GPS, tag and RAW flags.
     // No second catalog query, scan, index or projection is introduced.
     private string CurrentAttributeFilter =>
-        _appearance.GalleryAttributeFilter is "Gps" or "Tags" or "Raw"
+        _appearance.GalleryAttributeFilter is "Gps" or "Tags" or "Raw" or "Video"
             ? _appearance.GalleryAttributeFilter : "None";
 
     private bool AttributeFilterActive => CurrentAttributeFilter != "None";
@@ -25,6 +25,7 @@ public partial class MainWindow
             "Gps" => image.HasGps,
             "Tags" => image.HasTags,
             "Raw" => image.IsRaw,
+            "Video" => VideoFormats.IsVideo(image.FileName),
             _ => true
         };
         return filter == "None" || (inverted ? !matches : matches);
@@ -40,11 +41,13 @@ public partial class MainWindow
             "Gps" => inverse ? "Ohne GPS" : "Mit GPS",
             "Tags" => inverse ? "Ohne Tags" : "Mit Tags",
             "Raw" => inverse ? "Ohne RAW" : "Nur RAW",
+            "Video" => inverse ? "Nur Fotos" : "Nur Videos",
             _ => "Filter"
         });
         GalleryAttributeGpsMenu.IsChecked = filter == "Gps";
         GalleryAttributeTagsMenu.IsChecked = filter == "Tags";
         GalleryAttributeRawMenu.IsChecked = filter == "Raw";
+        GalleryAttributeVideoMenu.IsChecked = filter == "Video";
         GalleryAttributeFilterInvertButton.IsEnabled = filter != "None";
         GalleryAttributeFilterClearButton.IsEnabled = filter != "None";
         // Rotate the 24x24 CANVAS around its own center. Rotating a Path
@@ -126,7 +129,7 @@ public partial class MainWindow
 
     private async Task ChangeGalleryAttributeFilterAsync(string next, bool inverted)
     {
-        if (next is not ("None" or "Gps" or "Tags" or "Raw")) return;
+        if (next is not ("None" or "Gps" or "Tags" or "Raw" or "Video")) return;
         if (CurrentAttributeFilter == next &&
             _appearance.GalleryAttributeFilterInverted == inverted) return;
 
