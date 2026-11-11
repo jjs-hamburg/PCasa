@@ -203,11 +203,13 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    }
  };
  // Temporary GPX overlay, independent of the photo position projection.
- let gpxTrack=[];
+ let gpxTrack=[],gpxLayerInstalled=false;
  function drawGpx() {
-   if (!map.isStyleLoaded()) return;
+   if (!gpxTrack.length && !gpxLayerInstalled) return;
+   if (typeof map.isStyleLoaded === 'function' && !map.isStyleLoaded()) return;
    if (map.getLayer('pcasa-gpx-line')) map.removeLayer('pcasa-gpx-line');
    if (map.getSource('pcasa-gpx-track')) map.removeSource('pcasa-gpx-track');
+   gpxLayerInstalled=false;
    if (!gpxTrack.length) return;
    map.addSource('pcasa-gpx-track', {
      type:'geojson',data:{type:'FeatureCollection',
@@ -218,6 +220,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
    });
    map.addLayer({id:'pcasa-gpx-line',type:'line',source:'pcasa-gpx-track',
      paint:{'line-color':'#d55f18','line-width':4,'line-opacity':.92}});
+   gpxLayerInstalled=true;
  }
  window.pcasaShowGpx=(segments,fit)=>{
    gpxTrack=Array.isArray(segments)?segments:[];
