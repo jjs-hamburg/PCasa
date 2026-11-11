@@ -18,10 +18,11 @@ permissions:
 # Every source commit on main or a setup branch supersedes its predecessor.
 # Test/build only the newest push, avoiding parallel 270 MB ZIP artifacts
 # and conserving the account's limited GitHub Actions storage.
-# Manually dispatched acceptance builds remain independent.
+# Pull-request updates supersede previous attempts, too. Manual acceptance
+# runs stay independent and are never cancelled by later PR commits.
 concurrency:
   group: pcasa-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 
 # Use the same verified metadata tool for catalog AND all real-WPF runs.
 env:
