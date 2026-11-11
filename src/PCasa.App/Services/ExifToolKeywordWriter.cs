@@ -192,6 +192,9 @@ public static class ExifToolKeywordWriter
         private void WriteCore(string imagePath, IReadOnlyList<string> keywords,
             CancellationToken cancellationToken, long? knownSourceLengthBytes)
         {
+            // Videos are cataloged and played, never modified.
+            if (VideoFormats.IsVideo(imagePath))
+                throw new NotSupportedException("Videodateien werden in PCasa nicht bearbeitet.");
             foreach (var keyword in keywords)
                 if (keyword.Contains('\r') || keyword.Contains('\n'))
                     throw new ArgumentException("Ein Tag darf keine Zeilenumbrüche enthalten.");
