@@ -400,6 +400,7 @@ public partial class MainWindow
             ApplyViewerImageLayout();
         }
         PhotoViewerImage.Source = bitmap;
+        UpdateViewerHistogram(bitmap);
         if (_viewerFullscreenImage is not null)
         {
             _viewerFullscreenImage.Source = bitmap;
