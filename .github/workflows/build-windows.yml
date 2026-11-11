@@ -11,7 +11,7 @@ permissions:
 # A newer PR commit supersedes older Windows build checks.
 # Keep manually started runs independent.
 concurrency:
-  group: pcasa-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: pcasa-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
