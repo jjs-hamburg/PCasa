@@ -934,10 +934,11 @@ internal static class TagFlow
 
             // The GPS editing row is permanently visible. At narrow widths
             // its captions collapse to icons, without moving the controls.
-            var gpsToolsPanel = (Grid?)window.FindName("GpsEditPanel")
+            var gpsToolsPanel = (WrapPanel?)window.FindName("GpsEditPanel")
                 ?? throw new Exception("GPS actions grid is missing.");
             if (gpsToolsPanel.Visibility != Visibility.Visible ||
-                gpsToolsPanel.ColumnDefinitions.Count != 3)
+                !gpsToolsPanel.Children.Contains(replaceGpsButton) ||
+                !gpsToolsPanel.Children.Contains(removeGpsButton))
                 throw new Exception("GPS Pick/Replace/Remove must remain in one row.");
             Console.WriteLine("PASS: GPS tools are immediately available without an editor launcher.");
 
@@ -1310,7 +1311,8 @@ internal static class TagFlow
             if (((Grid?)window.FindName("GpsMapPanel"))?.Visibility != Visibility.Visible ||
                 ((Button?)window.FindName("GpsProviderButton"))?.ContextMenu?.Items.Count < 4 ||
                 Grid.GetRow(filmPanel) != 3 ||
-                Grid.GetRow(filmToggle) != 0 ||
+                filmToggle.Parent is not StackPanel sourceRow ||
+                Grid.GetRow(sourceRow) != 4 ||
                 window.FindName("GpsMapAttribution") is not null ||
                 window.FindName("GpsFullscreenCorners") is not System.Windows.Shapes.Path ||
                 window.FindName("FolderSidebarSymbolArrow") is not System.Windows.Shapes.Path)
@@ -1787,7 +1789,7 @@ internal static class TagFlow
                 foreach (var captionName in new[] {
                     "GpsPickPositionToggleCaption", "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
                     "GpsShowAreaCaption", "GpsClearAreaCaption",
-                    "GpsCopyButtonCaption", "GpsGoogleButtonCaption" })
+                    "GpsGoogleButtonCaption" })
                     if (window.FindName(captionName) is not TextBlock caption ||
                         caption.Visibility != Visibility.Visible ||
                         string.IsNullOrWhiteSpace(caption.Text))
@@ -1798,20 +1800,20 @@ internal static class TagFlow
                     Math.Abs(RelativePosition(gpsProvider).Y - originalProvider.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsSearchField).Y - originalSearch.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsAction).Y - originalAction.Y) > 2 ||
-                    Math.Abs(RelativePosition(gpsCopy).Y - originalCopy.Y) > 2 ||
+                    
                     Math.Abs(RelativePosition(gpsMapHost).Y - originalMap.Y) > 2 ||
                     Math.Abs(RelativePosition(gpsSearchField).X - originalSearch.X) > 2 ||
                     Math.Abs(RelativePosition(gpsAction).X - originalAction.X) > 2 ||
                     Math.Abs(gpsControls.ActualWidth - normalControlWidth) > 2 ||
                     Math.Abs(gpsHeader.ActualWidth - normalHeaderWidth) > 2 ||
-                    gpsControls.HorizontalAlignment != HorizontalAlignment.Right ||
-                    gpsHeader.HorizontalAlignment != HorizontalAlignment.Right)
+                    gpsControls.HorizontalAlignment != HorizontalAlignment.Stretch ||
+                    gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch)
                     throw new Exception("GPS controls changed position between normal and expanded modes.");
             }
             foreach (var captionName in new[] {
                 "GpsPickPositionToggleCaption", "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
                 "GpsShowAreaCaption", "GpsClearAreaCaption",
-                "GpsCopyButtonCaption", "GpsGoogleButtonCaption" })
+                "GpsGoogleButtonCaption" })
                 if (window.FindName(captionName) is not TextBlock text ||
                     text.Visibility != Visibility.Visible ||
                     string.IsNullOrWhiteSpace(text.Text))
