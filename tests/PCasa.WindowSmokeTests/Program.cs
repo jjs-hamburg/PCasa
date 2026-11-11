@@ -1542,7 +1542,9 @@ internal static class Program
                 ?? throw new Exception("Copy GPS icon missing next to coordinates.");
             var gpxEmpty = window.FindName("GpsGpxEmptyText") as TextBlock
                 ?? throw new Exception("GPX empty-folder message missing.");
-            if (Grid.GetColumn(gpsCoords) != 1 ||
+            if (gpsCoords.Parent is not StackPanel coordinateGroup ||
+                Grid.GetColumn(coordinateGroup) != 1 ||
+                !coordinateGroup.Children.Contains(headerCopy) ||
                 gpsControls.RowDefinitions.Count != 8 ||
                 Grid.GetRow(gpsActions) != 2 ||
                 gpsActions.Visibility != Visibility.Visible ||
