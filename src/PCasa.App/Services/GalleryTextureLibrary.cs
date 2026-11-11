@@ -23,10 +23,18 @@ public static class GalleryTextureLibrary
             Directory.CreateDirectory(DirectoryPath);
             // One-way migration of user-created JPGs from older installers.
             // Never copy discontinued shipped Leinwand/Schiefer textures.
-            var old = Path.Combine(AppContext.BaseDirectory, "Texturen");
-            if (Directory.Exists(old) &&
-                !string.Equals(old, DirectoryPath,StringComparison.OrdinalIgnoreCase))
+            var legacyFolders = new[]
             {
+                Path.Combine(AppContext.BaseDirectory,"Texturen"),
+                Path.Combine(Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData),
+                    "Programs","PCasa","Texturen")
+            };
+            foreach (var old in legacyFolders.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!Directory.Exists(old) ||
+                    string.Equals(old,DirectoryPath,StringComparison.OrdinalIgnoreCase))
+                    continue;
                 foreach (var path in Directory.EnumerateFiles(old))
                 {
                     var name = Path.GetFileName(path);
