@@ -125,27 +125,29 @@ public sealed class UndoHistoryService
             var meta = Path.Combine(ArchiveRoot, id.ToString("N") + ".json");
             try
             {
-                using var input = new FileStream(path, FileMode.Open, FileAccess.Read,
-                    FileShare.Read, 131072, FileOptions.SequentialScan);
-                using var output = new FileStream(temp, FileMode.CreateNew,
-                    FileAccess.Write, FileShare.None, 131072,
-                    FileOptions.WriteThrough);
-                using var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-                var buffer = new byte[131072];
-                long copied = 0;
-                while (true)
+                string hash;
+                using (var input = new FileStream(path, FileMode.Open, FileAccess.Read,
+                           FileShare.Read, 131072, FileOptions.SequentialScan))
+                using (var output = new FileStream(temp, FileMode.CreateNew,
+                           FileAccess.Write, FileShare.None, 131072, FileOptions.WriteThrough))
+                using (var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
                 {
-                    token.ThrowIfCancellationRequested();
-                    var count = input.Read(buffer);
-                    if (count == 0) break;
-                    hasher.AppendData(buffer,0,count);
-                    output.Write(buffer,0,count);
-                    copied += count;
+                    var buffer = new byte[131072];
+                    long copied = 0;
+                    while (true)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var count = input.Read(buffer);
+                        if (count == 0) break;
+                        hasher.AppendData(buffer, 0, count);
+                        output.Write(buffer, 0, count);
+                        copied += count;
+                    }
+                    output.Flush(flushToDisk: true);
+                    if (copied != size)
+                        throw new IOException("Original image changed during Undo backup.");
+                    hash = Convert.ToHexString(hasher.GetHashAndReset());
                 }
-                output.Flush(flushToDisk:true);
-                if (copied != size)
-                    throw new IOException("Original image changed during Undo backup.");
-                var hash = Convert.ToHexString(hasher.GetHashAndReset());
                 File.Move(temp,data);
                 // A fresh read from local backup verifies real stored bytes.
                 using var verified = File.OpenRead(data);
