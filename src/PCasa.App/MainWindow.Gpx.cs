@@ -112,12 +112,12 @@ public partial class MainWindow
                 try
                 {
                     var points = GpxTrackReader.Read(file.FullPath);
-                    var text = points.Count == 0 ? file.FullPath + "\\nKeine GPS-Punkte" :
-                        file.FullPath + "\\n" +
+                    var text = points.Count == 0 ? file.FullPath + "\nKeine GPS-Punkte" :
+                        file.FullPath + "\n" +
                         points[0].UtcTime.LocalDateTime.ToString("g") + " – " +
-                        points[^1].UtcTime.LocalDateTime.ToString("g") + "\\n" +
+                        points[^1].UtcTime.LocalDateTime.ToString("g") + "\n" +
                         points.Count.ToString("N0") + " GPS-Punkte · " +
-                        (points[^1].UtcTime - points[0].UtcTime).ToString(@"hh\\:mm\\:ss");
+                        (points[^1].UtcTime - points[0].UtcTime).ToString(@"hh\:mm\:ss");
                     _ = Dispatcher.BeginInvoke(new Action(() =>
                     {
                         if (revision == _gpxListRevision) file.Tooltip = text;
@@ -129,7 +129,7 @@ public partial class MainWindow
                     _ = Dispatcher.BeginInvoke(new Action(() =>
                     {
                         if (revision == _gpxListRevision)
-                            file.Tooltip = file.FullPath + "\\n" + ex.Message;
+                            file.Tooltip = file.FullPath + "\n" + ex.Message;
                     }));
                 }
             }
