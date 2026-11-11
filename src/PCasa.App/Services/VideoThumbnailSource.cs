@@ -29,7 +29,6 @@ public static class VideoThumbnailSource
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
         var root = Path.Combine(PcasaDataPaths.SharedDataRoot, "video-previews", hash[..2]);
         var target = Path.Combine(root, hash + ".jpg");
-        using (SourceFileLocks.Enter(path, token))
         {
             if (File.Exists(target) && new FileInfo(target).Length > 0)
                 return target;
@@ -66,8 +65,9 @@ public static class VideoThumbnailSource
         IntPtr hbitmap = IntPtr.Zero;
         try
         {
+            var iid = FactoryId;
             SHCreateItemFromParsingName(Path.GetFullPath(path), IntPtr.Zero,
-                ref FactoryIdForCall(), out factory);
+                ref iid, out factory);
             factory.GetImage(new NativeSize(Side, Side), 0x08, out hbitmap);
             if (hbitmap == IntPtr.Zero)
                 throw new NotSupportedException("Kein Video-Thumbnail verfügbar.");
@@ -82,8 +82,6 @@ public static class VideoThumbnailSource
             if (factory is not null) Marshal.ReleaseComObject(factory);
         }
     }
-
-    private static Guid FactoryIdForCall() => FactoryId;
 
     private static BitmapSource CreatePlaceholder()
     {
