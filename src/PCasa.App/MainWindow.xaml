@@ -964,7 +964,7 @@
                     <Border Grid.Row="2" Padding="9,7" BorderThickness="0,1,0,1"
                             BorderBrush="{DynamicResource PcasaDividerBrush}">
                         <StackPanel>
-                            <TextBlock Text="Histogramm &amp; Kamera-Informationen" FontSize="12"
+                            <TextBlock Text="{loc:Tr Key='Histogramm &amp; Kamera-Informationen'}" FontSize="12"
                                        FontWeight="SemiBold" Margin="0,0,0,4"/>
                             <Canvas x:Name="ViewerHistogramCanvas" Height="74" ClipToBounds="True"
                                     Background="{DynamicResource PcasaPanelBrush}"/>
