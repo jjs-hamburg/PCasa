@@ -677,7 +677,8 @@ internal static class Program
             var attributeSelector = window.FindName("GalleryAttributeFilterSelectorButton") as Button
                 ?? throw new Exception("Property filter selection is missing.");
             if (attributeSelector.ContextMenu?.Items.Count != 4 ||
-                 window.FindName("GalleryAttributeVideoMenu") is not MenuItem { Tag: "Video" } ||
+                 !attributeSelector.ContextMenu.Items.OfType<MenuItem>().Any(item =>
+                     item.Tag is string tag && tag == "Video") ||
                 attributeInvert.IsEnabled || attributeClear.IsEnabled ||
                 attributeLabel.Text != "Filter")
                 throw new Exception("Property filter initial state and four menu choices are incorrect.");
