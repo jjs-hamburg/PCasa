@@ -181,7 +181,7 @@ public partial class MainWindow
         {
             ViewerToolsOverview.Visibility = Visibility.Visible;
             ViewerCropOptions.Visibility = Visibility.Collapsed;
-        ViewerCropFooter.Visibility = Visibility.Collapsed;
+            ViewerCropFooter.Visibility = Visibility.Collapsed;
             ViewerCropOverlay.Visibility = Visibility.Collapsed;
         };
         CropSaveButton.Click += (_, _) => SaveCrop();
@@ -205,7 +205,6 @@ public partial class MainWindow
         {
             ViewerToolsOverview.Visibility = Visibility.Collapsed;
             ViewerCropOptions.Visibility = Visibility.Visible;
-        ViewerCropFooter.Visibility = Visibility.Visible;
             ViewerCropFooter.Visibility = Visibility.Visible;
             ViewerCropOverlay.Visibility = Visibility.Visible;
             DrawCropFrame();
@@ -220,6 +219,7 @@ public partial class MainWindow
         _cropHistoryIndex = 0;
         ViewerToolsOverview.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Visible;
+        ViewerCropFooter.Visibility = Visibility.Visible;
         ViewerCropOverlay.Visibility = Visibility.Visible;
         DrawCropFrame();
         UpdateCropHistoryControls();
@@ -233,6 +233,7 @@ public partial class MainWindow
         ViewerCropOverlay.ReleaseMouseCapture();
         ViewerCropOverlay.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
+        ViewerCropFooter.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         _cropHistory.Clear();
         _cropHistoryIndex = -1;
