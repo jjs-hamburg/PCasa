@@ -37,6 +37,7 @@ public partial class MainWindow
         public double ThumbnailSpacing { get; set; } = 10;
         public double ThumbnailWidth { get; set; } = 190;
         public bool? ShowThumbnailShadows { get; set; }
+        public string ThumbnailShadowStrength { get; set; } = "Dezent";
         // New profiles remember the current photo by default. Older
         // profiles retain any explicitly saved user preference.
         public bool RestoreGalleryPosition { get; set; } = true;
@@ -446,55 +447,61 @@ public partial class MainWindow
             _appearance.ShowThumbnailShadows == true, _appearance.TooltipsEnabled,
             _viewerSettings.SequenceScope.ToString(),
             _appearance.ThumbnailFilenameFontSize is 10 or 12 or 14
-                ? _appearance.ThumbnailFilenameFontSize : 10);
+                ? _appearance.ThumbnailFilenameFontSize : 10,
+            _appearance.ShowThumbnailShadows == true ? _appearance.ThumbnailShadowStrength : "Aus");
         var dialog = new AppearanceSettingsWindow(current)
         {
             Owner = this
         };
-        if (dialog.ShowDialog() != true) return;
-        var next = dialog.Values;
-        var visibilityChanged = next.HideCollapsed != _appearance.HideCollapsedFolders;
-        var galleryLayoutChanged =
-            next.FileNames != _appearance.ShowThumbnailFileNames ||
-            next.BoldFileNames != _appearance.BoldThumbnailFileNames ||
-            next.Icons != _appearance.ShowThumbnailIcons ||
-            next.CaptionSize != _appearance.ThumbnailFilenameFontSize;
-        // Use the original pre-dialog anchor for ALL appearance changes,
-        // including theme/texture changes that can remeasure the gallery.
-        _pendingGalleryAnchor = originalGalleryAnchor;
-        _restoringGalleryLayoutAnchor = true;
-        _appearance.Theme = next.Theme;
-        _appearance.Background = next.Background;
-        _appearance.TextureFileName = next.Texture;
-        _appearance.FolderStatusMode = next.FolderStatus;
-        _appearance.RestoreGalleryPosition = next.RestorePosition;
-        _appearance.HideCollapsedFolders = next.HideCollapsed;
-        _appearance.ShowThumbnailFileNames = next.FileNames;
-        _appearance.BoldThumbnailFileNames = next.BoldFileNames;
-        _appearance.ShowThumbnailIcons = next.Icons;
-        _appearance.ShowThumbnailShadows = next.Shadows;
-        _appearance.TooltipsEnabled = next.Tooltips;
-        _appearance.ThumbnailFilenameFontSize = next.CaptionSize;
-        ApplyAppearance();
-        ApplyTooltipSetting();
-        if (visibilityChanged)
+        // Live preview changes the in-memory appearance only. Persist solely on
+        // Apply/OK; Cancel or X restores the last applied snapshot.
+        void Preview(AppearanceDialogValues candidate, bool persist)
         {
-            UpdateGalleryFolderVisibility();
-            RefreshGallerySearchAfterTreeVisibilityChange();
-        }
-        // Restore the same photo after synchronous layout and again at the
-        // next Loaded pass. WPF may schedule a second remeasure after the
-        // modal dialog and global theme finish changing.
-        RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
-            originalGalleryOffset, originalNavigationVersion, originalActiveFolderId);
-        _ = Dispatcher.BeginInvoke(new Action(() =>
+            var visibilityChanged = candidate.HideCollapsed != _appearance.HideCollapsedFolders;
+            _pendingGalleryAnchor = originalGalleryAnchor;
+            _restoringGalleryLayoutAnchor = true;
+            _appearance.Theme = candidate.Theme;
+            _appearance.Background = candidate.Background;
+            _appearance.TextureFileName = candidate.Texture;
+            _appearance.FolderStatusMode = candidate.FolderStatus;
+            _appearance.RestoreGalleryPosition = candidate.RestorePosition;
+            _appearance.HideCollapsedFolders = candidate.HideCollapsed;
+            _appearance.ShowThumbnailFileNames = candidate.FileNames;
+            _appearance.BoldThumbnailFileNames = candidate.BoldFileNames;
+            _appearance.ShowThumbnailIcons = candidate.Icons;
+            _appearance.ShowThumbnailShadows = candidate.Shadows;
+            _appearance.ThumbnailShadowStrength = candidate.ShadowStrength;
+            _appearance.TooltipsEnabled = candidate.Tooltips;
+            _appearance.ThumbnailFilenameFontSize = candidate.CaptionSize;
+            ApplyAppearance();
+            ApplyTooltipSetting();
+            if (visibilityChanged)
+            {
+                UpdateGalleryFolderVisibility();
+                RefreshGallerySearchAfterTreeVisibilityChange();
+            }
             RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
-                originalGalleryOffset, originalNavigationVersion, originalActiveFolderId)),
-            System.Windows.Threading.DispatcherPriority.Loaded);
-        if (Enum.TryParse<PhotoSequenceScope>(next.SequenceScope, out var sequence) &&
-            Enum.IsDefined(sequence))
-            ApplyPhotoSequenceScope(sequence);
-        SaveAppearance();
+                originalGalleryOffset, originalNavigationVersion, originalActiveFolderId);
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+                RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
+                    originalGalleryOffset, originalNavigationVersion, originalActiveFolderId)),
+                System.Windows.Threading.DispatcherPriority.Loaded);
+            if (Enum.TryParse<PhotoSequenceScope>(candidate.SequenceScope,
+                    out var sequence) && Enum.IsDefined(sequence))
+            {
+                // Preview must not persist viewer settings without acceptance.
+                if (persist) ApplyPhotoSequenceScope(sequence);
+            }
+            if (persist) SaveAppearance();
+        }
+        dialog.PreviewChanged += candidate => Preview(candidate, false);
+        dialog.ApplyRequested += candidate =>
+        {
+            Preview(candidate, true);
+            current = candidate;
+        };
+        if (dialog.ShowDialog() == true) Preview(dialog.Values, true);
+        else Preview(current, false);
     }
 
     private void ApplyAppearance()
@@ -534,7 +541,8 @@ public partial class MainWindow
             item.ShowIcons = _appearance.ShowThumbnailIcons;
         BrowseSurface.SetFilenameBold(_appearance.BoldThumbnailFileNames);
         BrowseSurface.SetFilenameFontSize(_appearance.ThumbnailFilenameFontSize);
-        BrowseSurface.SetShadowEnabled(_appearance.ShowThumbnailShadows == true);
+        BrowseSurface.SetShadowStrength(_appearance.ShowThumbnailShadows == true
+            ? _appearance.ThumbnailShadowStrength : "Aus");
         ApplyFolderStatusMode();
         if (ThumbnailSizeSlider is not null)
             ThumbnailSizeSlider.Value = Math.Clamp(_appearance.ThumbnailWidth, 72, 600);
