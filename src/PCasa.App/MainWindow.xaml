@@ -1289,7 +1289,7 @@
   </Grid>
  </Grid>
  <Grid Grid.Row="3" Height="31">
-  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+  <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
   <Button x:Name="GpsCopyButton" Grid.Column="0" Height="31" Padding="3,1" Margin="0,0,3,0" IsEnabled="False" Click="GpsCopy_Click" ToolTip="{loc:Tr Key='Kopiert die GPS-Koordinaten eines ausgewählten Fotos. Ohne gültige Koordinaten nicht verfügbar.'}" ToolTipService.ShowOnDisabled="True">
  <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"><Viewbox Width="18" Height="18" Margin="0,0,3,0"><Canvas Width="24" Height="24"><Path Data="M5,3 H15 L20,8 V21 H5 Z M15,3 V8 H20" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock x:Name="GpsCopyButtonCaption" Text="{loc:Tr Key='GPS kopieren'}" FontSize="12" VerticalAlignment="Center"/></StackPanel>
  </Button>
@@ -1300,6 +1300,11 @@
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><TextBlock Text="{loc:Tr Key='Karte'}" FontWeight="SemiBold"/><Path Data="M2,3 L7,8 L12,3" Width="11" Height="8" Margin="7,4,0,0" Stretch="Fill" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/></StackPanel></Button>
   <ToggleButton x:Name="GpsFilmstripToggle" Grid.Column="4" Width="34" Height="31" Margin="5,0,0,0" Padding="3" ToolTip="{loc:Tr Key='GPS Filmstrip'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed" ToolTipService.ShowOnDisabled="True">
    <Viewbox Width="21" Height="19"><Canvas Width="28" Height="24"><Rectangle Canvas.Left="1.5" Canvas.Top="3" Width="25" Height="18" RadiusX="1" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="2"/><Path Data="M8,3 V21 M20,3 V21 M3,8 H6 M3,16 H6 M22,8 H25 M22,16 H25" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.7"/><Path Data="M11,8 L17,12 L11,16 Z" Fill="{DynamicResource PcasaTextBrush}"/></Canvas></Viewbox>
+  </ToggleButton>
+  <ToggleButton x:Name="GpsGpxToggle" Grid.Column="5" Height="31" Margin="4,0,0,0"
+                Padding="7,1" ToolTip="GPX Import" Checked="GpsGpxToggle_Changed"
+                Unchecked="GpsGpxToggle_Changed">
+    <TextBlock Text="GPX Import" FontSize="12"/>
   </ToggleButton>
  </Grid>
 </Grid>
@@ -1370,6 +1375,42 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
+                        <Border x:Name="GpsGpxPanel" Grid.Row="3" Height="173" Margin="0,4,0,0"
+                                BorderBrush="#343638" BorderThickness="1"
+                                Background="#202224" Visibility="Collapsed" ClipToBounds="True">
+                            <Grid Margin="4">
+                                <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <DockPanel Grid.Row="0">
+                                    <Button x:Name="GpsGpxToGalleryButton" Content="GPX → Galerie"
+                                            IsEnabled="False" DockPanel.Dock="Right"
+                                            Margin="4,0,0,2" Padding="8,1"
+                                            Click="GpsGpxToGallery_Click"/>
+                                    <TextBlock x:Name="GpsGpxHeader" Text="GPX Import"
+                                               FontSize="12" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" Margin="5,0,0,0"/>
+                                </DockPanel>
+                                <ListBox x:Name="GpsGpxList" Grid.Row="1"
+                                         Background="Transparent" BorderThickness="0"
+                                         SelectionMode="Extended"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         SelectionChanged="GpsGpx_SelectionChanged"
+                                         SizeChanged="GpsGpx_SizeChanged">
+                                    <ListBox.ItemsPanel><ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate></ListBox.ItemsPanel>
+                                    <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="4,3"/>
+                                        <Setter Property="ToolTip" Value="{Binding Tooltip}"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    </Style></ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate><DataTemplate>
+                                        <TextBlock Text="{Binding Name}" FontSize="12"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </DataTemplate></ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
                         <Border x:Name="GpsFilmstripPanel" Grid.Row="3"
                                 Height="173" Margin="0,4,0,0"
                                 BorderBrush="#343638" BorderThickness="1"
