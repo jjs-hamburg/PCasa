@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
+
 jobs:
   window-smoke:
     runs-on: windows-latest
@@ -17,6 +20,9 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+      - name: Install verified ExifTool required by WPF gallery fixture
+        shell: pwsh
+        run: ./.github/scripts/install-exiftool.ps1 -Destination "$env:GITHUB_WORKSPACE/tools/exiftool"
       - name: Supply pinned dynamic libvips for real WPF image decoding
         shell: pwsh
         run: |
