@@ -323,8 +323,10 @@ public partial class MainWindow
                     PCasaDiagnostics.Write("Update.Download.Interrupted", ex);
                     // A failed attempt must not leave an executable or a stale
                     // partial. Reuse the vetted release URL and SHA-256.
-                    // Preserve a valid prefix for HTTP Range continuation.
-                    // Definitive cancellation is cleaned in finally.
+                    // A failed SHA-256 digest invalidates the entire prefix;
+                    // other transport failures can preserve verified byte count.
+                    if (ex is CryptographicException && File.Exists(partial))
+                        File.Delete(partial);
                     if (!await downloadWindow.AskRetryAsync(ex))
                         return null;
                 }
