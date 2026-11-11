@@ -111,7 +111,7 @@ public partial class MainWindow
     {
         if (!_viewerOpen || _viewerImageInfo is not { LocalPath: { } path } ||
             !System.IO.Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
-            !Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+            !System.IO.Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
             PcasaDialog.Show(this,
                 "Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert.",
@@ -195,7 +195,7 @@ public partial class MainWindow
         if (horizontal && ratio < 1 || !horizontal && ratio > 1) ratio = 1 / ratio;
         _cropRatio = ratio;
         _cropRatioMode = "Fixed";
-        _cropRect = FitCrop(_cropRect, _cropRatio);
+        _cropRect = FitToImageAspect(_cropRect);
         AddCropHistory(_cropRect);
     }
 
