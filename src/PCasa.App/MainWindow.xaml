@@ -1399,6 +1399,11 @@
                                                    TextTrimming="CharacterEllipsis"/>
                                     </DataTemplate></ListBox.ItemTemplate>
                                 </ListBox>
+                                <TextBlock x:Name="GpsGpxEmptyText" Grid.Row="1"
+                                  Text="Keine GPX-Dateien." FontSize="12"
+                                  Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                  VerticalAlignment="Center" HorizontalAlignment="Center"
+                                  IsHitTestVisible="False" Visibility="Collapsed"/>
                             </Grid>
                         </Border>
                         <Border x:Name="GpsFilmstripPanel" Grid.Row="3"
