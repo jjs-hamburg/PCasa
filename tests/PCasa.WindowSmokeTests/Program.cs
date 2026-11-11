@@ -32,6 +32,8 @@ internal static class Program
         if (args.Length == 2 &&
             string.Equals(args[0], "--chromium-credits", StringComparison.OrdinalIgnoreCase))
             return ChromiumCreditsFlow.Run(args[1]);
+        if (args.Contains("--crop-flow", StringComparer.OrdinalIgnoreCase))
+            return CropFlow.Run();
         if (args.Contains("--tag-flow", StringComparer.OrdinalIgnoreCase))
             return TagFlow.Run();
         if (args.Contains("--folder-removal", StringComparer.OrdinalIgnoreCase))
