@@ -75,6 +75,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     private double _lastViewportTop;
     private int _scrollDirection = 1;
     private bool _showShadows;
+    private string _shadowStrength = "Aus";
     private Brush _galleryBackground = new SolidColorBrush(Color.FromRgb(32,33,34));
 
     public BrowseGallerySurface()
@@ -252,13 +253,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
     }
 
     public void SetShadowEnabled(bool enabled)
-    {
-        if (_showShadows == enabled)
-        {
-            return;
-        }
+        => SetShadowStrength(enabled ? "Dezent" : "Aus");
 
-        _showShadows = enabled;
+    public void SetShadowStrength(string strength)
+    {
+        strength = strength is "Aus" or "Dezent" or "Normal" or "Stark"
+            ? strength : "Dezent";
+        if (_shadowStrength == strength) return;
+        _shadowStrength = strength;
+        _showShadows = strength != "Aus";
         InvalidateVisual();
     }
 
@@ -945,19 +948,26 @@ public sealed class BrowseGallerySurface : FrameworkElement
         drawingContext.DrawText(full, new Point(left + 6, top + 4));
     }
 
-    private static void DrawEdgeShadow(DrawingContext drawingContext, Rect imageRect)
+    private void DrawEdgeShadow(DrawingContext drawingContext, Rect imageRect)
     {
-        // Directional cast shadow: light comes from the upper left.
-        // A stronger 3px offset edge plus a restrained outer falloff.
-        var outer = new Rect(imageRect.X + 5, imageRect.Y + 5,
-            imageRect.Width, imageRect.Height);
-        drawingContext.DrawRectangle(
-            new SolidColorBrush(Color.FromArgb(24, 0, 0, 0)), null, outer);
-
-        var core = new Rect(imageRect.X + 3, imageRect.Y + 3,
-            imageRect.Width, imageRect.Height);
-        drawingContext.DrawRectangle(
-            new SolidColorBrush(Color.FromArgb(76, 0, 0, 0)), null, core);
+        // Same upper-left light direction for every strength. Each step
+        // increases offset and falloff without changing the thumbnail size.
+        var (depth, outerAlpha, coreAlpha) = _shadowStrength switch
+        {
+            "Normal" => (5.0, (byte)41, (byte)112),
+            "Stark" => (8.0, (byte)62, (byte)150),
+            _ => (3.0, (byte)24, (byte)76)
+        };
+        foreach (var factor in new[] { 1.8, 1.4, 1.0 })
+        {
+            var offset = depth * factor;
+            var rect = new Rect(imageRect.X + offset, imageRect.Y + offset,
+                imageRect.Width, imageRect.Height);
+            var alpha = factor > 1.4 ? (byte)(outerAlpha / 2)
+                : factor > 1 ? outerAlpha : coreAlpha;
+            drawingContext.DrawRectangle(
+                new SolidColorBrush(Color.FromArgb(alpha, 0, 0, 0)), null, rect);
+        }
     }
 
     private double ImageColumnLeft(SectionLayout section, int column)
