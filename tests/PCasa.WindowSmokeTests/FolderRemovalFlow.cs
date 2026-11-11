@@ -41,7 +41,9 @@ internal static class FolderRemovalFlow
             Console.WriteLine($"Folder removal seed: seen={seeded.ImageFilesSeen}, updated={seeded.Updated}, failed={seeded.Failed}");
             if (seeded.Failed > 0)
             {
-                var logPath = PCasaDiagnostics.LogPath;
+                var logPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "PCasa", "logs", "pcasa-errors.log");
                 if (File.Exists(logPath))
                     foreach (var line in File.ReadLines(logPath)
                         .Where(line => line.Contains("[Scan.FileSkipped]", StringComparison.Ordinal))
