@@ -756,7 +756,7 @@ public partial class MainWindow
         _gpsCurrentCoordinates = (photo.Lat, photo.Lon);
         GpsCoordinatesText.Text = UiLanguage.Format(
             "{0:F6}°, {1:F6}°", photo.Lat, photo.Lon);
-        GpsCopyButton.IsEnabled = true;
+        GpsCopyButton.IsEnabled = _selectedImageIds.Count == 1;
         UpdateGpsGoogleButton();
     }
 
@@ -928,7 +928,8 @@ public partial class MainWindow
                 ? (focused.Lat, focused.Lon)
                 : selectedGps.Length == 1
                     ? (selectedGps[0].Lat, selectedGps[0].Lon) : null;
-            GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null;
+            GpsCopyButton.IsEnabled = _gpsCurrentCoordinates is not null &&
+                _selectedImageIds.Count == 1;
             GpsRemoveButton.IsEnabled = selectedIds.Length > 0;
             GpsReplaceButton.IsEnabled = selectedIds.Length > 0 &&
                 _gpsDraft.HasValue;
