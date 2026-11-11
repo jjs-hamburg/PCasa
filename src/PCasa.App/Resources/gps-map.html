@@ -202,6 +202,34 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      post({type:'error',message:'GPS map bounds: '+String(err)});
    }
  };
+ // Temporary GPX overlay, independent of the photo position projection.
+ let gpxTrack=[];
+ function drawGpx() {
+   if (!map.isStyleLoaded()) return;
+   if (map.getLayer('pcasa-gpx-line')) map.removeLayer('pcasa-gpx-line');
+   if (map.getSource('pcasa-gpx-track')) map.removeSource('pcasa-gpx-track');
+   if (!gpxTrack.length) return;
+   map.addSource('pcasa-gpx-track', {
+     type:'geojson',data:{type:'FeatureCollection',
+       features:gpxTrack.map(segment=>({
+         type:'Feature',properties:{},
+         geometry:{type:'LineString',coordinates:segment}
+       }))}
+   });
+   map.addLayer({id:'pcasa-gpx-line',type:'line',source:'pcasa-gpx-track',
+     paint:{'line-color':'#d55f18','line-width':4,'line-opacity':.92}});
+ }
+ window.pcasaShowGpx=(segments,fit)=>{
+   gpxTrack=Array.isArray(segments)?segments:[];
+   drawGpx();
+   if(fit&&gpxTrack.length){
+     const all=gpxTrack.flat().filter(p=>Array.isArray(p)&&p.length===2);
+     if(!all.length)return;
+     let west=180,east=-180,south=90,north=-90;
+     for(const p of all){west=Math.min(west,p[0]);east=Math.max(east,p[0]);south=Math.min(south,p[1]);north=Math.max(north,p[1]);}
+     map.fitBounds([[west,south],[east,north]],{padding:40,maxZoom:15,duration:0});
+   }
+ };
  window.pcasaApplyProvider = (provider) => {
    if (!provider || !provider.url) return;
    try {
@@ -214,6 +242,7 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  };
  map.on('style.load',()=>{
    installPhotos();
+   drawGpx();
    if(!ready){ready=true;post({type:'ready'});}
    // Style switching preserves the current camera instead of zooming again.
  });
