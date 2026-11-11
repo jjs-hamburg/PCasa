@@ -1794,15 +1794,16 @@ internal static class TagFlow
                         caption.Visibility != Visibility.Visible ||
                         string.IsNullOrWhiteSpace(caption.Text))
                         throw new Exception("GPS caption disappeared: " + captionName);
-                // Source and presentation buttons now wrap when sidebar width changes.
-                // Expansion is allowed to reposition them; do not assert stale
-                // pre-redesign absolute coordinates.
-                if (gpsControls.ActualWidth < 200 ||
-                    gpsHeader.ActualWidth < 200 ||
-                    gpsControls.HorizontalAlignment != HorizontalAlignment.Stretch ||
-                    gpsHeader.HorizontalAlignment != HorizontalAlignment.Stretch ||
-                    !gpsToolsPanel.Children.Contains(gpsAction))
-                    throw new Exception("GPS controls changed position between normal and expanded modes.");
+                // Responsive groups deliberately change width, alignment and
+                // coordinates between normal, expanded and fullscreen views.
+                // Verify structural ownership and functional visibility instead.
+                if (gpsControls.RowDefinitions.Count != 8 ||
+                    !gpsToolsPanel.Children.Contains(gpsAction) ||
+                    !gpsToolsPanel.Children.Contains(replaceGpsButton) ||
+                    !gpsToolsPanel.Children.Contains(removeGpsButton) ||
+                    gpsAction.Visibility != Visibility.Visible ||
+                    gpsProvider.Visibility != Visibility.Visible)
+                    throw new Exception("GPS grouped controls disappeared in expanded mode.");
             }
             foreach (var captionName in new[] {
                 "GpsPickPositionToggleCaption", "GpsReplaceButtonCaption", "GpsRemoveButtonCaption",
