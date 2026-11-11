@@ -48,7 +48,7 @@ internal sealed class UpdateDownloadWindow : Window
         content.Children.Add(_bar);
         _retry = new Button
         {
-            Content = UiLanguage.T("Wiederholen"), MinWidth = 94, Height = 30,
+            Content = UiLanguage.T("Download wiederholen"), MinWidth = 94, Height = 30,
             Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 8, 0)
         };
         _retry.Click += (_, _) => _retryDecision?.TrySetResult(true);
