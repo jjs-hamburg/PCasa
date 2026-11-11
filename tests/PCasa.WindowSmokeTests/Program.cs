@@ -253,20 +253,23 @@ internal static class Program
             // selectable by filename and native-sized across DPI settings.
             // In the installer, default textures belong to scope-specific DATA,
             // not the build/output directory. Seed the isolated WPF test profile.
-            var defaultTextures = System.IO.Path.GetFullPath(
-                System.IO.Path.Combine(AppContext.BaseDirectory,
-                    "..","..","..","..","..","default-textures"));
-            if (System.IO.Directory.Exists(defaultTextures))
+            var testRoot = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+            while (testRoot is not null &&
+                   !System.IO.Directory.Exists(System.IO.Path.Combine(
+                       testRoot.FullName, "default-textures")))
+                testRoot = testRoot.Parent;
+            if (testRoot is null)
+                throw new Exception("Test fixture default-textures directory missing.");
+            var defaultTextures = System.IO.Path.Combine(
+                testRoot.FullName,"default-textures");
+            System.IO.Directory.CreateDirectory(
+                PCasa.App.Services.GalleryTextureLibrary.DirectoryPath);
+            foreach (var original in System.IO.Directory.GetFiles(defaultTextures,"*.jpg"))
             {
-                System.IO.Directory.CreateDirectory(
-                    PCasa.App.Services.GalleryTextureLibrary.DirectoryPath);
-                foreach (var original in System.IO.Directory.GetFiles(defaultTextures,"*.jpg"))
-                {
-                    var dest = System.IO.Path.Combine(
-                        PCasa.App.Services.GalleryTextureLibrary.DirectoryPath,
-                        System.IO.Path.GetFileName(original));
-                    System.IO.File.Copy(original,dest,overwrite:true);
-                }
+                var dest = System.IO.Path.Combine(
+                    PCasa.App.Services.GalleryTextureLibrary.DirectoryPath,
+                    System.IO.Path.GetFileName(original));
+                System.IO.File.Copy(original,dest,overwrite:true);
             }
             var textures = PCasa.App.Services.GalleryTextureLibrary.GetFiles();
             if (textures.Count != 12 ||
