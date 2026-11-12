@@ -2260,6 +2260,10 @@ internal static class Program
                         new[] { new GpsPhotoCluster(1000, 28.415, -16.568,
                             new long[] { 1000, 1001, 1002 }) });
                     clusterClick.Invoke(window, new object[] { 1000L, 77L });
+                    var immediateClusterCount = strip.Items.Count;
+                    var immediatePointGroup = viewerType.GetField("_gpsFilmstripPointIds",
+                        reflectFlags)!.GetValue(window) as HashSet<long>;
+                    var immediatePointGroupCount = immediatePointGroup?.Count ?? -1;
                     Flush(window);
                     if (strip.Items.Count != 3 ||
                         !strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>()
@@ -2267,6 +2271,9 @@ internal static class Program
                             .SequenceEqual(new long[] { 1000, 1001, 1002 }))
                         throw new Exception("Cluster click did not show its three photos: " +
                             $"actual={string.Join(",", strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().Select(x => x.Id))}; " +
+                            $"immediate={immediateClusterCount}; pointGroupBeforeFlush={immediatePointGroupCount}; " +
+                            $"pointGroupAfterFlush={(viewerType.GetField("_gpsFilmstripPointIds", reflectFlags)!.GetValue(window) as HashSet<long>)?.Count ?? -1}; " +
+                            $"revision={versionField.GetValue(window)}; clusterCount={((IReadOnlyList<GpsPhotoCluster>)clusterField.GetValue(window)!).Count}; " +
                             $"toggle={stripToggle.IsChecked}; visible={strip.IsVisible}; " +
                             $"frozen={viewerType.GetField("_gpsFilmstripFrozen", reflectFlags)!.GetValue(window)}; " +
                             $"mode={sidebarModeField.GetValue(window)}; " +
