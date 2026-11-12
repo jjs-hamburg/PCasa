@@ -708,6 +708,12 @@ public sealed class BrowseGallerySurface : FrameworkElement
             InvalidateVisual();
         }
         var now = e.GetPosition(this);
+        var restoreIndex = _showStatusIcons ? HitTestImageIndex(now) : null;
+        ToolTip = restoreIndex is int badgeIndex &&
+                  badgeIndex >= 0 && badgeIndex < _index.Count &&
+                  _index[badgeIndex].HasRestore &&
+                  IsRestoreGlyphHit(now, badgeIndex)
+            ? UiLanguage.T("Wiederherstellbar") : null;
         if (e.RightButton == MouseButtonState.Pressed &&
             _rightDragStartingPoint is Point rightOrigin &&
             _rightDragStartingImageId is long rightImage &&
@@ -739,6 +745,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     protected override void OnMouseLeave(MouseEventArgs e)
     {
         base.OnMouseLeave(e);
+        ToolTip = null;
         if (_hoveredImageIndex is not null)
         {
             _hoveredImageIndex = null;
@@ -1012,6 +1019,28 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var surplus = extra / (section.ColumnCount + 1);
         return HorizontalMargin + (column + 1) * surplus
             + column * (_thumbnailWidth + _cellGap);
+    }
+
+    private bool IsRestoreGlyphHit(Point point, int imageIndex)
+    {
+        var section = FindSectionAt(point.Y);
+        if (section is null || imageIndex < section.StartImageIndex ||
+            imageIndex >= section.StartImageIndex + section.ImageCount)
+            return false;
+        var relative = imageIndex - section.StartImageIndex;
+        var row = relative / section.ColumnCount;
+        var column = relative % section.ColumnCount;
+        var box = new Rect(ImageColumnLeft(section, column),
+            section.ImagesTop + section.RowOffsets[row], _thumbnailWidth,
+            section.RowImageHeights[row]);
+        var entry = _index[imageIndex];
+        var bounds = FitInto(box, entry.PixelWidth, entry.PixelHeight);
+        if (_pageCache is not null &&
+            _pageCache.TryGet(imageIndex, out var bitmap) && bitmap is not null)
+            bounds = FitInto(box, bitmap.PixelWidth, bitmap.PixelHeight);
+        // The recycling glyph occupies the rightmost 12x12 status slot.
+        return new Rect(bounds.Right - 15, bounds.Bottom - 16, 16, 16)
+            .Contains(point);
     }
 
     private int? HitTestImageIndex(Point point, bool includeCaption = false)
