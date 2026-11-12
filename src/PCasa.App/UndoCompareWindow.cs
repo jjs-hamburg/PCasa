@@ -12,8 +12,8 @@ namespace PCasa.App;
 internal sealed class UndoCompareWindow : Window
 {
     private readonly IReadOnlyList<UndoVersion> _versions;
-    private readonly Image _candidate = new() { Stretch = Stretch.None };
-    private readonly Image _current = new() { Stretch = Stretch.None };
+    private readonly Image _candidate = new() { Stretch = Stretch.Uniform };
+    private readonly Image _current = new() { Stretch = Stretch.Uniform };
     private readonly ScrollViewer _leftScroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly ScrollViewer _rightScroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -73,6 +73,8 @@ internal sealed class UndoCompareWindow : Window
         panes.Children.Add(_leftScroll);
         Grid.SetColumn(_rightScroll,2);
         panes.Children.Add(_rightScroll);
+        _leftScroll.SizeChanged += (_, _) => FitImagesToPanes();
+        _rightScroll.SizeChanged += (_, _) => FitImagesToPanes();
         _leftScroll.ScrollChanged += (_, e) => Synchronize(_leftScroll,_rightScroll,e);
         _rightScroll.ScrollChanged += (_, e) => Synchronize(_rightScroll,_leftScroll,e);
 
@@ -126,6 +128,16 @@ internal sealed class UndoCompareWindow : Window
         };
         _current.Source = Load(originalPath);
         ShowVersion();
+    }
+
+    private void FitImagesToPanes()
+    {
+        // Limit the natural WPF image size to the visible viewport before
+        // applying the user's synchronized zoom transformation.
+        _candidate.MaxWidth = Math.Max(1, _leftScroll.ActualWidth - 18);
+        _candidate.MaxHeight = Math.Max(1, _leftScroll.ActualHeight - 18);
+        _current.MaxWidth = Math.Max(1, _rightScroll.ActualWidth - 18);
+        _current.MaxHeight = Math.Max(1, _rightScroll.ActualHeight - 18);
     }
 
     private static BitmapSource Load(string file)
