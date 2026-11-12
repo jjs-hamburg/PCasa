@@ -134,6 +134,7 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
                 if (succeeded)
                 {
+                    _ = RefreshRestoreBadgesAsync();
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.MonitoredFolderId,request.Path,
                         BackgroundFolderChangeKind.ScanFile,
