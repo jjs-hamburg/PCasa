@@ -129,6 +129,33 @@ public static class GpxTrackReader
         return new DateTimeOffset(adjusted, zone.GetUtcOffset(adjusted)).ToUniversalTime();
     }
 
+    // Shared, conservative segment/time/speed rule for map geometry
+    // and timestamp-based photo matching.
+    public static string? LinkFailure(
+        GpxTrackPoint first, GpxTrackPoint next, int maximumGapSeconds)
+    {
+        if (first.SegmentId != next.SegmentId)
+            return "Aufzeichnungslücke";
+        var gap = (next.UtcTime - first.UtcTime).TotalSeconds;
+        if (gap <= 0 || gap > maximumGapSeconds)
+            return "Zeitabstand zu groß";
+
+        // Discard apparent jumps even when timestamps happen to be close.
+        // 100 m/s is a deliberately generous upper bound (360 km/h).
+        const double maxSpeedMetersPerSecond = 100;
+        const double rad = Math.PI / 180;
+        var deltaLat = (next.Latitude - first.Latitude) * rad;
+        var deltaLon = (next.Longitude - first.Longitude) * rad;
+        var sine = Math.Pow(Math.Sin(deltaLat / 2), 2) +
+            Math.Cos(first.Latitude * rad) * Math.Cos(next.Latitude * rad) *
+            Math.Pow(Math.Sin(deltaLon / 2), 2);
+        var distanceMeters = 12742000 * Math.Asin(Math.Min(1, Math.Sqrt(sine)));
+        if (distanceMeters / gap > maxSpeedMetersPerSecond)
+            return "Unplausibler Positionssprung";
+
+        return null;
+    }
+
     public sealed record MatchResult(
         (double Latitude, double Longitude)? Position, string? FailureReason);
 
@@ -155,25 +182,9 @@ public static class GpxTrackReader
             return new(null, "Außerhalb des GPX-Zeitraums");
         var first = points[lo - 1];
         var next = points[lo];
-        if (first.SegmentId != next.SegmentId)
-            return new(null, "Aufzeichnungslücke");
+        var failure = LinkFailure(first, next, maximumGapSeconds);
+        if (failure is not null) return new(null, failure);
         var gap = (next.UtcTime - first.UtcTime).TotalSeconds;
-        if (gap <= 0 || gap > maximumGapSeconds)
-            return new(null, "Zeitabstand zu groß");
-
-        // Discard apparent jumps even when timestamps happen to be close.
-        // 100 m/s is a deliberately generous upper bound (360 km/h).
-        const double maxSpeedMetersPerSecond = 100;
-        const double rad = Math.PI / 180;
-        var deltaLat = (next.Latitude - first.Latitude) * rad;
-        var deltaLon = (next.Longitude - first.Longitude) * rad;
-        var sine = Math.Pow(Math.Sin(deltaLat / 2), 2) +
-            Math.Cos(first.Latitude * rad) * Math.Cos(next.Latitude * rad) *
-            Math.Pow(Math.Sin(deltaLon / 2), 2);
-        var distanceMeters = 12742000 * Math.Asin(Math.Min(1, Math.Sqrt(sine)));
-        if (distanceMeters / gap > maxSpeedMetersPerSecond)
-            return new(null, "Unplausibler Positionssprung");
-
         var t = (cameraUtc - first.UtcTime).TotalSeconds / gap;
         var dLon = (next.Longitude - first.Longitude + 540) % 360 - 180;
         var lon = first.Longitude + t * dLon;
