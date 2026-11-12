@@ -36,4 +36,47 @@ internal static class GpxRegressionTests
             if (File.Exists(filename)) File.Delete(filename);
         }
     }
+
+    internal static void GapSpeedAndClockOffset()
+    {
+        var start = DateTimeOffset.Parse("2026-11-12T10:00:00Z",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var regular = new[]
+        {
+            new GpxTrackPoint(start, 53.5, 10),
+            new GpxTrackPoint(start.AddSeconds(30), 53.5003, 10.0003)
+        };
+        var midpoint = GpxTrackReader.MatchDetailed(regular,
+            start.AddSeconds(15), 120);
+        if (midpoint.Position is null ||
+            Math.Abs(midpoint.Position.Value.Latitude - 53.50015) > 0.0000001)
+            throw new Exception("Timestamp interpolation failed.");
+
+        var sparse = new[]
+        {
+            regular[0],
+            regular[1] with { UtcTime = start.AddMinutes(5) }
+        };
+        if (GpxTrackReader.MatchDetailed(sparse, start.AddMinutes(2), 120)
+                .FailureReason != "Zeitabstand zu groß")
+            throw new Exception("Large GPX recording gap was incorrectly interpolated.");
+
+        var teleported = new[]
+        {
+            regular[0],
+            new GpxTrackPoint(start.AddSeconds(30), 55, 13)
+        };
+        if (GpxTrackReader.MatchDetailed(teleported, start.AddSeconds(15), 120)
+                .FailureReason != "Unplausibler Positionssprung")
+            throw new Exception("Implausible GPX speed was not rejected.");
+
+        var options = new GpxOptions { CameraTimeZoneId = TimeZoneInfo.Utc.Id };
+        var camera = new DateTime(2026, 11, 12, 10, 1, 0);
+        var corrected = GpxTrackReader.CameraToUtc(camera, options, 60);
+        if (corrected != start)
+            throw new Exception("Positive camera clock offset was not subtracted.");
+        if (GpxTrackReader.CameraToUtc(camera, options, -60) !=
+            start.AddMinutes(2))
+            throw new Exception("Negative camera clock offset was not applied.");
+    }
 }
