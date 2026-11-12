@@ -1302,6 +1302,18 @@ internal static class Program
                         $"Edge={surface.GetLiveFolderEdge(scroller.VerticalOffset, scroller.ViewportHeight, 200)}, " +
                         $"Deferred={scanDirtyField.GetValue(window)}");
 
+                // The previous check deliberately visits a LIVE folder edge.
+                // There, pending scanner work may legally refresh from the
+                // runner's real (empty) catalog, replacing our synthetic
+                // gallery. Start the separate interior-policy assertion with
+                // its synthetic fixture again; never interpret an empty
+                // real catalog as a failure of the interior boundary rule.
+                pages.SetIndex(synthetic);
+                surface.SetData(synthetic, groups, pages);
+                Flush(window);
+                if (surface.GetFolderOffset(100) is null ||
+                    surface.GetFolderOffset(200) is null)
+                    throw new Exception("Synthetic gallery fixture not restored before interior test.");
                 // No first/last row is visible deep inside the large first
                 // folder. Null here means INTERIOR, not an empty gallery.
                 scroller.ScrollToVerticalOffset(2200);

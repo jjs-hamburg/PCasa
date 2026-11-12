@@ -519,6 +519,24 @@ internal static class FolderAddFlow
                     root.ServerSyncEnabled)).ToArray();
             new FolderManagerSelectionService(db).Apply(
                 new FolderManagerSelection(choices, BackgroundScanEnabled: false));
+            // This synthetic setup changes SQLite outside the real WPF
+            // Ordnermanager. Publish the resulting committed selection to
+            // the same UI snapshot that the manager's OK handler updates.
+            // Otherwise the following rejected Scan command incorrectly
+            // uses the OLD cached inclusion state and starts a delayed
+            // validation that can fail while Explorer Add is running.
+            var committedProjection = roots.GetAll().Select(root =>
+                (Folder: root, ExcludedPaths:
+                    (IReadOnlyList<string>)roots.GetExcludedPaths(root.Id))).ToArray();
+            var projectionField = typeof(PCasa.App.MainWindow).GetField(
+                "_dropTargetProjection",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("Folder projection missing.");
+            projectionField.SetValue(window, committedProjection);
+            if (!committedProjection.Any(root =>
+                    SamePath(root.Folder.LocalPath, initialRoot) &&
+                    root.ExcludedPaths.Any(path => SamePath(path, inactiveExplorer))))
+                throw new Exception("Excluded Explorer child was not published in WPF setup.");
 
             new BackgroundScanSettings { Enabled = false }.Save();
             var selectedRoot = Walk(tree).Single(item =>
