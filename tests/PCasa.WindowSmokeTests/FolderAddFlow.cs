@@ -779,7 +779,7 @@ internal static class FolderAddFlow
             if (browserButton.Tag is not null ||
                 !ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
-                !treeBefore.IsExpanded ||
+                treeBefore.IsExpanded ||
                 !Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) ||

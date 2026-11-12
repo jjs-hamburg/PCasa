@@ -32,6 +32,8 @@ public partial class MainWindow
     private CancellationTokenSource? _viewerDecodeCancellation;
     private int _viewerImageRequest;
     private bool _viewerHasOriginal;
+    private long? _viewerPendingOriginalImageId;
+    private int _viewerPendingOriginalPixels;
     private Window? _viewerFullscreenWindow;
     private Image? _viewerFullscreenImage;
     private ScrollViewer? _viewerFullscreenScroller;
@@ -190,6 +192,11 @@ public partial class MainWindow
         }
         _viewerImageInfo = null;
         _viewerCachedCameraDetails = null;
+        // Reserve this image identity before slow catalog metadata can
+        // complete, so viewport SizeChanged cannot cancel and restart the
+        // same decode repeatedly while an NAS read is already pending.
+        _viewerPendingOriginalImageId = entry.ImageId;
+        _viewerPendingOriginalPixels = GetViewerRequiredPixelSize();
         UpdateViewerSequenceTitle();
         if (_viewerNavigatorImageId != entry.ImageId)
         {
@@ -243,10 +250,13 @@ public partial class MainWindow
 
         ApplyViewerImageLayout();
         var size = GetViewerRequiredPixelSize();
+        _viewerPendingOriginalPixels = size;
 
         if (TryGetViewerOriginal(entry.ImageId, size, out var decoded))
         {
             _viewerHasOriginal = true;
+            _viewerPendingOriginalImageId = null;
+            _viewerPendingOriginalPixels = 0;
             SetViewerBitmap(decoded);
             SetViewerQualityMessage(null);
             StartViewerNeighborPrefetch(size);
@@ -255,6 +265,8 @@ public partial class MainWindow
 
         if (_viewerImageInfo is { } selected && IsPathKnownOffline(selected.LocalPath))
         {
+            _viewerPendingOriginalImageId = null;
+            _viewerPendingOriginalPixels = 0;
             // The local pack thumbnail is still useful even when its source NAS
             // is offline. Never attempt repeated synchronous OS network probes.
             SetViewerQualityMessage("Original momentan nicht erreichbar");
@@ -501,6 +513,15 @@ public partial class MainWindow
             {
                 // Never silently leave a soft 192/384px cache image on screen.
                 SetViewerQualityMessage("Original nicht verfügbar: " + ex.Message);
+            }
+        }
+        finally
+        {
+            if (IsCurrentViewerRequest(version, token) &&
+                _viewerPendingOriginalImageId == imageId)
+            {
+                _viewerPendingOriginalImageId = null;
+                _viewerPendingOriginalPixels = 0;
             }
         }
     }
@@ -920,6 +941,11 @@ public partial class MainWindow
                 return;
             }
 
+            // The same or a larger decode is already in flight; do not
+            // restart it on every DPI/size notification, locally or via NAS.
+            if (_viewerPendingOriginalImageId == id &&
+                _viewerPendingOriginalPixels >= required)
+                return;
             // Leave the currently displayed image on screen until the requested
             // higher-quality decode is ready.
             ShowViewerImage(keepCurrentAsPlaceholder: true);
