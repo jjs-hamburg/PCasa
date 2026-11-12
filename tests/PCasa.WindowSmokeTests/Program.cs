@@ -1862,17 +1862,26 @@ internal static class Program
                 progressWindow.Finish();
             }
 
-            // The folder manager must never enumerate a potentially offline
-            // NAS root via its own Task.Run. Expanding a real TreeViewItem
-            // must submit its source probe through the shared scheduler.
-            var managerScheduler = new PCasaScheduler();
+            // The manager's read-only tree is now intentionally INDEPENDENT
+            // of the durable scheduler. Exercise actual WPF folder expansion
+            // using a local directory that has never been catalogued.
+            var fixtureDirectory = Path.Combine(Path.GetTempPath(),
+                "PCasa-ManagerForeground-" + Guid.NewGuid().ToString("N"));
+            var fixtureChild = Path.Combine(fixtureDirectory, "NeverIndexed");
+            Directory.CreateDirectory(fixtureChild);
             PCasa.App.FolderManagerWindow? manager = null;
             try
             {
+                var fixture = new MonitoredFolder
+                {
+                    Id = -100,
+                    LocalPath = fixtureDirectory,
+                    CanonicalPath = fixtureDirectory
+                };
                 manager = new PCasa.App.FolderManagerWindow(
-                    Array.Empty<(PCasa.App.Models.MonitoredFolder Folder,
-                        IReadOnlyList<string> ExcludedPaths)>(),
-                    managerScheduler, serverDatabaseConfigured: false)
+                    new[] { (Folder: fixture,
+                        ExcludedPaths: (IReadOnlyList<string>)Array.Empty<string>()) },
+                    new ForegroundReadService(), serverDatabaseConfigured: false)
                 {
                     Owner = window
                 };
@@ -1880,28 +1889,32 @@ internal static class Program
                 Flush(manager);
                 var managedTree = (TreeView?)manager.FindName("FolderManagerTree")
                     ?? throw new Exception("Folder manager tree missing.");
-                var firstManagedNode = managedTree.Items.OfType<TreeViewItem>().FirstOrDefault()
-                    ?? throw new Exception("Folder manager has no expandable system folder.");
-                firstManagedNode.IsExpanded = true;
-                Flush(manager);
-                if (!managerScheduler.Snapshot().Any(job =>
-                        job.Key.StartsWith("folder-manager:expand:", StringComparison.Ordinal)
-                        && job.Priority == SchedulerPriority.Interactive))
-                    throw new Exception("Manager expansion bypassed the shared scheduler.");
-                Console.WriteLine("PASS: Folder manager expansion uses scheduled source probe.");
+                static string? ManagerPath(TreeViewItem item)
+                    => item.Tag?.GetType().GetProperty("LocalPath")
+                        ?.GetValue(item.Tag) as string;
+                var fixtureNode = managedTree.Items.OfType<TreeViewItem>()
+                    .Single(item => string.Equals(ManagerPath(item),
+                        fixtureDirectory, StringComparison.OrdinalIgnoreCase));
+                fixtureNode.IsExpanded = true;
+                var deadline = DateTime.UtcNow.AddSeconds(10);
+                while (!fixtureNode.Items.OfType<TreeViewItem>().Any(item =>
+                           string.Equals(ManagerPath(item),
+                               fixtureChild, StringComparison.OrdinalIgnoreCase)) &&
+                       DateTime.UtcNow < deadline)
+                    Flush(manager);
+                if (!fixtureNode.Items.OfType<TreeViewItem>().Any(item =>
+                        string.Equals(ManagerPath(item),
+                            fixtureChild, StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception(
+                        "Manager foreground enumeration did not reveal non-indexed folder.");
+                Console.WriteLine(
+                    "PASS: Folder manager expands uncatalogued physical folders independently of scheduler.");
             }
             finally
             {
                 manager?.Close();
-                // Never block the STA waiting for an async DisposeAsync which
-                // must resume on this dispatcher: pump it like other WPF tests.
-                var dispose = managerScheduler.DisposeAsync().AsTask();
-                var deadline = DateTime.UtcNow.AddSeconds(20);
-                while (!dispose.IsCompleted && DateTime.UtcNow < deadline)
-                    Flush(window);
-                if (!dispose.IsCompleted)
-                    throw new TimeoutException("Folder manager scheduler disposal stalled.");
-                dispose.GetAwaiter().GetResult();
+                try { Directory.Delete(fixtureDirectory, recursive: true); }
+                catch (IOException) { }
             }
 
             // A fullscreen round trip is a change of viewport, not an
