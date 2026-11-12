@@ -71,6 +71,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Explorer.AddToPCasa", ex);
+            System.Diagnostics.Trace.WriteLine("Explorer.AddToPCasa failed: " + ex);
             PcasaDialog.Show(this, ex.Message, "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
