@@ -164,6 +164,9 @@ public partial class MainWindow
         GpsFullscreenButton.ToolTip = UiLanguage.T(fullscreen
             ? "GPS-Vollbild verlassen" : "GPS-Vollbild");
         FolderSidebarToggleButton.IsEnabled = !expanded && !fullscreen;
+        FolderSidebarToggleButton.ToolTip = UiLanguage.T(_viewerOpen
+            ? "Bearbeitungsleiste ein-/ausblenden"
+            : "Ordnerleiste ein-/ausblenden");
         SidePanelHeading.Text = UiLanguage.T(_sidebarMode switch
         {
             "GPS" => "GPS",

@@ -19,6 +19,7 @@ public partial class MainWindow
     private TreeViewItem? _explorerOriginalSelection;
     private string? _explorerOriginalSelectionPath;
     private double? _explorerOriginalScroll;
+    private bool _explorerOriginalExpanded;
     private readonly HashSet<string> _explorerInsertedPaths =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _explorerLoadedPaths =
@@ -56,6 +57,7 @@ public partial class MainWindow
         _explorerOriginalSelection = (TreeViewItem)FoldersTree.SelectedItem;
         _explorerOriginalSelectionPath = selected.FullPath;
         _explorerOriginalScroll = FindTreeScrollViewer(FoldersTree)?.VerticalOffset;
+        _explorerOriginalExpanded = _explorerOriginalSelection.IsExpanded;
         _explorerSession = new CancellationTokenSource();
         ++_explorerGeneration;
         UpdateAllFoldersButtonState();
@@ -63,6 +65,13 @@ public partial class MainWindow
         // No Items.Clear(), no other TreeView, no selecting a new root.
         // Existing opened nodes and their WPF object identities survive.
         AddExplorerExpanders(_explorerOriginalSelection);
+        // The selected folder can be collapsed; it must still display its
+        // previously uncatalogued physical children when Explorer is enabled.
+        _bulkFolderExpansion = true;
+        try { _explorerOriginalSelection.IsExpanded = true; }
+        finally { _bulkFolderExpansion = false; }
+        StatusText.Text = "Explorer: Unterordner werden geladen …";
+        _ = LoadExplorerChildrenAsync(_explorerOriginalSelection);
         ProbeOpenedExplorerFolders();
         RestoreExplorerScroll();
     }
@@ -93,7 +102,10 @@ public partial class MainWindow
             // branches stay exactly as the user left them.
             if (_explorerOriginalSelectionPath is string scopePath &&
                 FindFolderTreeItemByPath(FoldersTree, scopePath) is { } scopeRoot)
+            {
                 RemoveTemporaryExplorerNodes(scopeRoot);
+                scopeRoot.IsExpanded = _explorerOriginalExpanded;
+            }
             _explorerInsertedPaths.Clear();
             _explorerLoadedPaths.Clear();
             _explorerPending.Clear();
@@ -110,6 +122,7 @@ public partial class MainWindow
         _explorerOriginalSelection = null;
         _explorerOriginalSelectionPath = null;
         _explorerOriginalScroll = null;
+        _explorerOriginalExpanded = false;
     }
 
     private static ScrollViewer? FindTreeScrollViewer(DependencyObject parent)
@@ -266,9 +279,11 @@ public partial class MainWindow
                 .Where(node => node.Tag is FolderTreeTag)
                 .Select(node => ((FolderTreeTag)node.Tag).FullPath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var inserted = 0;
             foreach (var child in children)
             {
                 if (!existing.Add(child)) continue;
+                inserted++;
                 var indexed = _photoFolders.FirstOrDefault(f =>
                     string.Equals(FolderExclusionRules.Normalize(f.LocalPath),
                         child, StringComparison.OrdinalIgnoreCase));
@@ -306,12 +321,18 @@ public partial class MainWindow
                 .Where(node => node.Tag is null).ToArray())
                 item.Items.Remove(placeholder);
             _explorerLoadedPaths.Add(path);
+            if (string.Equals(path, _allFolderProjectionRootPath,
+                    StringComparison.OrdinalIgnoreCase))
+                StatusText.Text = $"Explorer: {children.Length:N0} Unterordner gefunden, " +
+                    $"{inserted:N0} zusätzlich eingeblendet.";
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or
             UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
             PCasaDiagnostics.Write("Explorer.EnumerateDirectory", ex);
+            if (generation == _explorerGeneration)
+                StatusText.Text = "Explorer: Ordner konnten nicht gelesen werden: " + ex.Message;
             // Keep the placeholder to allow another attempt after the
             // network share becomes reachable.
         }
@@ -386,6 +407,10 @@ public partial class MainWindow
                 _allFolderProjectionRootPath) is { } scopeRoot)
         {
             AddExplorerExpanders(scopeRoot);
+            _bulkFolderExpansion = true;
+            try { scopeRoot.IsExpanded = true; }
+            finally { _bulkFolderExpansion = false; }
+            _ = LoadExplorerChildrenAsync(scopeRoot);
             _ = Dispatcher.BeginInvoke(new Action(ProbeOpenedExplorerFolders),
                 DispatcherPriority.Background);
         }

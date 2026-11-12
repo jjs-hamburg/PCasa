@@ -548,7 +548,8 @@ internal static class FolderAddFlow
             var unrelatedChildrenBefore = unrelatedRoot.Items
                 .OfType<TreeViewItem>().ToArray();
             selectedRoot.IsSelected = true;
-            selectedRoot.IsExpanded = true;
+            // A collapsed selected folder must also enumerate physical children.
+            selectedRoot.IsExpanded = false;
             var treeBefore = selectedRoot;
             var expandedBefore = treeBefore.IsExpanded;
             var originalRoots = presentRoots.Select(r => r.LocalPath).ToArray();
@@ -589,7 +590,7 @@ internal static class FolderAddFlow
             if (window.FindName("ExplorerTree") is not null ||
                 !ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
-                !expandedBefore || !treeBefore.IsExpanded ||
+                expandedBefore || !treeBefore.IsExpanded ||
                 browserButton.Tag as string != "ActiveGold")
                 throw new Exception(
                     "Explorer Ansicht replaced or collapsed the original folder tree.");
@@ -778,7 +779,7 @@ internal static class FolderAddFlow
             if (browserButton.Tag is not null ||
                 !ReferenceEquals(treeBefore,
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
-                !treeBefore.IsExpanded ||
+                treeBefore.IsExpanded ||
                 !Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) ||
                 Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) ||

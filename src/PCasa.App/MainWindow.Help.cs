@@ -244,7 +244,9 @@ public partial class MainWindow
                     using var installerClient = new HttpClient
                     {
                         Timeout = TimeSpan.FromMinutes(30),
-                        DefaultRequestVersion = HttpVersion.Version11,
+                        // Prefer modern CDN transport, but retain HTTP/1.1
+                        // fallback for proxies and satellite/VPN connections.
+                        DefaultRequestVersion = HttpVersion.Version20,
                         DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
                     };
                     installerClient.DefaultRequestHeaders.UserAgent.ParseAdd("PCasa-Windows/0.1");

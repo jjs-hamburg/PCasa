@@ -68,7 +68,18 @@ public static class VideoThumbnailSource
             var iid = FactoryId;
             SHCreateItemFromParsingName(Path.GetFullPath(path), IntPtr.Zero,
                 ref iid, out factory);
-            factory.GetImage(new NativeSize(Side, Side), 0x08, out hbitmap);
+            try
+            {
+                // Prefer an actual video frame, never just a generic icon.
+                factory.GetImage(new NativeSize(Side, Side), 0x08, out hbitmap);
+            }
+            catch (COMException)
+            {
+                // Some Windows codecs cannot provide a strict thumbnail,
+                // but the Shell still provides a recognizable video icon.
+                // Only fall back to the PCasa placeholder if both fail.
+                factory.GetImage(new NativeSize(Side, Side), 0x00, out hbitmap);
+            }
             if (hbitmap == IntPtr.Zero)
                 throw new NotSupportedException("Kein Video-Thumbnail verfügbar.");
             var source = Imaging.CreateBitmapSourceFromHBitmap(hbitmap, IntPtr.Zero,

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -32,6 +33,8 @@ public partial class MainWindow
     private CancellationTokenSource? _viewerDecodeCancellation;
     private int _viewerImageRequest;
     private bool _viewerHasOriginal;
+    private long? _viewerPendingOriginalImageId;
+    private int _viewerPendingOriginalPixels;
     private Window? _viewerFullscreenWindow;
     private Image? _viewerFullscreenImage;
     private ScrollViewer? _viewerFullscreenScroller;
@@ -190,12 +193,33 @@ public partial class MainWindow
         }
         _viewerImageInfo = null;
         _viewerCachedCameraDetails = null;
+        // Reserve this image identity before slow catalog metadata can
+        // complete, so viewport SizeChanged cannot cancel and restart the
+        // same decode repeatedly while an NAS read is already pending.
+        _viewerPendingOriginalImageId = entry.ImageId;
+        _viewerPendingOriginalPixels = GetViewerRequiredPixelSize();
         UpdateViewerSequenceTitle();
         if (_viewerNavigatorImageId != entry.ImageId)
         {
             _viewerNavigatorImageId = entry.ImageId;
             PhotoViewerNavigator.ShowForNewImage();
             _viewerFullscreenNavigator?.ShowForNewImage();
+        }
+
+        // Publish local packed pixels before awaiting SQLite metadata:
+        // a busy catalog or slow NAS must not leave a blank viewer.
+        if (!keepCurrentAsPlaceholder)
+        {
+            if (_viewerSequence.UsesGallery(_displayedBrowseIndex) &&
+                _browsePageCache?.TryGet(
+                    _viewerSequence.GalleryPositionAt(_viewerCurrentIndex),
+                    out var cachedPreview) == true && cachedPreview is not null)
+                SetViewerBitmap(cachedPreview);
+            else
+            {
+                SetViewerBitmap(null);
+                _ = LoadViewerPackedPreviewAsync(entry, version, token);
+            }
         }
 
         // A blocked SQLite reader must not freeze navigation/zoom on WPF.
@@ -227,35 +251,23 @@ public partial class MainWindow
 
         ApplyViewerImageLayout();
         var size = GetViewerRequiredPixelSize();
+        _viewerPendingOriginalPixels = size;
 
         if (TryGetViewerOriginal(entry.ImageId, size, out var decoded))
         {
             _viewerHasOriginal = true;
+            _viewerPendingOriginalImageId = null;
+            _viewerPendingOriginalPixels = 0;
             SetViewerBitmap(decoded);
             SetViewerQualityMessage(null);
             StartViewerNeighborPrefetch(size);
             return;
         }
 
-        if (!keepCurrentAsPlaceholder)
-        {
-            // Display the existing Picasa browse-cache picture immediately.
-            if (_viewerSequence.UsesGallery(_displayedBrowseIndex) &&
-                _browsePageCache?.TryGet(
-                    _viewerSequence.GalleryPositionAt(_viewerCurrentIndex),
-                    out var cached) == true && cached is not null)
-            {
-                SetViewerBitmap(cached);
-            }
-            else
-            {
-                SetViewerBitmap(null);
-                _ = LoadViewerPackedPreviewAsync(entry, version, token);
-            }
-        }
-
         if (_viewerImageInfo is { } selected && IsPathKnownOffline(selected.LocalPath))
         {
+            _viewerPendingOriginalImageId = null;
+            _viewerPendingOriginalPixels = 0;
             // The local pack thumbnail is still useful even when its source NAS
             // is offline. Never attempt repeated synchronous OS network probes.
             SetViewerQualityMessage("Original momentan nicht erreichbar");
@@ -323,9 +335,18 @@ public partial class MainWindow
         // Neighbor preloading at native 100% could allocate multiple huge
         // 40+ megapixel images and flood an NAS. Only prefetch normal fit-sized
         // views; at high zoom, wait for explicit navigation.
-        if (requiredSize > 4096)
+        if (requiredSize > 4096) return;
+        // Never spend limited SMB/VPN bandwidth decoding two neighbors
+        // while the user is trying to refine the current original.
+        if (_viewerImageInfo is { } current)
         {
-            return;
+            try
+            {
+                if (PathClassifier.Classify(current.LocalPath).IsNetwork)
+                    return;
+            }
+            catch (IOException) { return; }
+            catch (UnauthorizedAccessException) { return; }
         }
 
         var cancellation = new CancellationTokenSource();
@@ -493,6 +514,15 @@ public partial class MainWindow
             {
                 // Never silently leave a soft 192/384px cache image on screen.
                 SetViewerQualityMessage("Original nicht verfügbar: " + ex.Message);
+            }
+        }
+        finally
+        {
+            if (IsCurrentViewerRequest(version, token) &&
+                _viewerPendingOriginalImageId == imageId)
+            {
+                _viewerPendingOriginalImageId = null;
+                _viewerPendingOriginalPixels = 0;
             }
         }
     }
@@ -912,6 +942,11 @@ public partial class MainWindow
                 return;
             }
 
+            // The same or a larger decode is already in flight; do not
+            // restart it on every DPI/size notification, locally or via NAS.
+            if (_viewerPendingOriginalImageId == id &&
+                _viewerPendingOriginalPixels >= required)
+                return;
             // Leave the currently displayed image on screen until the requested
             // higher-quality decode is ready.
             ShowViewerImage(keepCurrentAsPlaceholder: true);

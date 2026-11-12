@@ -1,4 +1,6 @@
 using System.IO;
+using System.Diagnostics;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -18,6 +20,8 @@ public sealed class VideoPlayerWindow : Window
     private readonly DispatcherTimer _clock;
     private bool _seeking;
     private bool _playing;
+    private int _metadataRotation;
+    private bool _videoOpened;
 
     public VideoPlayerWindow(string path)
     {
@@ -88,6 +92,8 @@ public sealed class VideoPlayerWindow : Window
 
         _player.MediaOpened += (_, _) =>
         {
+            _videoOpened = true;
+            ApplyVideoRotation();
             if (_player.NaturalDuration.HasTimeSpan)
             {
                 _position.Maximum = Math.Max(0.01, _player.NaturalDuration.TimeSpan.TotalSeconds);
@@ -128,6 +134,7 @@ public sealed class VideoPlayerWindow : Window
 
         Loaded += (_, _) =>
         {
+            _ = ReadAndApplyVideoRotationAsync(path);
             _player.Play();
             _playing = true;
             _clock.Start();
@@ -147,6 +154,65 @@ public sealed class VideoPlayerWindow : Window
                 e.Handled = true;
             }
         };
+    }
+
+    private async Task ReadAndApplyVideoRotationAsync(string path)
+    {
+        try
+        {
+            var degrees = await Task.Run(() => ReadVideoRotation(path));
+            if (!IsLoaded) return;
+            _metadataRotation = degrees;
+            ApplyVideoRotation();
+        }
+        catch (Exception ex)
+        {
+            Services.PCasaDiagnostics.Write("Video.Rotation", ex);
+        }
+    }
+
+    private void ApplyVideoRotation()
+    {
+        if (!_videoOpened) return;
+        // Windows MediaElement may ignore QuickTime rotation metadata;
+        // do not double-rotate when the codec already exposes portrait axes.
+        var turn = _metadataRotation is 90 or 270 &&
+            _player.NaturalVideoWidth > _player.NaturalVideoHeight;
+        _player.LayoutTransform = new RotateTransform(
+            turn || _metadataRotation == 180 ? _metadataRotation : 0);
+    }
+
+    private static int ReadVideoRotation(string path)
+    {
+        var executable = Environment.GetEnvironmentVariable("PCASA_EXIFTOOL_PATH");
+        if (string.IsNullOrWhiteSpace(executable))
+            executable = Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe");
+        if (!File.Exists(executable)) return 0;
+        using var process = new Process();
+        process.StartInfo = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        process.StartInfo.ArgumentList.Add("-s3");
+        process.StartInfo.ArgumentList.Add("-n");
+        process.StartInfo.ArgumentList.Add("-Rotation");
+        process.StartInfo.ArgumentList.Add(path);
+        if (!process.Start()) return 0;
+        var output = process.StandardOutput.ReadToEndAsync();
+        var errors = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(10000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new TimeoutException("Video rotation metadata timed out.");
+        }
+        if (process.ExitCode != 0)
+            throw new IOException(errors.GetAwaiter().GetResult().Trim());
+        if (!double.TryParse(output.GetAwaiter().GetResult().Trim(),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+            return 0;
+        var degrees = ((int)Math.Round(value) % 360 + 360) % 360;
+        return degrees is 90 or 180 or 270 ? degrees : 0;
     }
 
     private void TogglePlayback()

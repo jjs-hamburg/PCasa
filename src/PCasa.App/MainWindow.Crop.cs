@@ -702,9 +702,11 @@ public partial class MainWindow
         DrawCropFrame();
     }
 
+    private bool _cropSavePending;
+
     private void SaveCrop()
     {
-        if (!_cropActive || _viewerImageInfo is not { } info) return;
+        if (_cropSavePending || !_cropActive || _viewerImageInfo is not { } info) return;
         var area = FitToImageAspect(_cropRect);
         if (area.Width <= .01 || area.Height <= .01) return;
         var imageId = info.Id;
@@ -720,6 +722,9 @@ public partial class MainWindow
         var request = new CropWriteRecipe(imageId, folderId, info.LocalPath,
             area.X, area.Y, area.Width, area.Height);
         var key = "image:crop:" + Guid.NewGuid().ToString("N");
+        _cropSavePending = true;
+        CropSaveButton.IsEnabled = false;
+        CropCancelButton.IsEnabled = false;
         BeginVisibleManualOperation(key, "Bild zuschneiden", 1);
         Task task;
         try
@@ -732,9 +737,13 @@ public partial class MainWindow
         catch
         {
             EndVisibleManualOperation(key);
+            _cropSavePending = false;
+            CropSaveButton.IsEnabled = true;
+            CropCancelButton.IsEnabled = true;
             throw;
         }
-        EndCrop();
+        // Preserve the selected crop while the durable write is pending;
+        // if metadata copying fails the user can retry rather than lose it.
         _ = ObserveCropAsync(task, key, request);
     }
 
@@ -771,8 +780,13 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
             {
                 EndVisibleManualOperation(key);
+                _cropSavePending = false;
+                CropSaveButton.IsEnabled = true;
+                CropCancelButton.IsEnabled = true;
                 if (success)
                 {
+                    if (_cropActive && _viewerImageInfo?.Id == request.ImageId)
+                        EndCrop();
                     _ = RefreshRestoreBadgesAsync();
                     _viewerOriginalCache.Remove(request.ImageId);
                     QueueBackgroundChange(new BackgroundFolderChange(
@@ -780,7 +794,7 @@ public partial class MainWindow
                         BackgroundFolderChangeKind.ScanFile,
                         Recursive: false, ForceExifRefresh: true));
                     if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
-                        ShowViewerImage();
+                        ShowViewerImage(keepCurrentAsPlaceholder: true);
                 }
             }
         }
