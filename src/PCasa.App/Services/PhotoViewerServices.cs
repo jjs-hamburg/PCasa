@@ -41,8 +41,10 @@ public static class PhotoViewerImageLoader
         int requiredSize,
         CancellationToken cancellationToken)
     {
-        lock (SourceFileLocks.ForPath(info.LocalPath))
-            return LoadLocked(info, requiredSize, cancellationToken);
+        // A canceled viewer request must not remain blocked on the same
+        // source stripe as a long-running network import or prefetch.
+        using var lease = SourceFileLocks.Enter(info.LocalPath, cancellationToken);
+        return LoadLocked(info, requiredSize, cancellationToken);
     }
 
     private static BitmapSource LoadLocked(

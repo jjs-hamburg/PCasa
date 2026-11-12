@@ -198,6 +198,22 @@ public partial class MainWindow
             _viewerFullscreenNavigator?.ShowForNewImage();
         }
 
+        // Publish local packed pixels before awaiting SQLite metadata:
+        // a busy catalog or slow NAS must not leave a blank viewer.
+        if (!keepCurrentAsPlaceholder)
+        {
+            if (_viewerSequence.UsesGallery(_displayedBrowseIndex) &&
+                _browsePageCache?.TryGet(
+                    _viewerSequence.GalleryPositionAt(_viewerCurrentIndex),
+                    out var cachedPreview) == true && cachedPreview is not null)
+                SetViewerBitmap(cachedPreview);
+            else
+            {
+                SetViewerBitmap(null);
+                _ = LoadViewerPackedPreviewAsync(entry, version, token);
+            }
+        }
+
         // A blocked SQLite reader must not freeze navigation/zoom on WPF.
         // The request version fences asynchronous metadata from an older photo.
         PhotoViewerImageInfo? resolvedInfo = null;
@@ -235,23 +251,6 @@ public partial class MainWindow
             SetViewerQualityMessage(null);
             StartViewerNeighborPrefetch(size);
             return;
-        }
-
-        if (!keepCurrentAsPlaceholder)
-        {
-            // Display the existing Picasa browse-cache picture immediately.
-            if (_viewerSequence.UsesGallery(_displayedBrowseIndex) &&
-                _browsePageCache?.TryGet(
-                    _viewerSequence.GalleryPositionAt(_viewerCurrentIndex),
-                    out var cached) == true && cached is not null)
-            {
-                SetViewerBitmap(cached);
-            }
-            else
-            {
-                SetViewerBitmap(null);
-                _ = LoadViewerPackedPreviewAsync(entry, version, token);
-            }
         }
 
         if (_viewerImageInfo is { } selected && IsPathKnownOffline(selected.LocalPath))
@@ -323,9 +322,18 @@ public partial class MainWindow
         // Neighbor preloading at native 100% could allocate multiple huge
         // 40+ megapixel images and flood an NAS. Only prefetch normal fit-sized
         // views; at high zoom, wait for explicit navigation.
-        if (requiredSize > 4096)
+        if (requiredSize > 4096) return;
+        // Never spend limited SMB/VPN bandwidth decoding two neighbors
+        // while the user is trying to refine the current original.
+        if (_viewerImageInfo is { } current)
         {
-            return;
+            try
+            {
+                if (PathClassifier.Classify(current.LocalPath).IsNetwork)
+                    return;
+            }
+            catch (IOException) { return; }
+            catch (UnauthorizedAccessException) { return; }
         }
 
         var cancellation = new CancellationTokenSource();

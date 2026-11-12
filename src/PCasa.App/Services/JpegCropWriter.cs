@@ -113,7 +113,8 @@ public static class JpegCropWriter
                 exifTool);
         var start = new ProcessStartInfo(exifTool)
         {
-            UseShellExecute = false, CreateNoWindow = true
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
         };
         foreach (var value in new[]
         {
@@ -132,8 +133,23 @@ public static class JpegCropWriter
                 try { if (!child.HasExited) child.Kill(entireProcessTree: true); }
                 catch (InvalidOperationException) { }
             });
-            if (!child.WaitForExit(120000) || child.ExitCode != 0)
-                throw new IOException(UiLanguage.T("ExifTool konnte die Metadaten nicht vollständig übertragen."));
+            var output = child.StandardOutput.ReadToEndAsync();
+            var errors = child.StandardError.ReadToEndAsync();
+            var finished = child.WaitForExit(120000);
+            if (!finished)
+            {
+                try { child.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { }
+            }
+            token.ThrowIfCancellationRequested();
+            var detail = errors.GetAwaiter().GetResult().Trim();
+            if (string.IsNullOrWhiteSpace(detail))
+                detail = output.GetAwaiter().GetResult().Trim();
+            if (!finished || child.ExitCode != 0)
+                throw new IOException(
+                    UiLanguage.T("ExifTool konnte die Metadaten nicht vollständig übertragen.") +
+                    (string.IsNullOrWhiteSpace(detail) ? "" :
+                        Environment.NewLine + detail[..Math.Min(detail.Length, 900)]));
         }
         finally { ExifToolProcessRegistry.Retire(child); }
     }
