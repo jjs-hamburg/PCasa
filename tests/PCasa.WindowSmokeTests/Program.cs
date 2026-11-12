@@ -680,12 +680,13 @@ internal static class Program
                 ?? throw new Exception("Separate red circled clear button is missing.");
             var attributeSelector = window.FindName("GalleryAttributeFilterSelectorButton") as Button
                 ?? throw new Exception("Property filter selection is missing.");
-            if (attributeSelector.ContextMenu?.Items.Count != 4 ||
-                 !attributeSelector.ContextMenu.Items.OfType<MenuItem>().Any(item =>
-                     item.Tag is string tag && tag == "Video") ||
+            if (attributeSelector.ContextMenu?.Items.Count != 7 ||
+                 !new[] { "None", "VideoPhotos", "Video", "Gps", "Tags", "Raw" }
+                     .All(tag => attributeSelector.ContextMenu.Items.OfType<MenuItem>()
+                         .Any(item => item.Tag is string actual && actual == tag)) ||
                 attributeInvert.IsEnabled || attributeClear.IsEnabled ||
                 attributeLabel.Text != "Filter")
-                throw new Exception("Property filter initial state and four menu choices are incorrect.");
+                throw new Exception("Property filter initial state and six media/property choices are incorrect.");
             var navigationBar = window.FindName("GalleryNavigationBar") as Border
                 ?? throw new Exception("Navigation bar must be outside the scrollable gallery.");
             var navigationNames = new[] { "FolderStart", "FolderEnd",
