@@ -554,14 +554,44 @@ internal static class FolderAddFlow
             var expandedBefore = treeBefore.IsExpanded;
             var originalRoots = presentRoots.Select(r => r.LocalPath).ToArray();
             var browserButton = (Button)window.FindName("ShowAllFilesystemFoldersButton");
-            browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
-            Until(window, () =>
-                    Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), firstExplorer)) &&
-                    Walk(tree).Any(item => SamePath(PathOf(item), lastExplorer)),
-                "Explorer in-place extension did not expose all child directories.");
+            // Test the REAL WPF toggle while the app's scheduler has an
+            // occupied P0 writer and another P0 is waiting. Earlier tests
+            // used an idle scheduler and missed the user's actual blocker.
+            var explorerScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(window)!;
+            var foregroundP0Started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseForegroundP0 = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var blockedForegroundP0 = explorerScheduler.EnqueueAsync(
+                "test:viewer-explorer-running-P0", SchedulerPriority.ManualAction,
+                async _ =>
+                {
+                    foregroundP0Started.TrySetResult();
+                    await releaseForegroundP0.Task;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                Until(window, () => foregroundP0Started.Task.IsCompleted,
+                    "Test could not start a blocked durable-priority catalog task.");
+                browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
+                Until(window, () =>
+                        Walk(tree).Any(item => SamePath(PathOf(item), neverScanned)) &&
+                        Walk(tree).Any(item => SamePath(PathOf(item), hiddenExplorer)) &&
+                        Walk(tree).Any(item => SamePath(PathOf(item), inactiveExplorer)) &&
+                        Walk(tree).Any(item => SamePath(PathOf(item), firstExplorer)) &&
+                        Walk(tree).Any(item => SamePath(PathOf(item), lastExplorer)),
+                    "Explorer did not reveal non-catalogued folders while P0 was blocked.");
+                if (blockedForegroundP0.IsCompleted)
+                    throw new Exception(
+                        "Explorer UI only completed because the P0 blocker already finished.");
+            }
+            finally { releaseForegroundP0.TrySetResult(); }
+            Until(window, () => blockedForegroundP0.IsCompleted,
+                "Blocked P0 fixture did not finish after release.");
+            Console.WriteLine(
+                "PASS: Actual WPF Explorer shows physical unindexed folders while P0 is blocked.");
 
             // The sibling root is expanded too, but Explorer mode must not
             // touch it: only the CURRENT selection and its descendants qualify.
