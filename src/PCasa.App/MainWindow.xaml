@@ -882,6 +882,8 @@
                               TreeViewItem.Collapsed="FoldersTree_ExpansionChanged">
                         <TreeView.ContextMenu>
                             <ContextMenu>
+                                <MenuItem Header="{loc:Tr Key='Zu PCasa hinzufügen'}"
+                                          Click="BrowseAddFolder_Click" />
                                 <MenuItem Header="{loc:Tr Key='Aktuellen Ordner einlesen / aktualisieren'}"
                                           Click="BrowseScanCurrentFolder_Click" />
                                 <MenuItem Header="{loc:Tr Key='Ordnerinformationen'}"
@@ -948,7 +950,7 @@
                                     </Button>
                                 </StackPanel>
                                 <Button x:Name="CropPreviewButton" Height="29" Padding="12,3"
-                                        Content="{loc:Tr Key='Vorschau · Original gedrückt halten'}"
+                                        Content="{loc:Tr Key='Vorschau · Ausschnitt gedrückt halten'}"
                                         HorizontalAlignment="Left"/>
                             </StackPanel>
                         </Grid>
