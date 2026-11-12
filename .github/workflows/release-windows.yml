@@ -1,0 +1,119 @@
+name: Publish PCasa Windows Release
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-windows.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pcasa-windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Validate single-source release version
+        shell: pwsh
+        run: |
+          ./tools/Test-PCasaReleaseVersion.ps1
+          $v = ./tools/Get-PCasaReleaseVersion.ps1
+          Write-Host "Building $($v.Product) ($($v.Tag))"
+
+      - name: Prepare pinned resources and icon
+        shell: pwsh
+        run: |
+          ./.github/scripts/install-maplibre.ps1 -Destination "src/PCasa.App/Resources"
+          python -m pip install --disable-pip-version-check pillow
+          python tools/generate_pcasa_icon.py
+
+      - name: Restore win-x64
+        shell: pwsh
+        run: dotnet restore src/PCasa.App/PCasa.App.csproj -r win-x64
+
+      - name: Publish framework-dependent application
+        shell: pwsh
+        run: |
+          dotnet publish src/PCasa.App/PCasa.App.csproj --configuration Release --runtime win-x64 --self-contained false --no-restore -p:DebugType=None -p:DebugSymbols=false -o publish/PCasa
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet publish failed' }
+
+      - name: Package vetted ExifTool
+        shell: pwsh
+        run: ./.github/scripts/install-exiftool.ps1 -Destination "publish/PCasa/exiftool"
+
+      - name: Supply dynamic LGPL libvips
+        shell: pwsh
+        run: ./tools/prepare-dynamic-libvips.ps1 -PublishDir publish/PCasa -EvidenceDir license-audit/dynamic-libvips
+
+      - name: Generate actual Chromium credits
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          if ($LASTEXITCODE -ne 0) { throw 'Chromium credits generation failed' }
+          if ((Get-Item 'publish/PCasa/Licenses/Chromium-Credits.html').Length -lt 50000) { throw 'Incomplete Chromium credits' }
+
+      - name: Audit all shipped licenses
+        shell: pwsh
+        run: |
+          ./tools/collect_third_party_licenses.ps1 -AssetsFile src/PCasa.App/obj/project.assets.json -PublishDir publish/PCasa
+          ./tools/audit-exiftool-perl-native.ps1 -PublishDir publish/PCasa -OutputDir license-audit
+          ./.github/scripts/audit-published-licenses.ps1 -PublishDir publish/PCasa -ProjectAssetsFile src/PCasa.App/obj/project.assets.json -OutputDir license-audit
+
+      - name: Build versioned Inno Setup installer
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          }
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler unavailable: $iscc" }
+          ./tools/Build-PCasaInstaller.ps1 -IsccPath $iscc
+          $v = ./tools/Get-PCasaReleaseVersion.ps1
+          $item = Get-Item -LiteralPath $v.InstallerPath
+          if ($item.Length -lt 100000) { throw 'Installer size is unexpectedly small' }
+          $sha = (Get-FileHash -LiteralPath $v.InstallerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "PCasa $($v.Product) installer: $($item.Length) bytes, SHA-256 $sha" | Out-File -Append -FilePath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload installer as workflow artifact for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCasa-Setup-Release-Candidate
+          path: dist/PCasa-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish immutable GitHub prerelease from main
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = ./tools/Get-PCasaReleaseVersion.ps1
+          # Never overwrite an already published installer for a version.
+          # A correction needs a new version and a fresh verified artifact.
+          $found = gh release view $v.Tag --json tagName --jq '.tagName' 2>$null
+          if ($LASTEXITCODE -eq 0 -and $found -eq $v.Tag) {
+            Write-Host "Release $($v.Tag) already exists; do not overwrite it."
+            exit 0
+          }
+          gh release create $v.Tag $v.InstallerPath --target $env:GITHUB_SHA --title "PCasa $($v.Product)" --generate-notes --prerelease
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release $($v.Tag) creation failed" }
+          Write-Host "Published https://github.com/jjs-hamburg/PCasa/releases/tag/$($v.Tag)"
