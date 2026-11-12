@@ -2009,6 +2009,9 @@ internal static class Program
                 // the GPS points or in the actual gallery selection.
                 var fullscreenPointField = viewerType.GetField("_gpsPoints", reflectFlags)!;
                 var previousFullscreenPoints = fullscreenPointField.GetValue(window);
+                var fullscreenSelectedIds = (HashSet<long>)viewerType.GetField(
+                    "_selectedImageIds", reflectFlags)!.GetValue(window)!;
+                var hadFullscreenSelectedId = fullscreenSelectedIds.Contains(999L);
                 var fullscreenPointType = viewerType.GetNestedType("GpsPoint",
                     System.Reflection.BindingFlags.NonPublic)!;
                 var fullscreenPoint = Activator.CreateInstance(fullscreenPointType,
@@ -2023,6 +2026,7 @@ internal static class Program
                 {
                     sidebarModeField.SetValue(window, "GPS");
                     fullscreenPointField.SetValue(window, fullscreenPointArray);
+                    fullscreenSelectedIds.Add(999L);
                     relayoutWorkspace.Invoke(window, null);
                     Flush(window);
                     gpsFullscreenClick.Invoke(window, new object[] {
@@ -2093,6 +2097,7 @@ internal static class Program
                     if ((bool)gpsFullscreenFlag.GetValue(window)!)
                         gpsFullscreenClick.Invoke(window, new object[] {
                             window, new RoutedEventArgs(Button.ClickEvent) });
+                    if (!hadFullscreenSelectedId) fullscreenSelectedIds.Remove(999L);
                     fullscreenPointField.SetValue(window, previousFullscreenPoints);
                     sidebarModeField.SetValue(window, previousGpsMode);
                     relayoutWorkspace.Invoke(window, null);
@@ -2264,7 +2269,9 @@ internal static class Program
                     var immediatePointGroup = viewerType.GetField("_gpsFilmstripPointIds",
                         reflectFlags)!.GetValue(window) as HashSet<long>;
                     var immediatePointGroupCount = immediatePointGroup?.Count ?? -1;
-                    Flush(window);
+                    // The click synchronously updates ItemsSource. A later
+                    // unrelated asynchronous gallery refresh is tested
+                    // separately and must not mutate this synthetic fixture.
                     if (strip.Items.Count != 3 ||
                         !strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>()
                             .Select(x => x.Id).Order()
