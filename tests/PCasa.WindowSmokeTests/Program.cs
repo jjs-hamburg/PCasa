@@ -2005,9 +2005,24 @@ internal static class Program
                 var gpsSidebar = (Border?)window.FindName("InfoSidebarPanel")
                     ?? throw new Exception("GPS sidebar missing.");
                 var previousGpsMode = sidebarModeField.GetValue(window);
+                // A filmstrip double-click requires a photo represented in
+                // the GPS points or in the actual gallery selection.
+                var fullscreenPointField = viewerType.GetField("_gpsPoints", reflectFlags)!;
+                var previousFullscreenPoints = fullscreenPointField.GetValue(window);
+                var fullscreenPointType = viewerType.GetNestedType("GpsPoint",
+                    System.Reflection.BindingFlags.NonPublic)!;
+                var fullscreenPoint = Activator.CreateInstance(fullscreenPointType,
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic,
+                    null, new object[] { 999L, "synthetic-viewer-photo.jpg",
+                        28.416d, -16.567d, true }, null)!;
+                var fullscreenPointArray = Array.CreateInstance(fullscreenPointType, 1);
+                fullscreenPointArray.SetValue(fullscreenPoint, 0);
                 try
                 {
                     sidebarModeField.SetValue(window, "GPS");
+                    fullscreenPointField.SetValue(window, fullscreenPointArray);
                     relayoutWorkspace.Invoke(window, null);
                     Flush(window);
                     gpsFullscreenClick.Invoke(window, new object[] {
@@ -2029,10 +2044,9 @@ internal static class Program
                         .Invoke(window, null);
                     var filmstripList = (ListBox?)window.FindName("GpsFilmstripList")
                         ?? throw new Exception("GPS filmstrip list missing.");
-                    // This is deliberately a synthetic viewer-only photo
-                    // without a catalog/GPS row. Suppress the real filmstrip
-                    // SelectionChanged -> GPS catalog request while setting
-                    // up the isolated double-click test fixture.
+                    // Use a synthetic GPS-valid point without an actual photo file.
+                    // Suppress the real selection-triggered catalog request
+                    // while preparing this isolated double-click fixture.
                     var stripUpdating = viewerType.GetField("_gpsFilmstripUpdating", reflectFlags)!;
                     stripUpdating.SetValue(window, true);
                     try
@@ -2079,6 +2093,7 @@ internal static class Program
                     if ((bool)gpsFullscreenFlag.GetValue(window)!)
                         gpsFullscreenClick.Invoke(window, new object[] {
                             window, new RoutedEventArgs(Button.ClickEvent) });
+                    fullscreenPointField.SetValue(window, previousFullscreenPoints);
                     sidebarModeField.SetValue(window, previousGpsMode);
                     relayoutWorkspace.Invoke(window, null);
                     Flush(window);
