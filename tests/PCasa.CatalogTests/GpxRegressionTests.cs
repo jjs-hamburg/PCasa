@@ -14,10 +14,10 @@ internal static class GpxRegressionTests
                 <gpx version="1.1" creator="PCasa Regression" xmlns="http://www.topografix.com/GPX/1/1">
                   <trk><trkseg>
                     <trkpt lat="53.5" lon="10.0"><time>2026-11-12T10:00:00Z</time></trkpt>
-                    <trkpt lat="53.6" lon="10.1"><time>2026-11-12T10:01:00Z</time></trkpt>
+                    <trkpt lat="53.5005" lon="10.0005"><time>2026-11-12T10:01:00Z</time></trkpt>
                   </trkseg><trkseg>
                     <trkpt lat="54.5" lon="11.0"><time>2026-11-12T10:02:00Z</time></trkpt>
-                    <trkpt lat="54.6" lon="11.1"><time>2026-11-12T10:03:00Z</time></trkpt>
+                    <trkpt lat="54.5005" lon="11.0005"><time>2026-11-12T10:03:00Z</time></trkpt>
                   </trkseg></trk>
                 </gpx>
                 """);
