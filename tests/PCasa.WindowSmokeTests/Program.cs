@@ -1002,6 +1002,18 @@ internal static class Program
                 !Matching("None", false))
                 throw new Exception("GPS, Tags and RAW filter predicates/inversion are incorrect.");
             Console.WriteLine("PASS: Photo property filtering and inversion use indexed GPS/tag/RAW flags.");
+            var videoEntry = synthetic[1] with { FileName = "scene.mp4" };
+            var photoEntry = synthetic[2] with { FileName = "scene.jpg" };
+            bool IsMatch(BrowseThumbnailIndexEntry image, string kind, bool inverted) =>
+                (bool)matcher.Invoke(null, new object[] { image, kind, inverted })!;
+            if (!IsMatch(videoEntry, "Video", false) ||
+                IsMatch(videoEntry, "Video", true) ||
+                IsMatch(photoEntry, "Video", false) ||
+                !IsMatch(photoEntry, "Video", true) ||
+                !IsMatch(videoEntry, "None", false) ||
+                !IsMatch(photoEntry, "None", false))
+                throw new Exception("All media/photos/videos filtering produced incorrect matches.");
+            Console.WriteLine("PASS: All media, photos and video share the existing gallery property filter.");
 
             // A property toggle must preserve a matching current image and
             // otherwise choose the nearest following/preceding match.
