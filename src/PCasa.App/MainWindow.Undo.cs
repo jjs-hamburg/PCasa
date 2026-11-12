@@ -18,11 +18,42 @@ public partial class MainWindow
         dialog.ShowDialog();
     }
 
-    private void UndoRestore_Click(object sender, RoutedEventArgs e)
-    {
-        var imageId = _viewerOpen && _viewerSequence is not null
+    private long CurrentRestoreImageId =>
+        _viewerOpen && _viewerSequence is not null
             ? _viewerSequence.At(_viewerCurrentIndex).ImageId
             : _selectedImageIds.Count == 1 ? _selectedImageIds.First() : 0;
+
+    private bool HasRestorableVersion(long imageId)
+    {
+        if (imageId <= 0) return false;
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT local_path FROM images WHERE id=$id";
+        command.Parameters.AddWithValue("$id", imageId);
+        var path = command.ExecuteScalar() as string;
+        return path is not null &&
+            new UndoHistoryService(UndoOptions.Load()).GetVersions(path).Count > 0;
+    }
+
+    private async void EditMenu_SubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        var imageId = CurrentRestoreImageId;
+        EditRestoreMenuItem.IsEnabled = false;
+        if (imageId <= 0) return;
+        try
+        {
+            var available = await Task.Run(() => HasRestorableVersion(imageId));
+            if (!Dispatcher.HasShutdownStarted && imageId == CurrentRestoreImageId)
+                EditRestoreMenuItem.IsEnabled = available;
+        }
+        catch (Exception ex) { PCasaDiagnostics.Write("Undo.Availability", ex); }
+    }
+
+    private void UndoRestore_Click(object sender, RoutedEventArgs e)
+        => UndoRestoreImage(CurrentRestoreImageId);
+
+    private void UndoRestoreImage(long imageId)
+    {
         if (imageId <= 0)
         {
             PcasaDialog.Show(this, "Bitte genau ein Bild auswählen.",
