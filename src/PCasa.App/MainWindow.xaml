@@ -515,6 +515,12 @@
                                   Header="{loc:Tr Key='Alle überwachten Ordner einlesen'}"
                                   Click="BrowseScanAll_Click" />
                     </MenuItem>
+                    <MenuItem Header="{loc:Tr Key='Bearbeiten'}" Margin="0,0,12,0"
+                              HorizontalAlignment="Left" SubmenuOpened="EditMenu_SubmenuOpened">
+                        <MenuItem x:Name="EditRestoreMenuItem"
+                                  Header="{loc:Tr Key='Bild wiederherstellen'}"
+                                  IsEnabled="False" Click="UndoRestore_Click"/>
+                    </MenuItem>
                     <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
                               Margin="0,0,12,0" HorizontalAlignment="Left"
                               Click="AppearanceSettings_Click"/>
@@ -526,9 +532,8 @@
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
                         <MenuItem Header="GPX..." Click="GpxOptions_Click"/>
-                        <MenuItem Header="Bildbearbeitung">
-                            <MenuItem Header="Undo..." Click="UndoOptions_Click"/>
-                            <MenuItem Header="Bild wiederherstellen..." Click="UndoRestore_Click"/>
+                        <MenuItem Header="{loc:Tr Key='Bildbearbeitung'}">
+                            <MenuItem Header="{loc:Tr Key='Undo-Einstellungen'}" Click="UndoOptions_Click"/>
                         </MenuItem>
                         <MenuItem x:Name="TaskManagerMenuItem"
                                   Header="{loc:Tr Key='Taskmanager...'}"
