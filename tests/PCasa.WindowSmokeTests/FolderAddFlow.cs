@@ -1269,12 +1269,20 @@ internal static class FolderAddFlow
         {
             window.UpdateLayout();
             var frame = new DispatcherFrame();
-            // ContextIdle can be starved indefinitely by ongoing WPF tree/
-            // scheduler presentation. Render priority allows the test's
-            // 30-second deadline to run without starving normal UI work.
-            window.Dispatcher.BeginInvoke(DispatcherPriority.Render,
+            // Preserve idle dispatch for real gallery work, but do not let
+            // a busy dispatcher hold the test inside PushFrame forever.
+            using var watchdog = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Normal,
+                window.Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(200)
+            };
+            watchdog.Tick += (_, _) => frame.Continue = false;
+            watchdog.Start();
+            window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,
                 new Action(() => frame.Continue = false));
             Dispatcher.PushFrame(frame);
+            watchdog.Stop();
             if (ready()) return;
             Thread.Sleep(35);
         }
