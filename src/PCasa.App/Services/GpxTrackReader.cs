@@ -54,7 +54,7 @@ public sealed class GpxOptions
     }
 }
 
-public sealed record GpxTrackPoint(DateTimeOffset UtcTime, double Latitude, double Longitude);
+public sealed record GpxTrackPoint(DateTimeOffset UtcTime, double Latitude, double Longitude, int SegmentId = 0);
 public sealed record GpxFileSummary(string FilePath, DateTimeOffset First, DateTimeOffset Last, int PointCount);
 
 // Secure streaming reader: trackpoint coordinates and mandatory UTC time only.
@@ -64,6 +64,7 @@ public static class GpxTrackReader
     public static IReadOnlyList<GpxTrackPoint> Read(string path)
     {
         var points = new List<GpxTrackPoint>();
+        var segmentId = 0;
         using var stream = File.OpenRead(path);
         using var reader = XmlReader.Create(stream, new XmlReaderSettings
         {
@@ -74,8 +75,13 @@ public static class GpxTrackReader
         });
         while (reader.Read())
         {
-            if (reader.NodeType != XmlNodeType.Element ||
-                reader.LocalName is not ("trkpt" or "rtept")) continue;
+            if (reader.NodeType != XmlNodeType.Element) continue;
+            if (reader.LocalName is "trkseg" or "rte")
+            {
+                segmentId++;
+                continue;
+            }
+            if (reader.LocalName is not ("trkpt" or "rtept")) continue;
             var latText = reader.GetAttribute("lat");
             var lonText = reader.GetAttribute("lon");
             if (!double.TryParse(latText, NumberStyles.Float,
@@ -102,9 +108,9 @@ public static class GpxTrackReader
             if (timestamp is null ||
                 !DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal, out var instant)) continue;
-            points.Add(new GpxTrackPoint(instant.ToUniversalTime(), lat, lon));
+            points.Add(new GpxTrackPoint(instant.ToUniversalTime(), lat, lon, segmentId));
         }
-        return points.OrderBy(x => x.UtcTime).DistinctBy(x => x.UtcTime).ToArray();
+        return points.OrderBy(x => x.UtcTime).DistinctBy(x => (x.SegmentId, x.UtcTime)).ToArray();
     }
 
     public static DateTimeOffset CameraToUtc(DateTime cameraLocal, GpxOptions options)
@@ -134,6 +140,7 @@ public static class GpxTrackReader
         if (lo == 0 || lo == points.Count) return null;
         var first = points[lo - 1];
         var next = points[lo];
+        if (first.SegmentId != next.SegmentId) return null;
         var gap = (next.UtcTime - first.UtcTime).TotalSeconds;
         if (gap <= 0 || gap > maximumGapSeconds) return null;
         var t = (cameraUtc - first.UtcTime).TotalSeconds / gap;
