@@ -32,6 +32,9 @@ public partial class MainWindow
     private int _manualContextScanCount;
     private CancellationTokenSource? _manualContextCancellation;
 
+    private sealed record ExplorerRegisteredScan(string Directory,
+        long RootId, bool CreatedRoot, bool AcknowledgeTargetedPending);
+
     private async void BrowseAddFolder_Click(object sender, RoutedEventArgs e)
     {
         if (FoldersTree.SelectedItem is not TreeViewItem { Tag: FolderTreeTag tag })
@@ -47,7 +50,13 @@ public partial class MainWindow
                     var result = new FolderManagerSelectionService(_database)
                         .EnsureMonitoredFolder(directory, token);
                     var snapshot = ReadFolderTreeConfigurationSnapshot();
-                    return (result.Changed, Snapshot: snapshot);
+                    var root = FolderExclusionRules.FindOwner(directory,
+                        snapshot.Select(candidate => candidate.Folder))
+                        ?? throw new InvalidOperationException(
+                            "Hinzugefügter Ordner ist nicht registriert.");
+                    return (result.Changed, result.CreatedRoot,
+                        result.AcknowledgeTargetedPending, RootId: root.Id,
+                        Snapshot: snapshot);
                 }, workKind: SchedulerWorkKind.Catalog);
             if (registration.Changed)
             {
@@ -55,7 +64,9 @@ public partial class MainWindow
                 _dragTargetValidity.Clear();
                 PromoteExplorerMonitoredPath(directory);
             }
-            BrowseScanCurrentFolder_Click(sender, e);
+            BrowseScanCurrentFolder_Click(new ExplorerRegisteredScan(directory,
+                registration.RootId, registration.CreatedRoot,
+                registration.AcknowledgeTargetedPending), e);
         }
         catch (Exception ex)
         {
@@ -84,6 +95,10 @@ public partial class MainWindow
         // outside the scheduler. Even an unreachable SMB path is checked by
         // the priority worker, not by the UI event handler.
         var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
+        var explicitAdd = sender is ExplorerRegisteredScan accepted &&
+            string.Equals(FolderExclusionRules.Normalize(accepted.Directory),
+                FolderExclusionRules.Normalize(directory),
+                StringComparison.OrdinalIgnoreCase) ? accepted : null;
         // A scan is never a registration operation. Explorer may display
         // unregistered paths, but only the explicit Add command activates them.
         if (_allFolderProjectionRootPath is not null &&
@@ -145,9 +160,10 @@ public partial class MainWindow
             // Explorer scanning may only use a root registered by the
             // Folder Manager. The explicit "Add to PCasa" action is the
             // sole registration path for an Explorer-selected directory.
-            bool newRoot = false;
-            bool acknowledgeTargetedPending = false;
-            long? expectedRootId = null;
+            bool newRoot = explicitAdd?.CreatedRoot == true;
+            bool acknowledgeTargetedPending =
+                explicitAdd?.AcknowledgeTargetedPending == true;
+            long? expectedRootId = explicitAdd?.RootId;
             if (_allFolderProjectionRootPath is not null)
             {
                 var persisted = await _scheduler.RunAsync(
@@ -169,7 +185,7 @@ public partial class MainWindow
                     }, cancellationToken: cancellation.Token,
                     workKind: SchedulerWorkKind.Catalog);
                 expectedRootId = persisted.Id;
-                acknowledgeTargetedPending = string.Equals(
+                acknowledgeTargetedPending |= string.Equals(
                     FolderExclusionRules.Normalize(directory),
                     FolderExclusionRules.Normalize(persisted.LocalPath),
                     StringComparison.OrdinalIgnoreCase);
