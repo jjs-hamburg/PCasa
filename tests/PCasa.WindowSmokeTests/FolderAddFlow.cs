@@ -1269,7 +1269,10 @@ internal static class FolderAddFlow
         {
             window.UpdateLayout();
             var frame = new DispatcherFrame();
-            window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,
+            // ContextIdle can be starved indefinitely by ongoing WPF tree/
+            // scheduler presentation. Render priority allows the test's
+            // 30-second deadline to run without starving normal UI work.
+            window.Dispatcher.BeginInvoke(DispatcherPriority.Render,
                 new Action(() => frame.Continue = false));
             Dispatcher.PushFrame(frame);
             if (ready()) return;
