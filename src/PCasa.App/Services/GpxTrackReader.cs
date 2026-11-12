@@ -16,7 +16,7 @@ public sealed class GpxOptions
         Path.Combine(PcasaDataPaths.SharedDataRoot, "GPX");
     public double CameraOffsetSeconds { get; set; }
     public string CameraTimeZoneId { get; set; } = TimeZoneInfo.Local.Id;
-    public int MaximumGapSeconds { get; set; } = 60;
+    public int MaximumGapSeconds { get; set; } = 120;
 
     public static GpxOptions Load()
     {
