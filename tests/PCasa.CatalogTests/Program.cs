@@ -107,6 +107,8 @@ internal static class Program
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
         Run("Two-endpoint source locks serialize opposite transfers", PairedSourceLocksAreOrdered, failures);
         Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
+        Run("Visible originals and Explorer enumeration survive blocked durable P0",
+            ForegroundUiReadsIgnoreSchedulerBlock, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("Startup browse projection is visible beside blocked or deferred durable P0 without admitting P4",
@@ -2642,6 +2644,69 @@ internal static class Program
                     throw new Exception("Deferred P0 fixture could not be canceled.");
             }
             await manual.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void ForegroundUiReadsIgnoreSchedulerBlock()
+    {
+        static async Task Check()
+        {
+            using var sandbox = new Sandbox();
+            var original = Path.Combine(sandbox.Images, "foreground.jpg");
+            var folderWithoutImages = Path.Combine(sandbox.Images, "NotCatalogued");
+            Directory.CreateDirectory(folderWithoutImages);
+            WriteJpeg(original);
+
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var running = scheduler.EnqueueAsync(
+                "test:foreground-blocked-durable-P0", SchedulerPriority.ManualAction,
+                async _ =>
+                {
+                    started.TrySetResult();
+                    await release.Task;
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                // A newer queued P0 can starve both the old viewer and
+                // interactive Explorer SourceProbe through scheduler admission.
+                var pending = scheduler.EnqueueAsync(
+                    "test:foreground-waiting-P0", SchedulerPriority.ManualAction,
+                    _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.CatalogScan);
+
+                var foreground = new ForegroundReadService();
+                using var cancel = new CancellationTokenSource(
+                    TimeSpan.FromSeconds(8));
+                var folders = foreground.ReadFoldersAsync(
+                    sandbox.Images, cancel.Token);
+                var image = new PhotoViewerImageInfo(1, original,
+                    "foreground.jpg", 128, 128);
+                var rendered = foreground.ReadViewerAsync(
+                    original,
+                    token => PhotoViewerImageLoader.Load(image, 128, token),
+                    cancel.Token);
+                await Task.WhenAll(folders, rendered)
+                    .WaitAsync(TimeSpan.FromSeconds(8));
+                if (rendered.Result.PixelWidth < 1 ||
+                    !folders.Result.Any(path =>
+                        string.Equals(path, folderWithoutImages,
+                            StringComparison.OrdinalIgnoreCase)) ||
+                    running.IsCompleted || pending.IsCompleted)
+                    throw new Exception(
+                        "Viewer or unindexed Explorer folder waited on a blocked " +
+                        "durable scheduler package.");
+            }
+            finally
+            {
+                release.TrySetResult();
+            }
+            await running.WaitAsync(TimeSpan.FromSeconds(8));
         }
         Check().GetAwaiter().GetResult();
     }
