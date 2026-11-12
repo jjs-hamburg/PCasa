@@ -16,6 +16,10 @@ public partial class MainWindow
     private BrowseCacheRepository? _browseCacheRepository;
     private BrowseCacheBuilder? _browseCacheBuilder;
     private BrowseThumbnailPageCache? _browsePageCache;
+    private HashSet<long> _restoreBadgeImageIds = new();
+    private bool _restoreBadgeChecking;
+    private DateTime _restoreArchiveStamp = DateTime.MinValue;
+
     private IReadOnlyList<BrowseThumbnailIndexEntry> _browseIndex =
         Array.Empty<BrowseThumbnailIndexEntry>();
     private CancellationTokenSource? _browseCacheCancellation;
@@ -741,6 +745,10 @@ public partial class MainWindow
             }
             ordered = GalleryFolderOrdering.Order(ordered,
                 CaptureGalleryFolderOrder(), CurrentGallerySort);
+            if (_restoreBadgeImageIds.Count > 0)
+                ordered = ordered.Select(entry =>
+                    entry with { HasRestore = _restoreBadgeImageIds.Contains(entry.ImageId) })
+                    .ToArray();
             if (_activeBrowseTier != tier ||
                 _browseIndex.Count != ordered.Count ||
                 !_browseIndex.SequenceEqual(ordered))
@@ -756,6 +764,7 @@ public partial class MainWindow
             _browseIndex.Count > 0 ? 1 : 0);
 
         await ApplyTagFilterAsync();
+        if (!_restoreBadgeChecking) _ = RefreshRestoreBadgesAsync();
         if (!_browseRefreshRequests.IsCurrent(refresh))
             return;
 
@@ -898,6 +907,58 @@ public partial class MainWindow
                 !Dispatcher.HasShutdownStarted)
                 _catalogPublicationTimer?.Start();
         }
+    }
+
+    // A single asynchronous archive snapshot is projected onto catalog IDs.
+    // No original JPEG or NAS source path is opened by thumbnail rendering.
+    private async Task RefreshRestoreBadgesAsync()
+    {
+        if (_restoreBadgeChecking || Dispatcher.HasShutdownStarted) return;
+        var options = UndoOptions.Load();
+        var archive = Path.Combine(options.DirectoryPath, "Versions");
+        DateTime stamp;
+        try { stamp = Directory.GetLastWriteTimeUtc(archive); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { PCasaDiagnostics.Write("Undo.Badges", ex); return; }
+        if (stamp == _restoreArchiveStamp) return;
+        _restoreBadgeChecking = true;
+        try
+        {
+            var verifiedPaths = await Task.Run(() =>
+                new UndoHistoryService(options).GetVerifiedRestorablePaths(
+                    CancellationToken.None));
+            HashSet<long> ids = new();
+            if (verifiedPaths.Count > 0)
+                await _galleryCatalogReader.ReadAsync(token =>
+                {
+                    using var db = _database.OpenConnection();
+                    using var command = db.CreateCommand();
+                    command.CommandText = "SELECT id, local_path FROM images";
+                    using var reader = command.ExecuteReader();
+                    while (reader.Read())
+                    {
+                        token.ThrowIfCancellationRequested();
+                        if (verifiedPaths.Contains(reader.GetString(1)))
+                            ids.Add(reader.GetInt64(0));
+                    }
+                    return Task.CompletedTask;
+                });
+            if (Dispatcher.HasShutdownStarted) return;
+            _restoreArchiveStamp = stamp;
+            if (!_restoreBadgeImageIds.SetEquals(ids))
+            {
+                _restoreBadgeImageIds = ids;
+                if (_browseInitialized)
+                    await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                        warmViewport: false);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or OperationCanceledException or InvalidOperationException)
+        {
+            PCasaDiagnostics.Write("Undo.Badges", ex);
+        }
+        finally { _restoreBadgeChecking = false; }
     }
 
     private bool _manualScanAllActive;
