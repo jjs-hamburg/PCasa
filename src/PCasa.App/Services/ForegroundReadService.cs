@@ -57,6 +57,27 @@ public sealed class ForegroundReadService
                 return result;
             }, token);
 
+    // Unlike Explorer projection, the manager avoids system folders and
+    // reparse-point traversal; preserve its existing folder-tree policy.
+    public Task<string[]> ReadManagerFoldersAsync(string folder, CancellationToken token)
+        => ReadAsync(folder, _localExplorer, _remoteExplorer,
+            ct =>
+            {
+                ct.ThrowIfCancellationRequested();
+                var options = new EnumerationOptions
+                {
+                    RecurseSubdirectories = false,
+                    IgnoreInaccessible = true,
+                    ReturnSpecialDirectories = false,
+                    AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
+                };
+                var result = Directory.GetDirectories(folder, "*", options)
+                    .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase)
+                    .ToArray();
+                ct.ThrowIfCancellationRequested();
+                return result;
+            }, token);
+
     private static async Task<T> ReadAsync<T>(string path,
         SemaphoreSlim local, SemaphoreSlim remote,
         Func<CancellationToken, T> work, CancellationToken token)
