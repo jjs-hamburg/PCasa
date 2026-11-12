@@ -1271,7 +1271,7 @@ internal static class FolderAddFlow
             var frame = new DispatcherFrame();
             // Preserve idle dispatch for real gallery work, but do not let
             // a busy dispatcher hold the test inside PushFrame forever.
-            using var watchdog = new System.Windows.Threading.DispatcherTimer(
+            var watchdog = new System.Windows.Threading.DispatcherTimer(
                 System.Windows.Threading.DispatcherPriority.Normal,
                 window.Dispatcher)
             {
