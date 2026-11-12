@@ -87,7 +87,12 @@ public static class JpegCropWriter
             new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(fullPath, token);
             token.ThrowIfCancellationRequested();
             File.Replace(staged, fullPath, null);
-            File.SetLastWriteTimeUtc(fullPath, originalWriteTime);
+            // At this point the crop is committed. A failure to restore the
+            // file timestamp must never turn a successful edit into an error.
+            try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
+            catch (IOException ex) { PCasaDiagnostics.Write("Image.Crop.Timestamp", ex); }
+            catch (UnauthorizedAccessException ex)
+            { PCasaDiagnostics.Write("Image.Crop.Timestamp", ex); }
         }
         finally
         {
