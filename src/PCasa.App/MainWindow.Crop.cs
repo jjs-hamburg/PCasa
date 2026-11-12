@@ -747,6 +747,7 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
                 if (success)
                 {
+                    _ = RefreshRestoreBadgesAsync();
                     _viewerOriginalCache.Remove(request.ImageId);
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.FolderId, request.Path,
