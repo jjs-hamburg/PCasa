@@ -31,6 +31,8 @@ public partial class MainWindow
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
     private BitmapSource? _cropPreviewOriginal;
+    private (double ImageWidth, double ImageHeight, double CanvasWidth,
+        double CanvasHeight, double ScrollX, double ScrollY)? _cropPreviewLayout;
 
     private string? _viewerCachedCameraDetails;
 
@@ -228,7 +230,21 @@ public partial class MainWindow
                 var height = Math.Clamp((int)Math.Ceiling(area.Height * source.PixelHeight),
                     1, source.PixelHeight - y);
                 _cropPreviewOriginal = source;
-                PhotoViewerImage.Source = new CroppedBitmap(source, new Int32Rect(x, y, width, height));
+                _cropPreviewLayout = (PhotoViewerImage.Width, PhotoViewerImage.Height,
+                    PhotoViewerCanvas.Width, PhotoViewerCanvas.Height,
+                    PhotoViewerScroller.HorizontalOffset, PhotoViewerScroller.VerticalOffset);
+                var cropped = new CroppedBitmap(source, new Int32Rect(x, y, width, height));
+                cropped.Freeze();
+                var (viewportWidth, viewportHeight) = ViewerViewportSize();
+                var scale = Math.Min(viewportWidth / cropped.PixelWidth,
+                    viewportHeight / cropped.PixelHeight);
+                PhotoViewerImage.Width = Math.Max(1, cropped.PixelWidth * scale);
+                PhotoViewerImage.Height = Math.Max(1, cropped.PixelHeight * scale);
+                PhotoViewerCanvas.Width = Math.Max(viewportWidth, PhotoViewerImage.Width);
+                PhotoViewerCanvas.Height = Math.Max(viewportHeight, PhotoViewerImage.Height);
+                PhotoViewerImage.Source = cropped;
+                PhotoViewerScroller.ScrollToHorizontalOffset(0);
+                PhotoViewerScroller.ScrollToVerticalOffset(0);
                 ViewerCropOverlay.Visibility = Visibility.Hidden;
             }
             e.Handled = true;
@@ -300,6 +316,16 @@ public partial class MainWindow
         if (_cropPreviewOriginal is not { } source) return;
         _cropPreviewOriginal = null;
         PhotoViewerImage.Source = source;
+        if (_cropPreviewLayout is { } layout)
+        {
+            PhotoViewerImage.Width = layout.ImageWidth;
+            PhotoViewerImage.Height = layout.ImageHeight;
+            PhotoViewerCanvas.Width = layout.CanvasWidth;
+            PhotoViewerCanvas.Height = layout.CanvasHeight;
+            PhotoViewerScroller.ScrollToHorizontalOffset(layout.ScrollX);
+            PhotoViewerScroller.ScrollToVerticalOffset(layout.ScrollY);
+            _cropPreviewLayout = null;
+        }
         if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
         DrawCropFrame();
     }
