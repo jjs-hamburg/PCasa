@@ -1118,19 +1118,19 @@ public partial class MainWindow
         FolderManagerSelection? selection = null;
         try
         {
-            // Opening the dialog is a scheduled catalog read. No WPF
-            // constructor or checkbox may open a SQLite connection.
-            var configuration = await _scheduler.RunAsync(
-                $"catalog:folder-manager-configuration:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
+            // The folder manager is a read-only foreground view until OK.
+            // It must never wait behind a deferred or running durable P0
+            // scan that was started by Explorer registration. The same
+            // independent gallery reader already protects catalog snapshots.
+            var configuration = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
                     return ReadFolderTreeConfigurationSnapshot();
-                }, workKind: SchedulerWorkKind.CatalogRead);
+                });
             if (Dispatcher.HasShutdownStarted) return;
             var window = new FolderManagerWindow(
-                configuration, _scheduler, serverDatabaseConfigured: false)
+                configuration, _foregroundReadService, serverDatabaseConfigured: false)
             {
                 Owner = this
             };
