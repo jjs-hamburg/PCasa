@@ -188,7 +188,8 @@ public partial class MainWindow
             var stride = Math.Max(1, track.Count / 12000);
             foreach (var point in track)
             {
-                if (prev is null || (point.UtcTime - prev.UtcTime).TotalSeconds >
+                if (prev is null || point.SegmentId != prev.SegmentId ||
+                    (point.UtcTime - prev.UtcTime).TotalSeconds >
                     _gpxOptions.MaximumGapSeconds)
                 {
                     current = [];
