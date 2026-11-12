@@ -601,6 +601,18 @@ internal static class FolderAddFlow
                 "BrowseScanCurrentFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
             scan.Invoke(window, [tree, new RoutedEventArgs()]);
+            Flush(window);
+            if (!roots.GetExcludedPaths(initialTreeRoot.Tag is null
+                    ? throw new Exception("Root tag missing.")
+                    : roots.GetAll().Single(root =>
+                        SamePath(root.LocalPath, initialRoot)).Id)
+                .Any(path => SamePath(path, inactiveExplorer)))
+                throw new Exception(
+                    "Explorer scan unexpectedly activated an excluded folder.");
+            var add = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseAddFolder_Click",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            add.Invoke(window, [tree, new RoutedEventArgs()]);
             var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
                 .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(window)!;
@@ -612,7 +624,7 @@ internal static class FolderAddFlow
                 return parent is not null &&
                     !roots.GetExcludedPaths(parent.Id)
                         .Any(path => SamePath(path, inactiveExplorer));
-            }, "Explorer scan did not reactivate the excluded child in Ordnermanager.");
+            }, "Explicit Add to PCasa did not reactivate the excluded child in Ordnermanager.");
             var afterActivation = roots.GetAll();
             if (afterActivation.Count != originalRoots.Length ||
                 afterActivation.Any(root =>
