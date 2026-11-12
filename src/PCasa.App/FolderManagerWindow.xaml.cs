@@ -15,7 +15,7 @@ public partial class FolderManagerWindow : Window
         MonitoredFolder? Root, string LocalPath, bool IsRoot,
         bool IsSystemFolder = false, string? Label = null);
 
-    private readonly PCasaScheduler _scheduler;
+    private readonly ForegroundReadService _foregroundReadService;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
     private readonly CancellationTokenSource _lifetime = new();
@@ -38,10 +38,10 @@ public partial class FolderManagerWindow : Window
 
     public FolderManagerWindow(
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> configuration,
-        PCasaScheduler scheduler, bool serverDatabaseConfigured)
+        ForegroundReadService foregroundReadService, bool serverDatabaseConfigured)
     {
         InitializeComponent();
-        _scheduler = scheduler;
+        _foregroundReadService = foregroundReadService;
         _backgroundScanSettings = BackgroundScanSettings.Load();
         _monitoredRoots = configuration.Select(item => item.Folder).ToArray();
         foreach (var (folder, excludedPaths) in configuration)
@@ -197,27 +197,11 @@ public partial class FolderManagerWindow : Window
         var token = _lifetime.Token;
         try
         {
-            // Folder expansion is user-driven I/O and must use the same
-            // scheduler as other source probes. Slow SMB enumeration must
-            // neither block WPF nor start an independent Task.Run pipeline.
-            var directories = await _scheduler.RunAsync(
-                $"folder-manager:expand:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
-                workToken =>
-                {
-                    var options = new EnumerationOptions
-                    {
-                        RecurseSubdirectories = false,
-                        IgnoreInaccessible = true,
-                        ReturnSpecialDirectories = false,
-                        AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
-                    };
-                    workToken.ThrowIfCancellationRequested();
-                    return Directory.GetDirectories(node.LocalPath, "*", options)
-                        .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase)
-                        .ToArray();
-                }, cancellationToken: token,
-                workKind: SchedulerWorkKind.SourceProbe);
+            // Folder-manager visibility is another read-only foreground
+            // operation, not a catalog or source mutation. Reuse the
+            // Explorer reader capacity instead of blocking on queued P0s.
+            var directories = await _foregroundReadService.ReadManagerFoldersAsync(
+                node.LocalPath, token);
 
             if (token.IsCancellationRequested) return;
             item.Items.Clear();
