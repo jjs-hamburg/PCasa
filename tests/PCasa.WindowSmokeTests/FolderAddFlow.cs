@@ -696,7 +696,12 @@ internal static class FolderAddFlow
                 foreach (var dialog in Application.Current.Windows.OfType<Window>()
                              .Where(candidate => candidate.IsVisible &&
                                  ReferenceEquals(candidate.Owner, explorerWindow) &&
-                                 candidate is not PCasa.App.BrowseCacheProgressWindow))
+                                 candidate is not PCasa.App.BrowseCacheProgressWindow &&
+                                 // A real manager window contains both a DockPanel and
+                                 // a StackPanel, just like the generic error-dialog
+                                 // heuristic below. It must never be mistaken for
+                                 // an Explorer registration error and closed!
+                                 candidate is not PCasa.App.FolderManagerWindow))
                 {
                     // Only the actual PcasaDialog confirmation layout is an
                     // error condition here, not ordinary owned progress UI.
