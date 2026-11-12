@@ -101,6 +101,30 @@ internal static class CropFlow
             }
             if (!undo.HasRestorableVersion(path))
                 throw new Exception("Verified restore availability lost after second crop.");
+            // The same checksummed availability logic feeds the Edit menu,
+            // thumbnail context command and recycling glyph. An archive
+            // record alone is not sufficient when its bytes are corrupt.
+            var isolatedOptions = new UndoOptions
+            {
+                DirectoryPath = Path.Combine(root, "verified-undo"),
+                MaximumVersionsPerImage = 3,
+                MaximumBytes = 1024L * 1024 * 1024
+            };
+            var isolated = new UndoHistoryService(isolatedOptions);
+            var isolatedVersion = isolated.CaptureBeforeSave(path, CancellationToken.None);
+            if (!isolated.HasRestorableVersion(path) ||
+                !isolated.GetVerifiedRestorablePaths(CancellationToken.None).Contains(
+                    Path.GetFullPath(path)))
+                throw new Exception("Valid local Undo snapshot must be restorable.");
+            File.WriteAllBytes(isolatedVersion.SnapshotPath, [1, 2, 3]);
+            if (isolated.HasRestorableVersion(path) ||
+                isolated.GetVerifiedRestorablePaths(CancellationToken.None).Contains(
+                    Path.GetFullPath(path)))
+                throw new Exception("Corrupt Undo snapshot must never show Restore.");
+            File.Delete(isolatedVersion.SnapshotPath);
+            if (isolated.HasRestorableVersion(path))
+                throw new Exception("Missing Undo snapshot must never show Restore.");
+            Console.WriteLine("PASS: Restore availability rejects corrupted and missing snapshots.");
             Console.WriteLine("PASS: Crop -> Restore -> Crop reuses same path without file lock.");
             Console.WriteLine("PASS: MTA JPEG crop, source RAW untouched, GPS/keywords preserved, byte-perfect central Undo.");
             return 0;
