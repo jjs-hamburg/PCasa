@@ -80,69 +80,80 @@ jobs:
       - name: Verify selected GPS overlay at 6,000 photos and across continents
         shell: pwsh
         run: node tests/gps-map-overlay.test.cjs
+      # Compile the WPF project references ONCE before any per-test timeout.
+      # Otherwise the first dotnet run can spend the entire two-minute probe
+      # budget compiling XAML on a heavily loaded hosted Windows runner.
+      - name: Build catalog and WPF acceptance executables before timed probes
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          dotnet build tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "Catalog test executable failed to build" }
+          dotnet build tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw "WPF test executable failed to build" }
       - name: Verify startup gallery rendering beside blocked durable P0
         shell: pwsh
         timeout-minutes: 2
         run: |
-          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --startup-browse-probe
+          dotnet run --no-build --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --startup-browse-probe
       - name: Exercise real WPF gallery copy and move on monitored folders
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --gallery-files
       - name: Test real MTA JPEG crop, central Undo and preserved photo metadata
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --crop-flow
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --crop-flow
       - name: Verify taskmanager durable ordering, retry and safe cancellation
         timeout-minutes: 2
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager
 
       - name: Run WPF window smoke tests
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
       - name: Probe EXIF reader, GPS fields and legacy backfill
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --exif-probe
+          dotnet run --no-build --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --exif-probe
       - name: Verify persistent ExifTool tag-writing protocol
         timeout-minutes: 2
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --tag-write-probe
+          dotnet run --no-build --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --tag-write-probe
       - name: Verify durable GPS/tag package pause, restart and cursor recovery
         shell: pwsh
         timeout-minutes: 3
         run: |
-          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --durable-pause-probe
+          dotnet run --no-build --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release -- --durable-pause-probe
       - name: Run catalog regression executable
         env:
           PCASA_EXIFTOOL_PATH: ${{ github.workspace }}/tools/exiftool/exiftool.exe
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release
+          dotnet run --no-build --project tests/PCasa.CatalogTests/PCasa.CatalogTests.csproj --configuration Release
       - name: Exercise real WPF context-menu folder removal under active cache lock
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-removal
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-removal
       - name: Exercise real WPF priority folder add and restart
         timeout-minutes: 4
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-add
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-add
       - name: Exercise real WPF tag search and folder-anchor round trip
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --tag-flow
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --tag-flow
       - name: Verify global task ordering across P0, P4, GPS recipe admission and WPF buttons
         timeout-minutes: 2
         shell: pwsh
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager-global
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --taskmanager-global
 
       - name: Publish framework-dependent Windows x64 acceptance package
         shell: pwsh
@@ -206,7 +217,7 @@ jobs:
         shell: pwsh
         timeout-minutes: 3
         run: |
-          dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
+          dotnet run --no-build --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --chromium-credits "publish/PCasa/Licenses/Chromium-Credits.html"
           if ((Get-Item "publish/PCasa/Licenses/Chromium-Credits.html").Length -lt 50000) { throw "Chromium credits missing from installer payload" }
       - name: Collect and verify bundled third-party license files
         shell: pwsh

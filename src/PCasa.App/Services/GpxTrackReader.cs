@@ -16,7 +16,7 @@ public sealed class GpxOptions
         Path.Combine(PcasaDataPaths.SharedDataRoot, "GPX");
     public double CameraOffsetSeconds { get; set; }
     public string CameraTimeZoneId { get; set; } = TimeZoneInfo.Local.Id;
-    public int MaximumGapSeconds { get; set; } = 60;
+    public int MaximumGapSeconds { get; set; } = 120;
 
     public static GpxOptions Load()
     {
@@ -54,7 +54,7 @@ public sealed class GpxOptions
     }
 }
 
-public sealed record GpxTrackPoint(DateTimeOffset UtcTime, double Latitude, double Longitude);
+public sealed record GpxTrackPoint(DateTimeOffset UtcTime, double Latitude, double Longitude, int SegmentId = 0);
 public sealed record GpxFileSummary(string FilePath, DateTimeOffset First, DateTimeOffset Last, int PointCount);
 
 // Secure streaming reader: trackpoint coordinates and mandatory UTC time only.
@@ -64,6 +64,7 @@ public static class GpxTrackReader
     public static IReadOnlyList<GpxTrackPoint> Read(string path)
     {
         var points = new List<GpxTrackPoint>();
+        var segmentId = 0;
         using var stream = File.OpenRead(path);
         using var reader = XmlReader.Create(stream, new XmlReaderSettings
         {
@@ -74,8 +75,13 @@ public static class GpxTrackReader
         });
         while (reader.Read())
         {
-            if (reader.NodeType != XmlNodeType.Element ||
-                reader.LocalName is not ("trkpt" or "rtept")) continue;
+            if (reader.NodeType != XmlNodeType.Element) continue;
+            if (reader.LocalName is "trkseg" or "rte")
+            {
+                segmentId++;
+                continue;
+            }
+            if (reader.LocalName is not ("trkpt" or "rtept")) continue;
             var latText = reader.GetAttribute("lat");
             var lonText = reader.GetAttribute("lon");
             if (!double.TryParse(latText, NumberStyles.Float,
@@ -102,26 +108,67 @@ public static class GpxTrackReader
             if (timestamp is null ||
                 !DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal, out var instant)) continue;
-            points.Add(new GpxTrackPoint(instant.ToUniversalTime(), lat, lon));
+            points.Add(new GpxTrackPoint(instant.ToUniversalTime(), lat, lon, segmentId));
         }
-        return points.OrderBy(x => x.UtcTime).DistinctBy(x => x.UtcTime).ToArray();
+        return points.OrderBy(x => x.UtcTime).DistinctBy(x => (x.SegmentId, x.UtcTime)).ToArray();
     }
 
     public static DateTimeOffset CameraToUtc(DateTime cameraLocal, GpxOptions options)
+        => CameraToUtc(cameraLocal, options, options.CameraOffsetSeconds);
+
+    public static DateTimeOffset CameraToUtc(
+        DateTime cameraLocal, GpxOptions options, double offsetSeconds)
     {
+        if (!double.IsFinite(offsetSeconds) || Math.Abs(offsetSeconds) > 86400)
+            throw new ArgumentException("Invalid camera time offset.");
         var zone = TimeZoneInfo.FindSystemTimeZoneById(options.CameraTimeZoneId);
         var adjusted = DateTime.SpecifyKind(cameraLocal, DateTimeKind.Unspecified)
-            .AddSeconds(-options.CameraOffsetSeconds);
+            .AddSeconds(-offsetSeconds);
         if (zone.IsInvalidTime(adjusted) || zone.IsAmbiguousTime(adjusted))
             throw new InvalidOperationException("Ambiguous or invalid camera local time.");
         return new DateTimeOffset(adjusted, zone.GetUtcOffset(adjusted)).ToUniversalTime();
     }
 
+    // Shared, conservative segment/time/speed rule for map geometry
+    // and timestamp-based photo matching.
+    public static string? LinkFailure(
+        GpxTrackPoint first, GpxTrackPoint next, int maximumGapSeconds)
+    {
+        if (first.SegmentId != next.SegmentId)
+            return "Aufzeichnungslücke";
+        var gap = (next.UtcTime - first.UtcTime).TotalSeconds;
+        if (gap <= 0 || gap > maximumGapSeconds)
+            return "Zeitabstand zu groß";
+
+        // Discard apparent jumps even when timestamps happen to be close.
+        // 100 m/s is a deliberately generous upper bound (360 km/h).
+        const double maxSpeedMetersPerSecond = 100;
+        const double rad = Math.PI / 180;
+        var deltaLat = (next.Latitude - first.Latitude) * rad;
+        var deltaLon = (next.Longitude - first.Longitude) * rad;
+        var sine = Math.Pow(Math.Sin(deltaLat / 2), 2) +
+            Math.Cos(first.Latitude * rad) * Math.Cos(next.Latitude * rad) *
+            Math.Pow(Math.Sin(deltaLon / 2), 2);
+        var distanceMeters = 12742000 * Math.Asin(Math.Min(1, Math.Sqrt(sine)));
+        if (distanceMeters / gap > maxSpeedMetersPerSecond)
+            return "Unplausibler Positionssprung";
+
+        return null;
+    }
+
+    public sealed record MatchResult(
+        (double Latitude, double Longitude)? Position, string? FailureReason);
+
     public static (double Latitude, double Longitude)? Match(
+        IReadOnlyList<GpxTrackPoint> points, DateTimeOffset cameraUtc,
+        int maximumGapSeconds) => MatchDetailed(points, cameraUtc, maximumGapSeconds).Position;
+
+    public static MatchResult MatchDetailed(
         IReadOnlyList<GpxTrackPoint> points, DateTimeOffset cameraUtc,
         int maximumGapSeconds)
     {
-        if (points.Count == 0 || maximumGapSeconds <= 0) return null;
+        if (points.Count == 0 || maximumGapSeconds <= 0)
+            return new(null, "Keine gültigen GPX-Punkte");
         int lo = 0, hi = points.Count;
         while (lo < hi)
         {
@@ -130,18 +177,19 @@ public static class GpxTrackReader
             else hi = mid;
         }
         if (lo < points.Count && points[lo].UtcTime == cameraUtc)
-            return (points[lo].Latitude, points[lo].Longitude);
-        if (lo == 0 || lo == points.Count) return null;
+            return new((points[lo].Latitude, points[lo].Longitude), null);
+        if (lo == 0 || lo == points.Count)
+            return new(null, "Außerhalb des GPX-Zeitraums");
         var first = points[lo - 1];
         var next = points[lo];
+        var failure = LinkFailure(first, next, maximumGapSeconds);
+        if (failure is not null) return new(null, failure);
         var gap = (next.UtcTime - first.UtcTime).TotalSeconds;
-        if (gap <= 0 || gap > maximumGapSeconds) return null;
         var t = (cameraUtc - first.UtcTime).TotalSeconds / gap;
-        // Keep longitude interpolation on the short side of the dateline.
         var dLon = (next.Longitude - first.Longitude + 540) % 360 - 180;
         var lon = first.Longitude + t * dLon;
         if (lon > 180) lon -= 360;
         if (lon < -180) lon += 360;
-        return (first.Latitude + (next.Latitude - first.Latitude) * t, lon);
+        return new(((first.Latitude + (next.Latitude - first.Latitude) * t), lon), null);
     }
 }

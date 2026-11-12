@@ -30,6 +30,10 @@ public partial class MainWindow
     private double _cropRatio; // 0 = free
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
+    private BitmapSource? _cropPreviewOriginal;
+    private (double ImageWidth, double ImageHeight, double CanvasWidth,
+        double CanvasHeight, double ScrollX, double ScrollY)? _cropPreviewLayout;
+
     private string? _viewerCachedCameraDetails;
 
     // Use the ONE persisted EXIF catalog, never re-open the original
@@ -215,18 +219,42 @@ public partial class MainWindow
         };
         CropPreviewButton.PreviewMouseLeftButtonDown += (_, e) =>
         {
-            ViewerCropOverlay.Visibility = Visibility.Hidden;
+            if (_cropActive && PhotoViewerImage.Source is BitmapSource source &&
+                _cropPreviewOriginal is null)
+            {
+                var area = FitToImageAspect(_cropRect);
+                var x = Math.Clamp((int)Math.Floor(area.X * source.PixelWidth), 0, source.PixelWidth - 1);
+                var y = Math.Clamp((int)Math.Floor(area.Y * source.PixelHeight), 0, source.PixelHeight - 1);
+                var width = Math.Clamp((int)Math.Ceiling(area.Width * source.PixelWidth),
+                    1, source.PixelWidth - x);
+                var height = Math.Clamp((int)Math.Ceiling(area.Height * source.PixelHeight),
+                    1, source.PixelHeight - y);
+                _cropPreviewOriginal = source;
+                _cropPreviewLayout = (PhotoViewerImage.Width, PhotoViewerImage.Height,
+                    PhotoViewerCanvas.Width, PhotoViewerCanvas.Height,
+                    PhotoViewerScroller.HorizontalOffset, PhotoViewerScroller.VerticalOffset);
+                var cropped = new CroppedBitmap(source, new Int32Rect(x, y, width, height));
+                cropped.Freeze();
+                var (viewportWidth, viewportHeight) = ViewerViewportSize();
+                var scale = Math.Min(viewportWidth / cropped.PixelWidth,
+                    viewportHeight / cropped.PixelHeight);
+                PhotoViewerImage.Width = Math.Max(1, cropped.PixelWidth * scale);
+                PhotoViewerImage.Height = Math.Max(1, cropped.PixelHeight * scale);
+                PhotoViewerCanvas.Width = Math.Max(viewportWidth, PhotoViewerImage.Width);
+                PhotoViewerCanvas.Height = Math.Max(viewportHeight, PhotoViewerImage.Height);
+                PhotoViewerImage.Source = cropped;
+                PhotoViewerScroller.ScrollToHorizontalOffset(0);
+                PhotoViewerScroller.ScrollToVerticalOffset(0);
+                ViewerCropOverlay.Visibility = Visibility.Hidden;
+            }
             e.Handled = true;
         };
         CropPreviewButton.PreviewMouseLeftButtonUp += (_, e) =>
         {
-            if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
+            EndCropPreview();
             e.Handled = true;
         };
-        CropPreviewButton.LostMouseCapture += (_, _) =>
-        {
-            if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
-        };
+        CropPreviewButton.LostMouseCapture += (_, _) => EndCropPreview();
         ViewerCropOverlay.MouseLeftButtonUp += Crop_MouseUp;
         ViewerCropOverlay.LostMouseCapture += (_, _) => _cropDragging = false;
         PhotoViewerImage.SizeChanged += (_, _) => DrawCropFrame();
@@ -252,7 +280,7 @@ public partial class MainWindow
             !System.IO.Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
             PcasaDialog.Show(this,
-                "Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert.",
+                UiLanguage.T("Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert."),
                 UiLanguage.T("Zuschneiden"), MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -283,8 +311,28 @@ public partial class MainWindow
         UpdateCropSelectionButtons();
     }
 
+    private void EndCropPreview()
+    {
+        if (_cropPreviewOriginal is not { } source) return;
+        _cropPreviewOriginal = null;
+        PhotoViewerImage.Source = source;
+        if (_cropPreviewLayout is { } layout)
+        {
+            PhotoViewerImage.Width = layout.ImageWidth;
+            PhotoViewerImage.Height = layout.ImageHeight;
+            PhotoViewerCanvas.Width = layout.CanvasWidth;
+            PhotoViewerCanvas.Height = layout.CanvasHeight;
+            PhotoViewerScroller.ScrollToHorizontalOffset(layout.ScrollX);
+            PhotoViewerScroller.ScrollToVerticalOffset(layout.ScrollY);
+            _cropPreviewLayout = null;
+        }
+        if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
+        DrawCropFrame();
+    }
+
     private void EndCrop()
     {
+        EndCropPreview();
         _cropActive = false;
         _cropDragging = false;
         ViewerCropOverlay.ReleaseMouseCapture();
@@ -299,11 +347,13 @@ public partial class MainWindow
     private bool ConfirmCropExit()
     {
         if (!_cropActive) return true;
-        if (_cropHistory.Count > 1 || _cropRect.Width < .95 ||
-            _cropRect.Height < .95)
+        var baseline = _cropHistory.Count > 0 ? _cropHistory[0] : null;
+        if (baseline is not null &&
+            (_cropRect != baseline.Bounds || _cropRatio != baseline.AspectRatio ||
+             _cropRatioMode != baseline.Mode))
         {
             var response = PcasaDialog.Show(this,
-                "Zuschneiden ohne Speichern verlassen?",
+                UiLanguage.T("Zuschneiden ohne Speichern verlassen?"),
                 UiLanguage.T("Zuschneiden"),
                 MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (response != MessageBoxResult.Yes) return false;
@@ -723,6 +773,7 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
                 if (success)
                 {
+                    _ = RefreshRestoreBadgesAsync();
                     _viewerOriginalCache.Remove(request.ImageId);
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.FolderId, request.Path,

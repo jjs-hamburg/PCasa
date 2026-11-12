@@ -72,6 +72,12 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 if (Convert.ToInt32(superseded.ExecuteScalar()) != 0)
                     return;
             }
+            if (RawImageSource.IsRawPath(path))
+            {
+                ApplyRawGpsToCatalog(db, imageId, path, indexedSize,
+                    indexedTicks, latitude, longitude, mode, token);
+                return;
+            }
             // Never edit a source which another process changed after indexing.
             var before = new FileInfo(path);
             if (!before.Exists)
@@ -187,6 +193,80 @@ public sealed class GpsMetadataRepository(LocalDatabase database)
                 $"ReadMs={readMilliseconds}; NativeWriteMs={writeMilliseconds}; " +
                 $"VerifyMs={verifyMilliseconds}; TotalMs={elapsed.ElapsedMilliseconds}");
         }
+    }
+
+    // For camera RAW formats the catalog is intentionally the GPS authority:
+    // no EXIF/XMP/sidecar write is permitted. The separate durable override
+    // protects the selected coordinates from later scanner EXIF refreshes.
+    private static void ApplyRawGpsToCatalog(SqliteConnection db, long imageId,
+        string path, long indexedSize, long indexedTicks, double? latitude,
+        double? longitude, EditMode mode, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var source = new FileInfo(path);
+        if (!source.Exists)
+            throw new FileNotFoundException("RAW-Originaldatei nicht verfügbar.", path);
+        if (source.Length != indexedSize ||
+            source.LastWriteTimeUtc.Ticks != indexedTicks)
+            throw new IOException("RAW-Datei wurde außerhalb von PCasa verändert: " + path);
+        using var get = db.CreateCommand();
+        get.CommandText =
+            "SELECT gps_latitude,gps_longitude FROM image_exif WHERE image_id=$id";
+        get.Parameters.AddWithValue("$id", imageId);
+        double? oldLat, oldLon;
+        using (var row = get.ExecuteReader())
+        {
+            if (!row.Read())
+                throw new InvalidDataException(
+                    "RAW-Foto hat noch keinen EXIF-Katalogeintrag.");
+            oldLat = row.IsDBNull(0) ? null : row.GetDouble(0);
+            oldLon = row.IsDBNull(1) ? null : row.GetDouble(1);
+        }
+        var hasGps = oldLat.HasValue && oldLon.HasValue;
+        if (mode == EditMode.MissingOnly && hasGps) return;
+        if (mode == EditMode.Remove && !hasGps) return;
+        if (mode != EditMode.Remove &&
+            (!latitude.HasValue || !longitude.HasValue ||
+             !double.IsFinite(latitude.Value) || !double.IsFinite(longitude.Value) ||
+             latitude.Value is < -90 or > 90 || longitude.Value is < -180 or > 180))
+            throw new InvalidDataException("Ungültige RAW-GPS-Position.");
+
+        var lat = mode == EditMode.Remove ? null : latitude;
+        var lon = mode == EditMode.Remove ? null : longitude;
+        if (Same(oldLat, lat) && Same(oldLon, lon)) return;
+        token.ThrowIfCancellationRequested();
+        using var transaction = db.BeginTransaction();
+        using (var overrideCommand = db.CreateCommand())
+        {
+            overrideCommand.Transaction = transaction;
+            overrideCommand.CommandText = """
+                INSERT INTO raw_gps_overrides (image_id,gps_latitude,gps_longitude)
+                VALUES ($id,$lat,$lon)
+                ON CONFLICT(image_id) DO UPDATE SET
+                    gps_latitude=excluded.gps_latitude,
+                    gps_longitude=excluded.gps_longitude;
+                """;
+            overrideCommand.Parameters.AddWithValue("$id", imageId);
+            overrideCommand.Parameters.AddWithValue("$lat", (object?)lat ?? DBNull.Value);
+            overrideCommand.Parameters.AddWithValue("$lon", (object?)lon ?? DBNull.Value);
+            overrideCommand.ExecuteNonQuery();
+        }
+        using (var update = db.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE image_exif SET gps_latitude=$lat,gps_longitude=$lon
+                WHERE image_id=$id;
+                """;
+            update.Parameters.AddWithValue("$id", imageId);
+            update.Parameters.AddWithValue("$lat", (object?)lat ?? DBNull.Value);
+            update.Parameters.AddWithValue("$lon", (object?)lon ?? DBNull.Value);
+            if (update.ExecuteNonQuery() != 1)
+                throw new IOException("RAW-GPS-Katalogeintrag wurde nicht aktualisiert.");
+        }
+        transaction.Commit();
+        PCasaDiagnostics.WriteMessage("GPS.RawCatalog",
+            $"ImageId={imageId}; Mode={mode}; OriginalUnchanged=true");
     }
 
     private static bool Same(double? a, double? b)

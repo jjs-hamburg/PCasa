@@ -47,7 +47,9 @@ public partial class MainWindow
         GalleryAttributeGpsMenu.IsChecked = filter == "Gps";
         GalleryAttributeTagsMenu.IsChecked = filter == "Tags";
         GalleryAttributeRawMenu.IsChecked = filter == "Raw";
-        GalleryAttributeVideoMenu.IsChecked = filter == "Video";
+        GalleryAttributeVideoMenu.IsChecked = filter == "Video" && !inverse;
+        GalleryAttributePhotosMenu.IsChecked = filter == "Video" && inverse;
+        GalleryAttributeAllMediaMenu.IsChecked = filter == "None";
         GalleryAttributeFilterInvertButton.IsEnabled = filter != "None";
         GalleryAttributeFilterClearButton.IsEnabled = filter != "None";
         // Rotate the 24x24 CANVAS around its own center. Rotating a Path
@@ -69,7 +71,9 @@ public partial class MainWindow
     private async void GalleryAttributeFilterOption_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem { Tag: string choice }) return;
-        await ChangeGalleryAttributeFilterAsync(choice, false);
+        await ChangeGalleryAttributeFilterAsync(
+            choice == "VideoPhotos" ? "Video" : choice,
+            choice == "VideoPhotos");
     }
 
     private async void GalleryAttributeFilterInvert_Click(object sender, RoutedEventArgs e)

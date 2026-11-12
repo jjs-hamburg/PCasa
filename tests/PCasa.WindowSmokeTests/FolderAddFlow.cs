@@ -28,6 +28,9 @@ internal static class FolderAddFlow
         WriteJpeg(Path.Combine(afterRestart, "second.jpg"));
 
         PCasa.App.MainWindow? window = null;
+        ManualResetEventSlim? explorerWatchdogStop = null;
+        DispatcherTimer? explorerModalProbe = null;
+        string? explorerModalError = null;
         using var gateReady = new ManualResetEventSlim();
         using var releaseDelayedPhoto = new ManualResetEventSlim();
         Task? blockedFile = null;
@@ -516,6 +519,24 @@ internal static class FolderAddFlow
                     root.ServerSyncEnabled)).ToArray();
             new FolderManagerSelectionService(db).Apply(
                 new FolderManagerSelection(choices, BackgroundScanEnabled: false));
+            // This synthetic setup changes SQLite outside the real WPF
+            // Ordnermanager. Publish the resulting committed selection to
+            // the same UI snapshot that the manager's OK handler updates.
+            // Otherwise the following rejected Scan command incorrectly
+            // uses the OLD cached inclusion state and starts a delayed
+            // validation that can fail while Explorer Add is running.
+            var committedProjection = roots.GetAll().Select(root =>
+                (Folder: root, ExcludedPaths:
+                    (IReadOnlyList<string>)roots.GetExcludedPaths(root.Id))).ToArray();
+            var projectionField = typeof(PCasa.App.MainWindow).GetField(
+                "_dropTargetProjection",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new Exception("Folder projection missing.");
+            projectionField.SetValue(window, committedProjection);
+            if (!committedProjection.Any(root =>
+                    SamePath(root.Folder.LocalPath, initialRoot) &&
+                    root.ExcludedPaths.Any(path => SamePath(path, inactiveExplorer))))
+                throw new Exception("Excluded Explorer child was not published in WPF setup.");
 
             new BackgroundScanSettings { Enabled = false }.Save();
             var selectedRoot = Walk(tree).Single(item =>
@@ -596,23 +617,125 @@ internal static class FolderAddFlow
             if (inactiveItem.Tag?.GetType().GetProperty("PhotoFolderId")?
                     .GetValue(inactiveItem.Tag) is not null)
                 throw new Exception("Excluded unindexed folder already has a catalog ID.");
+            Console.WriteLine("TRACE Explorer: selecting excluded path");
             inactiveItem.IsSelected = true;
+            Console.WriteLine("TRACE Explorer: selected excluded path");
             var scan = typeof(PCasa.App.MainWindow).GetMethod(
                 "BrowseScanCurrentFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
+            Console.WriteLine("TRACE Explorer: before excluded scan");
             scan.Invoke(window, [tree, new RoutedEventArgs()]);
+            Console.WriteLine("TRACE Explorer: after excluded scan");
+            window.UpdateLayout();
+            Console.WriteLine("TRACE Explorer: after layout");
+            if (!roots.GetExcludedPaths(initialTreeRoot.Tag is null
+                    ? throw new Exception("Root tag missing.")
+                    : roots.GetAll().Single(root =>
+                        SamePath(root.LocalPath, initialRoot)).Id)
+                .Any(path => SamePath(path, inactiveExplorer)))
+                throw new Exception(
+                    "Explorer scan unexpectedly activated an excluded folder.");
+            var add = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseAddFolder_Click",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            // Distinguish actual modal error dialogs from the normal
+            // non-modal BrowseCacheProgressWindow. Closing the latter is a
+            // false positive and can interfere with regular cache work.
+            var explorerWindow = window;
             var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
                 .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(window)!;
+            var lastExplorerTrace = DateTime.UtcNow;
+            explorerModalProbe = new DispatcherTimer(DispatcherPriority.Background,
+                explorerWindow.Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(75)
+            };
+            explorerModalProbe.Tick += (_, _) =>
+            {
+                if ((DateTime.UtcNow - lastExplorerTrace).TotalSeconds >= 2)
+                {
+                    lastExplorerTrace = DateTime.UtcNow;
+                    Console.WriteLine("TRACE Explorer: dispatcher alive; open owned windows: " +
+                        string.Join(", ", Application.Current.Windows.OfType<Window>()
+                            .Where(candidate => candidate.IsVisible &&
+                                ReferenceEquals(candidate.Owner, explorerWindow))
+                            .Select(candidate => candidate.GetType().Name)));
+                }
+                foreach (var dialog in Application.Current.Windows.OfType<Window>()
+                             .Where(candidate => candidate.IsVisible &&
+                                 ReferenceEquals(candidate.Owner, explorerWindow) &&
+                                 candidate is not PCasa.App.BrowseCacheProgressWindow))
+                {
+                    // Only the actual PcasaDialog confirmation layout is an
+                    // error condition here, not ordinary owned progress UI.
+                    if (dialog.Content is not Grid layout ||
+                        !layout.Children.OfType<DockPanel>().Any() ||
+                        !layout.Children.OfType<StackPanel>().Any()) continue;
+                    var body = layout.Children.OfType<DockPanel>()
+                        .SelectMany(panel => panel.Children.OfType<ScrollViewer>())
+                        .Select(scroll => scroll.Content as TextBox)
+                        .FirstOrDefault()?.Text;
+                    explorerModalError = $"Unexpected Explorer Add error dialog: {dialog.Title}: {body}";
+                    Console.Error.WriteLine("FAIL: " + explorerModalError);
+                    dialog.Close();
+                    explorerModalProbe.Stop();
+                    break;
+                }
+            };
+            explorerModalProbe.Start();
+            explorerWatchdogStop = new ManualResetEventSlim();
+            var watchStop = explorerWatchdogStop;
+            var explorerWatchdog = new Thread(() =>
+            {
+                for (var elapsed = 10; elapsed <= 50; elapsed += 10)
+                {
+                    if (watchStop.Wait(TimeSpan.FromSeconds(10))) return;
+                    try
+                    {
+                        var active = scheduler.Snapshot()
+                            .Where(job => job.State is SchedulerJobState.Running or
+                                SchedulerJobState.Queued or SchedulerJobState.YieldRequested)
+                            .Take(12)
+                            .Select(job => job.State + " / " + job.Key)
+                            .ToArray();
+                        Console.Error.WriteLine($"TRACE Explorer {elapsed}s scheduler: " +
+                            string.Join(" | ", active));
+                        explorerWindow.Dispatcher.BeginInvoke(
+                            DispatcherPriority.Normal,
+                            new Action(() => Console.Error.WriteLine(
+                                $"TRACE Explorer {elapsed}s WPF heartbeat")));
+                        Console.Error.Flush();
+                    }
+                    catch (Exception error)
+                    {
+                        Console.Error.WriteLine(
+                            $"TRACE Explorer {elapsed}s watchdog sampling failed: {error}");
+                    }
+                }
+                Console.Error.WriteLine(
+                    "FAIL: Explorer Add did not finish within 50 seconds. " +
+                    "See dispatcher heartbeats and scheduler snapshot above.");
+                Console.Error.Flush();
+                Environment.Exit(36);
+            }) { IsBackground = true, Name = "ExplorerAddSmokeWatchdog" };
+            explorerWatchdog.Start();
+            Console.WriteLine("TRACE Explorer: before explicit add");
+            add.Invoke(window, [tree, new RoutedEventArgs()]);
+            Console.WriteLine("TRACE Explorer: after explicit add");
             Until(window, () =>
             {
+                if (explorerModalError is not null) return true;
                 var currentRoots = roots.GetAll();
                 var parent = currentRoots.FirstOrDefault(root =>
                     SamePath(root.LocalPath, initialRoot));
                 return parent is not null &&
                     !roots.GetExcludedPaths(parent.Id)
                         .Any(path => SamePath(path, inactiveExplorer));
-            }, "Explorer scan did not reactivate the excluded child in Ordnermanager.");
+            }, "Explicit Add to PCasa did not reactivate the excluded child in Ordnermanager.");
+            if (explorerModalError is not null)
+                throw new Exception(explorerModalError);
+            Console.WriteLine("TRACE Explorer: exclusion cleared");
             var afterActivation = roots.GetAll();
             if (afterActivation.Count != originalRoots.Length ||
                 afterActivation.Any(root =>
@@ -667,6 +790,8 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Explorer off destroyed original nodes or lost a newly registered root.");
 
+            explorerWatchdogStop.Set();
+            explorerModalProbe.Stop();
             Console.WriteLine(
                 "PASS: Explorer enables excluded subtree within original monitored root without duplicates or lost exclusions.");
 
@@ -1086,6 +1211,8 @@ internal static class FolderAddFlow
         }
         finally
         {
+            explorerWatchdogStop?.Set();
+            explorerModalProbe?.Stop();
             releaseDelayedPhoto.Set();
             releaseRestartPhoto.Set();
             try { blockedFile?.GetAwaiter().GetResult(); } catch { }
@@ -1249,9 +1376,20 @@ internal static class FolderAddFlow
         {
             window.UpdateLayout();
             var frame = new DispatcherFrame();
+            // Preserve idle dispatch for real gallery work, but do not let
+            // a busy dispatcher hold the test inside PushFrame forever.
+            var watchdog = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Normal,
+                window.Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(200)
+            };
+            watchdog.Tick += (_, _) => frame.Continue = false;
+            watchdog.Start();
             window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,
                 new Action(() => frame.Continue = false));
             Dispatcher.PushFrame(frame);
+            watchdog.Stop();
             if (ready()) return;
             Thread.Sleep(35);
         }

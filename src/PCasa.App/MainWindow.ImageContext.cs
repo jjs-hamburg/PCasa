@@ -28,10 +28,25 @@ public partial class MainWindow
         AddContextAction(menu, "Dateipfad kopieren",
             () => _ = CopyImagePathToClipboardAsync(id));
         AddContextAction(menu, "Eigenschaften", () => ShowFileProperties(id));
+        var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
+            IsEnabled = false };
+        restore.Click += (_, _) => UndoRestoreImage(id);
+        menu.Items.Add(restore);
+        _ = UpdateRestoreContextAsync(restore, id);
         menu.Items.Add(new Separator());
         AddContextAction(menu, "Duplizieren", () => DuplicateImage(id));
         AddContextAction(menu, "Löschen", () => _ = DeleteSelectedImagesAsync());
         menu.IsOpen = true;
+    }
+
+    private async Task UpdateRestoreContextAsync(MenuItem menu, long imageId)
+    {
+        try
+        {
+            var available = await Task.Run(() => HasRestorableVersion(imageId));
+            if (!Dispatcher.HasShutdownStarted) menu.IsEnabled = available;
+        }
+        catch (Exception ex) { PCasaDiagnostics.Write("Undo.ContextAvailability", ex); }
     }
 
     private static void AddContextAction(ContextMenu menu, string title, Action action)

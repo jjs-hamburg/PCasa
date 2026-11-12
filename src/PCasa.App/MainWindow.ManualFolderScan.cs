@@ -32,6 +32,52 @@ public partial class MainWindow
     private int _manualContextScanCount;
     private CancellationTokenSource? _manualContextCancellation;
 
+    private sealed record ExplorerRegisteredScan(string Directory,
+        long RootId, bool CreatedRoot, bool AcknowledgeTargetedPending);
+
+    private async void BrowseAddFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (FoldersTree.SelectedItem is not TreeViewItem { Tag: FolderTreeTag tag })
+            return;
+        var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
+        try
+        {
+            var registration = await _scheduler.RunAsync(
+                "folder-manager:explorer-add:" + Guid.NewGuid().ToString("N"),
+                SchedulerPriority.ManualAction,
+                token =>
+                {
+                    var result = new FolderManagerSelectionService(_database)
+                        .EnsureMonitoredFolder(directory, token);
+                    var snapshot = ReadFolderTreeConfigurationSnapshot();
+                    var root = FolderExclusionRules.FindOwner(directory,
+                        snapshot.Select(candidate => candidate.Folder))
+                        ?? throw new InvalidOperationException(
+                            "Hinzugefügter Ordner ist nicht registriert.");
+                    return (result.Changed, result.CreatedRoot,
+                        result.AcknowledgeTargetedPending, RootId: root.Id,
+                        Snapshot: snapshot);
+                }, workKind: SchedulerWorkKind.Catalog);
+            if (registration.Changed)
+            {
+                _dropTargetProjection = registration.Snapshot;
+                _dragTargetValidity.Clear();
+                PromoteExplorerMonitoredPath(directory);
+            }
+            BrowseScanCurrentFolder_Click(new ExplorerRegisteredScan(directory,
+                registration.RootId, registration.CreatedRoot,
+                registration.AcknowledgeTargetedPending), e);
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Explorer.AddToPCasa", ex);
+            System.Diagnostics.Trace.WriteLine("Explorer.AddToPCasa failed: " + ex);
+            Console.Error.WriteLine("Explorer.AddToPCasa failed: " + ex);
+            PcasaDialog.Show(this, ex.Message, "PCasa",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async void BrowseScanCurrentFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_folderRemovalPending)
@@ -51,6 +97,19 @@ public partial class MainWindow
         // outside the scheduler. Even an unreachable SMB path is checked by
         // the priority worker, not by the UI event handler.
         var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
+        var explicitAdd = sender is ExplorerRegisteredScan accepted &&
+            string.Equals(FolderExclusionRules.Normalize(accepted.Directory),
+                FolderExclusionRules.Normalize(directory),
+                StringComparison.OrdinalIgnoreCase) ? accepted : null;
+        // A scan is never a registration operation. Explorer may display
+        // unregistered paths, but only the explicit Add command activates them.
+        if (_allFolderProjectionRootPath is not null &&
+            (DisplayedMonitoredRoot(directory) is not { } registered ||
+             FolderExclusionRules.IsExcluded(directory, DisplayedExcludedPaths(registered.Id))))
+        {
+            StatusText.Text = UiLanguage.T("Diesen Ordner zuerst zu PCasa hinzufügen.");
+            return;
+        }
         // Manual requests form a LIFO stack. Do NOT cancel the predecessor:
         // its scanner cursor and progress remain valid for later resumption.
         _manualContextScanCount++;
@@ -100,50 +159,38 @@ public partial class MainWindow
 
         try
         {
-            // Explorer-originated manual scanning may register a previously
-            // inactive folder, but ONLY through Ordnermanager's transactional
-            // FolderManagerSelectionService.Apply. The scheduler owns that
-            // root transition and the subsequent durable manual scan.
-            bool newRoot = false;
-            bool acknowledgeTargetedPending = false;
-            long? expectedRootId = null;
+            // Explorer scanning may only use a root registered by the
+            // Folder Manager. The explicit "Add to PCasa" action is the
+            // sole registration path for an Explorer-selected directory.
+            bool newRoot = explicitAdd?.CreatedRoot == true;
+            bool acknowledgeTargetedPending =
+                explicitAdd?.AcknowledgeTargetedPending == true;
+            long? expectedRootId = explicitAdd?.RootId;
             if (_allFolderProjectionRootPath is not null)
             {
-                // The *persisted* catalog selection is authoritative here.
-                // Never decide a root's activation from a stale UI snapshot.
-                var registration = await _scheduler.RunAsync(
-                    "folder-manager:explorer-register:" + Guid.NewGuid().ToString("N"),
+                var persisted = await _scheduler.RunAsync(
+                    "folder-manager:explorer-validate:" + Guid.NewGuid().ToString("N"),
                     SchedulerPriority.ManualAction,
                     token =>
                     {
-                        var registration = new FolderManagerSelectionService(_database)
-                            .EnsureMonitoredFolder(directory, token);
+                        token.ThrowIfCancellationRequested();
                         var snapshot = ReadFolderTreeConfigurationSnapshot();
                         var root = FolderExclusionRules.FindOwner(directory,
                             snapshot.Select(candidate => candidate.Folder))
                             ?? throw new InvalidOperationException(
-                                "Der Ordner konnte nicht als Bildordner registriert werden.");
-                        return (registration.Changed, registration.CreatedRoot,
-                            registration.AcknowledgeTargetedPending,
-                            RootId: root.Id, Snapshot: snapshot);
+                                "Dieser Ordner ist nicht in PCasa registriert.");
+                        if (FolderExclusionRules.IsExcluded(directory,
+                            snapshot.First(x => x.Folder.Id == root.Id).ExcludedPaths))
+                            throw new InvalidOperationException(
+                                "Dieser Ordner ist im Ordnermanager deaktiviert.");
+                        return root;
                     }, cancellationToken: cancellation.Token,
                     workKind: SchedulerWorkKind.Catalog);
-
-                newRoot = registration.CreatedRoot;
-                acknowledgeTargetedPending = registration.AcknowledgeTargetedPending;
-                expectedRootId = registration.RootId;
-                if (registration.Changed)
-                {
-                    _dropTargetProjection = registration.Snapshot;
-                    _dragTargetValidity.Clear();
-                    // Newly activated subfolders also become permanent
-                    // catalog entries after the scan; never hide them when
-                    // Explorer Ansicht is turned off.
-                    PromoteExplorerMonitoredPath(directory);
-                    StatusText.Text = newRoot
-                        ? "Neuen Bildordner registriert · Manueller Scan gestartet"
-                        : "Unterordner im Ordnermanager aktiviert · Manueller Scan gestartet";
-                }
+                expectedRootId = persisted.Id;
+                acknowledgeTargetedPending |= string.Equals(
+                    FolderExclusionRules.Normalize(directory),
+                    FolderExclusionRules.Normalize(persisted.LocalPath),
+                    StringComparison.OrdinalIgnoreCase);
             }
             else
             {

@@ -10,6 +10,12 @@ internal static class ThumbnailStatusIconRenderer
 {
     private static readonly Brush GpsIconBrush =
         new SolidColorBrush(Color.FromRgb(225, 68, 76));
+    private static readonly Pen RestorePen = new(new SolidColorBrush(Color.FromRgb(52, 170, 76)), 1.55)
+        { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+    private static readonly Geometry RestoreGeometry = Geometry.Parse(
+        "M 4.7,0.8 C 7,0.3 9.6,2.1 9.9,4.5 M 8.2,3.5 L 10,5 L 11,3.1 " +
+        "M 10.2,6.1 C 9.7,8.6 7.5,10.2 5.2,9.7 M 6.9,8.7 L 4.7,9.7 L 6.2,11.2 " +
+        "M 3.9,9 C 1.4,7.5 1.1,4.5 2.8,2.5 M 2.8,4.7 L 2.8,2.1 L 0.6,2.7");
     private static readonly Brush RawIconBrush =
         new SolidColorBrush(Color.FromArgb(215, 33, 37, 42));
     private static readonly Geometry GpsPinGeometry = Geometry.Parse(
@@ -20,10 +26,17 @@ internal static class ThumbnailStatusIconRenderer
     private static readonly Pen TagOutlinePen = new(Brushes.DimGray, 0.8);
 
     public static void Draw(DrawingContext context, Rect imageRect,
-        bool hasGps, bool hasTags, bool isRaw, double dpi)
+        bool hasGps, bool hasTags, bool isRaw, double dpi, bool hasRestore = false)
     {
         var x = imageRect.Right - 11;
         var y = imageRect.Bottom - 14;
+        if (hasRestore)
+        {
+            context.PushTransform(new TranslateTransform(x - 1, y + 1));
+            context.DrawGeometry(null, RestorePen, RestoreGeometry);
+            context.Pop();
+            x -= 15;
+        }
         if (hasGps)
         {
             context.PushTransform(new TranslateTransform(x, y));
@@ -73,6 +86,11 @@ public sealed class ThumbnailStatusIconOverlay : FrameworkElement
             typeof(ThumbnailStatusIconOverlay),
             new FrameworkPropertyMetadata(false,
                 FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty HasRestoreProperty =
+        DependencyProperty.Register(nameof(HasRestore), typeof(bool),
+            typeof(ThumbnailStatusIconOverlay),
+            new FrameworkPropertyMetadata(false,
+                FrameworkPropertyMetadataOptions.AffectsRender));
     public static readonly DependencyProperty ShowIconsProperty =
         DependencyProperty.Register(nameof(ShowIcons), typeof(bool),
             typeof(ThumbnailStatusIconOverlay),
@@ -94,6 +112,11 @@ public sealed class ThumbnailStatusIconOverlay : FrameworkElement
         get => (bool)GetValue(IsRawProperty);
         set => SetValue(IsRawProperty, value);
     }
+    public bool HasRestore
+    {
+        get => (bool)GetValue(HasRestoreProperty);
+        set => SetValue(HasRestoreProperty, value);
+    }
     public bool ShowIcons
     {
         get => (bool)GetValue(ShowIconsProperty);
@@ -103,10 +126,10 @@ public sealed class ThumbnailStatusIconOverlay : FrameworkElement
     protected override void OnRender(DrawingContext drawingContext)
     {
         base.OnRender(drawingContext);
-        if (!ShowIcons || !(HasGps || HasTags || IsRaw)) return;
+        if (!ShowIcons || !(HasGps || HasTags || IsRaw || HasRestore)) return;
         ThumbnailStatusIconRenderer.Draw(drawingContext,
             new Rect(0, 0, ActualWidth, ActualHeight),
             HasGps, HasTags, IsRaw,
-            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            VisualTreeHelper.GetDpi(this).PixelsPerDip, HasRestore);
     }
 }

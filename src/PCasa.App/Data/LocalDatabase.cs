@@ -156,6 +156,43 @@ public sealed class LocalDatabase
             exif.ExecuteNonQuery();
         }
 
+        // RAW originals must never be modified. A catalog-only GPS override
+        // is explicitly retained in SQLite and projected back onto image_exif
+        // after each source metadata rescan. No sidecars and no RAW writes.
+        using (var rawGps = connection.CreateCommand())
+        {
+            rawGps.CommandText = """
+                CREATE TABLE IF NOT EXISTS raw_gps_overrides (
+                    image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                    gps_latitude REAL,
+                    gps_longitude REAL
+                );
+                CREATE TRIGGER IF NOT EXISTS raw_gps_after_exif_insert
+                AFTER INSERT ON image_exif
+                WHEN EXISTS(SELECT 1 FROM raw_gps_overrides WHERE image_id=NEW.image_id)
+                BEGIN
+                    UPDATE image_exif
+                       SET gps_latitude=(SELECT gps_latitude FROM raw_gps_overrides WHERE image_id=NEW.image_id),
+                           gps_longitude=(SELECT gps_longitude FROM raw_gps_overrides WHERE image_id=NEW.image_id)
+                     WHERE image_id=NEW.image_id;
+                END;
+                CREATE TRIGGER IF NOT EXISTS raw_gps_after_exif_update
+                AFTER UPDATE OF gps_latitude,gps_longitude ON image_exif
+                WHEN EXISTS(SELECT 1 FROM raw_gps_overrides WHERE image_id=NEW.image_id)
+                 AND (NEW.gps_latitude IS NOT
+                      (SELECT gps_latitude FROM raw_gps_overrides WHERE image_id=NEW.image_id)
+                   OR NEW.gps_longitude IS NOT
+                      (SELECT gps_longitude FROM raw_gps_overrides WHERE image_id=NEW.image_id))
+                BEGIN
+                    UPDATE image_exif
+                       SET gps_latitude=(SELECT gps_latitude FROM raw_gps_overrides WHERE image_id=NEW.image_id),
+                           gps_longitude=(SELECT gps_longitude FROM raw_gps_overrides WHERE image_id=NEW.image_id)
+                     WHERE image_id=NEW.image_id;
+                END;
+                """;
+            rawGps.ExecuteNonQuery();
+        }
+
         // One durable metadata index shared by scanner, sidebar and tag search.
         // FTS rows are synchronized by SQLite triggers; no second in-memory tag list.
         using (var tags = connection.CreateCommand())

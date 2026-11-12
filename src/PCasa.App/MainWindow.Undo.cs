@@ -18,14 +18,45 @@ public partial class MainWindow
         dialog.ShowDialog();
     }
 
-    private void UndoRestore_Click(object sender, RoutedEventArgs e)
-    {
-        var imageId = _viewerOpen && _viewerSequence is not null
+    private long CurrentRestoreImageId =>
+        _viewerOpen && _viewerSequence is not null
             ? _viewerSequence.At(_viewerCurrentIndex).ImageId
             : _selectedImageIds.Count == 1 ? _selectedImageIds.First() : 0;
+
+    private bool HasRestorableVersion(long imageId)
+    {
+        if (imageId <= 0) return false;
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = "SELECT local_path FROM images WHERE id=$id";
+        command.Parameters.AddWithValue("$id", imageId);
+        var path = command.ExecuteScalar() as string;
+        return path is not null &&
+            new UndoHistoryService(UndoOptions.Load()).HasRestorableVersion(path);
+    }
+
+    private async void EditMenu_SubmenuOpened(object sender, RoutedEventArgs e)
+    {
+        var imageId = CurrentRestoreImageId;
+        EditRestoreMenuItem.IsEnabled = false;
+        if (imageId <= 0) return;
+        try
+        {
+            var available = await Task.Run(() => HasRestorableVersion(imageId));
+            if (!Dispatcher.HasShutdownStarted && imageId == CurrentRestoreImageId)
+                EditRestoreMenuItem.IsEnabled = available;
+        }
+        catch (Exception ex) { PCasaDiagnostics.Write("Undo.Availability", ex); }
+    }
+
+    private void UndoRestore_Click(object sender, RoutedEventArgs e)
+        => UndoRestoreImage(CurrentRestoreImageId);
+
+    private void UndoRestoreImage(long imageId)
+    {
         if (imageId <= 0)
         {
-            PcasaDialog.Show(this, "Bitte genau ein Bild auswählen.",
+            PcasaDialog.Show(this, UiLanguage.T("Bitte genau ein Bild auswählen."),
                 "Undo", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -44,7 +75,7 @@ public partial class MainWindow
         var versions = service.GetVersions(path);
         if (versions.Count == 0)
         {
-            PcasaDialog.Show(this, "Für dieses Bild sind noch keine Undo-Sicherungen vorhanden.",
+            PcasaDialog.Show(this, UiLanguage.T("Für dieses Bild sind noch keine Undo-Sicherungen vorhanden."),
                 "Undo",MessageBoxButton.OK,MessageBoxImage.Information);
             return;
         }
@@ -53,7 +84,7 @@ public partial class MainWindow
             dialog.SelectedVersion is not { } selected) return;
         var request = new UndoRestoreRecipe(path,selected.Id,imageId,monitoredId);
         var key = "undo:restore:" + Guid.NewGuid().ToString("N");
-        BeginVisibleManualOperation(key,"Bild wiederherstellen",1);
+        BeginVisibleManualOperation(key,UiLanguage.T("Bild wiederherstellen"),1);
         Task task;
         try
         {
@@ -74,10 +105,10 @@ public partial class MainWindow
         package.AddStep(token =>
         {
             token.ThrowIfCancellationRequested();
-            _scheduler.ReportProgress(key,"Bild wiederherstellen",0,1,request.Path);
+            _scheduler.ReportProgress(key,UiLanguage.T("Bild wiederherstellen"),0,1,request.Path);
             new UndoHistoryService(UndoOptions.Load()).Restore(
                 request.Path,request.VersionId,token);
-            _scheduler.ReportProgress(key,"Bild wiederherstellen",1,1,request.Path);
+            _scheduler.ReportProgress(key,UiLanguage.T("Bild wiederherstellen"),1,1,request.Path);
             return Task.CompletedTask;
         });
         return package;
@@ -103,6 +134,7 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
                 if (succeeded)
                 {
+                    _ = RefreshRestoreBadgesAsync();
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.MonitoredFolderId,request.Path,
                         BackgroundFolderChangeKind.ScanFile,

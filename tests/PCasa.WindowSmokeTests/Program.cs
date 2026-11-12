@@ -66,7 +66,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] {
-                    "Datei", "Ordner", "Darstellung", "Optionen", "Hilfe" }))
+                    "Datei", "Ordner", "Bearbeiten", "Darstellung", "Optionen", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             var fileMenu = items.Single(item => Equals(item.Header, "Datei"));
@@ -76,9 +76,13 @@ internal static class Program
             var optionsMenu = items.Single(item => Equals(item.Header, "Optionen"));
             if (!optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     Equals(item.Header, "Schreibfehler")) ||
-                items.Any(item => Equals(item.Header, "Extras") ||
-                                  Equals(item.Header, "Bearbeiten")))
-                throw new Exception("Write errors belong under Options; Edit and Extras were removed.");
+                items.Any(item => Equals(item.Header, "Extras")))
+                throw new Exception("Write errors belong under Options; Extras is not present.");
+            var editMenu = items.Single(item => Equals(item.Header, "Bearbeiten"));
+            var restoreMenu = editMenu.Items.OfType<MenuItem>().Single(item =>
+                Equals(item.Header, "Bild wiederherstellen"));
+            if (restoreMenu.IsEnabled)
+                throw new Exception("Restore must be disabled without a selected, restorable image.");
             var helpMenu = items.Single(item => Equals(item.Header, "Hilfe"));
             var helpCommands = helpMenu.Items.OfType<MenuItem>().ToArray();
             if (helpCommands.Length != 2 ||
@@ -210,7 +214,7 @@ internal static class Program
                 !englishMenu.IsChecked || germanMenu.IsChecked ||
                 !menu.Items.OfType<MenuItem>()
                     .Select(item => item.Header?.ToString())
-                    .SequenceEqual(new[] { "File", "Folder", "Appearance", "Options", "Help" }))
+                    .SequenceEqual(new[] { "File", "Folder", "Edit", "Appearance", "Options", "Help" }))
                 throw new Exception("English translations were not applied live.");
             AssertCaptionGaps("en");
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
@@ -336,15 +340,15 @@ internal static class Program
                 System.IO.File.WriteAllText(gpxFile,
                     "<gpx><trk><trkseg>" +
                     "<trkpt lat='10' lon='20'><time>2026-11-10T10:00:00Z</time></trkpt>" +
-                    "<trkpt lat='11' lon='21'><time>2026-11-10T10:00:10Z</time></trkpt>" +
+                    "<trkpt lat='10.0002' lon='20.0002'><time>2026-11-10T10:00:10Z</time></trkpt>" +
                     "</trkseg></trk></gpx>");
                 var points = PCasa.App.Services.GpxTrackReader.Read(gpxFile);
                 if (points.Count != 2) throw new Exception("GPX parser lost time points.");
                 var midpoint = PCasa.App.Services.GpxTrackReader.Match(points,
                     new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),60);
                 if (midpoint is not { } p ||
-                    Math.Abs(p.Latitude-10.5)>0.0001 ||
-                    Math.Abs(p.Longitude-20.5)>0.0001 ||
+                    Math.Abs(p.Latitude-10.0001)>0.00001 ||
+                    Math.Abs(p.Longitude-20.0001)>0.00001 ||
                     PCasa.App.Services.GpxTrackReader.Match(points,
                         new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),5) is not null)
                     throw new Exception("GPX interpolation or gap limit is wrong.");
@@ -676,12 +680,13 @@ internal static class Program
                 ?? throw new Exception("Separate red circled clear button is missing.");
             var attributeSelector = window.FindName("GalleryAttributeFilterSelectorButton") as Button
                 ?? throw new Exception("Property filter selection is missing.");
-            if (attributeSelector.ContextMenu?.Items.Count != 4 ||
-                 !attributeSelector.ContextMenu.Items.OfType<MenuItem>().Any(item =>
-                     item.Tag is string tag && tag == "Video") ||
+            if (attributeSelector.ContextMenu?.Items.Count != 7 ||
+                 !new[] { "None", "VideoPhotos", "Video", "Gps", "Tags", "Raw" }
+                     .All(tag => attributeSelector.ContextMenu.Items.OfType<MenuItem>()
+                         .Any(item => item.Tag is string actual && actual == tag)) ||
                 attributeInvert.IsEnabled || attributeClear.IsEnabled ||
                 attributeLabel.Text != "Filter")
-                throw new Exception("Property filter initial state and four menu choices are incorrect.");
+                throw new Exception("Property filter initial state and six media/property choices are incorrect.");
             var navigationBar = window.FindName("GalleryNavigationBar") as Border
                 ?? throw new Exception("Navigation bar must be outside the scrollable gallery.");
             var navigationNames = new[] { "FolderStart", "FolderEnd",
@@ -997,6 +1002,18 @@ internal static class Program
                 !Matching("None", false))
                 throw new Exception("GPS, Tags and RAW filter predicates/inversion are incorrect.");
             Console.WriteLine("PASS: Photo property filtering and inversion use indexed GPS/tag/RAW flags.");
+            var videoEntry = synthetic[1] with { FileName = "scene.mp4" };
+            var photoEntry = synthetic[2] with { FileName = "scene.jpg" };
+            bool IsMatch(BrowseThumbnailIndexEntry image, string kind, bool inverted) =>
+                (bool)matcher.Invoke(null, new object[] { image, kind, inverted })!;
+            if (!IsMatch(videoEntry, "Video", false) ||
+                IsMatch(videoEntry, "Video", true) ||
+                IsMatch(photoEntry, "Video", false) ||
+                !IsMatch(photoEntry, "Video", true) ||
+                !IsMatch(videoEntry, "None", false) ||
+                !IsMatch(photoEntry, "None", false))
+                throw new Exception("All media/photos/videos filtering produced incorrect matches.");
+            Console.WriteLine("PASS: All media, photos and video share the existing gallery property filter.");
 
             // A property toggle must preserve a matching current image and
             // otherwise choose the nearest following/preceding match.
@@ -1285,6 +1302,18 @@ internal static class Program
                         $"Edge={surface.GetLiveFolderEdge(scroller.VerticalOffset, scroller.ViewportHeight, 200)}, " +
                         $"Deferred={scanDirtyField.GetValue(window)}");
 
+                // The previous check deliberately visits a LIVE folder edge.
+                // There, pending scanner work may legally refresh from the
+                // runner's real (empty) catalog, replacing our synthetic
+                // gallery. Start the separate interior-policy assertion with
+                // its synthetic fixture again; never interpret an empty
+                // real catalog as a failure of the interior boundary rule.
+                pages.SetIndex(synthetic);
+                surface.SetData(synthetic, groups, pages);
+                Flush(window);
+                if (surface.GetFolderOffset(100) is null ||
+                    surface.GetFolderOffset(200) is null)
+                    throw new Exception("Synthetic gallery fixture not restored before interior test.");
                 // No first/last row is visible deep inside the large first
                 // folder. Null here means INTERIOR, not an empty gallery.
                 scroller.ScrollToVerticalOffset(2200);
@@ -1988,9 +2017,28 @@ internal static class Program
                 var gpsSidebar = (Border?)window.FindName("InfoSidebarPanel")
                     ?? throw new Exception("GPS sidebar missing.");
                 var previousGpsMode = sidebarModeField.GetValue(window);
+                // A filmstrip double-click requires a photo represented in
+                // the GPS points or in the actual gallery selection.
+                var fullscreenPointField = viewerType.GetField("_gpsPoints", reflectFlags)!;
+                var previousFullscreenPoints = fullscreenPointField.GetValue(window);
+                var fullscreenSelectedIds = (HashSet<long>)viewerType.GetField(
+                    "_selectedImageIds", reflectFlags)!.GetValue(window)!;
+                var hadFullscreenSelectedId = fullscreenSelectedIds.Contains(999L);
+                var fullscreenPointType = viewerType.GetNestedType("GpsPoint",
+                    System.Reflection.BindingFlags.NonPublic)!;
+                var fullscreenPoint = Activator.CreateInstance(fullscreenPointType,
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic,
+                    null, new object[] { 999L, "synthetic-viewer-photo.jpg",
+                        28.416d, -16.567d, true }, null)!;
+                var fullscreenPointArray = Array.CreateInstance(fullscreenPointType, 1);
+                fullscreenPointArray.SetValue(fullscreenPoint, 0);
                 try
                 {
                     sidebarModeField.SetValue(window, "GPS");
+                    fullscreenPointField.SetValue(window, fullscreenPointArray);
+                    fullscreenSelectedIds.Add(999L);
                     relayoutWorkspace.Invoke(window, null);
                     Flush(window);
                     gpsFullscreenClick.Invoke(window, new object[] {
@@ -2012,10 +2060,9 @@ internal static class Program
                         .Invoke(window, null);
                     var filmstripList = (ListBox?)window.FindName("GpsFilmstripList")
                         ?? throw new Exception("GPS filmstrip list missing.");
-                    // This is deliberately a synthetic viewer-only photo
-                    // without a catalog/GPS row. Suppress the real filmstrip
-                    // SelectionChanged -> GPS catalog request while setting
-                    // up the isolated double-click test fixture.
+                    // Use a synthetic GPS-valid point without an actual photo file.
+                    // Suppress the real selection-triggered catalog request
+                    // while preparing this isolated double-click fixture.
                     var stripUpdating = viewerType.GetField("_gpsFilmstripUpdating", reflectFlags)!;
                     stripUpdating.SetValue(window, true);
                     try
@@ -2062,6 +2109,8 @@ internal static class Program
                     if ((bool)gpsFullscreenFlag.GetValue(window)!)
                         gpsFullscreenClick.Invoke(window, new object[] {
                             window, new RoutedEventArgs(Button.ClickEvent) });
+                    if (!hadFullscreenSelectedId) fullscreenSelectedIds.Remove(999L);
+                    fullscreenPointField.SetValue(window, previousFullscreenPoints);
                     sidebarModeField.SetValue(window, previousGpsMode);
                     relayoutWorkspace.Invoke(window, null);
                     Flush(window);
@@ -2228,12 +2277,26 @@ internal static class Program
                         new[] { new GpsPhotoCluster(1000, 28.415, -16.568,
                             new long[] { 1000, 1001, 1002 }) });
                     clusterClick.Invoke(window, new object[] { 1000L, 77L });
-                    Flush(window);
+                    var immediateClusterCount = strip.Items.Count;
+                    var immediatePointGroup = viewerType.GetField("_gpsFilmstripPointIds",
+                        reflectFlags)!.GetValue(window) as HashSet<long>;
+                    var immediatePointGroupCount = immediatePointGroup?.Count ?? -1;
+                    // The click synchronously updates ItemsSource. A later
+                    // unrelated asynchronous gallery refresh is tested
+                    // separately and must not mutate this synthetic fixture.
                     if (strip.Items.Count != 3 ||
                         !strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>()
                             .Select(x => x.Id).Order()
                             .SequenceEqual(new long[] { 1000, 1001, 1002 }))
-                        throw new Exception("Cluster click did not show its three photos.");
+                        throw new Exception("Cluster click did not show its three photos: " +
+                            $"actual={string.Join(",", strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().Select(x => x.Id))}; " +
+                            $"immediate={immediateClusterCount}; pointGroupBeforeFlush={immediatePointGroupCount}; " +
+                            $"pointGroupAfterFlush={(viewerType.GetField("_gpsFilmstripPointIds", reflectFlags)!.GetValue(window) as HashSet<long>)?.Count ?? -1}; " +
+                            $"revision={versionField.GetValue(window)}; clusterCount={((IReadOnlyList<GpsPhotoCluster>)clusterField.GetValue(window)!).Count}; " +
+                            $"toggle={stripToggle.IsChecked}; visible={strip.IsVisible}; " +
+                            $"frozen={viewerType.GetField("_gpsFilmstripFrozen", reflectFlags)!.GetValue(window)}; " +
+                            $"mode={sidebarModeField.GetValue(window)}; " +
+                            $"indexGps={string.Join(",", gpsSourceCatalog.Take(4).Select(x => $"{x.ImageId}:{x.HasGps}"))}");
                     clusterClick.Invoke(window, new object[] { 1000L, 76L });
                     if (strip.Items.Count != 3)
                         throw new Exception("Stale cluster click changed photo group.");

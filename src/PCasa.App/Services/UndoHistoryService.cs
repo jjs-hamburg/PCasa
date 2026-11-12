@@ -41,7 +41,7 @@ public sealed class UndoOptions
 
     public void Save()
     {
-        if (!IsValid()) throw new ArgumentException("Invalid undo options.");
+        if (!IsValid()) throw new ArgumentException(UiLanguage.T("Ungültige Undo-Einstellungen."));
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
         var temp = SettingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -65,7 +65,7 @@ public sealed class UndoHistoryService
     private readonly UndoOptions _options;
     public UndoHistoryService(UndoOptions options)
     {
-        if (!options.IsValid()) throw new ArgumentException("Invalid undo options.");
+        if (!options.IsValid()) throw new ArgumentException(UiLanguage.T("Ungültige Undo-Einstellungen."));
         _options = options;
     }
 
@@ -80,6 +80,46 @@ public sealed class UndoHistoryService
             return EnumerateVersions().Where(v => string.Equals(v.SourcePath,
                     Path.GetFullPath(sourcePath), StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(v => v.SavedAtUtc).ToArray();
+    }
+
+    private static bool IsVerifiedVersion(UndoVersion version, CancellationToken token)
+    {
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            using var data = File.OpenRead(version.SnapshotPath);
+            if (data.Length != version.ByteCount) return false;
+            var hash = Convert.ToHexString(SHA256.HashData(data));
+            return string.Equals(hash, version.Sha256,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { return false; }
+    }
+
+    // Identical availability policy for Edit, context menus and gallery icons.
+    // Only the local Undo archive is read; source images, including SMB/NAS,
+    // are never opened for an availability check.
+    public bool HasRestorableVersion(string sourcePath)
+    {
+        return GetVersions(sourcePath).Any(version =>
+            IsVerifiedVersion(version, CancellationToken.None));
+    }
+
+    public IReadOnlySet<string> GetVerifiedRestorablePaths(CancellationToken token)
+    {
+        lock (Gate)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var version in EnumerateVersions())
+            {
+                token.ThrowIfCancellationRequested();
+                if (!result.Contains(version.SourcePath) &&
+                    IsVerifiedVersion(version, token))
+                    result.Add(version.SourcePath);
+            }
+            return result;
+        }
     }
 
     private List<UndoVersion> EnumerateVersions()
@@ -110,14 +150,14 @@ public sealed class UndoHistoryService
     public UndoVersion CaptureBeforeSave(string originalPath, CancellationToken token)
     {
         if (!IsEditableImage(originalPath))
-            throw new NotSupportedException("RAW and non-JPEG files are not image-editable.");
+            throw new NotSupportedException(UiLanguage.T("RAW und andere Nicht-JPEG-Dateien können nicht bearbeitet werden."));
         lock (Gate)
         {
             token.ThrowIfCancellationRequested();
             var path = Path.GetFullPath(originalPath);
             var size = new FileInfo(path).Length;
             if (size > _options.MaximumBytes)
-                throw new IOException("Undo capacity is smaller than the original image.");
+                throw new IOException(UiLanguage.T("Die Undo-Kapazität ist kleiner als das Originalfoto."));
             Directory.CreateDirectory(ArchiveRoot);
             var id = Guid.NewGuid();
             var data = Path.Combine(ArchiveRoot, id.ToString("N") + ".bin");
@@ -145,7 +185,7 @@ public sealed class UndoHistoryService
                     }
                     output.Flush(flushToDisk: true);
                     if (copied != size)
-                        throw new IOException("Original image changed during Undo backup.");
+                        throw new IOException(UiLanguage.T("Das Original wurde während der Sicherung verändert."));
                     hash = Convert.ToHexString(hasher.GetHashAndReset());
                 }
                 File.Move(temp,data);
@@ -153,7 +193,7 @@ public sealed class UndoHistoryService
                 using var verified = File.OpenRead(data);
                 if (!string.Equals(Convert.ToHexString(SHA256.HashData(verified)),
                         hash,StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("Undo backup checksum verification failed.");
+                    throw new IOException(UiLanguage.T("Die Undo-Sicherung hat eine ungültige Prüfsumme."));
                 var version = new UndoVersion(id,path,data,DateTimeOffset.UtcNow,size,hash);
                 File.WriteAllText(meta,JsonSerializer.Serialize(version));
                 Prune(protectedId:id);
@@ -189,7 +229,7 @@ public sealed class UndoHistoryService
             total -= v.ByteCount;
         }
         if (total > _options.MaximumBytes)
-            throw new IOException("Undo storage capacity exhausted.");
+            throw new IOException(UiLanguage.T("Der Undo-Speicher ist voll."));
         foreach (var version in versions.Where(v => !keep.Contains(v.Id)))
         {
             File.Delete(Path.Combine(ArchiveRoot, version.Id.ToString("N")+".json"));
@@ -201,14 +241,14 @@ public sealed class UndoHistoryService
     {
         var path = Path.GetFullPath(originalPath);
         if (!IsEditableImage(path))
-            throw new NotSupportedException("RAW cannot be restored as an edited image.");
+            throw new NotSupportedException(UiLanguage.T("RAW kann nicht als bearbeitetes Bild wiederhergestellt werden."));
         using (SourceFileLocks.Enter(path,token))
         {
             var version = GetVersions(path).FirstOrDefault(v => v.Id == versionId)
-                ?? throw new FileNotFoundException("Undo version no longer exists.");
+                ?? throw new FileNotFoundException(UiLanguage.T("Die Undo-Version ist nicht mehr vorhanden."));
             using (var data = File.OpenRead(version.SnapshotPath))
                 if (Convert.ToHexString(SHA256.HashData(data)) != version.Sha256)
-                    throw new InvalidDataException("Undo version checksum mismatch.");
+                    throw new InvalidDataException(UiLanguage.T("Die Undo-Sicherung hat eine ungültige Prüfsumme."));
             // Restoration itself becomes undoable.
             CaptureBeforeSave(path,token);
             var temp = Path.Combine(Path.GetDirectoryName(path)!,
@@ -231,7 +271,7 @@ public sealed class UndoHistoryService
         if (string.IsNullOrWhiteSpace(exifTool))
             exifTool = Path.Combine(AppContext.BaseDirectory,"exiftool","exiftool.exe");
         if (!File.Exists(exifTool))
-            throw new FileNotFoundException("ExifTool required to preserve current metadata.",
+            throw new FileNotFoundException(UiLanguage.T("Zum Erhalten der Metadaten wird ExifTool benötigt."),
                 exifTool);
         var start = new System.Diagnostics.ProcessStartInfo(exifTool)
         {
@@ -254,7 +294,7 @@ public sealed class UndoHistoryService
                 catch (InvalidOperationException) { }
             });
             if (!child.WaitForExit(120000) || child.ExitCode != 0)
-                throw new IOException("ExifTool could not preserve current GPS and tags.");
+                throw new IOException(UiLanguage.T("ExifTool konnte GPS und Tags nicht erhalten."));
         }
         finally { ExifToolProcessRegistry.Retire(child); }
     }

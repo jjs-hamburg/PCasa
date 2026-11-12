@@ -68,7 +68,8 @@ public sealed record BrowseThumbnailIndexEntry(
     long? TakenUtcTicks = null,
     int OriginalWidth = 0,
     int OriginalHeight = 0,
-    string? LegacyThumbnailPath = null);
+    string? LegacyThumbnailPath = null,
+    bool HasRestore = false);
 
 public sealed record BrowseCacheCandidate(
     long ImageId,

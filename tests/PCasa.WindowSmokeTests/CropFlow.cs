@@ -77,6 +77,55 @@ internal static class CropFlow
                 throw new Exception("Undo backup does not match the original bytes.");
             if (Directory.GetFiles(root, ".pcasa-crop-*").Length > 0)
                 throw new Exception("Temporary crop files were not removed.");
+            // Regression for the reported Windows file-lock sequence:
+            // Crop -> restore -> crop the same path again, on MTA workers.
+            var undo = new UndoHistoryService(UndoOptions.Load());
+            Task.Run(() => undo.Restore(path, versions[0].Id,
+                CancellationToken.None)).GetAwaiter().GetResult();
+            using (var restoredInput = File.OpenRead(path))
+            {
+                var restoredFrame = BitmapDecoder.Create(restoredInput,
+                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.Single();
+                if (restoredFrame.PixelWidth != 480 || restoredFrame.PixelHeight != 320)
+                    throw new Exception("Undo did not restore original image dimensions.");
+            }
+            Task.Run(() => JpegCropWriter.Save(path,
+                new Rect(.2, .2, .5, .5), CancellationToken.None))
+                .GetAwaiter().GetResult();
+            using (var croppedAgain = File.OpenRead(path))
+            {
+                var frame = BitmapDecoder.Create(croppedAgain,
+                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.Single();
+                if (frame.PixelWidth != 240 || frame.PixelHeight != 160)
+                    throw new Exception("Second crop after restore failed.");
+            }
+            if (!undo.HasRestorableVersion(path))
+                throw new Exception("Verified restore availability lost after second crop.");
+            // The same checksummed availability logic feeds the Edit menu,
+            // thumbnail context command and recycling glyph. An archive
+            // record alone is not sufficient when its bytes are corrupt.
+            var isolatedOptions = new UndoOptions
+            {
+                DirectoryPath = Path.Combine(root, "verified-undo"),
+                MaximumVersionsPerImage = 3,
+                MaximumBytes = 1024L * 1024 * 1024
+            };
+            var isolated = new UndoHistoryService(isolatedOptions);
+            var isolatedVersion = isolated.CaptureBeforeSave(path, CancellationToken.None);
+            if (!isolated.HasRestorableVersion(path) ||
+                !isolated.GetVerifiedRestorablePaths(CancellationToken.None).Contains(
+                    Path.GetFullPath(path)))
+                throw new Exception("Valid local Undo snapshot must be restorable.");
+            File.WriteAllBytes(isolatedVersion.SnapshotPath, [1, 2, 3]);
+            if (isolated.HasRestorableVersion(path) ||
+                isolated.GetVerifiedRestorablePaths(CancellationToken.None).Contains(
+                    Path.GetFullPath(path)))
+                throw new Exception("Corrupt Undo snapshot must never show Restore.");
+            File.Delete(isolatedVersion.SnapshotPath);
+            if (isolated.HasRestorableVersion(path))
+                throw new Exception("Missing Undo snapshot must never show Restore.");
+            Console.WriteLine("PASS: Restore availability rejects corrupted and missing snapshots.");
+            Console.WriteLine("PASS: Crop -> Restore -> Crop reuses same path without file lock.");
             Console.WriteLine("PASS: MTA JPEG crop, source RAW untouched, GPS/keywords preserved, byte-perfect central Undo.");
             return 0;
         }

@@ -58,6 +58,10 @@ internal static class Program
         var failures = new List<string>();
         Run("Video containers enter the shared catalog and their cached previews never touch originals",
             VideoCatalogAndPreviewSmoke, failures);
+        Run("GPX gaps, improbable jumps and signed camera correction",
+            GpxRegressionTests.GapSpeedAndClockOffset, failures);
+        Run("GPX interpolation respects original track segment boundaries",
+            GpxRegressionTests.SegmentBoundariesAreRespected, failures);
         Run("GPS clusters group nearby originals by kilometres, preserve every ID and work across ±180°",
             GpsGeographicClustersPreserveIdentity, failures);
         Run("One UI translation catalog switches de/en and preserves user metadata", LanguageSwitchPreservesUserMetadata, failures);
@@ -188,6 +192,8 @@ internal static class Program
         Run("Tag edit draft preserves independent images and counts across selections", MultiImageTagDraftStaysAcrossSelections, failures);
         Run("Per-image tag batch records one atomic local intent transaction", PerImageTagBatchCommitsAtomically, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
+        Run("RAW GPS assignment persists through EXIF refresh without touching RAW bytes",
+            RawGpsCatalogOverridePreservesSource, failures);
         Run("GPS edit writes originals, verifies metadata and never creates sidecars", JpegGpsEditRoundTrip, failures);
         Run("JPEG tag prototype adds, removes and preserves original image bytes", JpegTagRewritePrototypeRoundTrip, failures);
         Run("User JPEG benchmark checks Tags and GPS together and cleans test copies",
@@ -5716,6 +5722,88 @@ internal static class Program
             $"source={add.SourceBytes}B; " +
             $"header={add.OriginalMetadataBytes}->{add.ResultMetadataBytes}B; " +
             $"serverCopy={(add.ServerSideCopyUsed ? "yes" : "no")}");
+    }
+
+    private static void RawGpsCatalogOverridePreservesSource()
+    {
+        using var sandbox = new Sandbox();
+        var jpegPath = Path.Combine(sandbox.Images, "raw-gps-seed.jpg");
+        WriteJpeg(jpegPath);
+        var (database, root, scanner) = sandbox.Prepare();
+        if (scanner.Scan(root).Failed != 0)
+            throw new Exception("Unable to index test image.");
+        var id = new ImageCatalogRepository(database).GetImageId(jpegPath)
+            ?? throw new Exception("Test image was not indexed.");
+        // The bytes are a valid JPEG fixture, deliberately renamed to RAW
+        // AFTER indexing so no actual proprietary RAW decoder is required.
+        // This tests the safety decision by extension on the final source path.
+        var rawPath = Path.Combine(sandbox.Images, "raw-gps-seed.arw");
+        File.Move(jpegPath, rawPath);
+        var file = new FileInfo(rawPath);
+        var before = SHA256.HashData(File.ReadAllBytes(rawPath));
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = """
+                UPDATE images
+                   SET local_path=$path,file_name=$name,file_size=$size,
+                       modified_utc_ticks=$ticks
+                 WHERE id=$id;
+                """;
+            cmd.Parameters.AddWithValue("$path", rawPath);
+            cmd.Parameters.AddWithValue("$name", Path.GetFileName(rawPath));
+            cmd.Parameters.AddWithValue("$size", file.Length);
+            cmd.Parameters.AddWithValue("$ticks", file.LastWriteTimeUtc.Ticks);
+            cmd.Parameters.AddWithValue("$id", id);
+            if (cmd.ExecuteNonQuery() != 1)
+                throw new Exception("Test RAW catalog source was not updated.");
+        }
+        var gps = new GpsMetadataRepository(database);
+        gps.Apply(id, 53.5, 10.25, GpsMetadataRepository.EditMode.Replace,
+            CancellationToken.None);
+        void AssertRawPosition(double? expectedLatitude, double? expectedLongitude)
+        {
+            using var db = database.OpenConnection();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = """
+                SELECT x.gps_latitude,x.gps_longitude,
+                       o.gps_latitude,o.gps_longitude
+                  FROM image_exif x JOIN raw_gps_overrides o ON o.image_id=x.image_id
+                 WHERE x.image_id=$id;
+                """;
+            cmd.Parameters.AddWithValue("$id", id);
+            using var row = cmd.ExecuteReader();
+            if (!row.Read()) throw new Exception("RAW GPS catalog override was not saved.");
+            for (var i = 0; i < 4; i += 2)
+            {
+                double? lat = row.IsDBNull(i) ? null : row.GetDouble(i);
+                double? lon = row.IsDBNull(i+1) ? null : row.GetDouble(i+1);
+                if ((lat is null) != (expectedLatitude is null) ||
+                    (lon is null) != (expectedLongitude is null) ||
+                    lat is double y && Math.Abs(y - expectedLatitude!.Value) > .0000001 ||
+                    lon is double x && Math.Abs(x - expectedLongitude!.Value) > .0000001)
+                    throw new Exception("RAW GPS location differs from persisted override.");
+            }
+        }
+        AssertRawPosition(53.5,10.25);
+        // Simulate scanner reparsing the unchanged RAW source without GPS.
+        // The trigger must keep the user's assigned catalog coordinates.
+        using (var db = database.OpenConnection())
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText =
+                "UPDATE image_exif SET gps_latitude=NULL,gps_longitude=NULL WHERE image_id=$id";
+            command.Parameters.AddWithValue("$id", id);
+            command.ExecuteNonQuery();
+        }
+        AssertRawPosition(53.5, 10.25);
+        gps.Apply(id, null, null, GpsMetadataRepository.EditMode.Remove,
+            CancellationToken.None);
+        AssertRawPosition(null, null);
+        if (!SHA256.HashData(File.ReadAllBytes(rawPath)).SequenceEqual(before))
+            throw new Exception("RAW source bytes changed during GPS assignment/removal.");
+        database.Initialize();
+        AssertRawPosition(null, null);
     }
 
     private static void JpegGpsEditRoundTrip()

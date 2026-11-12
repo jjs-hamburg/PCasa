@@ -21,10 +21,12 @@ public partial class MainWindow
         private bool _hasGps;
         private bool _hasTags;
         private bool _isRaw;
+        private bool _hasRestore;
         private bool _showIcons = true;
         public bool HasGps => _hasGps;
         public bool HasTags => _hasTags;
         public bool IsRaw => _isRaw;
+        public bool HasRestore => _hasRestore;
         public bool ShowIcons
         {
             get => _showIcons;
@@ -51,6 +53,11 @@ public partial class MainWindow
             {
                 _isRaw = index.IsRaw;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRaw)));
+            }
+            if (_hasRestore != index.HasRestore)
+            {
+                _hasRestore = index.HasRestore;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasRestore)));
             }
         }
         private BitmapSource? _bitmap;
