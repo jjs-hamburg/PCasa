@@ -28,6 +28,9 @@ internal static class FolderAddFlow
         WriteJpeg(Path.Combine(afterRestart, "second.jpg"));
 
         PCasa.App.MainWindow? window = null;
+        ManualResetEventSlim? explorerWatchdogStop = null;
+        DispatcherTimer? explorerModalProbe = null;
+        string? explorerModalError = null;
         using var gateReady = new ManualResetEventSlim();
         using var releaseDelayedPhoto = new ManualResetEventSlim();
         Task? blockedFile = null;
@@ -617,6 +620,47 @@ internal static class FolderAddFlow
             var add = typeof(PCasa.App.MainWindow).GetMethod(
                 "BrowseAddFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
+            // Do not let an asynchronous WPF error dialog hang GitHub Actions
+            // for the entire four-minute step timeout. This smoke test captures
+            // and closes unexpected modals; product dialogs stay unchanged.
+            var explorerWindow = window;
+            explorerModalProbe = new DispatcherTimer(DispatcherPriority.Background,
+                explorerWindow.Dispatcher)
+            {
+                Interval = TimeSpan.FromMilliseconds(75)
+            };
+            explorerModalProbe.Tick += (_, _) =>
+            {
+                foreach (var dialog in Application.Current.Windows.OfType<Window>()
+                             .Where(candidate => candidate.IsVisible &&
+                                 ReferenceEquals(candidate.Owner, explorerWindow)))
+                {
+                    var body = (dialog.Content as Grid)?.Children.OfType<DockPanel>()
+                        .SelectMany(panel => panel.Children.OfType<ScrollViewer>())
+                        .Select(scroll => scroll.Content as TextBox)
+                        .FirstOrDefault()?.Text;
+                    explorerModalError = $"Unexpected Explorer Add dialog: {dialog.Title}: {body}";
+                    Console.Error.WriteLine("FAIL: " + explorerModalError);
+                    dialog.Close();
+                    explorerModalProbe.Stop();
+                    break;
+                }
+            };
+            explorerModalProbe.Start();
+            explorerWatchdogStop = new ManualResetEventSlim();
+            var watchStop = explorerWatchdogStop;
+            var explorerWatchdog = new Thread(() =>
+            {
+                if (watchStop.Wait(TimeSpan.FromSeconds(50))) return;
+                Console.Error.WriteLine(
+                    "FAIL: Explorer Add WPF dispatcher remained blocked for 50 seconds. " +
+                    "The folder-add test did not reach its catalog-registration assertion.");
+                Console.Error.Flush();
+                // A dispatcher deadlock prevents both assertions and WPF
+                // timers; fail the test process with a diagnostic.
+                Environment.Exit(36);
+            }) { IsBackground = true, Name = "ExplorerAddSmokeWatchdog" };
+            explorerWatchdog.Start();
             Console.WriteLine("TRACE Explorer: before explicit add");
             add.Invoke(window, [tree, new RoutedEventArgs()]);
             Console.WriteLine("TRACE Explorer: after explicit add");
@@ -625,6 +669,7 @@ internal static class FolderAddFlow
                 .GetValue(window)!;
             Until(window, () =>
             {
+                if (explorerModalError is not null) return true;
                 var currentRoots = roots.GetAll();
                 var parent = currentRoots.FirstOrDefault(root =>
                     SamePath(root.LocalPath, initialRoot));
@@ -632,6 +677,8 @@ internal static class FolderAddFlow
                     !roots.GetExcludedPaths(parent.Id)
                         .Any(path => SamePath(path, inactiveExplorer));
             }, "Explicit Add to PCasa did not reactivate the excluded child in Ordnermanager.");
+            if (explorerModalError is not null)
+                throw new Exception(explorerModalError);
             Console.WriteLine("TRACE Explorer: exclusion cleared");
             var afterActivation = roots.GetAll();
             if (afterActivation.Count != originalRoots.Length ||
@@ -687,6 +734,8 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Explorer off destroyed original nodes or lost a newly registered root.");
 
+            explorerWatchdogStop.Set();
+            explorerModalProbe.Stop();
             Console.WriteLine(
                 "PASS: Explorer enables excluded subtree within original monitored root without duplicates or lost exclusions.");
 
@@ -1106,6 +1155,8 @@ internal static class FolderAddFlow
         }
         finally
         {
+            explorerWatchdogStop?.Set();
+            explorerModalProbe?.Stop();
             releaseDelayedPhoto.Set();
             releaseRestartPhoto.Set();
             try { blockedFile?.GetAwaiter().GetResult(); } catch { }
