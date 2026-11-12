@@ -57,7 +57,7 @@ internal sealed class UpdateDownloadWindow : Window
             Content = UiLanguage.T("Abbrechen"),
             MinWidth = 94, Height = 30,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Margin = new Thickness(0, 13, 0, 0)
+            Margin = new Thickness(0)
         };
         _cancelButton.Click += (_, _) => Close();
         var actions = new StackPanel { Orientation = Orientation.Horizontal,
