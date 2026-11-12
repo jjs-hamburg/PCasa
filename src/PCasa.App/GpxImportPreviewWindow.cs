@@ -13,6 +13,8 @@ internal sealed class GpxImportPreviewWindow : Window
 {
     private readonly CheckBox _replace = new();
     private readonly TextBox _offset = new() { Width = 95 };
+    private readonly TextBlock _offsetReadout = new() { Margin = new Thickness(8,0,0,0),
+        VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _heading = new() { FontSize = 15,
         FontWeight = FontWeights.SemiBold, Margin = new Thickness(0,0,0,8) };
     private readonly DataGrid _grid = new();
@@ -66,6 +68,7 @@ internal sealed class GpxImportPreviewWindow : Window
         _offset.Text = initialOffsetSeconds.ToString(CultureInfo.CurrentCulture);
         _offset.VerticalContentAlignment = VerticalAlignment.Center;
         offsetRow.Children.Add(_offset);
+        offsetRow.Children.Add(_offsetReadout);
         offsetRow.Children.Add(new TextBlock
         {
             Text = en ? "  + camera ahead, − camera behind" :
@@ -139,14 +142,24 @@ internal sealed class GpxImportPreviewWindow : Window
                     CultureInfo.CurrentCulture, out var seconds) ||
                 !double.IsFinite(seconds) || Math.Abs(seconds) > 86400)
             {
+                _offsetReadout.Text = "";
                 _apply.IsEnabled = false;
                 return;
             }
+            _offsetReadout.Text = FormatOffset(seconds);
             try { SetRows(_recalculate(seconds)); }
             catch (ArgumentException) { _apply.IsEnabled = false; }
             catch (InvalidOperationException) { _apply.IsEnabled = false; }
         };
+        _offsetReadout.Text = FormatOffset(initialOffsetSeconds);
         SetRows(rows);
+    }
+
+    private static string FormatOffset(double seconds)
+    {
+        var value = TimeSpan.FromSeconds(Math.Abs(seconds));
+        return (seconds < 0 ? "−" : "+") +
+            $"{(int)value.TotalMinutes:00}:{value.Seconds:00}";
     }
 
     private void SetRows(IReadOnlyList<GpxImportPreviewRow> rows)
