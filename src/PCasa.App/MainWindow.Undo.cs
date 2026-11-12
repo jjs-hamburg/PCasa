@@ -32,7 +32,7 @@ public partial class MainWindow
         command.Parameters.AddWithValue("$id", imageId);
         var path = command.ExecuteScalar() as string;
         return path is not null &&
-            new UndoHistoryService(UndoOptions.Load()).GetVersions(path).Count > 0;
+            new UndoHistoryService(UndoOptions.Load()).HasRestorableVersion(path);
     }
 
     private async void EditMenu_SubmenuOpened(object sender, RoutedEventArgs e)
