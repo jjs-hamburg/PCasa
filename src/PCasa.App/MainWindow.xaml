@@ -1590,6 +1590,7 @@
                                                         HasGps="{Binding HasGps}"
                                                         HasTags="{Binding HasTags}"
                                                         IsRaw="{Binding IsRaw}"
+                                                        HasRestore="{Binding HasRestore}"
                                                         ShowIcons="{Binding ShowIcons}"/>
                                                 </Grid>
                                             </Border>
