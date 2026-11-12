@@ -189,9 +189,8 @@ public partial class MainWindow
             var stride = Math.Max(1, track.Count / 12000);
             foreach (var point in track)
             {
-                if (prev is null || point.SegmentId != prev.SegmentId ||
-                    (point.UtcTime - prev.UtcTime).TotalSeconds >
-                    _gpxOptions.MaximumGapSeconds)
+                if (prev is null || GpxTrackReader.LinkFailure(
+                    prev, point, _gpxOptions.MaximumGapSeconds) is not null)
                 {
                     current = [];
                     segments.Add(current);
