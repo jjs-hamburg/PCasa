@@ -620,10 +620,14 @@ internal static class FolderAddFlow
             var add = typeof(PCasa.App.MainWindow).GetMethod(
                 "BrowseAddFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
-            // Do not let an asynchronous WPF error dialog hang GitHub Actions
-            // for the entire four-minute step timeout. This smoke test captures
-            // and closes unexpected modals; product dialogs stay unchanged.
+            // Distinguish actual modal error dialogs from the normal
+            // non-modal BrowseCacheProgressWindow. Closing the latter is a
+            // false positive and can interfere with regular cache work.
             var explorerWindow = window;
+            var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(window)!;
+            var lastExplorerTrace = DateTime.UtcNow;
             explorerModalProbe = new DispatcherTimer(DispatcherPriority.Background,
                 explorerWindow.Dispatcher)
             {
@@ -631,15 +635,30 @@ internal static class FolderAddFlow
             };
             explorerModalProbe.Tick += (_, _) =>
             {
+                if ((DateTime.UtcNow - lastExplorerTrace).TotalSeconds >= 2)
+                {
+                    lastExplorerTrace = DateTime.UtcNow;
+                    Console.WriteLine("TRACE Explorer: dispatcher alive; open owned windows: " +
+                        string.Join(", ", Application.Current.Windows.OfType<Window>()
+                            .Where(candidate => candidate.IsVisible &&
+                                ReferenceEquals(candidate.Owner, explorerWindow))
+                            .Select(candidate => candidate.GetType().Name)));
+                }
                 foreach (var dialog in Application.Current.Windows.OfType<Window>()
                              .Where(candidate => candidate.IsVisible &&
-                                 ReferenceEquals(candidate.Owner, explorerWindow)))
+                                 ReferenceEquals(candidate.Owner, explorerWindow) &&
+                                 candidate is not PCasa.App.BrowseCacheProgressWindow))
                 {
-                    var body = (dialog.Content as Grid)?.Children.OfType<DockPanel>()
+                    // Only the actual PcasaDialog confirmation layout is an
+                    // error condition here, not ordinary owned progress UI.
+                    if (dialog.Content is not Grid layout ||
+                        !layout.Children.OfType<DockPanel>().Any() ||
+                        !layout.Children.OfType<StackPanel>().Any()) continue;
+                    var body = layout.Children.OfType<DockPanel>()
                         .SelectMany(panel => panel.Children.OfType<ScrollViewer>())
                         .Select(scroll => scroll.Content as TextBox)
                         .FirstOrDefault()?.Text;
-                    explorerModalError = $"Unexpected Explorer Add dialog: {dialog.Title}: {body}";
+                    explorerModalError = $"Unexpected Explorer Add error dialog: {dialog.Title}: {body}";
                     Console.Error.WriteLine("FAIL: " + explorerModalError);
                     dialog.Close();
                     explorerModalProbe.Stop();
@@ -651,22 +670,41 @@ internal static class FolderAddFlow
             var watchStop = explorerWatchdogStop;
             var explorerWatchdog = new Thread(() =>
             {
-                if (watchStop.Wait(TimeSpan.FromSeconds(50))) return;
+                for (var elapsed = 10; elapsed <= 50; elapsed += 10)
+                {
+                    if (watchStop.Wait(TimeSpan.FromSeconds(10))) return;
+                    try
+                    {
+                        var active = scheduler.Snapshot()
+                            .Where(job => job.State is SchedulerJobState.Running or
+                                SchedulerJobState.Queued or SchedulerJobState.YieldRequested)
+                            .Take(12)
+                            .Select(job => job.State + " / " + job.Key)
+                            .ToArray();
+                        Console.Error.WriteLine($"TRACE Explorer {elapsed}s scheduler: " +
+                            string.Join(" | ", active));
+                        explorerWindow.Dispatcher.BeginInvoke(
+                            DispatcherPriority.Normal,
+                            new Action(() => Console.Error.WriteLine(
+                                $"TRACE Explorer {elapsed}s WPF heartbeat")));
+                        Console.Error.Flush();
+                    }
+                    catch (Exception error)
+                    {
+                        Console.Error.WriteLine(
+                            $"TRACE Explorer {elapsed}s watchdog sampling failed: {error}");
+                    }
+                }
                 Console.Error.WriteLine(
-                    "FAIL: Explorer Add WPF dispatcher remained blocked for 50 seconds. " +
-                    "The folder-add test did not reach its catalog-registration assertion.");
+                    "FAIL: Explorer Add did not finish within 50 seconds. " +
+                    "See dispatcher heartbeats and scheduler snapshot above.");
                 Console.Error.Flush();
-                // A dispatcher deadlock prevents both assertions and WPF
-                // timers; fail the test process with a diagnostic.
                 Environment.Exit(36);
             }) { IsBackground = true, Name = "ExplorerAddSmokeWatchdog" };
             explorerWatchdog.Start();
             Console.WriteLine("TRACE Explorer: before explicit add");
             add.Invoke(window, [tree, new RoutedEventArgs()]);
             Console.WriteLine("TRACE Explorer: after explicit add");
-            var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
-                .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
-                .GetValue(window)!;
             Until(window, () =>
             {
                 if (explorerModalError is not null) return true;
