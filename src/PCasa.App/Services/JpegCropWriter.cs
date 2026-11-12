@@ -19,11 +19,11 @@ public static class JpegCropWriter
         var extension = Path.GetExtension(originalPath);
         if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
             !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException("Nur JPEG-Fotos können zugeschnitten werden.");
+            throw new NotSupportedException(UiLanguage.T("Nur JPEG-Fotos können zugeschnitten werden."));
         if (normalized.Width <= .01 || normalized.Height <= .01 ||
             normalized.X < 0 || normalized.Y < 0 ||
             normalized.Right > 1.000001 || normalized.Bottom > 1.000001)
-            throw new InvalidDataException("Der Zuschneidebereich ist ungültig.");
+            throw new InvalidDataException(UiLanguage.T("Der Zuschneidebereich ist ungültig."));
         using var lease = SourceFileLocks.Enter(originalPath, token);
         var fullPath = Path.GetFullPath(originalPath);
         var original = new FileInfo(fullPath);
@@ -55,7 +55,7 @@ public static class JpegCropWriter
             var height = Math.Clamp((int)Math.Round(normalized.Height * pixels.PixelHeight),
                 1, pixels.PixelHeight - top);
             if (width < 16 || height < 16)
-                throw new InvalidDataException("Der Ausschnitt ist zu klein.");
+                throw new InvalidDataException(UiLanguage.T("Der Ausschnitt ist zu klein."));
             var cropped = new CroppedBitmap(pixels, new Int32Rect(left, top, width, height));
             cropped.Freeze();
             var encoder = new JpegBitmapEncoder { QualityLevel = 95 };
@@ -78,7 +78,7 @@ public static class JpegCropWriter
                 if (candidate.Frames.Count != 1 ||
                     candidate.Frames[0].PixelWidth != width ||
                     candidate.Frames[0].PixelHeight != height)
-                    throw new InvalidDataException("Die Zuschneidedatei ist nicht vollständig.");
+                    throw new InvalidDataException(UiLanguage.T("Die Zuschneidedatei ist nicht vollständig."));
                 verify.Position = 0;
                 _ = SHA256.HashData(verify);
             }
@@ -109,7 +109,7 @@ public static class JpegCropWriter
         if (string.IsNullOrWhiteSpace(exifTool))
             exifTool = Path.Combine(AppContext.BaseDirectory, "exiftool", "exiftool.exe");
         if (!File.Exists(exifTool))
-            throw new FileNotFoundException("ExifTool fehlt – Original nicht verändert.",
+            throw new FileNotFoundException(UiLanguage.T("ExifTool fehlt – Original nicht verändert."),
                 exifTool);
         var start = new ProcessStartInfo(exifTool)
         {
@@ -133,7 +133,7 @@ public static class JpegCropWriter
                 catch (InvalidOperationException) { }
             });
             if (!child.WaitForExit(120000) || child.ExitCode != 0)
-                throw new IOException("ExifTool konnte die Metadaten nicht vollständig übertragen.");
+                throw new IOException(UiLanguage.T("ExifTool konnte die Metadaten nicht vollständig übertragen."));
         }
         finally { ExifToolProcessRegistry.Retire(child); }
     }

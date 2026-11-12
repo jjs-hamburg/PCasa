@@ -280,7 +280,7 @@ public partial class MainWindow
             !System.IO.Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
             PcasaDialog.Show(this,
-                "Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert.",
+                UiLanguage.T("Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert."),
                 UiLanguage.T("Zuschneiden"), MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -353,7 +353,7 @@ public partial class MainWindow
              _cropRatioMode != baseline.Mode))
         {
             var response = PcasaDialog.Show(this,
-                "Zuschneiden ohne Speichern verlassen?",
+                UiLanguage.T("Zuschneiden ohne Speichern verlassen?"),
                 UiLanguage.T("Zuschneiden"),
                 MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (response != MessageBoxResult.Yes) return false;
