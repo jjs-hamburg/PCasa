@@ -49,7 +49,6 @@ public partial class MainWindow
     private (double X, double Y)? _viewerPendingImageCenter;
     private long _viewerNavigatorImageId = -1;
     private bool _viewerNavigatorWired;
-    private CancellationTokenSource? _viewerPrefetchCancellation;
     private readonly Dictionary<long, (BitmapSource Bitmap, int RequiredSize)> _viewerOriginalCache = new();
     private readonly LinkedList<long> _viewerOriginalLru = new();
     private const long ViewerOriginalCacheLimit = 128L * 1024 * 1024;
@@ -137,7 +136,6 @@ public partial class MainWindow
             BrowseSurface.HiddenFolderIds, currentImageId, requested);
         var position = next.IndexOfImage(currentImageId);
         if (position < 0) return;
-        _viewerPrefetchCancellation?.Cancel();
         _viewerSequence = next;
         _viewerCurrentIndex = position;
         UpdateViewerSequenceTitle();
@@ -171,14 +169,20 @@ public partial class MainWindow
             return;
         }
 
+        // A viewport change, zoom or fullscreen transition during an
+        // ongoing original load must NOT cancel and restart that same read.
+        // Finish it first; only then request any genuinely larger resolution.
+        var wanted = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+        if (keepCurrentAsPlaceholder &&
+            _viewerPendingOriginalImageId == wanted &&
+            _viewerDecodeCancellation is { IsCancellationRequested: false })
+            return;
+
         _viewerDecodeCancellation?.Cancel();
         _viewerDecodeCancellation?.Dispose();
         _viewerDecodeCancellation = new CancellationTokenSource();
         var token = _viewerDecodeCancellation.Token;
         var version = ++_viewerImageRequest;
-        _viewerPrefetchCancellation?.Cancel();
-        _viewerPrefetchCancellation?.Dispose();
-        _viewerPrefetchCancellation = null;
         _viewerHasOriginal = false;
         var entry = _viewerSequence.At(_viewerCurrentIndex);
         if (VideoFormats.IsVideo(entry.FileName))
@@ -260,7 +264,6 @@ public partial class MainWindow
             _viewerPendingOriginalPixels = 0;
             SetViewerBitmap(decoded);
             SetViewerQualityMessage(null);
-            StartViewerNeighborPrefetch(size);
             return;
         }
 
@@ -326,89 +329,6 @@ public partial class MainWindow
         }
     }
 
-    private void StartViewerNeighborPrefetch(int requiredSize)
-    {
-        _viewerPrefetchCancellation?.Cancel();
-        _viewerPrefetchCancellation?.Dispose();
-        _viewerPrefetchCancellation = null;
-
-        // Neighbor preloading at native 100% could allocate multiple huge
-        // 40+ megapixel images and flood an NAS. Only prefetch normal fit-sized
-        // views; at high zoom, wait for explicit navigation.
-        if (requiredSize > 4096) return;
-        // Never spend limited SMB/VPN bandwidth decoding two neighbors
-        // while the user is trying to refine the current original.
-        if (_viewerImageInfo is { } current)
-        {
-            try
-            {
-                if (PathClassifier.Classify(current.LocalPath).IsNetwork)
-                    return;
-            }
-            catch (IOException) { return; }
-            catch (UnauthorizedAccessException) { return; }
-        }
-
-        var cancellation = new CancellationTokenSource();
-        _viewerPrefetchCancellation = cancellation;
-        var origin = _viewerCurrentIndex;
-        _ = PrefetchViewerNeighborsAsync(origin, requiredSize, cancellation.Token);
-    }
-
-    private async Task PrefetchViewerNeighborsAsync(
-        int origin, int requiredSize, CancellationToken token)
-    {
-        // Only one prefetch chain at a time, with strictly sequential reads.
-        // Visible-image decoding always begins first, so prefetch cannot block it.
-        var sequence = _viewerSequence;
-        if (sequence is null || sequence.Count < 2) return;
-        foreach (var direction in new[] { 1, -1 })
-        {
-            if (token.IsCancellationRequested || !_viewerOpen ||
-                _viewerCurrentIndex != origin ||
-                !ReferenceEquals(sequence, _viewerSequence))
-                return;
-
-            var index = sequence.Move(origin, direction);
-            if (VideoFormats.IsVideo(sequence.At(index).FileName)) continue;
-            var id = sequence.At(index).ImageId;
-            if (TryGetViewerOriginal(id, requiredSize, out _))
-            {
-                continue;
-            }
-
-            try
-            {
-                BitmapSource? bitmap = null;
-                await _scheduler.EnqueueAsync(
-                    $"viewer-prefetch:{origin}:{id}:{requiredSize}",
-                    SchedulerPriority.Background,
-                    schedulerToken =>
-                    {
-                        schedulerToken.ThrowIfCancellationRequested();
-                        var info = new PhotoViewerImageRepository(_database).Get(id);
-                        bitmap = info is null || IsPathKnownOffline(info.LocalPath)
-                            ? null : PhotoViewerImageLoader.Load(info, requiredSize, schedulerToken);
-                        return Task.CompletedTask;
-                    }, cancellationToken: token, workKind: SchedulerWorkKind.ViewerRead);
-
-                if (bitmap is not null && !token.IsCancellationRequested &&
-                    _viewerOpen && _viewerCurrentIndex == origin)
-                {
-                    CacheViewerOriginal(id, requiredSize, bitmap);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception)
-            {
-                // Missing neighbors must never interrupt the current image.
-            }
-        }
-    }
-
     private void SetViewerBitmap(BitmapSource? bitmap)
     {
         // The catalog may contain the physical, unrotated dimensions of a
@@ -446,16 +366,14 @@ public partial class MainWindow
     {
         try
         {
-            BitmapSource? preview = null;
-            await _scheduler.EnqueueAsync(
-                $"viewer-preview:{entry.ImageId}:{version}",
-                SchedulerPriority.UserAction,
-                schedulerToken =>
+            // Packed previews are local read-only UI data. They never wait for
+            // durable GPS/Tag writes, scans, or scheduler admission.
+            var preview = await _foregroundReadService.ReadPreviewAsync(
+                readToken =>
                 {
                     using var reader = new PackedThumbnailReader();
-                    preview = reader.Load(entry, schedulerToken);
-                    return Task.CompletedTask;
-                }, cancellationToken: token, workKind: SchedulerWorkKind.ViewerRead);
+                    return reader.Load(entry, readToken);
+                }, token);
 
             if (IsCurrentViewerRequest(version, token) && !_viewerHasOriginal &&
                 preview is not null)
@@ -480,21 +398,18 @@ public partial class MainWindow
     {
         try
         {
-            BitmapSource? bitmap = null;
-            await _scheduler.EnqueueAsync(
-                $"viewer-original:{imageId}:{version}:{requiredSize}",
-                SchedulerPriority.Interactive,
-                schedulerToken =>
-                {
-                    schedulerToken.ThrowIfCancellationRequested();
-                    var info = new PhotoViewerImageRepository(_database).Get(imageId);
-                    if (info is null)
-                        throw new System.IO.FileNotFoundException(
-                            "Bild ist nicht mehr im Katalog.");
-                    bitmap = PhotoViewerImageLoader.Load(info, requiredSize, schedulerToken);
-                    return Task.CompletedTask;
-                }, cancellationToken: token, workKind: SchedulerWorkKind.ViewerRead);
-            if (bitmap is null) throw new System.IO.IOException("Bild konnte nicht geladen werden.");
+            // A visible original is foreground read-only work. The scheduler
+            // must never decide when it may start. Metadata and decode run
+            // outside WPF; per-original SourceFileLocks still protects writers.
+            var info = _viewerImageInfo ??
+                await Task.Run(
+                    () => new PhotoViewerImageRepository(_database).Get(imageId), token);
+            if (info is null)
+                throw new FileNotFoundException("Bild ist nicht mehr im Katalog.");
+            var bitmap = await _foregroundReadService.ReadViewerAsync(
+                info.LocalPath,
+                readToken => PhotoViewerImageLoader.Load(info, requiredSize, readToken),
+                token);
 
             if (IsCurrentViewerRequest(version, token))
             {
@@ -502,7 +417,6 @@ public partial class MainWindow
                 CacheViewerOriginal(imageId, requiredSize, bitmap);
                 SetViewerBitmap(bitmap);
                 SetViewerQualityMessage(null);
-                StartViewerNeighborPrefetch(requiredSize);
             }
         }
         catch (OperationCanceledException)
@@ -523,6 +437,11 @@ public partial class MainWindow
             {
                 _viewerPendingOriginalImageId = null;
                 _viewerPendingOriginalPixels = 0;
+                // If the viewport grew during decoding, schedule ONE new
+                // higher-resolution pass after the first one has finished.
+                if (_viewerHasOriginal &&
+                    GetViewerRequiredPixelSize() > requiredSize + 64)
+                    ScheduleViewerZoomRefinement();
             }
         }
     }
@@ -1427,9 +1346,6 @@ public partial class MainWindow
         _viewerZoomCancellation?.Dispose();
         _viewerZoomCancellation = null;
         _viewerImageInfo = null;
-        _viewerPrefetchCancellation?.Cancel();
-        _viewerPrefetchCancellation?.Dispose();
-        _viewerPrefetchCancellation = null;
         _viewerOriginalCache.Clear();
         _viewerOriginalLru.Clear();
         ++_viewerImageRequest;
