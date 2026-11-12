@@ -243,33 +243,11 @@ public partial class MainWindow
         var generation = _explorerGeneration;
         try
         {
-            // Only ONE level for each opened folder. Filesystem work remains
-            // in the existing interactive SourceProbe scheduler lane.
-            var children = await _scheduler.RunAsync(
-                $"folder-tree:explorer:{generation}:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    var options = new EnumerationOptions
-                    {
-                        RecurseSubdirectories = false,
-                        IgnoreInaccessible = true,
-                        AttributesToSkip = 0 // include system and hidden folders
-                    };
-                    var paths = Directory.EnumerateDirectories(path, "*", options)
-                        .Select(FolderExclusionRules.Normalize)
-                        .OrderBy(p => Path.GetFileName(
-                                Path.TrimEndingDirectorySeparator(p)),
-                            StringComparer.CurrentCultureIgnoreCase)
-                        .ToArray();
-                    token.ThrowIfCancellationRequested();
-                    return paths;
-                },
-                () => generation == _explorerGeneration &&
-                    ReferenceEquals(session, _explorerSession),
-                cancellationToken: session.Token,
-                workKind: SchedulerWorkKind.SourceProbe);
+            // Enumerate one real directory level without the global
+            // scheduler queue. Slow/deferred original-file writes cannot
+            // starve the selected Explorer subtree.
+            var children = await _foregroundReadService.ReadFoldersAsync(
+                path, session.Token);
 
             if (generation != _explorerGeneration ||
                 !ReferenceEquals(session, _explorerSession) ||

@@ -11,6 +11,7 @@ public partial class MainWindow : Window
 {
     private readonly PCasaScheduler _scheduler = new();
     private readonly GalleryCatalogReader _galleryCatalogReader = new();
+    private readonly ForegroundReadService _foregroundReadService = new();
     private readonly LocalDatabase _database;
     private readonly FolderRepository _folderRepository;
     private readonly ImageCatalogRepository _imageCatalog;
