@@ -32,6 +32,39 @@ public partial class MainWindow
     private int _manualContextScanCount;
     private CancellationTokenSource? _manualContextCancellation;
 
+    private async void BrowseAddFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (FoldersTree.SelectedItem is not TreeViewItem { Tag: FolderTreeTag tag })
+            return;
+        var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
+        try
+        {
+            var registration = await _scheduler.RunAsync(
+                "folder-manager:explorer-add:" + Guid.NewGuid().ToString("N"),
+                SchedulerPriority.ManualAction,
+                token =>
+                {
+                    var result = new FolderManagerSelectionService(_database)
+                        .EnsureMonitoredFolder(directory, token);
+                    var snapshot = ReadFolderTreeConfigurationSnapshot();
+                    return (result.Changed, Snapshot: snapshot);
+                }, workKind: SchedulerWorkKind.Catalog);
+            if (registration.Changed)
+            {
+                _dropTargetProjection = registration.Snapshot;
+                _dragTargetValidity.Clear();
+                PromoteExplorerMonitoredPath(directory);
+            }
+            BrowseScanCurrentFolder_Click(sender, e);
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Explorer.AddToPCasa", ex);
+            PcasaDialog.Show(this, ex.Message, "PCasa",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private async void BrowseScanCurrentFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_folderRemovalPending)
@@ -51,6 +84,17 @@ public partial class MainWindow
         // outside the scheduler. Even an unreachable SMB path is checked by
         // the priority worker, not by the UI event handler.
         var directory = Path.GetFullPath(tag.FullPath).Replace('/', '\\');
+        // A scan is never a registration operation. Explorer may display
+        // unregistered paths, but only the explicit Add command activates them.
+        if (_allFolderProjectionRootPath is not null &&
+            (DisplayedMonitoredRoot(directory) is not { } registered ||
+             FolderExclusionRules.IsExcluded(directory, DisplayedExcludedPaths(registered.Id))))
+        {
+            PcasaDialog.Show(this,
+                UiLanguage.T("Diesen Ordner zuerst zu PCasa hinzufügen."),
+                "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         // Manual requests form a LIFO stack. Do NOT cancel the predecessor:
         // its scanner cursor and progress remain valid for later resumption.
         _manualContextScanCount++;
