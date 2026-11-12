@@ -25,6 +25,7 @@ public partial class MainWindow
         }
         public event PropertyChangedEventHandler? PropertyChanged;
     }
+    private sealed record GpxSourcePhoto(long Id, string Name, DateTime? CameraLocal, bool ExistingGps);
     private sealed record GpxAssignment(long Id, string Name, double? Lat,
         double? Lon, string Status, bool ExistingGps);
     private sealed record GpxWriteItem(long Id, double Lat, double Lon);
@@ -229,7 +230,7 @@ public partial class MainWindow
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        var assignments = new List<GpxAssignment>();
+        var photos = new List<GpxSourcePhoto>();
         var tracks = _gpxSourceTracks.ToArray();
         var options = _gpxOptions;
         GpsGpxToGalleryButton.IsEnabled = false;
@@ -257,50 +258,28 @@ public partial class MainWindow
                         var name = reader.GetString(1);
                         var hasGps = !reader.IsDBNull(3) && !reader.IsDBNull(4);
                         var dateText = reader.IsDBNull(2) ? null : reader.GetString(2);
-                        if (!TryParseCameraTime(dateText, out var local))
-                        {
-                            assignments.Add(new(id,name,null,null,"Keine Aufnahmezeit",hasGps));
-                            continue;
-                        }
-                        try
-                        {
-                            var utc = GpxTrackReader.CameraToUtc(local, options);
-                            var results = tracks.Select(t => GpxTrackReader.MatchDetailed(t,
-                                    utc, options.MaximumGapSeconds)).ToArray();
-                            var matches = results.Where(m => m.Position.HasValue)
-                                .Select(m => m.Position!.Value).ToArray();
-                            if (matches.Length > 1 &&
-                                matches.Skip(1).Any(m =>
-                                    GpxDistanceMeters(matches[0],m) > 35))
-                                assignments.Add(new(id,name,null,null,
-                                    "Mehrere widersprüchliche GPX-Tracks",hasGps));
-                            else if (matches.Length > 0)
-                                assignments.Add(new(id,name,matches[0].Latitude,
-                                    matches[0].Longitude,
-                                    hasGps ? "GPS vorhanden" : "Zuordnung möglich",hasGps));
-                            else
-                                assignments.Add(new(id,name,null,null,
-                                    results.Select(m => m.FailureReason)
-                                        .FirstOrDefault(reason => reason == "Aufzeichnungslücke" ||
-                                            reason == "Unplausibler Positionssprung" ||
-                                            reason == "Zeitabstand zu groß") ??
-                                        "Außerhalb des GPX-Zeitraums",hasGps));
-                        }
-                        catch (ArgumentException)
-                        { assignments.Add(new(id,name,null,null,"Ungültige Aufnahmezeit",hasGps)); }
-                        catch (InvalidOperationException)
-                        { assignments.Add(new(id,name,null,null,"Mehrdeutige lokale Zeit",hasGps)); }
+                        photos.Add(new GpxSourcePhoto(id, name,
+                            TryParseCameraTime(dateText, out var local) ? local : null,
+                            hasGps));
                     }
                 }
                 return Task.CompletedTask;
             });
+            IReadOnlyList<GpxImportPreviewRow> Recalculate(double offset) =>
+                ComputeGpxAssignments(photos, tracks, options, offset)
+                    .Select(a => new GpxImportPreviewRow(a.Id, a.Name,
+                        a.Lat, a.Lon, UiLanguage.T(a.Status), a.ExistingGps)).ToArray();
             var preview = new GpxImportPreviewWindow(this,
-                assignments.Select(a => new GpxImportPreviewRow(a.Id,a.Name,
-                    a.Lat,a.Lon,a.Status,a.ExistingGps)).ToArray());
+                Recalculate(options.CameraOffsetSeconds), Recalculate,
+                options.CameraOffsetSeconds,
+                tracks.SelectMany(t => t).Min(p => p.UtcTime),
+                tracks.SelectMany(t => t).Max(p => p.UtcTime));
             if (preview.ShowDialog() != true) return;
-            var chosen = assignments.Where(x => x.Lat.HasValue && x.Lon.HasValue &&
-                (preview.ReplaceExisting || !x.ExistingGps))
-                .Select(x => new GpxWriteItem(x.Id,x.Lat!.Value,x.Lon!.Value)).ToArray();
+            var chosen = preview.Rows.Where(x =>
+                    x.Latitude.HasValue && x.Longitude.HasValue &&
+                    (preview.ReplaceExisting || !x.HasGps))
+                .Select(x => new GpxWriteItem(x.Id, x.Latitude!.Value,
+                    x.Longitude!.Value)).ToArray();
             if (chosen.Length == 0) return;
             var key = "gpx:write:" + Guid.NewGuid().ToString("N");
             var payload = JsonSerializer.Serialize(new GpxWriteRecipe(chosen,
@@ -323,6 +302,56 @@ public partial class MainWindow
             PcasaDialog.Show(this,ex.Message,"GPX",MessageBoxButton.OK,MessageBoxImage.Error);
         }
         finally { GpsGpxToGalleryButton.IsEnabled = true; }
+    }
+
+    private static IReadOnlyList<GpxAssignment> ComputeGpxAssignments(
+        IReadOnlyList<GpxSourcePhoto> photos, IReadOnlyList<GpxTrackPoint>[] tracks,
+        GpxOptions options, double offsetSeconds)
+    {
+        var assignments = new List<GpxAssignment>(photos.Count);
+        foreach (var photo in photos)
+        {
+            if (photo.CameraLocal is not DateTime local)
+            {
+                assignments.Add(new(photo.Id, photo.Name, null, null,
+                    "Keine Aufnahmezeit", photo.ExistingGps));
+                continue;
+            }
+            try
+            {
+                var utc = GpxTrackReader.CameraToUtc(local, options, offsetSeconds);
+                var results = tracks.Select(t => GpxTrackReader.MatchDetailed(
+                    t, utc, options.MaximumGapSeconds)).ToArray();
+                var matches = results.Where(m => m.Position.HasValue)
+                    .Select(m => m.Position!.Value).ToArray();
+                if (matches.Length > 1 &&
+                    matches.Skip(1).Any(m => GpxDistanceMeters(matches[0], m) > 35))
+                    assignments.Add(new(photo.Id, photo.Name, null, null,
+                        "Mehrere widersprüchliche GPX-Tracks", photo.ExistingGps));
+                else if (matches.Length > 0)
+                    assignments.Add(new(photo.Id, photo.Name, matches[0].Latitude,
+                        matches[0].Longitude,
+                        photo.ExistingGps ? "GPS vorhanden" : "Zuordnung möglich",
+                        photo.ExistingGps));
+                else
+                    assignments.Add(new(photo.Id, photo.Name, null, null,
+                        results.Select(m => m.FailureReason)
+                            .FirstOrDefault(reason => reason is "Aufzeichnungslücke"
+                                or "Unplausibler Positionssprung" or "Zeitabstand zu groß")
+                            ?? "Außerhalb des GPX-Zeitraums", photo.ExistingGps));
+            }
+            catch (ArgumentException)
+            {
+                assignments.Add(new(photo.Id, photo.Name, null, null,
+                    "Ungültige Aufnahmezeit", photo.ExistingGps));
+            }
+            catch (InvalidOperationException)
+            {
+                assignments.Add(new(photo.Id, photo.Name, null, null,
+                    "Mehrdeutige lokale Zeit", photo.ExistingGps));
+            }
+        }
+        return assignments;
     }
 
     private static double GpxDistanceMeters(
