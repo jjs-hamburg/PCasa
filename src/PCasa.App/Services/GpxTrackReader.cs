@@ -114,10 +114,16 @@ public static class GpxTrackReader
     }
 
     public static DateTimeOffset CameraToUtc(DateTime cameraLocal, GpxOptions options)
+        => CameraToUtc(cameraLocal, options, options.CameraOffsetSeconds);
+
+    public static DateTimeOffset CameraToUtc(
+        DateTime cameraLocal, GpxOptions options, double offsetSeconds)
     {
+        if (!double.IsFinite(offsetSeconds) || Math.Abs(offsetSeconds) > 86400)
+            throw new ArgumentException("Invalid camera time offset.");
         var zone = TimeZoneInfo.FindSystemTimeZoneById(options.CameraTimeZoneId);
         var adjusted = DateTime.SpecifyKind(cameraLocal, DateTimeKind.Unspecified)
-            .AddSeconds(-options.CameraOffsetSeconds);
+            .AddSeconds(-offsetSeconds);
         if (zone.IsInvalidTime(adjusted) || zone.IsAmbiguousTime(adjusted))
             throw new InvalidOperationException("Ambiguous or invalid camera local time.");
         return new DateTimeOffset(adjusted, zone.GetUtcOffset(adjusted)).ToUniversalTime();
