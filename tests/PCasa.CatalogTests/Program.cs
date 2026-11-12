@@ -58,6 +58,8 @@ internal static class Program
         var failures = new List<string>();
         Run("Video containers enter the shared catalog and their cached previews never touch originals",
             VideoCatalogAndPreviewSmoke, failures);
+        Run("GPX gaps, improbable jumps and signed camera correction",
+            GpxRegressionTests.GapSpeedAndClockOffset, failures);
         Run("GPX interpolation respects original track segment boundaries",
             GpxRegressionTests.SegmentBoundariesAreRespected, failures);
         Run("GPS clusters group nearby originals by kilometres, preserve every ID and work across ±180°",
