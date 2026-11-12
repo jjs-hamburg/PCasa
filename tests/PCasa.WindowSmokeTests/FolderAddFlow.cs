@@ -596,12 +596,17 @@ internal static class FolderAddFlow
             if (inactiveItem.Tag?.GetType().GetProperty("PhotoFolderId")?
                     .GetValue(inactiveItem.Tag) is not null)
                 throw new Exception("Excluded unindexed folder already has a catalog ID.");
+            Console.WriteLine("TRACE Explorer: selecting excluded path");
             inactiveItem.IsSelected = true;
+            Console.WriteLine("TRACE Explorer: selected excluded path");
             var scan = typeof(PCasa.App.MainWindow).GetMethod(
                 "BrowseScanCurrentFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
+            Console.WriteLine("TRACE Explorer: before excluded scan");
             scan.Invoke(window, [tree, new RoutedEventArgs()]);
+            Console.WriteLine("TRACE Explorer: after excluded scan");
             window.UpdateLayout();
+            Console.WriteLine("TRACE Explorer: after layout");
             if (!roots.GetExcludedPaths(initialTreeRoot.Tag is null
                     ? throw new Exception("Root tag missing.")
                     : roots.GetAll().Single(root =>
@@ -612,7 +617,9 @@ internal static class FolderAddFlow
             var add = typeof(PCasa.App.MainWindow).GetMethod(
                 "BrowseAddFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
+            Console.WriteLine("TRACE Explorer: before explicit add");
             add.Invoke(window, [tree, new RoutedEventArgs()]);
+            Console.WriteLine("TRACE Explorer: after explicit add");
             var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
                 .GetField("_scheduler", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .GetValue(window)!;
@@ -625,6 +632,7 @@ internal static class FolderAddFlow
                     !roots.GetExcludedPaths(parent.Id)
                         .Any(path => SamePath(path, inactiveExplorer));
             }, "Explicit Add to PCasa did not reactivate the excluded child in Ordnermanager.");
+            Console.WriteLine("TRACE Explorer: exclusion cleared");
             var afterActivation = roots.GetAll();
             if (afterActivation.Count != originalRoots.Length ||
                 afterActivation.Any(root =>
