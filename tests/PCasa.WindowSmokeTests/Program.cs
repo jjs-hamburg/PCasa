@@ -2250,7 +2250,12 @@ internal static class Program
                         !strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>()
                             .Select(x => x.Id).Order()
                             .SequenceEqual(new long[] { 1000, 1001, 1002 }))
-                        throw new Exception("Cluster click did not show its three photos.");
+                        throw new Exception("Cluster click did not show its three photos: " +
+                            $"actual={string.Join(",", strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().Select(x => x.Id))}; " +
+                            $"toggle={stripToggle.IsChecked}; visible={strip.IsVisible}; " +
+                            $"frozen={viewerType.GetField("_gpsFilmstripFrozen", reflectFlags)!.GetValue(window)}; " +
+                            $"mode={sidebarModeField.GetValue(window)}; " +
+                            $"indexGps={string.Join(",", gpsSourceCatalog.Take(4).Select(x => $"{x.ImageId}:{x.HasGps}"))}");
                     clusterClick.Invoke(window, new object[] { 1000L, 76L });
                     if (strip.Items.Count != 3)
                         throw new Exception("Stale cluster click changed photo group.");
