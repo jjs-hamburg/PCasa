@@ -66,7 +66,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] {
-                    "Datei", "Ordner", "Darstellung", "Optionen", "Hilfe" }))
+                    "Datei", "Ordner", "Bearbeiten", "Darstellung", "Optionen", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             var fileMenu = items.Single(item => Equals(item.Header, "Datei"));
@@ -76,9 +76,13 @@ internal static class Program
             var optionsMenu = items.Single(item => Equals(item.Header, "Optionen"));
             if (!optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     Equals(item.Header, "Schreibfehler")) ||
-                items.Any(item => Equals(item.Header, "Extras") ||
-                                  Equals(item.Header, "Bearbeiten")))
-                throw new Exception("Write errors belong under Options; Edit and Extras were removed.");
+                items.Any(item => Equals(item.Header, "Extras")))
+                throw new Exception("Write errors belong under Options; Extras is not present.");
+            var editMenu = items.Single(item => Equals(item.Header, "Bearbeiten"));
+            var restoreMenu = editMenu.Items.OfType<MenuItem>().Single(item =>
+                Equals(item.Header, "Bild wiederherstellen"));
+            if (restoreMenu.IsEnabled)
+                throw new Exception("Restore must be disabled without a selected, restorable image.");
             var helpMenu = items.Single(item => Equals(item.Header, "Hilfe"));
             var helpCommands = helpMenu.Items.OfType<MenuItem>().ToArray();
             if (helpCommands.Length != 2 ||
@@ -210,7 +214,7 @@ internal static class Program
                 !englishMenu.IsChecked || germanMenu.IsChecked ||
                 !menu.Items.OfType<MenuItem>()
                     .Select(item => item.Header?.ToString())
-                    .SequenceEqual(new[] { "File", "Folder", "Appearance", "Options", "Help" }))
+                    .SequenceEqual(new[] { "File", "Folder", "Edit", "Appearance", "Options", "Help" }))
                 throw new Exception("English translations were not applied live.");
             AssertCaptionGaps("en");
             if ((window.FindName("GalleryViewFilterToggle") as ToggleButton)
