@@ -883,7 +883,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
                     }
                     if (_showStatusIcons)
                         ThumbnailStatusIconRenderer.Draw(drawingContext, imageRect,
-                            entry.HasGps, entry.HasTags, entry.IsRaw, pixelsPerDip);
+                            entry.HasGps, entry.HasTags, entry.IsRaw, pixelsPerDip,
+                            entry.HasRestore);
 
                     if (_selectedImageIds.Contains(entry.ImageId))
                     {
