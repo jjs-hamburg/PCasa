@@ -72,6 +72,7 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("Explorer.AddToPCasa", ex);
             System.Diagnostics.Trace.WriteLine("Explorer.AddToPCasa failed: " + ex);
+            Console.Error.WriteLine("Explorer.AddToPCasa failed: " + ex);
             PcasaDialog.Show(this, ex.Message, "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
