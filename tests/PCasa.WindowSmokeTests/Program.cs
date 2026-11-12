@@ -340,15 +340,15 @@ internal static class Program
                 System.IO.File.WriteAllText(gpxFile,
                     "<gpx><trk><trkseg>" +
                     "<trkpt lat='10' lon='20'><time>2026-11-10T10:00:00Z</time></trkpt>" +
-                    "<trkpt lat='11' lon='21'><time>2026-11-10T10:00:10Z</time></trkpt>" +
+                    "<trkpt lat='10.0002' lon='20.0002'><time>2026-11-10T10:00:10Z</time></trkpt>" +
                     "</trkseg></trk></gpx>");
                 var points = PCasa.App.Services.GpxTrackReader.Read(gpxFile);
                 if (points.Count != 2) throw new Exception("GPX parser lost time points.");
                 var midpoint = PCasa.App.Services.GpxTrackReader.Match(points,
                     new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),60);
                 if (midpoint is not { } p ||
-                    Math.Abs(p.Latitude-10.5)>0.0001 ||
-                    Math.Abs(p.Longitude-20.5)>0.0001 ||
+                    Math.Abs(p.Latitude-10.0001)>0.00001 ||
+                    Math.Abs(p.Longitude-20.0001)>0.00001 ||
                     PCasa.App.Services.GpxTrackReader.Match(points,
                         new DateTimeOffset(2026,11,10,10,0,5,TimeSpan.Zero),5) is not null)
                     throw new Exception("GPX interpolation or gap limit is wrong.");
