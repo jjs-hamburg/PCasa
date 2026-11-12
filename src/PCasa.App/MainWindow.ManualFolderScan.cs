@@ -90,9 +90,7 @@ public partial class MainWindow
             (DisplayedMonitoredRoot(directory) is not { } registered ||
              FolderExclusionRules.IsExcluded(directory, DisplayedExcludedPaths(registered.Id))))
         {
-            PcasaDialog.Show(this,
-                UiLanguage.T("Diesen Ordner zuerst zu PCasa hinzufügen."),
-                "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
+            StatusText.Text = UiLanguage.T("Diesen Ordner zuerst zu PCasa hinzufügen.");
             return;
         }
         // Manual requests form a LIFO stack. Do NOT cancel the predecessor:
