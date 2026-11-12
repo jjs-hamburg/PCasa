@@ -265,9 +265,10 @@ public partial class MainWindow
                         try
                         {
                             var utc = GpxTrackReader.CameraToUtc(local, options);
-                            var matches = tracks.Select(t => GpxTrackReader.Match(t,
-                                    utc, options.MaximumGapSeconds))
-                                .Where(m => m.HasValue).Select(m => m!.Value).ToArray();
+                            var results = tracks.Select(t => GpxTrackReader.MatchDetailed(t,
+                                    utc, options.MaximumGapSeconds)).ToArray();
+                            var matches = results.Where(m => m.Position.HasValue)
+                                .Select(m => m.Position!.Value).ToArray();
                             if (matches.Length > 1 &&
                                 matches.Skip(1).Any(m =>
                                     GpxDistanceMeters(matches[0],m) > 35))
@@ -279,7 +280,11 @@ public partial class MainWindow
                                     hasGps ? "GPS vorhanden" : "Zuordnung möglich",hasGps));
                             else
                                 assignments.Add(new(id,name,null,null,
-                                    "Keine passende GPX-Position",hasGps));
+                                    results.Select(m => m.FailureReason)
+                                        .FirstOrDefault(reason => reason == "Aufzeichnungslücke" ||
+                                            reason == "Unplausibler Positionssprung" ||
+                                            reason == "Zeitabstand zu groß") ??
+                                        "Außerhalb des GPX-Zeitraums",hasGps));
                         }
                         catch (ArgumentException)
                         { assignments.Add(new(id,name,null,null,"Ungültige Aufnahmezeit",hasGps)); }
