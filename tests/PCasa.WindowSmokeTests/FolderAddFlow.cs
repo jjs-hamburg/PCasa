@@ -601,7 +601,7 @@ internal static class FolderAddFlow
                 "BrowseScanCurrentFolder_Click",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
             scan.Invoke(window, [tree, new RoutedEventArgs()]);
-            Flush(window);
+            window.UpdateLayout();
             if (!roots.GetExcludedPaths(initialTreeRoot.Tag is null
                     ? throw new Exception("Root tag missing.")
                     : roots.GetAll().Single(root =>
