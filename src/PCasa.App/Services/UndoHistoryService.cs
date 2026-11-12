@@ -82,6 +82,46 @@ public sealed class UndoHistoryService
                 .OrderByDescending(v => v.SavedAtUtc).ToArray();
     }
 
+    private static bool IsVerifiedVersion(UndoVersion version, CancellationToken token)
+    {
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            using var data = File.OpenRead(version.SnapshotPath);
+            if (data.Length != version.ByteCount) return false;
+            var hash = Convert.ToHexString(SHA256.HashData(data));
+            return string.Equals(hash, version.Sha256,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { return false; }
+    }
+
+    // Identical availability policy for Edit, context menus and gallery icons.
+    // Only the local Undo archive is read; source images, including SMB/NAS,
+    // are never opened for an availability check.
+    public bool HasRestorableVersion(string sourcePath)
+    {
+        return GetVersions(sourcePath).Any(version =>
+            IsVerifiedVersion(version, CancellationToken.None));
+    }
+
+    public IReadOnlySet<string> GetVerifiedRestorablePaths(CancellationToken token)
+    {
+        lock (Gate)
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var version in EnumerateVersions())
+            {
+                token.ThrowIfCancellationRequested();
+                if (!result.Contains(version.SourcePath) &&
+                    IsVerifiedVersion(version, token))
+                    result.Add(version.SourcePath);
+            }
+            return result;
+        }
+    }
+
     private List<UndoVersion> EnumerateVersions()
     {
         if (!Directory.Exists(ArchiveRoot)) return [];
