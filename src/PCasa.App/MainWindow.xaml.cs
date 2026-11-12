@@ -146,8 +146,8 @@ public partial class MainWindow : Window
 
 
     // ONE immutable view of monitored roots and exclusions, read by a
-    // scheduler catalog worker. Folder-tree layout, context menus and the
-    // folder-manager dialog consume this projection without SQLite I/O.
+    // background catalog reader. Folder-tree layout, context menus and the
+    // folder-manager dialog consume this projection without UI-thread SQLite I/O.
     private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)>
         ReadFolderTreeConfigurationSnapshot()
     {
