@@ -39,12 +39,19 @@ public static class VideoThumbnailSource
             {
                 token.ThrowIfCancellationRequested();
                 BitmapSource frame;
-                try { frame = GetWindowsThumbnail(path); }
+                try { frame = GetWindowsThumbnail(path, requireFrame: forceRefresh); }
                 catch (Exception ex) when (ex is COMException or NotSupportedException
                     or InvalidOperationException or ExternalException)
                 {
-                    // The source remains in the catalog even when its codec is absent.
-                    frame = CreatePlaceholder();
+                    // The Shell can provide only a generic icon for some
+                    // playable videos. During an explicit manual refresh try
+                    // PCasa's second built-in Windows media decoder first.
+                    // An unsupported codec still gets a visible placeholder.
+                    PCasaDiagnostics.Write("Video.ShellThumbnail", ex);
+                    frame = forceRefresh
+                        ? VideoFrameFallback.TryCapture(path, token) ??
+                            CreatePlaceholder()
+                        : CreatePlaceholder();
                 }
                 var encoder = new JpegBitmapEncoder { QualityLevel = 85 };
                 encoder.Frames.Add(BitmapFrame.Create(frame));
@@ -60,7 +67,7 @@ public static class VideoThumbnailSource
         }
     }
 
-    private static BitmapSource GetWindowsThumbnail(string path)
+    private static BitmapSource GetWindowsThumbnail(string path, bool requireFrame)
     {
         IShellItemImageFactory? factory = null;
         IntPtr hbitmap = IntPtr.Zero;
@@ -76,9 +83,10 @@ public static class VideoThumbnailSource
             }
             catch (COMException)
             {
-                // Some Windows codecs cannot provide a strict thumbnail,
-                // but the Shell still provides a recognizable video icon.
-                // Only fall back to the PCasa placeholder if both fail.
+                // A generic Shell icon is NOT an actual frame. For manual
+                // refresh let the MediaPlayer fallback try an actual video
+                // picture before showing another placeholder.
+                if (requireFrame) throw;
                 factory.GetImage(new NativeSize(Side, Side), 0x00, out hbitmap);
             }
             if (hbitmap == IntPtr.Zero)
