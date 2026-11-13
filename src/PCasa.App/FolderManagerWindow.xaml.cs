@@ -13,10 +13,15 @@ public partial class FolderManagerWindow : Window
 {
     private sealed record ManagedNode(
         MonitoredFolder? Root, string LocalPath, bool IsRoot,
-        bool IsSystemFolder = false, string? Label = null);
+        bool IsSystemFolder = false, string? Label = null,
+        int CatalogImageCount = 0);
 
     private readonly ForegroundReadService _foregroundReadService;
     private readonly BackgroundScanSettings _backgroundScanSettings;
+    // Already-indexed folders are a read-only catalog projection. They are
+    // not additional monitored roots, do not change scan scope, and require
+    // no NAS directory enumeration.
+    private readonly IReadOnlyList<PhotoFolderSummary> _catalogPhotoFolders;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
     // Roots unchecked during the dialog remain available for rechecking in
     // the right pane, with their original IDs and exclusion rules intact.
@@ -47,9 +52,11 @@ public partial class FolderManagerWindow : Window
 
     public FolderManagerWindow(
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> configuration,
-        ForegroundReadService foregroundReadService, bool serverDatabaseConfigured)
+        ForegroundReadService foregroundReadService, bool serverDatabaseConfigured,
+        IReadOnlyList<PhotoFolderSummary>? catalogPhotoFolders = null)
     {
         InitializeComponent();
+        _catalogPhotoFolders = catalogPhotoFolders ?? Array.Empty<PhotoFolderSummary>();
         _foregroundReadService = foregroundReadService;
         _backgroundScanSettings = BackgroundScanSettings.Load();
         _monitoredRoots = configuration.Select(item => item.Folder).ToArray();
@@ -79,10 +86,11 @@ public partial class FolderManagerWindow : Window
     }
 
 
-    // The manager is a view of the MONITORED configuration, not a second
-    // file explorer. Only explicit roots and the minimum ancestor paths
-    // needed to group them under a single drive/share are projected.
-    // Physical directory enumeration belongs exclusively to Add folder.
+    // One read-only tree of explicitly monitored roots AND already indexed
+    // image folders under them. An S:\ root must display its catalogued
+    // descendants even when none are separate monitoring roots. Source
+    // membership and thumbnail identities never change in this projection.
+    // All folder selection and filesystem browsing remain in Add folder.
     private void Reload(string? expandSystemFolder = null)
     {
         _selected = null;
@@ -90,18 +98,40 @@ public partial class FolderManagerWindow : Window
         _folderNodes.Clear();
         _enumeratedPaths.Clear();
 
-        foreach (var root in _monitoredRoots.OrderBy(r => r.LocalPath.Length)
-                     .ThenBy(r => r.LocalPath, StringComparer.CurrentCultureIgnoreCase))
+        var rootsByPath = _monitoredRoots.ToDictionary(
+            root => FolderExclusionRules.Normalize(root.LocalPath),
+            StringComparer.OrdinalIgnoreCase);
+        var catalogByPath = _catalogPhotoFolders
+            .Where(folder =>
+            {
+                var owner = _monitoredRoots.FirstOrDefault(root =>
+                    root.Id == folder.MonitoredFolderId);
+                return owner is not null &&
+                    FolderExclusionRules.IsAtOrBelow(folder.LocalPath, owner.LocalPath) &&
+                    !FolderExclusionRules.IsExcluded(folder.LocalPath,
+                        _exclusions.GetValueOrDefault(owner.Id) ?? Array.Empty<string>());
+            })
+            .GroupBy(folder => FolderExclusionRules.Normalize(folder.LocalPath),
+                StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key,
+                group => group.Sum(folder => folder.ImageCount),
+                StringComparer.OrdinalIgnoreCase);
+
+        var visiblePaths = rootsByPath.Keys.Concat(catalogByPath.Keys)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path.Length)
+            .ThenBy(path => path, StringComparer.CurrentCultureIgnoreCase);
+        foreach (var visiblePath in visiblePaths)
         {
             TreeViewItem? parent = null;
-            foreach (var path in ConfiguredPathHierarchy(root.LocalPath))
+            foreach (var path in ConfiguredPathHierarchy(visiblePath))
             {
                 if (!_folderNodes.TryGetValue(path, out var item))
                 {
-                    var exact = _monitoredRoots.FirstOrDefault(r =>
-                        PathEquals(r.LocalPath, path));
+                    rootsByPath.TryGetValue(path, out var exact);
+                    catalogByPath.TryGetValue(path, out var count);
                     item = CreateItem(new ManagedNode(exact, path,
-                        IsRoot: exact is not null));
+                        IsRoot: exact is not null, CatalogImageCount: count));
                     _folderNodes[path] = item;
                     if (parent is null) FolderManagerTree.Items.Add(item);
                     else parent.Items.Add(item);
@@ -221,8 +251,11 @@ public partial class FolderManagerWindow : Window
 
         var checkbox = new CheckBox
         {
-            Content = name,
-            ToolTip = node.LocalPath,
+            Content = node.CatalogImageCount > 0
+                ? $"{name} ({node.CatalogImageCount:N0})" : name,
+            ToolTip = node.CatalogImageCount > 0
+                ? $"{node.LocalPath} · {node.CatalogImageCount:N0} katalogisierte Bilder"
+                : node.LocalPath,
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(1, 0, 1, 0),
             IsChecked = DisplayIncludedState(node),
@@ -257,7 +290,9 @@ public partial class FolderManagerWindow : Window
         => !_busy && node.IsRoot;
 
     private bool? DisplayIncludedState(ManagedNode node)
-        => node.IsRoot ? true : null; // Ancestors group checked roots.
+        => node.IsRoot || node.CatalogImageCount > 0 ? true : null;
+        // Checked catalogued folder = included by ancestor root, NOT an
+        // independent root. Only exact root checkboxes can be changed.
 
     private bool IsExcluded(ManagedNode node)
         => node.Root is not null &&
@@ -348,9 +383,10 @@ public partial class FolderManagerWindow : Window
         SelectedFolderText.Text = _selected?.LocalPath ?? UiLanguage.T("Bitte links einen Ordner auswählen.");
         SelectedModeText.Text = _selected is null ? ""
             : _selected.Root is null ? UiLanguage.T("Laufwerk oder Pfadgruppe mit überwachten Unterordnern.")
-            : _selected.IsRoot ? UiLanguage.T("Überwachte Wurzel. Kann über das Häkchen des Systemordners oder über „Wurzel entfernen“ abgewählt werden.")
-            : IsExcluded(_selected) ? UiLanguage.T("Von der PCasa-Bibliothek ausgeschlossen.")
-            : UiLanguage.T("Dieser Ordner wird von PCasa eingelesen.");
+            : _selected.IsRoot ? UiLanguage.T("Überwachte Wurzel. Enthaltene Bildordner werden aus dem PCasa-Katalog angezeigt.")
+            : _selected.CatalogImageCount > 0
+                ? $"{_selected.CatalogImageCount:N0} katalogisierte Bilder · über eine übergeordnete Wurzel überwacht (kein zusätzlicher Root)."
+            : UiLanguage.T("Ordnergruppe bereits katalogisierter Unterordner.");
         RemoveFolderButton.IsEnabled =
             _selected is { IsRoot: true, Root: not null } && !_busy;
         if (_selected is { IsRoot: true, Root: { } serverRoot } &&

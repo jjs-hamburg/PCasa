@@ -1996,12 +1996,15 @@ internal static class Program
                 progressWindow.Finish();
             }
 
-            // The manager shows only explicitly monitored roots (plus
-            // minimal grouping ancestors), never arbitrary filesystem
-            // directories. Add folder owns physical directory browsing.
+            // Manager must project only configured monitoring roots and
+            // catalogued image folders, WITHOUT enumerating the filesystem.
+            // A drive monitored as a single root still has visible nested
+            // photo folders (even when that drive is offline).
             var fixtureDirectory = Path.Combine(Path.GetTempPath(),
                 "PCasa-ManagerForeground-" + Guid.NewGuid().ToString("N"));
             var fixtureChild = Path.Combine(fixtureDirectory, "NeverIndexed");
+            var cataloguedChild = Path.Combine(fixtureDirectory,
+                "AlreadyIndexed", "2026");
             Directory.CreateDirectory(fixtureChild);
             PCasa.App.FolderManagerWindow? manager = null;
             try
@@ -2015,7 +2018,13 @@ internal static class Program
                 manager = new PCasa.App.FolderManagerWindow(
                     new[] { (Folder: fixture,
                         ExcludedPaths: (IReadOnlyList<string>)Array.Empty<string>()) },
-                    new ForegroundReadService(), serverDatabaseConfigured: false)
+                    new ForegroundReadService(), serverDatabaseConfigured: false,
+                    catalogPhotoFolders:
+                    [
+                        new PhotoFolderSummary(
+                            -200, fixture.Id, cataloguedChild,
+                            cataloguedChild, "2026", 37)
+                    ])
                 {
                     Owner = window
                 };
@@ -2052,8 +2061,31 @@ internal static class Program
                         ManagerPath(item), fixtureDirectory,
                         StringComparison.OrdinalIgnoreCase)))
                     throw new Exception("Monitored directory missing from manager.");
+                var catalogItem = displayed.SingleOrDefault(item =>
+                    string.Equals(ManagerPath(item), cataloguedChild,
+                        StringComparison.OrdinalIgnoreCase));
+                if (catalogItem is null ||
+                    catalogItem.Header is not CheckBox catalogCheck ||
+                    catalogCheck.IsEnabled ||
+                    catalogCheck.IsChecked != true ||
+                    !Convert.ToString(catalogCheck.Content)!.Contains("37"))
+                    throw new Exception(
+                        "Catalogued child should be visible with its count, " +
+                        "included under the root but not a second monitoring checkbox.");
+                if (!displayed.Any(item => string.Equals(
+                        ManagerPath(item),
+                        Path.GetDirectoryName(cataloguedChild),
+                        StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception("Catalogued folder hierarchy missing intermediate node.");
+                var configured = manager.SelectedConfiguration.Roots;
+                if (configured.Count != 1 ||
+                    !string.Equals(configured[0].LocalPath,
+                        fixtureDirectory, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception(
+                        "Read-only catalog projection changed monitored-root configuration.");
                 Console.WriteLine(
-                    "PASS: Manager contains monitored roots only, not unrelated filesystem folders.");
+                    "PASS: Manager shows indexed children under one monitored root, " +
+                    "without inventing roots, scanning folders or changing catalog identities.");
             }
             finally
             {

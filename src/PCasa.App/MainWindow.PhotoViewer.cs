@@ -1270,10 +1270,25 @@ public partial class MainWindow
 
     private void HandleViewerKey(KeyEventArgs e, bool fullscreen)
     {
-        if (!_viewerOpen)
+        if (!_viewerOpen || e.Handled)
+            return;
+
+        // A single save command for every photo editing tool, regardless of
+        // keyboard focus in the viewer or in its separate fullscreen window.
+        // Do not write untouched JPEGs or create a second save/backup path.
+        if (e.Key == Key.S &&
+            (Keyboard.Modifiers == ModifierKeys.Control ||
+             Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)))
         {
+            e.Handled = true;
+            if (!_comparisonActive && !_cropSavePending &&
+                (_cropActive || _straightenActive ||
+                 _photoEditSession?.HasChanges == true))
+                SaveEdits(asCopy:
+                    (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
             return;
         }
+
         if (_comparisonActive && (e.Key == Key.Left || e.Key == Key.Right)) { e.Handled = true; return; }
 
         if (_cropActive)

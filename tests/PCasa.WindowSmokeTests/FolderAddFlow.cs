@@ -1369,14 +1369,27 @@ internal static class FolderAddFlow
                             "Folder manager opened without persisted Explorer parent.");
                     actualRoot.IsExpanded = true;
 
-                    // The manager now shows ONLY configured monitored roots.
-                    // An Explorer-registered physical child under an existing
-                    // root must not appear as a duplicate managed root, and
-                    // opening the manager must never wait on P0 or enumerate.
-                    if (Walk(tree).Any(item =>
-                        SamePath(ManagedPath(item), explorerAddedPath)))
+                    // A catalogued child MUST be visible under its existing
+                    // monitored root, even when the scheduler P0 is blocked.
+                    // Visibility does not mean the child is a second root:
+                    // its checkbox is informational and cannot alter source
+                    // identity, scanner membership, image IDs or thumbnails.
+                    var indexedChild = Walk(tree).SingleOrDefault(item =>
+                        SamePath(ManagedPath(item), explorerAddedPath));
+                    if (indexedChild?.Tag is null ||
+                        indexedChild.Tag.GetType().GetProperty("IsRoot")?
+                            .GetValue(indexedChild.Tag) is not false ||
+                        indexedChild.Header is not CheckBox childCheck ||
+                        childCheck.IsEnabled || childCheck.IsChecked != true)
                         throw new Exception(
-                            "Manager listed an already covered physical child as a duplicate root.");
+                            "Indexed Explorer child missing or exposed as a new monitoring root.");
+                    var selectedRoots = manager.SelectedConfiguration.Roots;
+                    if (!selectedRoots.Any(root =>
+                            SamePath(root.LocalPath, rootPath)) ||
+                        selectedRoots.Any(root =>
+                            SamePath(root.LocalPath, explorerAddedPath)))
+                        throw new Exception(
+                            "Read-only catalog folder changed monitored root membership.");
                     completed = true;
                     ((Button)manager.FindName("CancelButton")).RaiseEvent(
                         new RoutedEventArgs(Button.ClickEvent));
