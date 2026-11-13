@@ -152,6 +152,36 @@ internal static class CropFlow
             if (session.CanRedo)
                 throw new Exception("A new edit after undo/redo kept a stale redo branch.");
             var expected = session.Render();
+            // Arbitrary angles must work on the real MTA worker, not just in
+            // a preview. WPF TransformedBitmap rejects non-90-degree angles.
+            var mtaPreview = Task.Run(() => PhotoEditSession.Render(
+                editorSource, session.AppliedSteps)).GetAwaiter().GetResult();
+            if (mtaPreview.PixelWidth != expected.PixelWidth ||
+                mtaPreview.PixelHeight != expected.PixelHeight)
+                throw new Exception("MTA straightening disagrees with UI geometry.");
+            // White corners after small-angle straightening must stay white:
+            // the auto-crop must not leave black/transparent triangles.
+            var white = new byte[320 * 200 * 4];
+            Array.Fill(white, (byte)255);
+            var whiteSource = BitmapSource.Create(320, 200, 96, 96,
+                PixelFormats.Bgra32, null, white, 320 * 4);
+            var whiteTurn = Task.Run(() => PhotoEditSession.Render(
+                whiteSource, [new PhotoEditStep("rotate", Degrees: 2.5)]))
+                .GetAwaiter().GetResult();
+            var corners = new byte[checked(whiteTurn.PixelWidth * whiteTurn.PixelHeight * 4)];
+            whiteTurn.CopyPixels(corners, whiteTurn.PixelWidth * 4, 0);
+            foreach (var (cx, cy) in new[]
+            {
+                (0, 0), (whiteTurn.PixelWidth - 1, 0),
+                (0, whiteTurn.PixelHeight - 1),
+                (whiteTurn.PixelWidth - 1, whiteTurn.PixelHeight - 1)
+            })
+            {
+                var offset = (cy * whiteTurn.PixelWidth + cx) * 4;
+                if (corners[offset] != 255 || corners[offset + 1] != 255 ||
+                    corners[offset + 2] != 255 || corners[offset + 3] != 255)
+                    throw new Exception("Straightening left a dark corner.");
+            }
             Task.Run(() => JpegCropWriter.Save(path, session.AppliedSteps,
                 CancellationToken.None)).GetAwaiter().GetResult();
             using (var saved = File.OpenRead(path))
