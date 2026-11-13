@@ -25,12 +25,21 @@ public sealed class PhotoEditSession
     public PhotoEditSession(long imageId, BitmapSource original)
     {
         ImageId = imageId;
-        _original = original ?? throw new ArgumentNullException(nameof(original));
-        // An edit may be rendered on the WPF UI thread and subsequently on
-        // the durable MTA writer. Freeze the decoded source on its OWNER
-        // thread before any cross-thread handoff.
-        if (!_original.IsFrozen)
-            _original.Freeze();
+        ArgumentNullException.ThrowIfNull(original);
+        // BitmapFrame.Freeze() alone is not sufficient for a cross-thread
+        // CroppedBitmap/TransformedBitmap: WPF may still traverse its
+        // STA-owned BitmapDecoder while freezing the derived bitmap.
+        // Detach the decoded pixels while on the source's owning thread,
+        // then share this immutable, decoder-independent source with MTA.
+        var bgra = original.Format == PixelFormats.Bgra32
+            ? original
+            : new FormatConvertedBitmap(original, PixelFormats.Bgra32, null, 0);
+        var stride = checked(bgra.PixelWidth * 4);
+        var pixels = new byte[checked(stride * bgra.PixelHeight)];
+        bgra.CopyPixels(pixels, stride, 0);
+        _original = BitmapSource.Create(bgra.PixelWidth, bgra.PixelHeight,
+            bgra.DpiX, bgra.DpiY, PixelFormats.Bgra32, null, pixels, stride);
+        _original.Freeze();
     }
     public bool HasChanges => _cursor > 0;
     public bool CanUndo => _cursor > 0;
