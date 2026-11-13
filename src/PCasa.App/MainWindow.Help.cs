@@ -39,10 +39,10 @@ public partial class MainWindow
         try
         {
             foreach (var job in _scheduler.Snapshot().Where(job =>
-                         job.State is SchedulerJobState.Queued or
-                             SchedulerJobState.Running or SchedulerJobState.YieldRequested &&
-                         job.WorkKind is SchedulerWorkKind.CatalogScan or
-                             SchedulerWorkKind.InitialImport))
+                         (job.State is SchedulerJobState.Queued or
+                             SchedulerJobState.Running or SchedulerJobState.YieldRequested) &&
+                         (job.WorkKind is SchedulerWorkKind.CatalogScan or
+                             SchedulerWorkKind.InitialImport)))
             {
                 if (await _scheduler.PauseDurableTaskAsync(job.Key))
                     pausedByUpdate.Add(job.Key);
