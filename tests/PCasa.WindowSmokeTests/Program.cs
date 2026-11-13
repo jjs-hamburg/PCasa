@@ -96,11 +96,11 @@ internal static class Program
             // videos from the context refresh; non-video photos are ignored.
             var videoIdsForTest = new BrowseThumbnailIndexEntry[]
             {
-                new(10, 2, 192, "", 0, 0, 1, 1, 1,
+                new(10, 2, 192, "", 0, 0, 1, 1,
                     FileName: "one.mp4"),
-                new(11, 2, 192, "", 0, 0, 1, 1, 1,
+                new(11, 2, 192, "", 0, 0, 1, 1,
                     FileName: "two.mov"),
-                new(12, 2, 192, "", 0, 0, 1, 1, 1,
+                new(12, 2, 192, "", 0, 0, 1, 1,
                     FileName: "photo.jpg")
             };
             var selectVideoMethod = typeof(PCasa.App.MainWindow).GetMethod(
