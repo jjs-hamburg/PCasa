@@ -215,13 +215,21 @@ public partial class FolderManagerWindow : Window
             // explicitly unchecked, its existing children can be selected
             // as distinct replacement roots WITHOUT re-importing their
             // pictures or losing thumbnail IDs. All drives work identically.
-            var catalogued = _catalogPhotoFolders
+            var indexed = _catalogPhotoFolders
                 .Where(folder => folder.MonitoredFolderId == root.Id &&
-                    !PathEquals(folder.LocalPath, root.LocalPath))
-                .GroupBy(folder => FolderExclusionRules.Normalize(folder.LocalPath),
-                    StringComparer.OrdinalIgnoreCase)
-                .Select(group => (Path: group.Key,
-                    Count: group.Sum(folder => folder.ImageCount)))
+                    FolderExclusionRules.IsAtOrBelow(folder.LocalPath, root.LocalPath))
+                .ToArray();
+            // Include intermediate ancestors as well as image-bearing leaf
+            // folders. A user can select "Archiv.Negative" ONCE instead of
+            // manually creating a root for every indexed child beneath it.
+            var catalogued = indexed
+                .SelectMany(folder => ConfiguredPathHierarchy(folder.LocalPath))
+                .Where(path => !PathEquals(path, root.LocalPath) &&
+                    FolderExclusionRules.IsAtOrBelow(path, root.LocalPath))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(path => (Path: path, Count: indexed.Where(folder =>
+                    FolderExclusionRules.IsAtOrBelow(folder.LocalPath, path))
+                    .Sum(folder => folder.ImageCount)))
                 .OrderBy(folder => folder.Path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             if (catalogued.Length > 0)
@@ -245,7 +253,11 @@ public partial class FolderManagerWindow : Window
                             : " · als eigene Überwachungswurzel auswählbar"),
                         IsChecked = covered,
                         IsEnabled = !_busy && (!covered || exact is not null),
-                        Margin = new Thickness(0, 3, 0, 3)
+                        Margin = new Thickness(
+                            Math.Min(42, Math.Max(0,
+                                Path.GetRelativePath(root.LocalPath, folder.Path)
+                                    .Count(ch => ch == Path.DirectorySeparatorChar)) * 9),
+                            3, 0, 3)
                     };
                     item.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
                     item.Checked += (_, _) =>
