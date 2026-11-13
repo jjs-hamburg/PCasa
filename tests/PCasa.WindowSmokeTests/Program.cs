@@ -1893,7 +1893,16 @@ internal static class Program
                 static string? ManagerPath(TreeViewItem item)
                     => item.Tag?.GetType().GetProperty("LocalPath")
                         ?.GetValue(item.Tag) as string;
-                var fixtureNode = managedTree.Items.OfType<TreeViewItem>()
+                static IEnumerable<TreeViewItem> NestedManagerItems(ItemsControl root)
+                {
+                    foreach (var child in root.Items.OfType<TreeViewItem>())
+                    {
+                        yield return child;
+                        foreach (var grandchild in NestedManagerItems(child))
+                            yield return grandchild;
+                    }
+                }
+                var fixtureNode = NestedManagerItems(managedTree)
                     .Single(item => string.Equals(ManagerPath(item),
                         fixtureDirectory, StringComparison.OrdinalIgnoreCase));
                 fixtureNode.IsExpanded = true;
