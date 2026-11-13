@@ -1013,15 +1013,25 @@
                                        TextWrapping="Wrap" Margin="0,4,0,0"/>
                         </StackPanel>
                     </Border>
+                    <!-- Both save commands remain at the bottom. Use two
+                         rows so narrow editor panels never clip either action. -->
                     <StackPanel x:Name="ViewerCropFooter" Grid.Row="3" Visibility="Collapsed"
-                                Orientation="Horizontal" HorizontalAlignment="Right"
-                                Margin="9,8,9,9">
-                        <Button x:Name="CropCancelButton" Content="{loc:Tr Key='Abbrechen'}"
-                                Height="30" Padding="12,3" Margin="0,0,7,0"/>
-                        <Button x:Name="CropApplyButton" Content="{loc:Tr Key='Übernehmen'}"
-                                Height="30" Padding="12,3" Margin="0,0,7,0"/>
-                        <Button x:Name="CropSaveButton" Content="{loc:Tr Key='Speichern'}"
-                                Height="30" Padding="12,3"/>
+                                HorizontalAlignment="Right" Margin="9,8,9,9">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    Margin="0,0,0,5">
+                            <Button x:Name="CropCancelButton" Content="{loc:Tr Key='Abbrechen'}"
+                                    Height="30" Padding="12,3" Margin="0,0,7,0"/>
+                            <Button x:Name="CropApplyButton" Content="{loc:Tr Key='Übernehmen'}"
+                                    Height="30" Padding="12,3"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="CropSaveCopyButton"
+                                    Content="{loc:Tr Key='Als Kopie speichern'}"
+                                    Height="30" Padding="9,3" Margin="0,0,7,0"
+                                    ToolTip="{loc:Tr Key='Bearbeitetes Foto im selben Ordner als Kopie speichern; Original unverändert'}"/>
+                            <Button x:Name="CropSaveButton" Content="{loc:Tr Key='Speichern'}"
+                                    Height="30" Padding="12,3"/>
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
                 </Grid>
