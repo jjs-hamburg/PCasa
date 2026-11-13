@@ -1309,6 +1309,33 @@ internal static class Program
                 // gallery. Start the separate interior-policy assertion with
                 // its synthetic fixture again; never interpret an empty
                 // real catalog as a failure of the interior boundary rule.
+                // Reaching the preceding LIVE edge may have started a
+                // legitimate asynchronous refresh of the runner's empty
+                // catalog. Drain that publication BEFORE restoring the
+                // isolated synthetic index; otherwise the late completion
+                // can overwrite the fixture during Flush().
+                var publisherField = scrollType.GetField(
+                    "_galleryRefreshCompletion", scrollFlags)!;
+                for (var retry = 0; retry < 100; retry++)
+                {
+                    Flush(window);
+                    if (publisherField.GetValue(window) is not Task active ||
+                        active.IsCompleted)
+                        break;
+                    System.Threading.Thread.Sleep(20);
+                }
+                if (publisherField.GetValue(window) is Task pendingPublisher &&
+                    !pendingPublisher.IsCompleted)
+                    throw new Exception("Catalog publisher did not settle before isolated gallery test.");
+                // The synthetic gallery is not a real database snapshot.
+                // Prevent a previously scheduled 750ms catalog-timer tick
+                // from publishing the empty test database over that fixture.
+                var catalogTimer = (DispatcherTimer?)scrollType.GetField(
+                    "_catalogPublicationTimer", scrollFlags)!.GetValue(window);
+                catalogTimer?.Stop();
+                scrollType.GetField("_catalogPublicationPending", scrollFlags)!
+                    .SetValue(window, 0);
+                scanDirtyField.SetValue(window, false);
                 pages.SetIndex(synthetic);
                 surface.SetData(synthetic, groups, pages);
                 Flush(window);
