@@ -39,6 +39,55 @@ internal static class CropFlow
                 "-GPSLatitudeRef=N", "-GPSLongitude=10.25",
                 "-GPSLongitudeRef=E", "-Keywords=PCasaCropSmoke", path);
             var original = File.ReadAllBytes(path);
+
+            // Alpha.23: "Save as copy" is a full-resolution durable JPEG
+            // write. It must never alter the source, overwrite an existing
+            // sibling, strip GPS/tags or leave any temp/sidecar files.
+            var firstCopy = JpegCropWriter.GetAvailableCopyPath(path);
+            if (!string.Equals(firstCopy,
+                    Path.Combine(root, "croptest-Kopie.jpg"),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception("First copy has the wrong sibling filename.");
+            var copySteps = new[] { new PhotoEditStep("crop", .1, .1, .5, .5) };
+            Task.Run(() => JpegCropWriter.SaveAsCopy(path, firstCopy,
+                copySteps, CancellationToken.None)).GetAwaiter().GetResult();
+            if (!File.ReadAllBytes(path).SequenceEqual(original))
+                throw new Exception("Save as copy modified the original bytes.");
+            using (var copyInput = File.OpenRead(firstCopy))
+            {
+                var copyFrame = BitmapDecoder.Create(copyInput,
+                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.Single();
+                if (copyFrame.PixelWidth != 240 ||
+                    copyFrame.PixelHeight != 160)
+                    throw new Exception("Save as copy did not apply the edit.");
+            }
+            var copyExif = ReadExif(exif, "-n", "-GPSLatitude",
+                "-GPSLongitude", "-Keywords", firstCopy);
+            if (!copyExif.Contains("53.5") || !copyExif.Contains("10.25") ||
+                !copyExif.Contains("PCasaCropSmoke"))
+                throw new Exception("Save as copy lost embedded GPS or IPTC tags.");
+            var firstCopyBytes = File.ReadAllBytes(firstCopy);
+            var secondCopy = JpegCropWriter.GetAvailableCopyPath(path);
+            if (!string.Equals(secondCopy,
+                    Path.Combine(root, "croptest-Kopie-2.jpg"),
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Existing copy was not numbered safely.");
+            Task.Run(() => JpegCropWriter.SaveAsCopy(path, secondCopy,
+                copySteps, CancellationToken.None)).GetAwaiter().GetResult();
+            if (!File.ReadAllBytes(path).SequenceEqual(original) ||
+                !File.ReadAllBytes(firstCopy).SequenceEqual(firstCopyBytes))
+                throw new Exception("Second copy modified original or first copy.");
+            try
+            {
+                Task.Run(() => JpegCropWriter.SaveAsCopy(path, firstCopy,
+                    copySteps, CancellationToken.None)).GetAwaiter().GetResult();
+                throw new Exception("Duplicate durable save overwrote a copy.");
+            }
+            catch (IOException) { }
+            if (!File.ReadAllBytes(firstCopy).SequenceEqual(firstCopyBytes) ||
+                Directory.GetFiles(root, ".pcasa-crop-*").Length != 0)
+                throw new Exception("Duplicate copy save damaged a previous result or leaked temp files.");
+
             File.WriteAllBytes(raw, [1, 2, 3, 4]);
             try
             {
