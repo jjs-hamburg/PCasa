@@ -312,6 +312,7 @@ public partial class MainWindow
             _scheduler.ReportProgress(key, UiLanguage.T("Bildbearbeitung speichern"),
                 0, 1, request.Path);
             JpegCropWriter.Save(request.Path, request.Steps, token);
+            new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
             _scheduler.ReportProgress(key, UiLanguage.T("Bildbearbeitung speichern"),
                 1, 1, request.Path);
             return Task.CompletedTask;
@@ -341,6 +342,9 @@ public partial class MainWindow
             _cropSavePending = false;
             if (success)
             {
+                if (_photoEditSession?.ImageId == request.ImageId)
+                    _browsePageCache?.ShowEditedImage(
+                        request.ImageId, _photoEditSession.Render());
                 _photoEditSession = null;
                 if (_cropActive) EndCrop();
                 if (_straightenActive) LeaveStraighten();
