@@ -696,7 +696,12 @@ internal static class FolderAddFlow
                 foreach (var dialog in Application.Current.Windows.OfType<Window>()
                              .Where(candidate => candidate.IsVisible &&
                                  ReferenceEquals(candidate.Owner, explorerWindow) &&
-                                 candidate is not PCasa.App.BrowseCacheProgressWindow))
+                                 candidate is not PCasa.App.BrowseCacheProgressWindow &&
+                                 // A real manager window contains both a DockPanel and
+                                 // a StackPanel, just like the generic error-dialog
+                                 // heuristic below. It must never be mistaken for
+                                 // an Explorer registration error and closed!
+                                 candidate is not PCasa.App.FolderManagerWindow))
                 {
                     // Only the actual PcasaDialog confirmation layout is an
                     // error condition here, not ordinary owned progress UI.
@@ -805,6 +810,16 @@ internal static class FolderAddFlow
                     Walk(tree).Single(item => SamePath(PathOf(item), initialRoot))) ||
                 !treeBefore.IsExpanded)
                 throw new Exception("Explorer scan replaced the original open tree nodes.");
+
+            // The user reported that an Explorer-registered folder makes the
+            // manager permanently unable to open. Open the REAL modal dialog
+            // immediately after registration while manual P0 is waiting.
+            VerifyManagerAvailableAfterExplorerRegistration(
+                window, initialRoot, inactiveExplorer, blockManualScheduler: true);
+            Console.WriteLine(
+                "PASS: Real folder manager opens, expands the registered Explorer " +
+                "subfolder and closes while a P0 is blocked.");
+
             browserButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, browserButton));
             if (browserButton.Tag is not null ||
                 !ReferenceEquals(treeBefore,
@@ -904,6 +919,13 @@ internal static class FolderAddFlow
                 throw new Exception(
                     "Gallery/tree focus or single-image selection was lost after PCasa restart.");
             Console.WriteLine("PASS: Real restart restores tree focus and selected photo identity.");
+
+            // A fresh PCasa window must still reopen the manager with the
+            // Explorer registration persisted from the previous process view.
+            VerifyManagerAvailableAfterExplorerRegistration(
+                window, initialRoot, inactiveExplorer, blockManualScheduler: false);
+            Console.WriteLine(
+                "PASS: Folder manager reopens after restart with Explorer-added child.");
 
             // BackgroundScanSettings.Save always broadcasts Changed. Saving
             // the ALREADY ENABLED setting must not manufacture 7,000-file
@@ -1271,6 +1293,149 @@ internal static class FolderAddFlow
             try { Directory.Delete(rootPath, recursive: true); } catch { }
         }
     }
+
+    private static void VerifyManagerAvailableAfterExplorerRegistration(
+        PCasa.App.MainWindow window, string rootPath, string explorerAddedPath,
+        bool blockManualScheduler)
+    {
+        var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var scheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+            .GetField("_scheduler", flags)!.GetValue(window)!;
+        var managerCommand = typeof(PCasa.App.MainWindow).GetMethod(
+            "BrowseFolderManager_Click", flags)
+            ?? throw new Exception("Folder manager menu command is missing.");
+        var blockerStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBlocker = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? blocker = null;
+        Task? pendingManual = null;
+        DispatcherTimer? dialogTimer = null;
+        Exception? dialogError = null;
+        var completed = false;
+        try
+        {
+            if (blockManualScheduler)
+            {
+                blocker = scheduler.EnqueueAsync(
+                    "test:manager-running-p0", SchedulerPriority.ManualAction,
+                    async _ =>
+                    {
+                        blockerStarted.TrySetResult();
+                        // Deliberately don't observe scheduler yield until
+                        // the fixture is released: a newer P0 remains queued.
+                        await releaseBlocker.Task;
+                    }, workKind: SchedulerWorkKind.CatalogScan);
+                Until(window, () => blockerStarted.Task.IsCompleted,
+                    "Could not start the scheduler P0 blocker.");
+                pendingManual = scheduler.EnqueueAsync(
+                    "test:manager-pending-p0", SchedulerPriority.ManualAction,
+                    _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.CatalogScan);
+                Until(window, () => scheduler.Snapshot().Any(job =>
+                        job.Key == "test:manager-pending-p0" &&
+                        job.State == SchedulerJobState.Queued),
+                    "The manager regression did not arrange a waiting P0.");
+            }
+
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+            dialogTimer = new DispatcherTimer(DispatcherPriority.Background,
+                window.Dispatcher) { Interval = TimeSpan.FromMilliseconds(40) };
+            dialogTimer.Tick += (_, _) =>
+            {
+                if (completed)
+                {
+                    dialogTimer.Stop();
+                    return;
+                }
+                try
+                {
+                    var manager = Application.Current.Windows
+                        .OfType<PCasa.App.FolderManagerWindow>()
+                        .FirstOrDefault(w => w.IsVisible);
+                    if (manager is null)
+                    {
+                        if (DateTime.UtcNow >= deadline)
+                            throw new TimeoutException(
+                                "Folder manager never opened after Explorer registration.");
+                        return;
+                    }
+
+                    var tree = (TreeView)manager.FindName("FolderManagerTree");
+                    var actualRoot = tree.Items.OfType<TreeViewItem>()
+                        .FirstOrDefault(item =>
+                            SamePath(ManagedPath(item), rootPath));
+                    if (actualRoot is null)
+                        throw new Exception(
+                            "Folder manager opened without persisted Explorer parent.");
+                    actualRoot.IsExpanded = true;
+
+                    // The manager's expanded children must be served by the
+                    // foreground reader even though its P0 queue is blocked.
+                    var added = actualRoot.Items.OfType<TreeViewItem>()
+                        .Any(item => SamePath(ManagedPath(item), explorerAddedPath));
+                    if (!added)
+                    {
+                        if (DateTime.UtcNow >= deadline)
+                            throw new TimeoutException(
+                                "Folder manager directory expansion waited on P0.");
+                        return;
+                    }
+                    completed = true;
+                    ((Button)manager.FindName("CancelButton")).RaiseEvent(
+                        new RoutedEventArgs(Button.ClickEvent));
+                }
+                catch (Exception ex)
+                {
+                    dialogError = ex;
+                    completed = true;
+                    foreach (var manager in Application.Current.Windows
+                                 .OfType<PCasa.App.FolderManagerWindow>()
+                                 .Where(w => w.IsVisible))
+                        manager.Close();
+                }
+            };
+            dialogTimer.Start();
+            window.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
+                new Action(() =>
+                {
+                    try
+                    {
+                        managerCommand.Invoke(window,
+                            new object[] { window, new RoutedEventArgs() });
+                    }
+                    catch (Exception ex)
+                    {
+                        dialogError = ex;
+                        completed = true;
+                    }
+                }));
+            Until(window, () => completed,
+                "Folder manager did not open/expand/close after Explorer Add.");
+            if (dialogError is not null)
+                throw new Exception(
+                    "Folder manager failed after Explorer Add or restart.", dialogError);
+            if (blocker is not null && blocker.IsCompleted)
+                throw new Exception("The P0 blocker ended before the manager opened.");
+        }
+        finally
+        {
+            dialogTimer?.Stop();
+            releaseBlocker.TrySetResult();
+            foreach (var manager in Application.Current.Windows
+                         .OfType<PCasa.App.FolderManagerWindow>()
+                         .Where(w => w.IsVisible))
+                manager.Close();
+        }
+        if (blocker is not null)
+            Until(window, () => blocker.IsCompleted &&
+                (pendingManual is null || pendingManual.IsCompleted),
+                "P0 fixture did not finish after folder manager closed.");
+    }
+
+    private static string? ManagedPath(TreeViewItem node)
+        => node.Tag?.GetType().GetProperty("LocalPath")
+            ?.GetValue(node.Tag) as string;
 
     private static void ShowManagerWithStagedRoot(PCasa.App.MainWindow window,
         string path, bool commit, FolderRepository repository)
