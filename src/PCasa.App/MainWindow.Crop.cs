@@ -735,6 +735,7 @@ public partial class MainWindow
             _scheduler.ReportProgress(key, "Bild zuschneiden", 0, 1, request.Path);
             JpegCropWriter.Save(request.Path,
                 new Rect(request.X, request.Y, request.Width, request.Height), token);
+            new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
             _scheduler.ReportProgress(key, "Bild zuschneiden", 1, 1, request.Path);
             return Task.CompletedTask;
         });
