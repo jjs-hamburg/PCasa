@@ -47,25 +47,13 @@ public partial class MainWindow
 
     private void InitializeStraightenTools()
     {
-        var button = new Button
+        AddEditorTool(new TextBlock
         {
-            Width = 67, Height = 59, Padding = new Thickness(2),
-            Margin = new Thickness(3, 3, 3, 3),
-            ToolTip = UiLanguage.T("Begradigen / Drehen")
-        };
-        var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-        stack.Children.Add(new TextBlock
-        {
-            Text = "⟲", FontSize = 24, TextAlignment = TextAlignment.Center
-        });
-        stack.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Begradigen"), FontSize = 9.5,
+            Text = "⟲", FontSize = 25,
+            HorizontalAlignment = HorizontalAlignment.Center,
             TextAlignment = TextAlignment.Center
-        });
-        button.Content = stack;
-        button.Click += (_, _) => BeginStraighten();
-        ViewerToolsList.Children.Add(button);
+        }, "Begradigen", "Begradigen / Drehen",
+            () => BeginStraighten());
 
         StraightenBackButton.Click += (_, _) => LeaveStraighten();
         StraightenLeftButton.Click += (_, _) =>
