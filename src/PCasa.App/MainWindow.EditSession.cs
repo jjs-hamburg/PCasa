@@ -104,6 +104,7 @@ public partial class MainWindow
     {
         if (!EnsureEditSession()) return;
         if (_cropActive) EndCrop();
+        if (_brightnessActive) LeaveBrightness();
         _straightenPreviewBase = _photoEditSession!.Render();
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = true;
@@ -246,7 +247,7 @@ public partial class MainWindow
             _photoEditSession?.CanUndo == true;
         CropRedoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanRedo == true;
-        var editingTool = _cropActive || _straightenActive;
+        var editingTool = _cropActive || _straightenActive || _brightnessActive;
         CropApplyButton.Visibility = editingTool
             ? Visibility.Visible : Visibility.Collapsed;
         CropApplyButton.IsEnabled = !_cropSavePending && editingTool;
@@ -278,6 +279,14 @@ public partial class MainWindow
                 _photoEditSession.Apply(new PhotoEditStep(
                     "rotate", Degrees: degrees));
         }
+        else if (_brightnessActive)
+        {
+            var exposure = _brightnessAmount;
+            LeaveBrightness();
+            if (Math.Abs(exposure) > .00001)
+                _photoEditSession.Apply(new PhotoEditStep(
+                    "brightness", Amount: exposure));
+        }
         else return false;
         SetViewerBitmap(_photoEditSession.Render());
         ApplyViewerImageLayout();
@@ -290,6 +299,7 @@ public partial class MainWindow
         if (_cropSavePending || _photoEditSession is null) return;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
+        if (_brightnessActive) LeaveBrightness();
         if (direction < 0) _photoEditSession.Undo();
         else _photoEditSession.Redo();
         SetViewerBitmap(_photoEditSession.Render());
@@ -302,6 +312,7 @@ public partial class MainWindow
         if (_cropSavePending) return;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
+        if (_brightnessActive) LeaveBrightness();
         var original = _photoEditSession?.Original;
         _photoEditSession = null;
         if (original is not null)
@@ -315,7 +326,7 @@ public partial class MainWindow
     private async void SaveEdits(bool asCopy = false)
     {
         if (_cropSavePending || _viewerImageInfo is not { } info) return;
-        if (_cropActive || _straightenActive)
+        if (_cropActive || _straightenActive || _brightnessActive)
             if (!ApplyEditTool()) return;
         if (_photoEditSession is not { HasChanges: true } session ||
             session.ImageId != info.Id) return;
