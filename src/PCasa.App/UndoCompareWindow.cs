@@ -90,15 +90,9 @@ internal sealed class UndoCompareWindow : Window
         var restore = new Button { Content = english ? "Restore" : "Wiederherstellen",
             MinWidth = 125, IsDefault = true, Margin = new Thickness(4,0,0,0) };
         cancel.Click += (_,_) => DialogResult = false;
-        restore.Click += (_,_) =>
-        {
-            if (PcasaDialog.Show(this,
-                english ? "Restore the selected version? The current state will be backed up first." :
-                    "Ausgewählte Version wiederherstellen? Der aktuelle Zustand wird vorher gesichert.",
-                Title,MessageBoxButton.YesNo,MessageBoxImage.Question,
-                MessageBoxResult.No) == MessageBoxResult.Yes)
-                DialogResult = true;
-        };
+        // The durable UndoHistoryService.Restore already creates and verifies
+        // a pre-restore snapshot. A second confirmation is redundant.
+        restore.Click += (_,_) => DialogResult = true;
         actions.Children.Add(cancel);
         actions.Children.Add(restore);
         var navigation = new StackPanel { Orientation = Orientation.Horizontal,
@@ -107,10 +101,10 @@ internal sealed class UndoCompareWindow : Window
         footer.Children.Add(navigation);
         _older.Content = "‹";
         _older.Width = 36;
-        _older.Click += (_,_) => Navigate(1);
+        _older.Click += (_,_) => Navigate(-1);
         _newer.Content = "›";
         _newer.Width = 36;
-        _newer.Click += (_,_) => Navigate(-1);
+        _newer.Click += (_,_) => Navigate(1);
         navigation.Children.Add(_older);
         navigation.Children.Add(_description);
         _description.MinWidth = 225;
@@ -123,8 +117,8 @@ internal sealed class UndoCompareWindow : Window
         navigation.Children.Add(zoom);
         KeyDown += (_,e) =>
         {
-            if (e.Key == Key.Left) { Navigate(1); e.Handled = true; }
-            else if (e.Key == Key.Right) { Navigate(-1); e.Handled = true; }
+            if (e.Key == Key.Left) { Navigate(-1); e.Handled = true; }
+            else if (e.Key == Key.Right) { Navigate(1); e.Handled = true; }
         };
         _current.Source = Load(originalPath);
         ShowVersion();
@@ -158,8 +152,8 @@ internal sealed class UndoCompareWindow : Window
         var version = _versions[_index];
         _description.Text = $"{_index+1} / {_versions.Count}  " +
             version.SavedAtUtc.LocalDateTime.ToString("g");
-        _older.IsEnabled = _index < _versions.Count - 1;
-        _newer.IsEnabled = _index > 0;
+        _older.IsEnabled = _index > 0;
+        _newer.IsEnabled = _index < _versions.Count - 1;
     }
 
     private void Navigate(int delta)
