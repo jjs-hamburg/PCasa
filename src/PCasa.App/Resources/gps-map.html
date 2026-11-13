@@ -202,6 +202,17 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
      post({type:'error',message:'GPS map bounds: '+String(err)});
    }
  };
+ // Photo focus changes must NEVER call fitBounds, jump to zoom=13 or
+ // reset the user's scale. Only center the newly focused coordinates and
+ // supersede any older queued auto-fit for the previous photo.
+ window.pcasaFocusGpsPhoto=(version,lat,lon)=>{
+   if(!Number.isSafeInteger(version)||version<0||
+      !Number.isFinite(lat)||!Number.isFinite(lon)||
+      Math.abs(lat)>90||Math.abs(lon)>180)return;
+   if(version<latestFitQueryVersion)return;
+   latestFitQueryVersion=version;
+   map.jumpTo({center:[lon,lat]}); // zoom/bearing/pitch untouched
+ };
  // Temporary GPX overlay, independent of the photo position projection.
  let gpxTrack=[],gpxLayerInstalled=false;
  function drawGpx() {
