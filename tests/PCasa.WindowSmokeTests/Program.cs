@@ -1330,9 +1330,9 @@ internal static class Program
                 // The synthetic gallery is not a real database snapshot.
                 // Prevent a previously scheduled 750ms catalog-timer tick
                 // from publishing the empty test database over that fixture.
-                var catalogTimer = (DispatcherTimer?)scrollType.GetField(
+                var fixtureCatalogTimer = (DispatcherTimer?)scrollType.GetField(
                     "_catalogPublicationTimer", scrollFlags)!.GetValue(window);
-                catalogTimer?.Stop();
+                fixtureCatalogTimer?.Stop();
                 scrollType.GetField("_catalogPublicationPending", scrollFlags)!
                     .SetValue(window, 0);
                 scanDirtyField.SetValue(window, false);
