@@ -363,7 +363,8 @@ public partial class MainWindow
         ViewerCropOverlay.ReleaseMouseCapture();
         ViewerCropOverlay.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
-        ViewerCropFooter.Visibility = Visibility.Collapsed;
+        // Footer is a fixed row; leaving Crop only disables its actions.
+        ViewerCropFooter.Visibility = Visibility.Visible;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         _cropHistory.Clear();
         _cropHistoryIndex = -1;
