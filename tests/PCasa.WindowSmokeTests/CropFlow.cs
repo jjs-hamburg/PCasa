@@ -165,6 +165,8 @@ internal static class CropFlow
             Array.Fill(white, (byte)255);
             var whiteSource = BitmapSource.Create(320, 200, 96, 96,
                 PixelFormats.Bgra32, null, white, 320 * 4);
+            // Freeze at the origin before the MTA test worker receives it.
+            whiteSource.Freeze();
             var whiteTurn = Task.Run(() => PhotoEditSession.Render(
                 whiteSource, [new PhotoEditStep("rotate", Degrees: 2.5)]))
                 .GetAwaiter().GetResult();
