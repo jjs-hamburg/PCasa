@@ -7996,6 +7996,18 @@ internal static class Program
             var resolved = VideoThumbnailSource.Resolve(original);
             if (!string.Equals(preview, resolved, StringComparison.OrdinalIgnoreCase))
                 throw new Exception("Unchanged videos must reuse the same cached preview.");
+
+            // An explicit Refresh Thumbnail must regenerate a cached
+            // placeholder even when size/timestamp have not changed.
+            // Corrupt the local preview (not the video) to prove that the
+            // forced call replaces it with a decodable JPEG.
+            File.WriteAllBytes(preview, [1, 2, 3]);
+            var forced = VideoThumbnailSource.Resolve(original,
+                forceRefresh: true);
+            if (!string.Equals(preview, forced, StringComparison.OrdinalIgnoreCase) ||
+                new FileInfo(forced).Length <= 3)
+                throw new Exception(
+                    "Manual Refresh Thumbnail left the stale placeholder untouched.");
             using (var stream = File.OpenRead(preview))
             {
                 var decoder = new JpegBitmapDecoder(stream,
