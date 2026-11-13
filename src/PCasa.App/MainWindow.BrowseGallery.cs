@@ -1122,15 +1122,22 @@ public partial class MainWindow
             // It must never wait behind a deferred or running durable P0
             // scan that was started by Explorer registration. The same
             // independent gallery reader already protects catalog snapshots.
-            var configuration = await _galleryCatalogReader.ReadAsync(
+            // One immutable catalog read: configuration and already-indexed
+            // photo folders travel together. Opening the manager must not
+            // enumerate SMB directories, and no catalog row is modified.
+            var folderSnapshot = await _galleryCatalogReader.ReadAsync(
                 token =>
                 {
                     token.ThrowIfCancellationRequested();
-                    return ReadFolderTreeConfigurationSnapshot();
+                    return (
+                        Configuration: ReadFolderTreeConfigurationSnapshot(),
+                        CatalogFolders: _imageCatalog.GetPhotoFolders());
                 });
             if (Dispatcher.HasShutdownStarted) return;
             var window = new FolderManagerWindow(
-                configuration, _foregroundReadService, serverDatabaseConfigured: false)
+                folderSnapshot.Configuration, _foregroundReadService,
+                serverDatabaseConfigured: false,
+                catalogPhotoFolders: folderSnapshot.CatalogFolders)
             {
                 Owner = this
             };
