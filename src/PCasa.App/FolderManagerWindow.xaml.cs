@@ -18,6 +18,11 @@ public partial class FolderManagerWindow : Window
     private readonly ForegroundReadService _foregroundReadService;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
+    // Roots unchecked during the dialog remain available for rechecking in
+    // the right pane, with their original IDs and exclusion rules intact.
+    // Only OK persists the final staged selection.
+    private readonly Dictionary<long,
+        (MonitoredFolder Root, IReadOnlyList<string> Exclusions)> _uncheckedRoots = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly IReadOnlyList<(string Name, string Path)> _systemFolders;
     private IReadOnlyList<MonitoredFolder> _monitoredRoots = Array.Empty<MonitoredFolder>();
@@ -164,19 +169,29 @@ public partial class FolderManagerWindow : Window
     private void RefreshMonitoredRootsList()
     {
         MonitoredRootsList.Children.Clear();
-        foreach (var root in _monitoredRoots.OrderBy(
-                     folder => folder.LocalPath, StringComparer.CurrentCultureIgnoreCase))
+        var shown = _monitoredRoots
+            .Select(root => (Root: root, Included: true))
+            .Concat(_uncheckedRoots.Values.Select(entry =>
+                (Root: entry.Root, Included: false)))
+            .OrderBy(entry => entry.Root.LocalPath,
+                StringComparer.CurrentCultureIgnoreCase);
+        foreach (var (root, included) in shown)
         {
             var check = new CheckBox
             {
                 Content = root.LocalPath,
                 ToolTip = root.LocalPath,
                 Tag = root.Id,
-                IsChecked = true,
+                IsChecked = included,
                 Margin = new Thickness(2, 3, 0, 3),
                 VerticalAlignment = VerticalAlignment.Center
             };
             check.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
+            check.Checked += (_, _) =>
+            {
+                if (_updatingChecks || _busy) return;
+                RestoreStagedRoot(root.Id);
+            };
             check.Unchecked += (_, _) =>
             {
                 if (_updatingChecks || _busy) return;
@@ -188,9 +203,22 @@ public partial class FolderManagerWindow : Window
 
     private void RemoveStagedRoot(long rootId)
     {
+        var root = _monitoredRoots.FirstOrDefault(candidate =>
+            candidate.Id == rootId);
+        if (root is null) return;
+        _uncheckedRoots[rootId] = (root,
+            _exclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>());
         _monitoredRoots = _monitoredRoots
             .Where(candidate => candidate.Id != rootId).ToArray();
         _exclusions.Remove(rootId);
+        Reload();
+    }
+
+    private void RestoreStagedRoot(long rootId)
+    {
+        if (!_uncheckedRoots.Remove(rootId, out var previous)) return;
+        _monitoredRoots = _monitoredRoots.Append(previous.Root).ToArray();
+        _exclusions[rootId] = previous.Exclusions;
         Reload();
     }
 
@@ -466,6 +494,13 @@ public partial class FolderManagerWindow : Window
         var normalized = FolderExclusionRules.Normalize(path);
         if (_monitoredRoots.Any(root => PathEquals(root.LocalPath, normalized)))
             return;
+        var prior = _uncheckedRoots.Values.FirstOrDefault(item =>
+            PathEquals(item.Root.LocalPath, normalized));
+        if (prior.Root is not null)
+        {
+            RestoreStagedRoot(prior.Root.Id);
+            return;
+        }
         var classification = PathClassifier.Classify(normalized);
         var provisional = new MonitoredFolder
         {
