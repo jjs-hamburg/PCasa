@@ -124,6 +124,55 @@ internal static class CropFlow
             File.Delete(isolatedVersion.SnapshotPath);
             if (isolated.HasRestorableVersion(path))
                 throw new Exception("Missing Undo snapshot must never show Restore.");
+            // Alpha.21: Crop and straighten are ONE unsaved, globally
+            // reversible edit session. The MTA writer replays all accepted
+            // steps in exactly one verified commit, preserving embedded GPS.
+            BitmapSource editorSource;
+            using (var source = File.OpenRead(path))
+                editorSource = BitmapDecoder.Create(source,
+                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.Single();
+            var session = new PhotoEditSession(1001, editorSource);
+            if (session.HasChanges || session.CanUndo || session.CanRedo)
+                throw new Exception("New edit session is not initially clean.");
+            session.Apply(new PhotoEditStep("crop", .1, .1, .8, .8));
+            var cropSize = (session.Render().PixelWidth, session.Render().PixelHeight);
+            session.Apply(new PhotoEditStep("rotate", Degrees: 90));
+            var turned = session.Render();
+            if (turned.PixelWidth != cropSize.Item2 ||
+                turned.PixelHeight != cropSize.Item1 || !session.CanUndo)
+                throw new Exception("Quarter-turn did not swap cropped image axes.");
+            session.Undo();
+            if (!session.CanRedo || session.Render().PixelWidth != cropSize.Item1)
+                throw new Exception("Global undo did not revert rotated crop.");
+            session.Redo();
+            if (!session.CanUndo || session.CanRedo ||
+                session.Render().PixelWidth != cropSize.Item2)
+                throw new Exception("Global redo did not restore rotation.");
+            session.Apply(new PhotoEditStep("rotate", Degrees: 2.5));
+            if (session.CanRedo)
+                throw new Exception("A new edit after undo/redo kept a stale redo branch.");
+            var expected = session.Render();
+            Task.Run(() => JpegCropWriter.Save(path, session.AppliedSteps,
+                CancellationToken.None)).GetAwaiter().GetResult();
+            using (var saved = File.OpenRead(path))
+            {
+                var result = BitmapDecoder.Create(saved, BitmapCreateOptions.None,
+                    BitmapCacheOption.OnLoad).Frames.Single();
+                if (result.PixelWidth != expected.PixelWidth ||
+                    result.PixelHeight != expected.PixelHeight)
+                    throw new Exception(
+                        "Single-commit full-resolution edit differs from preview.");
+            }
+            var preserved = ReadExif(exif, "-n", "-GPSLatitude",
+                "-GPSLongitude", "-Keywords", path);
+            if (!preserved.Contains("53.5") || !preserved.Contains("10.25") ||
+                !preserved.Contains("PCasaCropSmoke"))
+                throw new Exception(
+                    "Combined Crop/Rotate/straighten lost original metadata.");
+            if (Directory.GetFiles(root, ".pcasa-crop-*").Length != 0)
+                throw new Exception("Multi-step editor leaked a staged JPEG.");
+            Console.WriteLine(
+                "PASS: Global editor Undo/Redo, Crop+90°+straighten single P0 JPEG commit, embedded GPS preserved.");
             Console.WriteLine("PASS: Restore availability rejects corrupted and missing snapshots.");
             Console.WriteLine("PASS: Crop -> Restore -> Crop reuses same path without file lock.");
             Console.WriteLine("PASS: MTA JPEG crop, source RAW untouched, GPS/keywords preserved, byte-perfect central Undo.");
