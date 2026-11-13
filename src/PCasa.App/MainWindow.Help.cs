@@ -19,6 +19,61 @@ public partial class MainWindow
 {
     private static readonly HttpClient ReleaseClient = CreateReleaseClient();
     private bool _checkingForUpdates;
+    private bool _updateDownloadActive;
+
+    // Downloading a verified installer over a slow link should not compete
+    // with running NAS scans, thumbnail building or source availability probes.
+    // Preserve each durable scheduler job's exact cursor for user cancellation.
+    private async Task<IReadOnlyList<string>> PauseReadsForUpdateAsync()
+    {
+        _updateDownloadActive = true;
+        _backgroundDebounceTimer?.Stop();
+        _backgroundMonitorRefreshTimer?.Stop();
+        _cacheMaintenanceTimer?.Stop();
+        _backgroundCurrentScanCancellation?.Cancel();
+        _initialScanCancellation?.Cancel();
+        _browseCacheCancellation?.Cancel();
+        _cacheMaintenanceCancellation?.Cancel();
+
+        var pausedByUpdate = new List<string>();
+        try
+        {
+            foreach (var job in _scheduler.Snapshot().Where(job =>
+                         job.State is SchedulerJobState.Queued or
+                             SchedulerJobState.Running or SchedulerJobState.YieldRequested &&
+                         job.WorkKind is SchedulerWorkKind.CatalogScan or
+                             SchedulerWorkKind.InitialImport))
+            {
+                if (await _scheduler.PauseDurableTaskAsync(job.Key))
+                    pausedByUpdate.Add(job.Key);
+            }
+            return pausedByUpdate;
+        }
+        catch
+        {
+            ResumeReadsAfterCanceledUpdate(pausedByUpdate);
+            throw;
+        }
+    }
+
+    private void ResumeReadsAfterCanceledUpdate(IReadOnlyList<string> pausedByUpdate)
+    {
+        foreach (var key in pausedByUpdate)
+        {
+            try { _scheduler.ResumeDurableTask(key); }
+            catch (Exception ex) { PCasaDiagnostics.Write("Update.ResumeReads", ex); }
+        }
+        _updateDownloadActive = false;
+        if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+        {
+            _backgroundMonitorRefreshTimer?.Start();
+            _cacheMaintenanceTimer?.Start();
+            if (_backgroundPending.Count > 0 &&
+                _backgroundScanSettings?.Enabled == true)
+                _backgroundDebounceTimer?.Start();
+            QueuePendingInitialScans();
+        }
+    }
 
     private static HttpClient CreateReleaseClient()
     {
@@ -168,6 +223,10 @@ public partial class MainWindow
             if (result == MessageBoxResult.Yes && installerUrl is not null &&
                 installerDigest is not null)
             {
+                var paused = await PauseReadsForUpdateAsync();
+                var installerStarted = false;
+                try
+                {
                 var downloaded = await DownloadVerifiedInstallerAsync(
                     latest.Value.ToString(), installerUrl, installerDigest, installerBytes);
                 if (downloaded is not null)
@@ -191,7 +250,14 @@ public partial class MainWindow
                     start.ArgumentList.Add(command);
                     using var helper = Process.Start(start) ??
                         throw new IOException("PCasa update launcher could not be started.");
+                    installerStarted = true;
                     Close();
+                }
+                }
+                finally
+                {
+                    if (!installerStarted)
+                        ResumeReadsAfterCanceledUpdate(paused);
                 }
             }
         }
