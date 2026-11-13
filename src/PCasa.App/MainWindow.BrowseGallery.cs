@@ -1292,6 +1292,11 @@ public partial class MainWindow
             tag.PhotoFolderId != invertedId)
             ResetGalleryInvertSelectionToggle();
 
+        // Register the new folder BEFORE clearing the old GPS photo
+        // selection. Clearing it starts asynchronous map/filmstrip UI work;
+        // none of that work can subsequently restore the old photo anchor.
+        MarkExplicitGalleryNavigation(tag.PhotoFolderId);
+
         // Explicit navigation to a different folder ends the previous
         // thumbnail selection. Scrolling does not alter the selection.
         if (_selectedImageIds.Count > 0)
@@ -1300,7 +1305,6 @@ public partial class MainWindow
             _gallerySelection.Reset();
             ApplyGallerySelection();
         }
-        MarkExplicitGalleryNavigation();
         _appearance.SelectedTreePath = tag.FullPath;
         SaveAppearance();
 
@@ -1342,22 +1346,21 @@ public partial class MainWindow
         var item = FindAncestor<TreeViewItem>(source);
         if (item?.IsSelected == true && item.Tag is FolderTreeTag { PhotoFolderId: long folderId })
         {
-            MarkExplicitGalleryNavigation();
+            MarkExplicitGalleryNavigation(folderId);
             _ = NavigateToPhotoFolderAsync(item, folderId);
         }
     }
 
     private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
     {
+            var navigationVersion = _explicitGalleryNavigationVersion;
             _activePhotoFolderId = photoFolderId;
             // Fast path: the gallery index is already local. A click must
             // display the selected folder NOW, never await a full 500k-photo
             // catalog reload or any pending NAS scanner publication.
             if (BrowseSurface.GetFolderOffset(photoFolderId) is double cachedOffset)
             {
-                BrowseScrollViewer.ScrollToVerticalOffset(cachedOffset);
-                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
-                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+                ScrollToExplicitGalleryFolder(photoFolderId, cachedOffset);
                 UpdateActiveFolderDisplay(photoFolderId,
                     updateTreeSelection: false);
                 if (_scanGalleryPublicationDeferred)
@@ -1376,7 +1379,8 @@ public partial class MainWindow
                 _scanGalleryPublicationDeferred = false;
                 await RefreshBrowseGalleryAsync(forceIndexReload: true,
                     warmViewport: false);
-                if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
+                if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
+                    navigationVersion != _explicitGalleryNavigationVersion) return;
             }
             var offset = BrowseSurface.GetFolderOffset(photoFolderId);
             if (offset is null && _browseInitialized && !_folderRemovalPending)
@@ -1387,7 +1391,8 @@ public partial class MainWindow
                 // waits for the scanner, nor does it rebuild the folder tree.
                 await RefreshBrowseGalleryAsync(forceIndexReload: true,
                     warmViewport: false);
-                if ((FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
+                if (navigationVersion != _explicitGalleryNavigationVersion ||
+                    (FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
                     FolderTreeTag { PhotoFolderId: long current } || current != photoFolderId)
                     return;
                 offset = BrowseSurface.GetFolderOffset(photoFolderId);
@@ -1410,7 +1415,7 @@ public partial class MainWindow
             // offset for a folder that has no search results.
             if (offset is not null)
             {
-                BrowseScrollViewer.ScrollToVerticalOffset(offset.Value);
+                ScrollToExplicitGalleryFolder(photoFolderId, offset.Value);
                 UpdateActiveFolderDisplay(photoFolderId, updateTreeSelection: false);
             }
             else if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text))
@@ -1469,10 +1474,18 @@ public partial class MainWindow
         if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition)
             return;
 
-        RegisterGalleryUserScroll();
+        // A tree click scrolls programmatically. Its own ScrollChanged
+        // cannot erase the chosen folder intent and expose a stale GPS
+        // reflow anchor. Real wheel input already registers navigation.
+        if (_scrollingToExplicitGalleryFolder) return;
+        var folderId = BrowseSurface.GetFolderIdAtOffset(e.VerticalOffset + 4);
+        if (_explicitGalleryFolderTargetId is not long intended ||
+            folderId != intended)
+            RegisterGalleryUserScroll();
+        else if (GalleryAtLiveEdge())
+            PublishDeferredScanGallery();
         if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text)) return;
 
-        var folderId = BrowseSurface.GetFolderIdAtOffset(e.VerticalOffset + 4);
         if (folderId is null || _activePhotoFolderId == folderId)
         {
             return;
@@ -1593,6 +1606,9 @@ public partial class MainWindow
         object? sender,
         BrowseImageClickedEventArgs e)
     {
+        // A genuine thumbnail click is independent of GPS map focus; it
+        // supersedes any earlier tree-folder anchor.
+        MarkExplicitGalleryNavigation();
         _gallerySelection.Click(e.ImageId, e.Modifiers,
             _displayedBrowseIndex, _selectedImageIds, BrowseSurface.HiddenFolderIds);
         ApplyGallerySelection();
