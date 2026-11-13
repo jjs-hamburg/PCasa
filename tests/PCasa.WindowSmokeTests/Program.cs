@@ -92,6 +92,94 @@ internal static class Program
                 throw new Exception("Help must contain exactly Check for Update and About.");
             Console.WriteLine("PASS: Menu reduced and reorganized with bilingual Help commands.");
 
+            // Alpha.25: one selected video must never hide other selected
+            // videos from the context refresh; non-video photos are ignored.
+            var videoIdsForTest = new BrowseThumbnailIndexEntry[]
+            {
+                new(10, 2, 192, "", 0, 0, 1, 1, 1,
+                    FileName: "one.mp4"),
+                new(11, 2, 192, "", 0, 0, 1, 1, 1,
+                    FileName: "two.mov"),
+                new(12, 2, 192, "", 0, 0, 1, 1, 1,
+                    FileName: "photo.jpg")
+            };
+            var selectVideoMethod = typeof(PCasa.App.MainWindow).GetMethod(
+                "SelectVideoThumbnailIds",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var chosenVideos = (long[])selectVideoMethod.Invoke(null,
+                [10L, new long[] { 10, 11, 12 }, videoIdsForTest])!;
+            if (!chosenVideos.OrderBy(id => id).SequenceEqual(new long[] { 10, 11 }))
+                throw new Exception(
+                    "Multi-video context action did not preserve all selected videos.");
+            var replacedVideos = (long[])selectVideoMethod.Invoke(null,
+                [10L, new long[] { 11, 12 }, videoIdsForTest])!;
+            if (!replacedVideos.SequenceEqual(new long[] { 10 }))
+                throw new Exception(
+                    "Right-clicking an unselected video did not replace the selection.");
+            Console.WriteLine(
+                "PASS: Video Refresh Thumbnail preserves two-video selection and excludes photos.");
+
+            // The five editors use identically sized ICON buttons with
+            // captions outside them; the three autos form their own row.
+            var initEditing = typeof(PCasa.App.MainWindow).GetMethod(
+                "InitializeCropTools",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            initEditing.Invoke(window, null);
+            Flush(window);
+            var manualTools = (WrapPanel)window.FindName("ViewerToolsList")!;
+            var automaticTools = (StackPanel)window.FindName("ViewerAutoToolsList")!;
+            if (manualTools.Children.Count != 2 ||
+                automaticTools.Children.Count != 3 ||
+                automaticTools.Orientation != Orientation.Horizontal)
+                throw new Exception("Expected two manual tools and three autos in one row.");
+            var toolCards = manualTools.Children.Cast<StackPanel>()
+                .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
+            var toolButtons = toolCards.Select(card =>
+                card.Children.OfType<Button>().Single()).ToArray();
+            if (toolButtons.Any(button =>
+                    button.Width != toolButtons[0].Width ||
+                    button.Height != toolButtons[0].Height) ||
+                toolCards.Any(card =>
+                    card.Children.OfType<TextBlock>().Count() != 1))
+                throw new Exception("Editor icon controls are not uniform.");
+            var activeLanguage = UiLanguage.Current.Code;
+            try
+            {
+                UiLanguage.Current.Select("en");
+                Flush(window);
+                var translatedAuto = (TextBlock)
+                    ((StackPanel)automaticTools.Children[1]).Children[1];
+                if (translatedAuto.Text != "Contrast (automatic)")
+                    throw new Exception(
+                        "Dynamic editor tool captions did not switch to English.");
+            }
+            finally
+            {
+                UiLanguage.Current.Select(activeLanguage);
+                Flush(window);
+            }
+            var floatingTools = (Border)window.FindName("ViewerOnImageToolsBar")!;
+            var cropOptions = (StackPanel)window.FindName("ViewerCropOptions")!;
+            var straightenOptions = (StackPanel)window.FindName("ViewerStraightenOptions")!;
+            if (!Descendants<StackPanel>(floatingTools).Contains(cropOptions) ||
+                !Descendants<StackPanel>(floatingTools).Contains(straightenOptions))
+                throw new Exception("Crop/Straighten options are not in image overlay.");
+            var toolbarFooter = (Grid)window.FindName("ViewerCropFooter")!;
+            var histogram = (Canvas)window.FindName("ViewerHistogramCanvas")!;
+            var histogramBorder = (Border)((StackPanel)histogram.Parent).Parent;
+            if (Grid.GetRow(toolbarFooter) != 2 ||
+                Grid.GetRow(histogramBorder) != 3 ||
+                toolbarFooter.Children.OfType<Button>().Count() != 3)
+                throw new Exception("Histogram footer is not a stable single-row toolbar.");
+            var toneReset = (Button)window.FindName("BrightnessResetButton")!;
+            var toneSlider = (Slider)window.FindName("BrightnessSlider")!;
+            if (toneReset.Parent != toneSlider.Parent)
+                throw new Exception("Brighten/Darken Reset must sit directly by slider.");
+            Console.WriteLine(
+                "PASS: Uniform translated editor icons, Picasa-style floating tool panel, stable footer and bottom histogram.");
+
             var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Single appearance dialog menu missing.");
             void ConfigureAppearance(Action<PCasa.App.AppearanceSettingsWindow> configure,
