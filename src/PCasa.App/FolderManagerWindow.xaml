@@ -45,7 +45,7 @@
             <Border Grid.Column="0" BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
                     Background="{DynamicResource PcasaPanelBrush}">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="{loc:Tr Key='Ordnerstruktur – Desktop, Bilder, Dokumente und überwachte Ordner'}"
+                    <TextBlock DockPanel.Dock="Top" Text="Überwachte Ordner – nach Laufwerk zusammengefasst"
                                FontWeight="SemiBold" Margin="12,11,12,9" />
                     <TreeView x:Name="FolderManagerTree"
                               Background="Transparent"
@@ -69,7 +69,7 @@
               <StackPanel>
                 <TextBlock Text="{loc:Tr Key='Explizit überwachte Ordner'}"
                            FontWeight="SemiBold" Margin="0,0,0,7"/>
-                <TextBlock Text="{loc:Tr Key='Diese Häkchen sind mit dem Verzeichnisbaum synchronisiert. Änderungen gelten erst mit OK.'}"
+                <TextBlock Text="Überwachungswurzeln aktivieren oder entfernen. Änderungen gelten erst mit OK."
                            TextWrapping="Wrap" Opacity=".7" Margin="0,0,0,8"/>
                 <StackPanel x:Name="MonitoredRootsList" Margin="1,0,0,14"/>
                 <Separator Margin="0,4,0,12"/>
@@ -79,9 +79,9 @@
                 <TextBlock x:Name="SelectedModeText" Margin="0,18,0,0"
                            Opacity="0.8" TextWrapping="Wrap" />
                 <TextBlock Margin="0,13,0,0" Opacity="0.7" TextWrapping="Wrap"
-                           Text="{loc:Tr Key='Links: Ordner einschließlich Unterordnern überwachen oder ausschließen. Rechts: ausdrücklich überwachte Wurzeln deaktivieren. Originaldateien bleiben unverändert.'}" />
+                           Text="Nur überwachte Wurzeln sind sichtbar. Weitere Verzeichnisse ausschließlich über 'Ordner hinzufügen' wählen." />
                 <TextBlock Margin="0,12,0,0" Opacity="0.7" TextWrapping="Wrap"
-                           Text="{loc:Tr Key='Ein ausgeschlossener übergeordneter Ordner muss zuerst wieder aktiviert werden, bevor seine Unterordner separat eingestellt werden können.'}" />
+                           Text="Bereits überwachte Unterordner benötigen keine zusätzliche Wurzel. Ausgeschlossene Unterordner lassen sich über 'Ordner hinzufügen' wieder einschließen." />
                 <CheckBox x:Name="ServerSyncCheckBox"
                           Margin="0,24,0,0" Visibility="Collapsed"
                           Content="{loc:Tr Key='Server-Synchronisierung dieser Wurzel'}"
