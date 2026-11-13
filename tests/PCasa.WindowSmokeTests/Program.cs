@@ -2087,33 +2087,41 @@ internal static class Program
                     "PASS: Manager shows indexed children under one monitored root, " +
                     "without inventing roots, scanning folders or changing catalog identities.");
 
-                // Replacing any monitored root with a selected catalogued
-                // child must be expressible in the RIGHT pane without a NAS
-                // probe. Cancel must remain a purely staged decision.
+                // Alpha.25: only the left tree owns the folder selection.
+                // Expanding one level must not expand nested levels. No
+                // catalogued child may be repeated as a right-side checkbox.
                 var rightList = (StackPanel)manager.FindName("MonitoredRootsList");
-                var originalCheck = Descendants<CheckBox>(rightList)
-                    .Single(box => Equals(box.Tag, fixture.Id));
-                originalCheck.IsChecked = false;
+                if (Descendants<CheckBox>(rightList).Any())
+                    throw new Exception("Right pane still duplicates editable folder tree.");
+                var fixtureAfter = NestedManagerItems(managedTree).Single(item =>
+                    string.Equals(ManagerPath(item), fixtureDirectory,
+                        StringComparison.OrdinalIgnoreCase));
+                var intermediatePath = Path.GetDirectoryName(cataloguedChild)!;
+                var intermediateItem = NestedManagerItems(fixtureAfter).Single(item =>
+                    string.Equals(ManagerPath(item), intermediatePath,
+                        StringComparison.OrdinalIgnoreCase));
+                if (intermediateItem.IsExpanded)
+                    throw new Exception("Expanding one tree level automatically opened its descendants.");
+                var oldRootCheck = (CheckBox)fixtureAfter.Header;
+                oldRootCheck.IsChecked = false;
                 Flush(manager);
-                rightList = (StackPanel)manager.FindName("MonitoredRootsList");
-                var rightChild = Descendants<CheckBox>(rightList)
-                    .SingleOrDefault(box => box.ToolTip is string t &&
-                        t.StartsWith(cataloguedChild,
-                            StringComparison.OrdinalIgnoreCase));
-                if (rightChild is null || !rightChild.IsEnabled ||
-                    rightChild.IsChecked != false)
+                var childAfter = NestedManagerItems(managedTree).Single(item =>
+                    string.Equals(ManagerPath(item), cataloguedChild,
+                        StringComparison.OrdinalIgnoreCase));
+                if (childAfter.Header is not CheckBox leftChild ||
+                    !leftChild.IsEnabled || leftChild.IsChecked != false)
                     throw new Exception(
-                        "Catalogued descendant is not selectable after its parent root is unchecked.");
-                rightChild.IsChecked = true;
+                        "Left tree did not allow choosing an indexed child after removing its broad root.");
+                leftChild.IsChecked = true;
                 Flush(manager);
                 var narrowedRoots = manager.SelectedConfiguration.Roots;
                 if (narrowedRoots.Count != 1 ||
                     !string.Equals(narrowedRoots[0].LocalPath,
                         cataloguedChild, StringComparison.OrdinalIgnoreCase))
                     throw new Exception(
-                        "Right-pane selection failed to replace the root with a catalogued child.");
+                        "Left-tree selection failed to replace the root without rescanning.");
                 Console.WriteLine(
-                    "PASS: Monitored root can be replaced with catalogued children in the right pane.");
+                    "PASS: One-level expansion and left-tree-only catalog-preserving root replacement.");
             }
             finally
             {
