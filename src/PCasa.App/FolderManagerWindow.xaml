@@ -64,21 +64,30 @@
                 </DockPanel>
             </Border>
 
-            <StackPanel Grid.Column="2" Margin="4,8,4,0">
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled" Margin="4,5,4,0">
+              <StackPanel>
+                <TextBlock Text="{loc:Tr Key='Explizit überwachte Ordner'}"
+                           FontWeight="SemiBold" Margin="0,0,0,7"/>
+                <TextBlock Text="{loc:Tr Key='Diese Häkchen sind mit dem Verzeichnisbaum synchronisiert. Änderungen gelten erst mit OK.'}"
+                           TextWrapping="Wrap" Opacity=".7" Margin="0,0,0,8"/>
+                <StackPanel x:Name="MonitoredRootsList" Margin="1,0,0,14"/>
+                <Separator Margin="0,4,0,12"/>
                 <TextBlock Text="{loc:Tr Key='Ausgewählter Ordner'}" FontWeight="SemiBold" />
                 <TextBlock x:Name="SelectedFolderText" Margin="0,9,0,0"
                            TextWrapping="Wrap" Text="{loc:Tr Key='Bitte links einen Ordner auswählen.'}" />
                 <TextBlock x:Name="SelectedModeText" Margin="0,18,0,0"
                            Opacity="0.8" TextWrapping="Wrap" />
-                <TextBlock Margin="0,20,0,0" Opacity="0.7" TextWrapping="Wrap"
-                           Text="{loc:Tr Key='Häkchen: in PCasa einlesen. Ohne Häkchen: Ordner und alle seine Unterordner aus dem Katalog ausschließen. Die Originaldateien bleiben unverändert.'}" />
+                <TextBlock Margin="0,13,0,0" Opacity="0.7" TextWrapping="Wrap"
+                           Text="{loc:Tr Key='Links: Ordner einschließlich Unterordnern überwachen oder ausschließen. Rechts: ausdrücklich überwachte Wurzeln deaktivieren. Originaldateien bleiben unverändert.'}" />
                 <TextBlock Margin="0,12,0,0" Opacity="0.7" TextWrapping="Wrap"
                            Text="{loc:Tr Key='Ein ausgeschlossener übergeordneter Ordner muss zuerst wieder aktiviert werden, bevor seine Unterordner separat eingestellt werden können.'}" />
                 <CheckBox x:Name="ServerSyncCheckBox"
                           Margin="0,24,0,0" Visibility="Collapsed"
                           Content="{loc:Tr Key='Server-Synchronisierung dieser Wurzel'}"
                           Click="ServerSync_Click" />
-            </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
         </Grid>
 
         <DockPanel Grid.Row="2" Margin="0,14,0,0" LastChildFill="False">
