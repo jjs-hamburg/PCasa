@@ -236,9 +236,18 @@ body{font-family:Segoe UI,sans-serif;background:#dfded9}
  window.pcasaApplyProvider = (provider) => {
    if (!provider || !provider.url) return;
    try {
-     const style=provider.format==='xyz'
-       ? {version:8,sources:{basemap:{type:'raster',tiles:[provider.url],tileSize:256,attribution:provider.attribution||''}},
-          layers:[{id:'basemap',type:'raster',source:'basemap'}]}
+     const raster=provider.format==='xyz';
+     const style=raster
+       ? {version:8,
+          sources:{
+            basemap:{type:'raster',tiles:[provider.url],tileSize:256,
+                     attribution:provider.attribution||'',maxzoom:14},
+            ...(provider.id==='eox-hybrid'?{labels:{
+              type:'raster',tiles:['https://tiles.maps.eox.at/wmts/1.0.0/overlay_bright_3857/default/g/{z}/{y}/{x}.png'],
+              tileSize:256,attribution:'Overlay © OpenStreetMap contributors · EOX',maxzoom:14}}:{})
+          },
+          layers:[{id:'basemap',type:'raster',source:'basemap'},
+                  ...(provider.id==='eox-hybrid'?[{id:'labels',type:'raster',source:'labels'}]:[])]}
        : provider.url;
      map.setStyle(style);
    } catch(err) { post({type:'error',message:String(err)}); }
