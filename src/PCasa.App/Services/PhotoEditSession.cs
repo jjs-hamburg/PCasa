@@ -20,6 +20,7 @@ public sealed class PhotoEditSession
     private readonly List<PhotoEditStep> _steps = [];
     private int _cursor;
     public long ImageId { get; }
+    public BitmapSource Original => _original;
 
     public PhotoEditSession(long imageId, BitmapSource original)
     {
@@ -72,19 +73,25 @@ public sealed class PhotoEditSession
             {
                 if (!double.IsFinite(step.Degrees) || Math.Abs(step.Degrees) > 360)
                     throw new InvalidDataException("Ungültiger Rotationswinkel.");
-                if (Math.Abs(step.Degrees) < .00001) continue;
-                var width = bitmap.PixelWidth;
-                var height = bitmap.PixelHeight;
-                var rotated = new TransformedBitmap(bitmap,
-                    new RotateTransform(step.Degrees));
-                rotated.Freeze();
-                bitmap = rotated;
-                if (Math.Abs(step.Degrees % 90) > .00001)
+                var quarters = (int)Math.Round(step.Degrees / 90);
+                var fine = step.Degrees - 90 * quarters;
+                if (quarters != 0)
                 {
-                    // Largest safe rectangle with the original aspect ratio.
-                    // Every corner remains inside the rotated source: no
-                    // black triangles at any intermediate angle.
-                    var rad = Math.Abs(step.Degrees * Math.PI / 180);
+                    bitmap = new TransformedBitmap(bitmap,
+                        new RotateTransform(90 * quarters));
+                    bitmap.Freeze();
+                }
+                if (Math.Abs(fine) > .00001)
+                {
+                    var width = bitmap.PixelWidth;
+                    var height = bitmap.PixelHeight;
+                    var rotated = new TransformedBitmap(bitmap,
+                        new RotateTransform(fine));
+                    rotated.Freeze();
+                    bitmap = rotated;
+                    // A centered, inscribed source-aspect rectangle:
+                    // no black triangles after arbitrary straightening.
+                    var rad = Math.Abs(fine * Math.PI / 180);
                     var sin = Math.Abs(Math.Sin(rad));
                     var cos = Math.Abs(Math.Cos(rad));
                     var ratio = width / (double)height;
