@@ -2011,7 +2011,7 @@ internal static class Program
             {
                 var fixture = new MonitoredFolder
                 {
-                    Id = -100,
+                    Id = 100,
                     LocalPath = fixtureDirectory,
                     CanonicalPath = fixtureDirectory
                 };
@@ -2086,6 +2086,34 @@ internal static class Program
                 Console.WriteLine(
                     "PASS: Manager shows indexed children under one monitored root, " +
                     "without inventing roots, scanning folders or changing catalog identities.");
+
+                // Replacing any monitored root with a selected catalogued
+                // child must be expressible in the RIGHT pane without a NAS
+                // probe. Cancel must remain a purely staged decision.
+                var rightList = (StackPanel)manager.FindName("MonitoredRootsList");
+                var originalCheck = Descendants<CheckBox>(rightList)
+                    .Single(box => Equals(box.Tag, fixture.Id));
+                originalCheck.IsChecked = false;
+                Flush(manager);
+                rightList = (StackPanel)manager.FindName("MonitoredRootsList");
+                var rightChild = Descendants<CheckBox>(rightList)
+                    .SingleOrDefault(box => box.ToolTip is string t &&
+                        t.StartsWith(cataloguedChild,
+                            StringComparison.OrdinalIgnoreCase));
+                if (rightChild is null || !rightChild.IsEnabled ||
+                    rightChild.IsChecked != false)
+                    throw new Exception(
+                        "Catalogued descendant is not selectable after its parent root is unchecked.");
+                rightChild.IsChecked = true;
+                Flush(manager);
+                var narrowedRoots = manager.SelectedConfiguration.Roots;
+                if (narrowedRoots.Count != 1 ||
+                    !string.Equals(narrowedRoots[0].LocalPath,
+                        cataloguedChild, StringComparison.OrdinalIgnoreCase))
+                    throw new Exception(
+                        "Right-pane selection failed to replace the root with a catalogued child.");
+                Console.WriteLine(
+                    "PASS: Monitored root can be replaced with catalogued children in the right pane.");
             }
             finally
             {
