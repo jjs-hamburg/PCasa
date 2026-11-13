@@ -2102,7 +2102,17 @@ internal static class Program
                         Math.Abs(gpsPhotoFrame.ActualWidth - workspace.ActualWidth) > 2 ||
                         Math.Abs(gpsPhotoFrame.ActualHeight - workspace.ActualHeight) > 2)
                         throw new Exception(
-                            "The fullscreen photo does not cover the entire GPS workspace.");
+                            "The fullscreen photo does not cover the entire GPS workspace. " +
+                            $"GpsFullscreen={(bool)gpsFullscreenFlag.GetValue(window)!}; " +
+                            $"Overlay={gpsOverlay.Visibility}; " +
+                            $"GridColumn={Grid.GetColumn(gpsOverlay)}; " +
+                            $"GridSpan={Grid.GetColumnSpan(gpsOverlay)}; " +
+                            $"OverlayZ={Panel.GetZIndex(gpsOverlay)}; " +
+                            $"SidebarZ={Panel.GetZIndex(gpsSidebar)}; " +
+                            $"Frame={gpsPhotoFrame.ActualWidth:F2}x{gpsPhotoFrame.ActualHeight:F2}; " +
+                            $"OverlaySize={gpsOverlay.ActualWidth:F2}x{gpsOverlay.ActualHeight:F2}; " +
+                            $"Workspace={workspace.ActualWidth:F2}x{workspace.ActualHeight:F2}; " +
+                            $"Sidebar={gpsSidebar.ActualWidth:F2}x{gpsSidebar.ActualHeight:F2}");
                     // A real filmstrip double-click (not only the image
                     // loader method) must reopen the floating window while
                     // preserving the fullscreen GPS mode.
