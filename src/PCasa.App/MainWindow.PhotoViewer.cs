@@ -1277,13 +1277,15 @@ public partial class MainWindow
         // keyboard focus in the viewer or in its separate fullscreen window.
         // Do not write untouched JPEGs or create a second save/backup path.
         if (e.Key == Key.S &&
-            (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            (Keyboard.Modifiers == ModifierKeys.Control ||
+             Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)))
         {
             e.Handled = true;
             if (!_comparisonActive && !_cropSavePending &&
                 (_cropActive || _straightenActive ||
                  _photoEditSession?.HasChanges == true))
-                SaveEdits();
+                SaveEdits(asCopy:
+                    (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
             return;
         }
 
