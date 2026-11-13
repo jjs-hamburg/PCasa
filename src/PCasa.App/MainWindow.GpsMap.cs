@@ -605,46 +605,9 @@ public partial class MainWindow
             {
                 ShowGpsClusterById(data.Id, data.Version);
             }
-            else if (data.Kind == "select" && data.Id > 0 &&
-                     _gpsPoints.Any(x => x.Id == data.Id))
+            else if (data.Kind == "select")
             {
-                var selectedId = data.Id;
-                FocusGpsPhotoForDisplay(selectedId);
-                if (_gpsFullscreen)
-                {
-                    _gpsHighlightedImageId = selectedId;
-                    GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                    ShowGpsFullscreenImage(selectedId);
-                }
-                else if (_appearance.ShowGpsFilmstrip ||
-                         _gpsSelectionCount > 1)
-                {
-                    _gpsHighlightedImageId = selectedId;
-                    if (_appearance.ShowGpsFilmstrip && !_gpsFilmstripFrozen)
-                    {
-                        GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                        _gpsFilmstripUpdating = true;
-                        GpsFilmstripList.SelectedItem =
-                            _gpsFilmstripEntries.FirstOrDefault(x => x.Id == selectedId);
-                        _gpsFilmstripUpdating = false;
-                    }
-                    else
-                        ShowGpsPhotoPopup(selectedId);
-                    HighlightGpsPointOnMap(selectedId);
-                }
-                else
-                {
-                    ShowGpsPhotoPopup(selectedId);
-                    if (_displayedBrowseIndex.Any(x => x.ImageId == selectedId))
-                    {
-                        BrowseSurface_ImageClicked(this,
-                            new BrowseImageClickedEventArgs(selectedId, ModifierKeys.None));
-                        RestoreGalleryAnchor((selectedId, 0));
-                    }
-                    else
-                        GpsCoordinatesText.Text =
-                            _gpsPoints.First(x => x.Id == selectedId).Name;
-                }
+                FocusGpsMapPhotoWithoutGalleryNavigation(data.Id);
             }
             else if (data.Kind == "error" && data.Error is not null)
             {
@@ -768,6 +731,47 @@ public partial class MainWindow
         ShowGpsPointGroup(cluster.ImageIds.ToHashSet(), cluster.ImageIds[0]);
         if (cluster.ImageIds.Count == 1 && !_gpsFullscreen)
             ShowGpsPhotoPopup(cluster.ImageIds[0]);
+    }
+
+    // GPS point focus is a MAP-only action. Previously the single-photo
+    // branch synthesized a gallery thumbnail click AND forcibly restored
+    // that photo's scroll anchor. A later/stale Chromium callback could then
+    // repeatedly pull the user back to the GPS photo's old folder. This
+    // method does not touch BrowseScrollViewer, the tree, gallery selection,
+    // or any gallery anchor — regardless of GPS availability.
+    private void FocusGpsMapPhotoWithoutGalleryNavigation(long imageId)
+    {
+        if (imageId <= 0 || !_gpsPoints.Any(point => point.Id == imageId))
+            return;
+        FocusGpsPhotoForDisplay(imageId);
+        if (_gpsFullscreen)
+        {
+            _gpsHighlightedImageId = imageId;
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+            ShowGpsFullscreenImage(imageId);
+        }
+        else if (_appearance.ShowGpsFilmstrip || _gpsSelectionCount > 1)
+        {
+            _gpsHighlightedImageId = imageId;
+            if (_appearance.ShowGpsFilmstrip && !_gpsFilmstripFrozen)
+            {
+                GpsPhotoPopup.Visibility = Visibility.Collapsed;
+                _gpsFilmstripUpdating = true;
+                try
+                {
+                    GpsFilmstripList.SelectedItem =
+                        _gpsFilmstripEntries.FirstOrDefault(x => x.Id == imageId);
+                }
+                finally { _gpsFilmstripUpdating = false; }
+            }
+            else ShowGpsPhotoPopup(imageId);
+            HighlightGpsPointOnMap(imageId);
+        }
+        else
+        {
+            ShowGpsPhotoPopup(imageId);
+            HighlightGpsPointOnMap(imageId);
+        }
     }
 
     private void HighlightGpsPointOnMap(long imageId)
