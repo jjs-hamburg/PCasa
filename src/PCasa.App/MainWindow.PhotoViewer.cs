@@ -338,6 +338,7 @@ public partial class MainWindow
         // Keep the original pixel count for genuine 100% zoom; use only the
         // decoded bitmap's aspect to identify the axis swap.
         if (bitmap is { PixelWidth: > 0, PixelHeight: > 0 } &&
+            _photoEditSession is null && !_straightenActive &&
             _viewerImageInfo is { Width: > 0, Height: > 0 } info &&
             ViewerImageGeometry.NeedsAxisSwap(info.Width, info.Height,
                 bitmap.PixelWidth, bitmap.PixelHeight))
