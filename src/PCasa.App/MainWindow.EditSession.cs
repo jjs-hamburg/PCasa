@@ -230,8 +230,35 @@ public partial class MainWindow
         UpdateEditControls();
     }
 
+    private void UpdateEditHistoryTooltips()
+    {
+        static string ActionName(PhotoEditStep step) => step.Kind switch
+        {
+            "crop" => UiLanguage.T("Zuschneiden"),
+            "rotate" => UiLanguage.T("Begradigen") + " " +
+                step.Degrees.ToString("+0.##;-0.##;0",
+                    System.Globalization.CultureInfo.CurrentCulture) + "°",
+            "auto-fix" => UiLanguage.T("Auf gut Glück!"),
+            "auto-contrast" => UiLanguage.T("Kontrast (automatisch)"),
+            "auto-color" => UiLanguage.T("Farbe (automatisch)"),
+            "brightness" => UiLanguage.T("Aufhellen / Abdunkeln") + " " +
+                step.Amount.ToString("+0.##;-0.##;0",
+                    System.Globalization.CultureInfo.CurrentCulture) + " EV",
+            _ => UiLanguage.T("Bildbearbeitung")
+        };
+        var undo = _photoEditSession?.NextUndoStep;
+        var redo = _photoEditSession?.NextRedoStep;
+        CropUndoButton.ToolTip = undo is null
+            ? UiLanguage.T("Rückgängig machen")
+            : UiLanguage.Format("Rückgängig: {0}", ActionName(undo));
+        CropRedoButton.ToolTip = redo is null
+            ? UiLanguage.T("Wiederholen")
+            : UiLanguage.Format("Wiederholen: {0}", ActionName(redo));
+    }
+
     private void UpdateEditControls()
     {
+        UpdateEditHistoryTooltips();
         ViewerOnImageToolsBar.Visibility = _cropActive || _straightenActive
             ? Visibility.Visible : Visibility.Collapsed;
         CropUndoButton.IsEnabled = !_cropSavePending &&
