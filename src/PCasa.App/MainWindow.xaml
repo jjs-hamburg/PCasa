@@ -977,13 +977,20 @@
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,11">
                                     <Slider x:Name="StraightenAngleSlider" Width="192"
-                                            Minimum="-45" Maximum="45" Value="0"
-                                            TickFrequency=".1" IsSnapToTickEnabled="False"
+                                            Minimum="-10" Maximum="10" Value="0"
+                                            SmallChange=".05" LargeChange=".5"
+                                            TickFrequency=".05" IsSnapToTickEnabled="False"
+                                            IsMoveToPointEnabled="True"
+                                            ToolTip="Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°."
                                             VerticalAlignment="Center"/>
                                     <TextBlock x:Name="StraightenAngleValue" Width="65"
-                                               Text="0,0°" TextAlignment="Right"
+                                               Text="0,00°" TextAlignment="Right"
                                                VerticalAlignment="Center" Margin="7,0,0,0"/>
                                 </StackPanel>
+                                <CheckBox x:Name="StraightenWideRangeCheckBox"
+                                          Content="Großer Bereich ±45°"
+                                          FontSize="11" Margin="0,0,0,9"
+                                          ToolTip="Normal: feinfühlig ±10°. Optional: gesamter Winkelbereich ±45°."/>
                                 <StackPanel Orientation="Horizontal">
                                     <Button x:Name="StraightenLeftButton" Content="↶ 90°"
                                             Height="28" Padding="10,2" Margin="0,0,7,0"
