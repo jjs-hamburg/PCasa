@@ -1286,6 +1286,7 @@ public partial class MainWindow
             e.Handled = true;
             if (!_comparisonActive && !_cropSavePending &&
                 (_cropActive || _straightenActive ||
+                 (_brightnessActive && Math.Abs(_brightnessAmount) > .00001) ||
                  _photoEditSession?.HasChanges == true))
                 SaveEdits(asCopy:
                     (Keyboard.Modifiers & ModifierKeys.Shift) != 0);
