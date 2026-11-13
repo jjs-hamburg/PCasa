@@ -21,7 +21,8 @@ public partial class MainWindow
     private bool _straightenActive;
     private double _straightenAngle;
     private int _straightenQuarterTurns;
-    private DispatcherTimer? _straightenPreviewTimer;
+    private BitmapSource? _straightenPreviewBase;
+    private int _straightenPreviewQuarterTurns = int.MinValue;
 
     private bool EnsureEditSession()
     {
@@ -68,12 +69,12 @@ public partial class MainWindow
         StraightenBackButton.Click += (_, _) => LeaveStraighten();
         StraightenLeftButton.Click += (_, _) =>
         {
-            _straightenQuarterTurns--;
+            _straightenQuarterTurns = NormalizeStraightenTurns(_straightenQuarterTurns - 1);
             QueueStraightenPreview();
         };
         StraightenRightButton.Click += (_, _) =>
         {
-            _straightenQuarterTurns++;
+            _straightenQuarterTurns = NormalizeStraightenTurns(_straightenQuarterTurns + 1);
             QueueStraightenPreview();
         };
         StraightenAngleSlider.ValueChanged += (_, _) =>
@@ -82,14 +83,18 @@ public partial class MainWindow
             _straightenAngle = StraightenAngleSlider.Value;
             QueueStraightenPreview();
         };
-        _straightenPreviewTimer = new DispatcherTimer(
-            TimeSpan.FromMilliseconds(85), DispatcherPriority.Background,
-            (_, _) =>
-            {
-                _straightenPreviewTimer?.Stop();
-                RenderStraightenPreview();
-            }, Dispatcher);
-        _straightenPreviewTimer.Stop();
+        StraightenWideRangeCheckBox.Checked += (_, _) =>
+        {
+            StraightenAngleSlider.Minimum = -45;
+            StraightenAngleSlider.Maximum = 45;
+        };
+        StraightenWideRangeCheckBox.Unchecked += (_, _) =>
+        {
+            // Keep the selected angle while returning to fine mode.
+            // A value outside the fine range is explicitly clamped.
+            StraightenAngleSlider.Minimum = -10;
+            StraightenAngleSlider.Maximum = 10;
+        };
         ViewerStraightenGrid.SizeChanged += (_, _) => DrawStraightenGrid();
         UpdateEditControls();
     }
@@ -98,6 +103,8 @@ public partial class MainWindow
     {
         if (!EnsureEditSession()) return;
         if (_cropActive) EndCrop();
+        _straightenPreviewBase = _photoEditSession!.Render();
+        _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = true;
         _straightenAngle = 0;
         _straightenQuarterTurns = 0;
@@ -111,30 +118,71 @@ public partial class MainWindow
         UpdateEditControls();
     }
 
+    private static int NormalizeStraightenTurns(int quarterTurns)
+        => ((quarterTurns % 4 + 6) % 4) - 2;
+
     private void QueueStraightenPreview()
     {
         if (!_straightenActive) return;
         StraightenAngleValue.Text =
             (_straightenAngle + 90 * _straightenQuarterTurns)
-                .ToString("+0.0;-0.0;0.0",
+                .ToString("+0.00;-0.00;0.00",
                     System.Globalization.CultureInfo.CurrentCulture) + "°";
-        _straightenPreviewTimer?.Stop();
-        _straightenPreviewTimer?.Start();
+        // No debounce. Slider motion changes only a GPU-side WPF transform,
+        // not a multi-megapixel bitmap or the viewport geometry.
+        RenderStraightenPreview();
+    }
+
+    private void ResetStraightenPreviewTransform()
+    {
+        PhotoViewerImage.RenderTransform = Transform.Identity;
+        PhotoViewerImage.RenderTransformOrigin = new Point(0, 0);
+        PhotoViewerCanvas.Clip = null;
     }
 
     private void RenderStraightenPreview()
     {
-        if (!_straightenActive || _photoEditSession is null) return;
-        var angle = _straightenAngle + 90 * _straightenQuarterTurns;
+        if (!_straightenActive || _straightenPreviewBase is null) return;
         try
         {
-            var basis = _photoEditSession.Render();
-            var preview = Math.Abs(angle) < .00001 ? basis :
-                PhotoEditSession.Render(basis,
-                    [new PhotoEditStep("rotate", Degrees: angle)]);
-            SetViewerBitmap(preview);
-            ApplyViewerImageLayout();
-            DrawStraightenGrid();
+            // A quarter turn is a cheap, discrete WPF bitmap rotation.
+            // It is only regenerated when an actual 90° button is clicked.
+            if (_straightenPreviewQuarterTurns != _straightenQuarterTurns)
+            {
+                var source = _straightenQuarterTurns == 0
+                    ? _straightenPreviewBase
+                    : PhotoEditSession.Render(_straightenPreviewBase,
+                        [new PhotoEditStep("rotate",
+                            Degrees: _straightenQuarterTurns * 90)]);
+                ResetStraightenPreviewTransform();
+                SetViewerBitmap(source);
+                ApplyViewerImageLayout();
+                _straightenPreviewQuarterTurns = _straightenQuarterTurns;
+                DrawStraightenGrid();
+            }
+
+            // The same centered, auto-inscribed rectangle as the durable
+            // image-space renderer: keep the visible frame fixed while the
+            // angle changes continuously. This is a *visual* preview only;
+            // ApplyEditTool commits the precise full-res pixels once.
+            var width = PhotoViewerImage.Width;
+            var height = PhotoViewerImage.Height;
+            if (!(width > 0) || !(height > 0)) return;
+            var radians = _straightenAngle * Math.PI / 180.0;
+            var cosine = Math.Abs(Math.Cos(radians));
+            var sine = Math.Abs(Math.Sin(radians));
+            var scale = Math.Max(cosine + sine * height / width,
+                                 cosine + sine * width / height);
+            PhotoViewerImage.RenderTransformOrigin = new Point(.5, .5);
+            var transform = new TransformGroup();
+            transform.Children.Add(new ScaleTransform(scale, scale));
+            transform.Children.Add(new RotateTransform(_straightenAngle));
+            PhotoViewerImage.RenderTransform = transform;
+            var canvasWidth = PhotoViewerCanvas.Width;
+            var canvasHeight = PhotoViewerCanvas.Height;
+            PhotoViewerCanvas.Clip = new RectangleGeometry(new Rect(
+                (canvasWidth - width) / 2, (canvasHeight - height) / 2,
+                width, height));
         }
         catch (Exception ex)
         {
@@ -175,7 +223,9 @@ public partial class MainWindow
 
     private void LeaveStraighten()
     {
-        _straightenPreviewTimer?.Stop();
+        ResetStraightenPreviewTransform();
+        _straightenPreviewBase = null;
+        _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = false;
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
         ViewerStraightenGrid.Children.Clear();
@@ -248,7 +298,6 @@ public partial class MainWindow
     private void CancelEditSession()
     {
         if (_cropSavePending) return;
-        _straightenPreviewTimer?.Stop();
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         var original = _photoEditSession?.Original;

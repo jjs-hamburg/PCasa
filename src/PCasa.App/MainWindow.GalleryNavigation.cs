@@ -15,6 +15,41 @@ public partial class MainWindow
     // publication or automatic post-drop scroll. This is view intent, not
     // a separate work queue.
     private long _explicitGalleryNavigationVersion;
+    // Explicit tree-folder intent takes precedence over layout/CEF callbacks
+    // for photographs previously selected in OTHER folders. GPS status is
+    // irrelevant: the guard checks the immutable catalog folder identity.
+    private long? _explicitGalleryFolderTargetId;
+    private int _explicitGalleryScrollRevision;
+    private bool _scrollingToExplicitGalleryFolder;
+
+    private bool IsAutomaticAnchorInSelectedFolder(
+        (long ImageId, double RelativeY) anchor)
+    {
+        if (_explicitGalleryFolderTargetId is not long selectedFolderId)
+            return true;
+        return _displayedBrowseIndex.Any(entry =>
+            entry.ImageId == anchor.ImageId &&
+            entry.PhotoFolderId == selectedFolderId);
+    }
+
+    private void ScrollToExplicitGalleryFolder(long folderId, double offset)
+    {
+        _activePhotoFolderId = folderId;
+        _explicitGalleryFolderTargetId = folderId;
+        _scrollingToExplicitGalleryFolder = true;
+        var revision = ++_explicitGalleryScrollRevision;
+        BrowseScrollViewer.ScrollToVerticalOffset(offset);
+        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+            Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        // ScrollChanged is also raised by programmatic navigation. It must
+        // not be misclassified as fresh wheel input which would invalidate
+        // the destination folder before its pending layout settles.
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (revision == _explicitGalleryScrollRevision)
+                _scrollingToExplicitGalleryFolder = false;
+        }, DispatcherPriority.ContextIdle);
+    }
 
     // The catalog can change indefinitely while the user is looking at
     // the middle of the gallery. Never publish those changes just because
@@ -90,9 +125,10 @@ public partial class MainWindow
             warmViewport: false, fromScanner: true);
     }
 
-    private void MarkExplicitGalleryNavigation()
+    private void MarkExplicitGalleryNavigation(long? folderId = null)
     {
         _explicitGalleryNavigationVersion++;
+        _explicitGalleryFolderTargetId = folderId;
         _pendingGalleryAnchor = null;
         _galleryLayoutRestoreRevision++;
         _restoringGalleryLayoutAnchor = false;
@@ -116,6 +152,9 @@ public partial class MainWindow
         if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition &&
             _explicitGalleryNavigationVersion == 0)
             return;
+        if (anchor is { } candidate &&
+            !IsAutomaticAnchorInSelectedFolder(candidate))
+            return;
         _pendingGalleryAnchor ??= anchor;
         if (_pendingGalleryAnchor is not null)
             _restoringGalleryLayoutAnchor = true;
@@ -129,6 +168,10 @@ public partial class MainWindow
         if (!_galleryPositionRestored && _appearance.RestoreGalleryPosition &&
             _explicitGalleryNavigationVersion == 0)
             return;
+        // A GPS-sidebar resize may reflow the OLD selected photo after
+        // the user has clicked another folder. Its old image anchor must
+        // never pull the current gallery back to that GPS photo.
+        if (!IsAutomaticAnchorInSelectedFolder(anchor)) return;
         _pendingGalleryAnchor ??= anchor;
         _restoringGalleryLayoutAnchor = true;
         RestoreAnchorAfterSidebarLayout();
@@ -137,6 +180,11 @@ public partial class MainWindow
     private void RestorePendingGalleryAnchor()
     {
         if (_pendingGalleryAnchor is not { } anchor) return;
+        if (!IsAutomaticAnchorInSelectedFolder(anchor))
+        {
+            _pendingGalleryAnchor = null;
+            return;
+        }
         var revision = ++_galleryLayoutRestoreRevision;
         _restoringGalleryLayoutAnchor = true;
         _pendingGalleryAnchor = null;

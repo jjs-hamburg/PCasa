@@ -221,4 +221,27 @@ send(10,worldwide,7200,7200,2);
 assert.equal(live().length,5,
   'First-frame world selection must render without stale-zoom veto');
 assert.equal(sum(),7200,'World fit preserves all photo identities');
-console.log('GPS map PASS: first fit then cluster at actual camera zoom, stale-fit protection, 7200-photo identity, atomic transfers, clicks and styles');
+
+// A user has zoomed into a satellite scene. Moving between GPS photos must
+// change ONLY the center, never invoke a new extent fit or reset the zoom.
+activeMap.zoom=11.75;
+const userZoom=activeMap.getZoom();
+const previousExtent=JSON.stringify(activeMap.bounds);
+window.pcasaFocusGpsPhoto(12,28.417,-16.567);
+assert.equal(activeMap.getZoom(),userZoom,
+  'Focusing the first GPS photo must retain the manually selected scale');
+assert.deepEqual(Array.from(activeMap.lastJump.center),[-16.567,28.417],
+  'Photo focus must recenter on the clicked coordinates');
+assert.equal(activeMap.lastJump.zoom,undefined,
+  'Photo focus must never request any new zoom level');
+window.pcasaFocusGpsPhoto(13,28.420,-16.578);
+assert.equal(activeMap.getZoom(),userZoom,
+  'Switching to the next GPS photo must retain the same satellite scale');
+assert.deepEqual(Array.from(activeMap.lastJump.center),[-16.578,28.420],
+  'Second photo must be centered without re-fitting the whole selection');
+window.pcasaPrepareGpsExtent(11,0,0,0,0);
+assert.equal(JSON.stringify(activeMap.bounds),previousExtent,
+  'An older pending auto-fit must not reset zoom after a newer photo click');
+assert.equal(activeMap.getZoom(),userZoom,
+  'Stale fit callback must never override the current photo zoom');
+console.log('GPS map PASS: zoom-preserving photo focus, first fit then cluster at actual camera zoom, stale-fit protection, 7200-photo identity, atomic transfers, clicks and styles');

@@ -135,12 +135,43 @@ public partial class MainWindow
                 EndVisibleManualOperation(key);
                 if (succeeded)
                 {
+                    // The durable writer has restored the actual source and
+                    // invalidated its packed cache. Also drop any decoded
+                    // old pixels (including the post-edit preview bridge).
+                    _browsePageCache?.InvalidateImage(request.ImageId);
+                    _viewerOriginalCache.Remove(request.ImageId);
                     _ = RefreshRestoreBadgesAsync();
+                    // Reuse the normal priority image reader for an immediate
+                    // visible restored thumbnail. No filesystem access on the
+                    // WPF dispatcher and no second thumbnail writer.
+                    try
+                    {
+                        var restored = await _scheduler.RunAsync(
+                            "undo:restored-preview:" + key,
+                            SchedulerPriority.ManualAction,
+                            token =>
+                            {
+                                var info = new PhotoViewerImageRepository(_database)
+                                    .Get(request.ImageId);
+                                return info is null ? null
+                                    : PhotoViewerImageLoader.Load(info, 512, token);
+                            },
+                            workKind: SchedulerWorkKind.ViewerRead);
+                        if (!Dispatcher.HasShutdownStarted && restored is not null)
+                            _browsePageCache?.ShowEditedImage(request.ImageId, restored);
+                    }
+                    catch (Exception ex)
+                    {
+                        PCasaDiagnostics.Write("Undo.RestoredPreview", ex);
+                    }
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.MonitoredFolderId,request.Path,
                         BackgroundFolderChangeKind.ScanFile,
                         Recursive:false,ForceExifRefresh:true));
-                    if (_viewerOpen) ShowViewerImage();
+                    if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
+                        ShowViewerImage(keepCurrentAsPlaceholder:true);
+                    _ = RefreshBrowseGalleryAsync(forceIndexReload:true,
+                        warmViewport:false);
                 }
             }
         }

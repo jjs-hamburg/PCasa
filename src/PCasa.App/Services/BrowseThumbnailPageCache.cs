@@ -114,6 +114,32 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         }
     }
 
+    // A disk restore invalidates both the packed-cache entry AND every
+    // already decoded/live-edited pixel that might still show the pre-restore
+    // picture. Cancel pending page reads so stale results cannot reappear.
+    // Restores are manual and infrequent; dropping decoded pages here costs
+    // less than displaying the wrong photograph across multiple gallery tiers.
+    public void InvalidateImage(long imageId)
+    {
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _generation++;
+            foreach (var page in _pages.Values)
+            {
+                page.Cancellation.Cancel();
+                page.Cancellation.Dispose();
+            }
+            _pages.Clear();
+            _lru.Clear();
+            _decodedBytes = 0;
+            _retainedBitmaps.Clear();
+            _retainedBytes = 0;
+            _liveEditedThumbnails.Remove(imageId);
+        }
+        PageReady?.Invoke(this, EventArgs.Empty);
+    }
+
     public void ShowEditedImage(long imageId, BitmapSource source)
     {
         if (source.PixelWidth <= 0 || source.PixelHeight <= 0) return;

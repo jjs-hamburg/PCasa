@@ -977,13 +977,20 @@
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,11">
                                     <Slider x:Name="StraightenAngleSlider" Width="192"
-                                            Minimum="-45" Maximum="45" Value="0"
-                                            TickFrequency=".1" IsSnapToTickEnabled="False"
+                                            Minimum="-10" Maximum="10" Value="0"
+                                            SmallChange=".05" LargeChange=".5"
+                                            TickFrequency=".05" IsSnapToTickEnabled="False"
+                                            IsMoveToPointEnabled="True"
+                                            ToolTip="Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°."
                                             VerticalAlignment="Center"/>
                                     <TextBlock x:Name="StraightenAngleValue" Width="65"
-                                               Text="0,0°" TextAlignment="Right"
+                                               Text="0,00°" TextAlignment="Right"
                                                VerticalAlignment="Center" Margin="7,0,0,0"/>
                                 </StackPanel>
+                                <CheckBox x:Name="StraightenWideRangeCheckBox"
+                                          Content="Großer Bereich ±45°"
+                                          FontSize="11" Margin="0,0,0,9"
+                                          ToolTip="Normal: feinfühlig ±10°. Optional: gesamter Winkelbereich ±45°."/>
                                 <StackPanel Orientation="Horizontal">
                                     <Button x:Name="StraightenLeftButton" Content="↶ 90°"
                                             Height="28" Padding="10,2" Margin="0,0,7,0"
@@ -1476,17 +1483,37 @@
                                                FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
                                     <TextBlock Text="{loc:Tr Key='Name'}"/>
                                     <TextBox x:Name="GpsProviderNameBox" Margin="0,0,0,6"/>
-                                    <TextBlock Text="{loc:Tr Key='Kartenformat'}"/>
-                                    <ComboBox x:Name="GpsProviderFormatBox" SelectedIndex="0" Margin="0,0,0,6">
-                                        <ComboBoxItem Content="MapLibre Style JSON"/>
-                                        <ComboBoxItem Content="XYZ PNG/JPEG"/>
-                                    </ComboBox>
-                                    <TextBlock Text="HTTPS-URL"/>
+                                    <StackPanel x:Name="GpsProviderFormatPanel">
+                                        <TextBlock Text="URL-Typ (nicht Kartenstil)" FontSize="11" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
+                                            <RadioButton x:Name="GpsProviderStyleRadio" Content="MapLibre JSON" IsChecked="True"
+                                                         GroupName="GpsProviderFormat" Margin="0,0,12,0" />
+                                            <RadioButton x:Name="GpsProviderXyzRadio" Content="XYZ-Kacheln"
+                                                         GroupName="GpsProviderFormat" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <StackPanel x:Name="GpsMapTilerStylePanel" Visibility="Collapsed">
+                                        <TextBlock Text="MapTiler-Kartenstil" FontSize="11" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
+                                            <RadioButton x:Name="GpsMapTilerHybridRadio" Content="Hybrid (mit Beschriftung)"
+                                                         IsChecked="True" GroupName="GpsMapTilerStyle" Margin="0,0,12,0" />
+                                            <RadioButton x:Name="GpsMapTilerSatelliteRadio" Content="Satellit"
+                                                         GroupName="GpsMapTilerStyle" />
+                                        </StackPanel>
+                                        <TextBlock Text="MapLibre JSON wird automatisch verwendet."
+                                                   FontSize="10" Opacity=".75" Margin="0,0,0,7"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="GpsProviderUrlLabel" Text="HTTPS-URL"/>
                                     <TextBox x:Name="GpsProviderUrlBox" Margin="0,0,0,6"/>
                                     <TextBlock Text="{loc:Tr Key='Quellenangabe'}"/>
                                     <TextBox x:Name="GpsProviderAttributionBox" Margin="0,0,0,6"/>
                                     <TextBlock Text="{loc:Tr Key='API-Schlüssel optional'}"/>
                                     <PasswordBox x:Name="GpsProviderKeyBox" Margin="0,0,0,6"/>
+                                    <Button x:Name="GpsProviderGetKeyButton"
+                                            Content="MapTiler API-Key holen (Browser)"
+                                            HorizontalAlignment="Left" Padding="9,4"
+                                            Margin="0,0,0,9" Visibility="Collapsed"
+                                            Click="GpsProviderGetKey_Click" />
                                     <TextBlock x:Name="GpsProviderError" TextWrapping="Wrap"
                                                Margin="0,0,0,6" Foreground="#D35C55"/>
                                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

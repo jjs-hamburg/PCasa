@@ -60,6 +60,9 @@ public partial class MainWindow
     // While the map is fitting a new selection, ignore moveend-triggered
     // reclusters. The first projection must use the FINAL camera zoom.
     private long _gpsPendingFitQueryRevision = -1;
+    // A photo change is navigation, not a command to fit and reset the zoom.
+    // Only the first populated GPS view is fitted automatically.
+    private bool _gpsPhotoCameraEstablished;
     private double _gpsCurrentMapZoom = 2;
     // The map's own monotonically increasing camera-event sequence.
     // Old queued Chromium messages cannot overwrite a newer viewport.
@@ -103,6 +106,20 @@ public partial class MainWindow
         };
     }
 
+    private const string MapTilerHybridUrl =
+        "https://api.maptiler.com/maps/hybrid/style.json?key={key}";
+    private const string MapTilerSatelliteUrl =
+        "https://api.maptiler.com/maps/satellite-v4/style.json?key={key}";
+
+    private static bool IsPresetMapTilerProvider(GpsMapProvider? provider)
+        => provider is not null &&
+           (provider.Url.StartsWith(
+                "https://api.maptiler.com/maps/hybrid/style.json",
+                StringComparison.OrdinalIgnoreCase) ||
+            provider.Url.StartsWith(
+                "https://api.maptiler.com/maps/satellite-v4/style.json",
+                StringComparison.OrdinalIgnoreCase));
+
     private void UpdateGpsProviderMenu()
     {
         // One compact launcher: source selection and user-owned provider
@@ -126,17 +143,24 @@ public partial class MainWindow
         var add = new MenuItem { Header = UiLanguage.T("Eigener Kartenanbieter") + " …" };
         add.Click += (_, _) => OpenGpsProviderEditor(null);
         menu.Items.Add(add);
-        // Optional MapTiler Satellite Hybrid uses the user's OWN encrypted
-        // key. PCasa neither embeds a shared key nor incurs a paid account.
-        var mapTiler = new MenuItem { Header = "MapTiler · Satellit / Hybrid (eigener Schlüssel) …" };
-        mapTiler.Click += (_, _) => OpenGpsProviderEditor(new GpsMapProvider
+        // An existing MapTiler configuration already appears as a selectable
+        // source above, and can be edited via "Kartenanbieter konfigurieren".
+        // Never show another "create MapTiler" action that makes duplicates.
+        if (!_appearance.GpsProviders.Any(IsPresetMapTilerProvider))
         {
-            Name = "MapTiler · Satellite Hybrid",
-            Format = "style",
-            Url = "https://api.maptiler.com/maps/hybrid/style.json?key={key}",
-            Attribution = "© MapTiler · © OpenStreetMap contributors"
-        });
-        menu.Items.Add(mapTiler);
+            var mapTiler = new MenuItem
+            {
+                Header = "MapTiler einrichten (eigener API-Key) …"
+            };
+            mapTiler.Click += (_, _) => OpenGpsProviderEditor(new GpsMapProvider
+            {
+                Name = "MapTiler · Hybrid",
+                Format = "style",
+                Url = MapTilerHybridUrl,
+                Attribution = "© MapTiler · © OpenStreetMap contributors"
+            });
+            menu.Items.Add(mapTiler);
+        }
         if (_appearance.GpsProviders.Any(p => p.Id == active.Id))
         {
             var edit = new MenuItem { Header = UiLanguage.T("Kartenanbieter konfigurieren") + " …" };
@@ -493,6 +517,9 @@ public partial class MainWindow
             else if (data.Kind == "ready")
             {
                 _gpsCameraRevision = -1;
+                // A newly loaded map document has not yet fitted a photo.
+                // Provider STYLE changes do not emit this handshake.
+                _gpsPhotoCameraEstablished = false;
                 _gpsBrowserReady = true;
                 GpsMapStatus.Visibility = Visibility.Collapsed;
                 ApplyGpsMapProvider();
@@ -522,6 +549,7 @@ public partial class MainWindow
                 // scheduler projection using the actual displayed zoom.
                 _gpsPendingFitQueryRevision = -1;
                 _gpsCameraRevision = data.CameraRevision;
+                _gpsPhotoCameraEstablished = true;
                 _gpsCurrentMapZoom = finalZoom;
                 _ = PublishGpsClustersAsync();
             }
@@ -549,6 +577,10 @@ public partial class MainWindow
                      data.CameraRevision >= _gpsCameraRevision)
             {
                 _gpsCameraRevision = data.CameraRevision;
+                // After a user pans/zooms among photo markers, later photo
+                // clicks must not reset that chosen map scale.
+                if (_gpsPoints.Count > 0)
+                    _gpsPhotoCameraEstablished = true;
                 // The map is the owner of camera movements; this only
                 // persists them, without changing the displayed camera.
                 _appearance.GpsMapCenterLat = lat;
@@ -573,46 +605,9 @@ public partial class MainWindow
             {
                 ShowGpsClusterById(data.Id, data.Version);
             }
-            else if (data.Kind == "select" && data.Id > 0 &&
-                     _gpsPoints.Any(x => x.Id == data.Id))
+            else if (data.Kind == "select")
             {
-                var selectedId = data.Id;
-                FocusGpsPhotoForDisplay(selectedId);
-                if (_gpsFullscreen)
-                {
-                    _gpsHighlightedImageId = selectedId;
-                    GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                    ShowGpsFullscreenImage(selectedId);
-                }
-                else if (_appearance.ShowGpsFilmstrip ||
-                         _gpsSelectionCount > 1)
-                {
-                    _gpsHighlightedImageId = selectedId;
-                    if (_appearance.ShowGpsFilmstrip && !_gpsFilmstripFrozen)
-                    {
-                        GpsPhotoPopup.Visibility = Visibility.Collapsed;
-                        _gpsFilmstripUpdating = true;
-                        GpsFilmstripList.SelectedItem =
-                            _gpsFilmstripEntries.FirstOrDefault(x => x.Id == selectedId);
-                        _gpsFilmstripUpdating = false;
-                    }
-                    else
-                        ShowGpsPhotoPopup(selectedId);
-                    HighlightGpsPointOnMap(selectedId);
-                }
-                else
-                {
-                    ShowGpsPhotoPopup(selectedId);
-                    if (_displayedBrowseIndex.Any(x => x.ImageId == selectedId))
-                    {
-                        BrowseSurface_ImageClicked(this,
-                            new BrowseImageClickedEventArgs(selectedId, ModifierKeys.None));
-                        RestoreGalleryAnchor((selectedId, 0));
-                    }
-                    else
-                        GpsCoordinatesText.Text =
-                            _gpsPoints.First(x => x.Id == selectedId).Name;
-                }
+                FocusGpsMapPhotoWithoutGalleryNavigation(data.Id);
             }
             else if (data.Kind == "error" && data.Error is not null)
             {
@@ -736,6 +731,47 @@ public partial class MainWindow
         ShowGpsPointGroup(cluster.ImageIds.ToHashSet(), cluster.ImageIds[0]);
         if (cluster.ImageIds.Count == 1 && !_gpsFullscreen)
             ShowGpsPhotoPopup(cluster.ImageIds[0]);
+    }
+
+    // GPS point focus is a MAP-only action. Previously the single-photo
+    // branch synthesized a gallery thumbnail click AND forcibly restored
+    // that photo's scroll anchor. A later/stale Chromium callback could then
+    // repeatedly pull the user back to the GPS photo's old folder. This
+    // method does not touch BrowseScrollViewer, the tree, gallery selection,
+    // or any gallery anchor — regardless of GPS availability.
+    private void FocusGpsMapPhotoWithoutGalleryNavigation(long imageId)
+    {
+        if (imageId <= 0 || !_gpsPoints.Any(point => point.Id == imageId))
+            return;
+        FocusGpsPhotoForDisplay(imageId);
+        if (_gpsFullscreen)
+        {
+            _gpsHighlightedImageId = imageId;
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
+            ShowGpsFullscreenImage(imageId);
+        }
+        else if (_appearance.ShowGpsFilmstrip || _gpsSelectionCount > 1)
+        {
+            _gpsHighlightedImageId = imageId;
+            if (_appearance.ShowGpsFilmstrip && !_gpsFilmstripFrozen)
+            {
+                GpsPhotoPopup.Visibility = Visibility.Collapsed;
+                _gpsFilmstripUpdating = true;
+                try
+                {
+                    GpsFilmstripList.SelectedItem =
+                        _gpsFilmstripEntries.FirstOrDefault(x => x.Id == imageId);
+                }
+                finally { _gpsFilmstripUpdating = false; }
+            }
+            else ShowGpsPhotoPopup(imageId);
+            HighlightGpsPointOnMap(imageId);
+        }
+        else
+        {
+            ShowGpsPhotoPopup(imageId);
+            HighlightGpsPointOnMap(imageId);
+        }
     }
 
     private void HighlightGpsPointOnMap(long imageId)
@@ -977,8 +1013,26 @@ public partial class MainWindow
             if (_gpsGoogleWebsiteActive)
                 NavigateGoogleMapsToSelection();
             else if (selectionChanged || pointsChanged || sourceFocusChanged)
-                _ = PublishGpsClustersAsync(fitSelection:
-                    selectedGps.Length > 0 || activeSourceFocus is not null);
+            {
+                // First GPS view: fit the selection once so its points are
+                // visible. After that, changing photos (gallery OR filmstrip)
+                // only centers the next point; the user zoom is preserved.
+                var firstPhotoFit = !_gpsPhotoCameraEstablished &&
+                    points.Any(p => p.Selected);
+                var photoChanged = selectionChanged || sourceFocusChanged;
+                if (!firstPhotoFit && photoChanged && focused is not null &&
+                    _gpsBrowserReady &&
+                    _gpsBrowser is { IsDisposed: false } currentMap)
+                {
+                    // Supersede any earlier fit before focusing this photo.
+                    _gpsPendingFitQueryRevision = -1;
+                    currentMap.ExecuteScriptAsync("window.pcasaFocusGpsPhoto?.(" +
+                        _gpsPointRevision + "," +
+                        focused.Lat.ToString("R", CultureInfo.InvariantCulture) + "," +
+                        focused.Lon.ToString("R", CultureInfo.InvariantCulture) + ")");
+                }
+                _ = PublishGpsClustersAsync(fitSelection: firstPhotoFit);
+            }
             // An unchanged selection keeps its existing pending projection.
             // Live catalog refreshes cannot starve the GPS renderer.
             if (_appearance.ShowGpsFilmstrip)
@@ -1134,26 +1188,66 @@ public partial class MainWindow
 
     private void OpenGpsProviderEditor(GpsMapProvider? provider)
     {
+        var mapTiler = IsPresetMapTilerProvider(provider);
         GpsProviderNameBox.Text = provider?.Name ?? "";
         GpsProviderUrlBox.Text = provider?.Url ?? "";
         GpsProviderAttributionBox.Text = provider?.Attribution ?? "";
-        GpsProviderFormatBox.SelectedIndex = provider?.Format == "xyz" ? 1 : 0;
+        GpsProviderXyzRadio.IsChecked = provider?.Format == "xyz";
+        GpsProviderStyleRadio.IsChecked = provider?.Format != "xyz";
+        GpsProviderFormatPanel.Visibility = mapTiler
+            ? Visibility.Collapsed : Visibility.Visible;
+        GpsMapTilerStylePanel.Visibility = mapTiler
+            ? Visibility.Visible : Visibility.Collapsed;
+        GpsMapTilerSatelliteRadio.IsChecked = mapTiler &&
+            provider!.Url.Contains("/maps/satellite-v4/", StringComparison.OrdinalIgnoreCase);
+        GpsMapTilerHybridRadio.IsChecked = !mapTiler ||
+            GpsMapTilerSatelliteRadio.IsChecked != true;
+        GpsProviderUrlLabel.Visibility = mapTiler
+            ? Visibility.Collapsed : Visibility.Visible;
+        GpsProviderUrlBox.Visibility = mapTiler
+            ? Visibility.Collapsed : Visibility.Visible;
+        GpsProviderGetKeyButton.Visibility = mapTiler
+            ? Visibility.Visible : Visibility.Collapsed;
         GpsProviderKeyBox.Clear(); // Never reveal the existing DPAPI secret.
         GpsProviderError.Text = "";
         GpsProviderEditor.Tag = provider?.Id;
         GpsProviderEditor.Visibility = Visibility.Visible;
     }
 
+    private void GpsProviderGetKey_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(
+                "https://cloud.maptiler.com/account/keys/")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("GPS.MapTilerKey", ex);
+            GpsProviderError.Text = "MapTiler konnte nicht im Browser geöffnet werden.";
+        }
+    }
+
     private void GpsProviderSave_Click(object sender, RoutedEventArgs e)
     {
         var previousId = GpsProviderEditor.Tag as string;
         var old = _appearance.GpsProviders.FirstOrDefault(p => p.Id == previousId);
+        var mapTiler = GpsMapTilerStylePanel.Visibility == Visibility.Visible;
+        var satellite = GpsMapTilerSatelliteRadio.IsChecked == true;
         var provider = new GpsMapProvider
         {
             Id = old?.Id ?? Guid.NewGuid().ToString("N"),
-            Name = GpsProviderNameBox.Text.Trim(),
-            Format = GpsProviderFormatBox.SelectedIndex == 1 ? "xyz" : "style",
-            Url = GpsProviderUrlBox.Text.Trim(),
+            Name = mapTiler
+                ? satellite ? "MapTiler · Satellit" : "MapTiler · Hybrid"
+                : GpsProviderNameBox.Text.Trim(),
+            Format = mapTiler || GpsProviderStyleRadio.IsChecked == true
+                ? "style" : "xyz",
+            Url = mapTiler
+                ? satellite ? MapTilerSatelliteUrl : MapTilerHybridUrl
+                : GpsProviderUrlBox.Text.Trim(),
             Attribution = GpsProviderAttributionBox.Text.Trim(),
             ProtectedKey = GpsProviderKeyBox.Password.Length > 0
                 ? GpsMapProvider.EncryptKey(GpsProviderKeyBox.Password)

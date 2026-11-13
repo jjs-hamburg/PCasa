@@ -1369,17 +1369,14 @@ internal static class FolderAddFlow
                             "Folder manager opened without persisted Explorer parent.");
                     actualRoot.IsExpanded = true;
 
-                    // The manager's expanded children must be served by the
-                    // foreground reader even though its P0 queue is blocked.
-                    var added = actualRoot.Items.OfType<TreeViewItem>()
-                        .Any(item => SamePath(ManagedPath(item), explorerAddedPath));
-                    if (!added)
-                    {
-                        if (DateTime.UtcNow >= deadline)
-                            throw new TimeoutException(
-                                "Folder manager directory expansion waited on P0.");
-                        return;
-                    }
+                    // The manager now shows ONLY configured monitored roots.
+                    // An Explorer-registered physical child under an existing
+                    // root must not appear as a duplicate managed root, and
+                    // opening the manager must never wait on P0 or enumerate.
+                    if (Walk(tree).Any(item =>
+                        SamePath(ManagedPath(item), explorerAddedPath)))
+                        throw new Exception(
+                            "Manager listed an already covered physical child as a duplicate root.");
                     completed = true;
                     ((Button)manager.FindName("CancelButton")).RaiseEvent(
                         new RoutedEventArgs(Button.ClickEvent));
