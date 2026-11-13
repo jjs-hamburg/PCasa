@@ -12,6 +12,15 @@ public sealed class BrowseCacheRepository
         _database = database;
     }
 
+    public void InvalidateImage(long imageId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM thumbnail_entries WHERE image_id=$id;";
+        command.Parameters.AddWithValue("$id", imageId);
+        command.ExecuteNonQuery();
+    }
+
     public int CountEntries()
     {
         using var connection = _database.OpenConnection();
