@@ -276,6 +276,7 @@ public partial class MainWindow
         };
         CropApplyButton.Click += (_, _) => ApplyEditTool();
         CropSaveButton.Click += (_, _) => SaveEdits();
+        CropSaveCopyButton.Click += (_, _) => SaveEdits(asCopy: true);
         CropCancelButton.Click += (_, _) => CancelEditSession();
         InitializeStraightenTools();
     }
