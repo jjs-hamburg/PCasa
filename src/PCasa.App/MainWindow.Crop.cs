@@ -295,7 +295,7 @@ public partial class MainWindow
         }
         if (!EnsureEditSession()) return;
         if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) LeaveBrightness();
+        if (_brightnessActive) ApplyEditTool();
         if (_photoEditSession is null) return;
         // Work on the currently accepted, unsaved image, not an old source.
         if (_photoEditSession.HasChanges)
