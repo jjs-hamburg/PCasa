@@ -132,6 +132,8 @@ internal static class CropFlow
                 editorSource = BitmapDecoder.Create(source,
                     BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.Single();
             var session = new PhotoEditSession(1001, editorSource);
+            if (session.Original is BitmapFrame || !session.Original.IsFrozen)
+                throw new Exception("Editor source remains coupled to an STA decoder.");
             if (session.HasChanges || session.CanUndo || session.CanRedo)
                 throw new Exception("New edit session is not initially clean.");
             session.Apply(new PhotoEditStep("crop", .1, .1, .8, .8));
@@ -155,7 +157,7 @@ internal static class CropFlow
             // Arbitrary angles must work on the real MTA worker, not just in
             // a preview. WPF TransformedBitmap rejects non-90-degree angles.
             var mtaPreview = Task.Run(() => PhotoEditSession.Render(
-                editorSource, session.AppliedSteps)).GetAwaiter().GetResult();
+                session.Original, session.AppliedSteps)).GetAwaiter().GetResult();
             if (mtaPreview.PixelWidth != expected.PixelWidth ||
                 mtaPreview.PixelHeight != expected.PixelHeight)
                 throw new Exception("MTA straightening disagrees with UI geometry.");
