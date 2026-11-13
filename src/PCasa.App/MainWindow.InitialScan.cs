@@ -25,7 +25,7 @@ public partial class MainWindow
     private void QueuePendingInitialScans()
     {
         _scheduler.NotifyTaskViewChanged();
-        if (!_folderManagerOpen && !_initialScanPumpRunning &&
+        if (!_updateDownloadActive && !_folderManagerOpen && !_initialScanPumpRunning &&
             !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
     }
@@ -37,7 +37,7 @@ public partial class MainWindow
         var processedAny = false;
         try
         {
-            while (!Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
+            while (!_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
                    !_folderManagerOpen && !_manualFileTransferActive)
             {
                 // A manual scan already in progress owns the foreground job.
