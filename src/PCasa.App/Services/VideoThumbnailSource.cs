@@ -20,7 +20,8 @@ public static class VideoThumbnailSource
     private const int Side = 512;
     private static readonly Guid FactoryId = new("bcc18b79-ba16-442f-80c4-8a59c30c463b");
 
-    public static string Resolve(string path, CancellationToken token = default)
+    public static string Resolve(string path, CancellationToken token = default,
+        bool forceRefresh = false)
     {
         if (!VideoFormats.IsVideo(path)) return path;
         token.ThrowIfCancellationRequested();
@@ -30,7 +31,7 @@ public static class VideoThumbnailSource
         var root = Path.Combine(PcasaDataPaths.SharedDataRoot, "video-previews", hash[..2]);
         var target = Path.Combine(root, hash + ".jpg");
         {
-            if (File.Exists(target) && new FileInfo(target).Length > 0)
+            if (!forceRefresh && File.Exists(target) && new FileInfo(target).Length > 0)
                 return target;
             Directory.CreateDirectory(root);
             var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";

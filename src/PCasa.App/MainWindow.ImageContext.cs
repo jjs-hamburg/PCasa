@@ -9,6 +9,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using Microsoft.VisualBasic.FileIO;
 using PCasa.App.Controls;
+using PCasa.App.Data;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -28,6 +29,12 @@ public partial class MainWindow
         AddContextAction(menu, "Dateipfad kopieren",
             () => _ = CopyImagePathToClipboardAsync(id));
         AddContextAction(menu, "Eigenschaften", () => ShowFileProperties(id));
+        if (_displayedBrowseIndex.Any(item => item.ImageId == id &&
+            VideoFormats.IsVideo(item.FileName)))
+        {
+            AddContextAction(menu, "Vorschaubild aktualisieren",
+                () => _ = RefreshVideoThumbnailAsync(id));
+        }
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };
         restore.Click += (_, _) => UndoRestoreImage(id);
@@ -37,6 +44,49 @@ public partial class MainWindow
         AddContextAction(menu, "Duplizieren", () => DuplicateImage(id));
         AddContextAction(menu, "Löschen", () => _ = DeleteSelectedImagesAsync());
         menu.IsOpen = true;
+    }
+
+    private async Task RefreshVideoThumbnailAsync(long imageId)
+    {
+        const string label = "Video-Vorschaubild aktualisieren";
+        string? key = null;
+        try
+        {
+            var paths = await SelectedGalleryPathsAsync([imageId]);
+            if (paths.Length != 1 || !VideoFormats.IsVideo(paths[0]) ||
+                Dispatcher.HasShutdownStarted)
+                return;
+            var source = paths[0];
+            key = "thumbnail:video-refresh:" + imageId + ":" +
+                Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, UiLanguage.T(label), 1);
+            // One manual P0 package, and one ID. Never re-enumerate the NAS,
+            // recatalogue the folder or regenerate unrelated photo tiers.
+            await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    VideoThumbnailSource.Resolve(source, token,
+                        forceRefresh: true);
+                    new BrowseCacheRepository(_database).InvalidateImage(imageId);
+                    _browseCacheBuilder?.RebuildSingleImage(imageId, token);
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.Catalog);
+            if (Dispatcher.HasShutdownStarted) return;
+            _browsePageCache?.InvalidateImage(imageId);
+            await RefreshBrowseGalleryAsync(forceIndexReload: true,
+                warmViewport: false);
+            StatusText.Text = UiLanguage.T(
+                "Video-Vorschaubild neu erzeugt. Bei fehlendem Windows-Codec " +
+                "bleibt das Platzhalterbild sichtbar.");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { ShowFileActionError(ex); }
+        finally
+        {
+            if (key is not null && !Dispatcher.HasShutdownStarted)
+                EndVisibleManualOperation(key);
+        }
     }
 
     private async Task UpdateRestoreContextAsync(MenuItem menu, long imageId)

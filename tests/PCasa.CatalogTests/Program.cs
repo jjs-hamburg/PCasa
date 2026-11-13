@@ -133,6 +133,8 @@ internal static class Program
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
         Run("User-added empty root is immediately persisted and resumes initial import after restart", NewlyAddedFolderInitialImportSurvivesRestart, failures);
         Run("Folder manager changes are atomic on OK with no staged side effects", FolderManagerSelectionCommitsAtomically, failures);
+        Run("Narrowing any monitored root preserves covered photo IDs, thumbnails and tags",
+            ManagerRootNarrowingPreservesCatalog, failures);
         Run("Changed exclusion advances source generation", ExclusionAdvancesGeneration, failures);
         Run("Nested monitored root owns exclusion decision", NestedMonitoredRootOwnsExclusion, failures);
         Run("Old exclusion cleanup cannot delete newer same-path exclusion", OldExclusionGenerationDoesNotPrune, failures);
@@ -4298,6 +4300,151 @@ internal static class Program
         Require(db, 1);
     }
 
+    private static void ManagerRootNarrowingPreservesCatalog()
+    {
+        using var sandbox = new Sandbox();
+        var first = Path.Combine(sandbox.Images, "IndexedA");
+        var second = Path.Combine(sandbox.Images, "IndexedB");
+        Directory.CreateDirectory(first);
+        Directory.CreateDirectory(second);
+        var firstFile = Path.Combine(first, "old-a.jpg");
+        var secondFile = Path.Combine(second, "old-b.jpg");
+        WriteJpeg(firstFile);
+        WriteJpeg(secondFile);
+        var firstBytes = File.ReadAllBytes(firstFile);
+        var secondBytes = File.ReadAllBytes(secondFile);
+        var (db, parent, scanner) = sandbox.Prepare();
+        scanner.Scan(parent);
+        Require(db, 2);
+        var photoIds = new ImageCatalogRepository(db).GetPhotoFolders()
+            .ToDictionary(item => item.LocalPath,
+                item => item.Id, StringComparer.OrdinalIgnoreCase);
+        if (!photoIds.ContainsKey(first) || !photoIds.ContainsKey(second))
+            throw new Exception("Narrowing fixture did not catalog both image folders.");
+
+        var packed = new BrowseCacheRepository(db);
+        new BrowseCacheBuilder(packed, new BrowseThumbnailProfileRepository(db))
+            .BuildMissing(cancellationToken: CancellationToken.None);
+        var imageIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var thumbnailCounts = new Dictionary<long, long>();
+        using (var connection = db.OpenConnection())
+        using (var read = connection.CreateCommand())
+        {
+            read.CommandText = """
+                SELECT id,local_path,
+                       (SELECT COUNT(*) FROM thumbnail_entries t
+                        WHERE t.image_id=i.id)
+                FROM images i ORDER BY local_path;
+                """;
+            using var rows = read.ExecuteReader();
+            while (rows.Read())
+            {
+                imageIds[rows.GetString(1)] = rows.GetInt64(0);
+                thumbnailCounts[rows.GetInt64(0)] = rows.GetInt64(2);
+            }
+        }
+        if (imageIds.Count != 2 || thumbnailCounts.Values.Any(count => count == 0))
+            throw new Exception("Narrowing fixture did not create packed previews.");
+
+        using (var connection = db.OpenConnection())
+        using (var tags = connection.CreateCommand())
+        {
+            tags.CommandText = """
+                INSERT INTO image_tags(image_id,keywords,source_modified_utc_ticks)
+                SELECT id,'PCasaNarrowing',modified_utc_ticks FROM images
+                WHERE local_path=$path
+                ON CONFLICT(image_id) DO UPDATE SET keywords='PCasaNarrowing';
+                """;
+            tags.Parameters.AddWithValue("$path", firstFile);
+            tags.ExecuteNonQuery();
+        }
+        // One existing image directory created via PCasa must retain its
+        // ownership record when the covering root is replaced.
+        var created = Path.Combine(first, "CreatedEmpty");
+        new FolderRepository(db).RegisterCreatedDirectory(parent.Id, created);
+        var requested = new FolderManagerSelection(
+            [
+                new FolderManagerRootChoice(first, Array.Empty<string>(), false),
+                new FolderManagerRootChoice(second, Array.Empty<string>(), false)
+            ], BackgroundScanEnabled: false);
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            try
+            {
+                new FolderManagerSelectionService(db).Apply(requested, canceled.Token);
+                throw new Exception("Canceled root narrowing mutated the DB.");
+            }
+            catch (OperationCanceledException) { }
+        }
+        if (new FolderRepository(db).GetAll().Count != 1)
+            throw new Exception("Canceled root narrowing removed the broad root.");
+
+        if (!new FolderManagerSelectionService(db).Apply(requested))
+            throw new Exception("Root narrowing made no persistent changes.");
+        var replacementRoots = new FolderRepository(db).GetAll();
+        if (replacementRoots.Count != 2 ||
+            replacementRoots.Any(r => r.Id == parent.Id))
+            throw new Exception("Broad monitoring root was not replaced.");
+
+        var expectedOwner = replacementRoots.ToDictionary(
+            item => item.LocalPath, item => item.Id,
+            StringComparer.OrdinalIgnoreCase);
+        using (var connection = db.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT i.id,i.local_path,i.folder_id,i.photo_folder_id,
+                       (SELECT COUNT(*) FROM thumbnail_entries t
+                        WHERE t.image_id=i.id) AS thumbs
+                FROM images i ORDER BY i.local_path;
+                """;
+            using var reader = command.ExecuteReader();
+            var count = 0;
+            while (reader.Read())
+            {
+                var id = reader.GetInt64(0);
+                var imagePath = reader.GetString(1);
+                var directory = Path.GetDirectoryName(imagePath)!;
+                if (!imageIds.TryGetValue(imagePath, out var oldId) ||
+                    id != oldId ||
+                    reader.GetInt64(2) != expectedOwner[directory] ||
+                    reader.GetInt64(3) != photoIds[directory] ||
+                    reader.GetInt64(4) != thumbnailCounts[id])
+                    throw new Exception(
+                        "Root narrowing changed an image ID, photo-folder ID, " +
+                        "owner or packed thumbnail tiers.");
+                count++;
+            }
+            if (count != 2)
+                throw new Exception("Root narrowing lost indexed pictures.");
+        }
+        using (var connection = db.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "SELECT keywords FROM image_tags WHERE image_id=$id;";
+            command.Parameters.AddWithValue("$id", imageIds[firstFile]);
+            if ((string?)command.ExecuteScalar() != "PCasaNarrowing")
+                throw new Exception("Root narrowing lost embedded tag index.");
+        }
+        using (var connection = db.OpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT COUNT(*) FROM created_photo_directories
+                WHERE monitored_folder_id=$owner AND local_path=$path;
+                """;
+            command.Parameters.AddWithValue("$owner", expectedOwner[first]);
+            command.Parameters.AddWithValue("$path", created);
+            if (Convert.ToInt32(command.ExecuteScalar()) != 1)
+                throw new Exception("Root narrowing lost PCasa-created directories.");
+        }
+        if (!File.ReadAllBytes(firstFile).SequenceEqual(firstBytes) ||
+            !File.ReadAllBytes(secondFile).SequenceEqual(secondBytes))
+            throw new Exception("Changing monitored roots modified original files.");
+    }
+
     private static void FolderManagerSelectionCommitsAtomically()
     {
         using var sandbox = new Sandbox();
@@ -7849,6 +7996,18 @@ internal static class Program
             var resolved = VideoThumbnailSource.Resolve(original);
             if (!string.Equals(preview, resolved, StringComparison.OrdinalIgnoreCase))
                 throw new Exception("Unchanged videos must reuse the same cached preview.");
+
+            // An explicit Refresh Thumbnail must regenerate a cached
+            // placeholder even when size/timestamp have not changed.
+            // Corrupt the local preview (not the video) to prove that the
+            // forced call replaces it with a decodable JPEG.
+            File.WriteAllBytes(preview, [1, 2, 3]);
+            var forced = VideoThumbnailSource.Resolve(original,
+                forceRefresh: true);
+            if (!string.Equals(preview, forced, StringComparison.OrdinalIgnoreCase) ||
+                new FileInfo(forced).Length <= 3)
+                throw new Exception(
+                    "Manual Refresh Thumbnail left the stale placeholder untouched.");
             using (var stream = File.OpenRead(preview))
             {
                 var decoder = new JpegBitmapDecoder(stream,

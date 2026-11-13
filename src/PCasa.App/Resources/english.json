@@ -1,4 +1,11 @@
 {
+  "Kontrast (automatisch)": "Contrast (automatic)",
+  "Farbe (automatisch)": "Color (automatic)",
+  "Aufhellen / Abdunkeln": "Brighten / Darken",
+  "Vorschaubild aktualisieren": "Refresh thumbnail",
+  "Video-Vorschaubild aktualisieren": "Refresh video thumbnail",
+  "Katalogisierte Unterordner": "Indexed subfolders",
+  "Video-Vorschaubild neu erzeugt. Bei fehlendem Windows-Codec bleibt das Platzhalterbild sichtbar.": "Video thumbnail refreshed. A placeholder remains when a Windows codec is missing.",
   " · {0:N0} Fehler": " · {0:N0} errors",
   " · Fehler: {0:N0}": " · errors: {0:N0}",
   "!  Fehler bei der Aktualisierung": "!  Update failed",

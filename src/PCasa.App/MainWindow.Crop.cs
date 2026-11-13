@@ -295,7 +295,7 @@ public partial class MainWindow
         }
         if (!EnsureEditSession()) return;
         if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) LeaveBrightness();
+        if (_brightnessActive) ApplyEditTool();
         if (_photoEditSession is null) return;
         // Work on the currently accepted, unsaved image, not an old source.
         if (_photoEditSession.HasChanges)
@@ -363,7 +363,8 @@ public partial class MainWindow
         ViewerCropOverlay.ReleaseMouseCapture();
         ViewerCropOverlay.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
-        ViewerCropFooter.Visibility = Visibility.Collapsed;
+        // Footer is a fixed row; leaving Crop only disables its actions.
+        ViewerCropFooter.Visibility = Visibility.Visible;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         _cropHistory.Clear();
         _cropHistoryIndex = -1;

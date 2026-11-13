@@ -98,6 +98,16 @@ public sealed class BrowseCacheBuilder
         return new BrowseCacheBuildResult(total, processed, failed);
     }
 
+    public void RebuildSingleImage(long imageId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var candidate = _repository.GetImageCandidate(imageId)
+            ?? throw new FileNotFoundException(
+                "Die ausgewählte Datei ist nicht mehr im PCasa-Katalog.");
+        BuildCandidate(candidate, _profileRepository.Get(), cancellationToken);
+    }
+
     private void BuildCandidate(
         BrowseCacheCandidate candidate,
         BrowseThumbnailProfile profile,
@@ -117,7 +127,10 @@ public sealed class BrowseCacheBuilder
 
         if (missing.Length > 0)
         {
-            var available = File.Exists(candidate.ThumbnailPath);
+            // Video placeholders stored in the legacy JPEG cache must not
+            // override a newly regenerated Windows video frame.
+            var available = !VideoFormats.IsVideo(candidate.LocalPath) &&
+                File.Exists(candidate.ThumbnailPath);
             var legacyTiers = available
                 ? missing.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()
                 : Array.Empty<int>();

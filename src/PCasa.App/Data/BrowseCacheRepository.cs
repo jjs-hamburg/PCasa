@@ -67,6 +67,28 @@ public sealed class BrowseCacheRepository
         return result;
     }
 
+    // Targeted manual thumbnail refresh: one indexed image, never a scan of
+    // all 500,000 photos. Uses the SAME BrowseCacheCandidate and pack writer
+    // as the regular missing-tier builder.
+    public BrowseCacheCandidate? GetImageCandidate(long imageId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id,photo_folder_id,local_path,thumbnail_path,
+                   modified_utc_ticks,width,height
+            FROM images
+            WHERE id=$id AND photo_folder_id IS NOT NULL;
+            """;
+        command.Parameters.AddWithValue("$id", imageId);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new BrowseCacheCandidate(reader.GetInt64(0),reader.GetInt64(1),
+                reader.GetString(2),reader.GetString(3),reader.GetInt64(4),
+                reader.GetInt32(5),reader.GetInt32(6),new HashSet<int>())
+            : null;
+    }
+
     // Only fully valid packed cache entries (used by cache verification/tests).
     public IReadOnlyList<BrowseThumbnailIndexEntry> GetIndex(int tier)
         => ReadIndex(tier, imageId: null, includeMissing: false);

@@ -124,31 +124,8 @@ public sealed class FolderManagerSelectionService
             var reclaim = false;
             var timestamp = DateTime.UtcNow.ToString("O");
 
-            foreach (var (path, old) in existing)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (selectedPaths.Contains(path)) continue;
-
-                using (var stale = Command(connection, transaction, """
-                    UPDATE scheduler_sources
-                    SET generation = generation + 1, desired_present = 0,
-                        updated_utc = $now
-                    WHERE canonical_path = $path;
-                    """))
-                {
-                    stale.Parameters.AddWithValue("$path", old.Canonical);
-                    stale.Parameters.AddWithValue("$now", timestamp);
-                    stale.ExecuteNonQuery();
-                }
-                using (var delete = Command(connection, transaction,
-                    "DELETE FROM monitored_folders WHERE id = $id;"))
-                {
-                    delete.Parameters.AddWithValue("$id", old.Id);
-                    delete.ExecuteNonQuery();
-                }
-                reclaim = modified = true;
-            }
-
+            var desiredRootIds = new Dictionary<string, long>(
+                StringComparer.OrdinalIgnoreCase);
             foreach (var (choice, classified) in desired)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -192,6 +169,7 @@ public sealed class FolderManagerSelectionService
                     modified = true;
                 }
 
+                desiredRootIds[classified.LocalPath] = id;
                 var wanted = choice.ExcludedPaths.Select(FolderExclusionRules.Normalize)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 foreach (var excluded in wanted)
@@ -224,6 +202,67 @@ public sealed class FolderManagerSelectionService
                 }
             }
 
+            // IMPORTANT: Existing monitored roots must be removed LAST.
+            // If a user replaces a broad root (e.g. a whole drive) with
+            // selected already-indexed descendants, cascading the old root
+            // first would destroy image IDs, GPS/tags and thumbnail mappings.
+            // Rehome covered catalog records inside this SAME transaction.
+            // This is a general root-to-roots transition, never S:-specific.
+            var retainedRoots = desired.Select(x => (
+                Path: x.Classified.LocalPath,
+                Id: desiredRootIds[x.Classified.LocalPath],
+                Excluded: x.Choice.ExcludedPaths))
+                .OrderByDescending(x => x.Path.Length)
+                .ToArray();
+            foreach (var (path, old) in existing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (selectedPaths.Contains(path)) continue;
+                RehomeCatalogRows(connection, transaction, old.Id,
+                    retainedRoots.Select(target =>
+                        (target.Path, target.Id, target.Excluded)).ToArray(),
+                    cancellationToken);
+            }
+
+            // Obsolete root sources are then invalidated and deleted. Image
+            // rows no longer under any requested root retain their deliberate
+            // remove-from-PCasa semantics; covered images keep their IDs.
+            foreach (var (path, old) in existing)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (selectedPaths.Contains(path)) continue;
+                var oldHadImages = false;
+
+                using (var stale = Command(connection, transaction, """
+                    UPDATE scheduler_sources
+                    SET generation = generation + 1, desired_present = 0,
+                        updated_utc = $now
+                    WHERE canonical_path = $path;
+                    """))
+                {
+                    stale.Parameters.AddWithValue("$path", old.Canonical);
+                    stale.Parameters.AddWithValue("$now", timestamp);
+                    stale.ExecuteNonQuery();
+                }
+                using (var count = Command(connection, transaction,
+                    "SELECT COUNT(*) FROM images WHERE folder_id=$id;"))
+                {
+                    count.Parameters.AddWithValue("$id", old.Id);
+                    oldHadImages = Convert.ToInt64(count.ExecuteScalar()) > 0;
+                }
+                using (var delete = Command(connection, transaction,
+                    "DELETE FROM monitored_folders WHERE id = $id;"))
+                {
+                    delete.Parameters.AddWithValue("$id", old.Id);
+                    delete.ExecuteNonQuery();
+                }
+                // Do not discard packed thumbnails for images that have
+                // just been reassigned to another requested monitoring root.
+                // Only actually removed images require idle cache cleanup.
+                reclaim |= oldHadImages;
+                modified = true;
+            }
+
             if (reclaim)
             {
                 using var maintenance = Command(connection, transaction, """
@@ -239,6 +278,87 @@ public sealed class FolderManagerSelectionService
         }
     }
 
+
+    // The ONE atomic root transition for every drive and NAS share.
+    // No disk or SMB access; ownership follows normalized indexed paths.
+    // Moving a row only updates its owner key, so all image IDs, EXIF/GPS,
+    // tags, undo associations and packed thumbnail_entries remain intact.
+    private static void RehomeCatalogRows(
+        SqliteConnection connection, SqliteTransaction tx, long removedRootId,
+        IReadOnlyList<(string Path, long Id, IReadOnlyList<string> Excluded)> desired,
+        CancellationToken token)
+    {
+        long? FindTarget(string localPath)
+        {
+            foreach (var target in desired)
+            {
+                if (FolderExclusionRules.IsAtOrBelow(localPath, target.Path) &&
+                    !FolderExclusionRules.IsExcluded(localPath, target.Excluded))
+                    return target.Id;
+            }
+            return null;
+        }
+
+        void TransferRows(string table, string idColumn, string ownerColumn)
+        {
+            var found = new List<(long Id, string Path)>();
+            using (var select = Command(connection, tx,
+                $"SELECT {idColumn},local_path FROM {table} WHERE {ownerColumn}=$root;"))
+            {
+                select.Parameters.AddWithValue("$root", removedRootId);
+                using var reader = select.ExecuteReader();
+                while (reader.Read())
+                    found.Add((reader.GetInt64(0), reader.GetString(1)));
+            }
+            using var update = Command(connection, tx,
+                $"UPDATE {table} SET {ownerColumn}=$owner WHERE {idColumn}=$id AND {ownerColumn}=$old;");
+            update.Parameters.AddWithValue("$old", removedRootId);
+            var ownerParam = update.Parameters.Add("$owner", SqliteType.Integer);
+            var idParam = update.Parameters.Add("$id", SqliteType.Integer);
+            foreach (var record in found)
+            {
+                token.ThrowIfCancellationRequested();
+                if (FindTarget(record.Path) is not long owner) continue;
+                ownerParam.Value = owner;
+                idParam.Value = record.Id;
+                update.ExecuteNonQuery();
+            }
+        }
+
+        // Move photo_folders FIRST to avoid deleting their identity when the
+        // old root is removed; then the images' own folder_id.
+        TransferRows("photo_folders", "id", "monitored_folder_id");
+        TransferRows("images", "id", "folder_id");
+
+        var directories = new List<(string Path, string CreatedUtc)>();
+        using (var select = Command(connection, tx, """
+            SELECT local_path,created_utc FROM created_photo_directories
+            WHERE monitored_folder_id=$root;
+            """))
+        {
+            select.Parameters.AddWithValue("$root", removedRootId);
+            using var reader = select.ExecuteReader();
+            while (reader.Read())
+                directories.Add((reader.GetString(0), reader.GetString(1)));
+        }
+        using var insert = Command(connection, tx, """
+            INSERT OR IGNORE INTO created_photo_directories (
+                monitored_folder_id,local_path,created_utc)
+            VALUES ($owner,$path,$created);
+            """);
+        var dOwner = insert.Parameters.Add("$owner", SqliteType.Integer);
+        var dPath = insert.Parameters.Add("$path", SqliteType.Text);
+        var dCreated = insert.Parameters.Add("$created", SqliteType.Text);
+        foreach (var entry in directories)
+        {
+            token.ThrowIfCancellationRequested();
+            if (FindTarget(entry.Path) is not long owner) continue;
+            dOwner.Value = owner;
+            dPath.Value = entry.Path;
+            dCreated.Value = entry.CreatedUtc;
+            insert.ExecuteNonQuery();
+        }
+    }
 
     public readonly record struct ExclusionTransition(bool Changed, int Removed);
 
