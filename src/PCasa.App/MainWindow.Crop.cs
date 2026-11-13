@@ -279,6 +279,7 @@ public partial class MainWindow
         CropSaveCopyButton.Click += (_, _) => SaveEdits(asCopy: true);
         CropCancelButton.Click += (_, _) => CancelEditSession();
         InitializeStraightenTools();
+        InitializeAutoImageTools();
     }
 
     private void BeginCrop()
@@ -294,6 +295,7 @@ public partial class MainWindow
         }
         if (!EnsureEditSession()) return;
         if (_straightenActive) LeaveStraighten();
+        if (_brightnessActive) LeaveBrightness();
         if (_photoEditSession is null) return;
         // Work on the currently accepted, unsaved image, not an old source.
         if (_photoEditSession.HasChanges)
@@ -377,7 +379,9 @@ public partial class MainWindow
              _cropRatioMode != _cropHistory[0].Mode);
         var pendingAngle = _straightenActive &&
             (Math.Abs(_straightenAngle) > .00001 || _straightenQuarterTurns != 0);
-        if (hasAccepted || editedMask || pendingAngle)
+        var pendingBrightness = _brightnessActive &&
+            Math.Abs(_brightnessAmount) > .00001;
+        if (hasAccepted || editedMask || pendingAngle || pendingBrightness)
         {
             var response = PcasaDialog.Show(this,
                 UiLanguage.T("Ungespeicherte Bildbearbeitungen verwerfen?"),
