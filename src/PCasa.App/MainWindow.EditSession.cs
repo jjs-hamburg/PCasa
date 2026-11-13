@@ -248,16 +248,16 @@ public partial class MainWindow
         CropRedoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanRedo == true;
         var editingTool = _cropActive || _straightenActive || _brightnessActive;
-        CropApplyButton.Visibility = editingTool
-            ? Visibility.Visible : Visibility.Collapsed;
+        // Keep all four buttons in a fixed footprint below the histogram.
+        // A disabled action is still visible; the histogram never jumps.
+        CropApplyButton.Visibility = Visibility.Visible;
         CropApplyButton.IsEnabled = !_cropSavePending && editingTool;
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (editingTool || _photoEditSession?.HasChanges == true);
         CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
-        CropCancelButton.IsEnabled = !_cropSavePending;
-        ViewerCropFooter.Visibility = editingTool ||
-            _photoEditSession?.HasChanges == true
-                ? Visibility.Visible : Visibility.Collapsed;
+        CropCancelButton.IsEnabled = !_cropSavePending &&
+            (editingTool || _photoEditSession?.HasChanges == true);
+        ViewerCropFooter.Visibility = Visibility.Visible;
     }
 
     private bool ApplyEditTool()
