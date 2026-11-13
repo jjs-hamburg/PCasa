@@ -14,6 +14,53 @@ public partial class MainWindow
     private CancellationTokenSource? _brightnessPreviewCancellation;
     private int _brightnessPreviewRevision;
 
+    // One registration path for every edit tool: identical icon-button
+    // geometry, captions OUTSIDE the button and live language switching.
+    private readonly List<(TextBlock Caption, Button Button,
+        string Key, string TooltipKey)> _editorToolLabels = [];
+
+    private void AddEditorTool(UIElement icon, string label, string tooltip,
+        Action action, bool automatic = false)
+    {
+        var button = new Button
+        {
+            Width = 74, Height = 49, Padding = new Thickness(2),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Content = icon
+        };
+        button.Click += (_, _) => action();
+        var caption = new TextBlock
+        {
+            Width = 82, Height = 31, FontSize = 10,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 5, 0, 0)
+        };
+        var item = new StackPanel
+        {
+            Width = 86, Margin = new Thickness(1, 2, 1, 3)
+        };
+        item.Children.Add(button);
+        item.Children.Add(caption);
+        (automatic ? ViewerAutoToolsList.Children : ViewerToolsList.Children)
+            .Add(item);
+        _editorToolLabels.Add((caption, button, label, tooltip));
+        RefreshEditorToolLabels();
+    }
+
+    private void RefreshEditorToolLabels()
+    {
+        foreach (var (caption, button, label, tooltip) in _editorToolLabels)
+        {
+            caption.Text = UiLanguage.T(label);
+            button.ToolTip = UiLanguage.T(tooltip);
+        }
+        UpdateEditHistoryTooltips();
+    }
+
     private void InitializeAutoImageTools()
     {
         AddAutoImageButton("✦", "Auf gut Glück!", "auto-fix",
@@ -44,25 +91,14 @@ public partial class MainWindow
 
     private void AddAutoImageButton(string symbol, string label,
         string kind, string tooltip)
-    {
-        var button = new Button {
-            Width = 83, Height = 65, Padding = new Thickness(2),
-            Margin = new Thickness(3),
-            ToolTip = UiLanguage.T(tooltip)
-        };
-        button.Content = new StackPanel {
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Children = {
-                new TextBlock { Text = symbol, FontSize = 23,
-                    TextAlignment = TextAlignment.Center },
-                new TextBlock { Text = UiLanguage.T(label),
-                    FontSize = 10, TextAlignment = TextAlignment.Center,
-                    TextWrapping = TextWrapping.Wrap, MaxWidth = 78 }
-            }
-        };
-        button.Click += (_, _) => ApplyAutomaticImageEdit(kind);
-        ViewerToolsList.Children.Add(button);
-    }
+        => AddEditorTool(
+            new TextBlock
+            {
+                Text = symbol, FontSize = 24,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment = TextAlignment.Center
+            }, label, tooltip, () => ApplyAutomaticImageEdit(kind),
+            automatic: true);
 
     private void ApplyAutomaticImageEdit(string kind)
     {
