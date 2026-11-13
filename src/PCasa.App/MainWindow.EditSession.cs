@@ -104,7 +104,7 @@ public partial class MainWindow
     {
         if (!EnsureEditSession()) return;
         if (_cropActive) EndCrop();
-        if (_brightnessActive) LeaveBrightness();
+        if (_brightnessActive) ApplyEditTool();
         _straightenPreviewBase = _photoEditSession!.Render();
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = true;
@@ -247,7 +247,8 @@ public partial class MainWindow
             _photoEditSession?.CanUndo == true;
         CropRedoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanRedo == true;
-        var editingTool = _cropActive || _straightenActive || _brightnessActive;
+        var editingTool = _cropActive || _straightenActive ||
+            (_brightnessActive && Math.Abs(_brightnessAmount) > .00001);
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
