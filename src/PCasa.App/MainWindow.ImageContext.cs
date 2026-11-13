@@ -62,9 +62,9 @@ public partial class MainWindow
             .Select(item => item.ImageId).ToHashSet();
         // The right click preserves an existing multi-selection. If that
         // thumbnail was not selected it becomes a one-item selection.
-        var clickedIsSelected = selectedIds.Contains(clickedId);
-        return (clickedIsSelected ? selectedIds : [clickedId])
-            .Where(videoIds.Contains).Distinct().ToArray();
+        IEnumerable<long> candidates = selectedIds.Contains(clickedId)
+            ? selectedIds : new[] { clickedId };
+        return candidates.Where(videoIds.Contains).Distinct().ToArray();
     }
 
     private async Task RefreshVideoThumbnailsAsync(long[] imageIds)
