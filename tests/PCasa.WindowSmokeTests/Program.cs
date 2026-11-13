@@ -1114,6 +1114,112 @@ internal static class Program
                 ?? throw new Exception("Actual browse scroll viewer not found.");
             surface.SetData(synthetic, groups, pages);
             Flush(window);
+
+            // Real regression: a GPS-marked photo in folder 100 must never
+            // pull the gallery back after the user explicitly enters folder
+            // 200. Repeat with a GPS-free photo: stale layout anchors are
+            // invalid by FOLDER identity, not by a special GPS flag.
+            var navFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var navType = typeof(PCasa.App.MainWindow);
+            var navDisplayedField = navType.GetField("_displayedBrowseIndex", navFlags)!;
+            var navPendingField = navType.GetField("_pendingGalleryAnchor", navFlags)!;
+            var navTargetField = navType.GetField("_explicitGalleryFolderTargetId", navFlags)!;
+            var navScrollMethod = navType.GetMethod(
+                "ScrollToExplicitGalleryFolder", navFlags)!;
+            var navMarkMethod = navType.GetMethod(
+                "MarkExplicitGalleryNavigation", navFlags)!;
+            var navRestoreMethod = navType.GetMethod(
+                "RestorePendingGalleryAnchor", navFlags)!;
+            var navReflowMethod = navType.GetMethod(
+                "BrowseSurface_LayoutReflowed", navFlags)!;
+            var navMapPhotoMethod = navType.GetMethod(
+                "FocusGpsMapPhotoWithoutGalleryNavigation", navFlags)!;
+            var navPointsField = navType.GetField("_gpsPoints", navFlags)!;
+            var navPointType = navType.GetNestedType("GpsPoint",
+                System.Reflection.BindingFlags.NonPublic)!;
+            var navOldDisplayed = navDisplayedField.GetValue(window);
+            var navOldPoints = navPointsField.GetValue(window);
+            var navOldTarget = navTargetField.GetValue(window);
+            var navOldPending = navPendingField.GetValue(window);
+            var navOldFolder = navType.GetField(
+                "_activePhotoFolderId", navFlags)!.GetValue(window);
+            try
+            {
+                navDisplayedField.SetValue(window,
+                    synthetic.Select((entry, index) =>
+                        entry with { HasGps = index == 0 }).ToArray());
+                var newFolderStart = surface.GetFolderOffset(200)
+                    ?? throw new Exception("Synthetic destination folder missing.");
+                navMarkMethod.Invoke(window, [(long?)200]);
+                navScrollMethod.Invoke(window, [200L, newFolderStart]);
+                Flush(window);
+                var destination = scroller.VerticalOffset;
+                if (Math.Abs(destination - newFolderStart) > 3 ||
+                    !Equals(navTargetField.GetValue(window), 200L))
+                    throw new Exception("Explicit folder navigation was lost before GPS checks.");
+
+                foreach (var oldImageId in new[] {
+                    synthetic[0].ImageId, // has GPS
+                    synthetic[1].ImageId  // has NO GPS
+                })
+                {
+                    var oldAnchor = (ImageId: oldImageId, RelativeY: 0d);
+                    // Both a delayed pending anchor and a resize/reflow
+                    // callback from the old folder must be rejected.
+                    navPendingField.SetValue(window, oldAnchor);
+                    navRestoreMethod.Invoke(window, null);
+                    navReflowMethod.Invoke(window, [surface, oldAnchor]);
+                    Flush(window);
+                    if (Math.Abs(scroller.VerticalOffset - destination) > 3 ||
+                        navPendingField.GetValue(window) is not null ||
+                        !Equals(navTargetField.GetValue(window), 200L))
+                        throw new Exception(
+                            "Old folder anchor hijacked explicit navigation " +
+                            "(HasGps=" + (oldImageId == synthetic[0].ImageId) + ").");
+                }
+
+                var navPoint = Activator.CreateInstance(navPointType,
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic,
+                    null, new object[] {
+                        synthetic[0].ImageId, "older-gps-photo.jpg",
+                        28.417d, -16.567d, true }, null)!;
+                var navPoints = Array.CreateInstance(navPointType, 1);
+                navPoints.SetValue(navPoint, 0);
+                navPointsField.SetValue(window, navPoints);
+                navMapPhotoMethod.Invoke(window, [synthetic[0].ImageId]);
+                Flush(window);
+                if (Math.Abs(scroller.VerticalOffset - destination) > 3 ||
+                    !Equals(navTargetField.GetValue(window), 200L))
+                    throw new Exception("GPS map photo focus scrolled the gallery to its old folder.");
+
+                // A photo without GPS has no marker. Even a stale synthetic
+                // map callback referencing its old ID must do nothing.
+                navPointsField.SetValue(window, Array.CreateInstance(navPointType, 0));
+                navMapPhotoMethod.Invoke(window, [synthetic[1].ImageId]);
+                Flush(window);
+                if (Math.Abs(scroller.VerticalOffset - destination) > 3 ||
+                    !Equals(navTargetField.GetValue(window), 200L))
+                    throw new Exception("GPS-free photo callback navigated the gallery.");
+
+                Console.WriteLine(
+                    "PASS: Old GPS and GPS-free photo callbacks cannot hijack a newly selected gallery folder.");
+            }
+            finally
+            {
+                navDisplayedField.SetValue(window, navOldDisplayed);
+                navPointsField.SetValue(window, navOldPoints);
+                navTargetField.SetValue(window, navOldTarget);
+                navPendingField.SetValue(window, navOldPending);
+                navType.GetField("_activePhotoFolderId", navFlags)!
+                    .SetValue(window, navOldFolder);
+                if (window.FindName("GpsPhotoPopup") is Border navPopup)
+                    navPopup.Visibility = Visibility.Collapsed;
+                Flush(window);
+            }
+
             // The bookmark is a toggle, not a new scheduler/navigation stack.
             // It must restore a stable arbitrary picture-relative position
             // without selecting a thumbnail.
