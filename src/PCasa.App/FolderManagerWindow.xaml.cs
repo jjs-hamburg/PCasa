@@ -180,8 +180,8 @@ public partial class FolderManagerWindow : Window
         MonitoredRootsList.Children.Clear();
         var shown = _monitoredRoots
             .Select(root => (Root: root, Included: true))
-            .Concat(_uncheckedRoots.Values.Select(entry =>
-                (Root: entry.Root, Included: false)))
+            .Concat(_uncheckedRoots.Values.Where(entry => entry.Root.Id > 0)
+                .Select(entry => (Root: entry.Root, Included: false)))
             .OrderBy(entry => entry.Root.LocalPath,
                 StringComparer.OrdinalIgnoreCase);
         foreach (var (root, included) in shown)
@@ -281,8 +281,11 @@ public partial class FolderManagerWindow : Window
         var root = _monitoredRoots.FirstOrDefault(candidate =>
             candidate.Id == rootId);
         if (root is null) return;
-        _uncheckedRoots[rootId] = (root,
-            _exclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>());
+        // A newly staged root has no database record to restore. Unchecking
+        // it is simply a cancellation, not a second unchecked root row.
+        if (root.Id > 0)
+            _uncheckedRoots[rootId] = (root,
+                _exclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>());
         _monitoredRoots = _monitoredRoots
             .Where(candidate => candidate.Id != rootId).ToArray();
         _exclusions.Remove(rootId);
@@ -604,6 +607,33 @@ public partial class FolderManagerWindow : Window
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         if (_busy) return;
+
+        var roots = SelectedConfiguration.Roots;
+        var noLongerIncluded = _catalogPhotoFolders
+            .Where(folder => !roots.Any(root =>
+                FolderExclusionRules.IsAtOrBelow(folder.LocalPath, root.LocalPath) &&
+                !FolderExclusionRules.IsExcluded(folder.LocalPath,
+                    root.ExcludedPaths)))
+            .Sum(folder => (long)folder.ImageCount);
+        if (noLongerIncluded > 0)
+        {
+            // Removing a root without selecting its existing descendants
+            // intentionally removes uncaptured photos from the PCasa catalog,
+            // but never from disk. Never let a mistaken checkbox silently
+            // cascade-delete their database records/thumbnails.
+            var answer = PcasaDialog.Show(this,
+                $"{noLongerIncluded:N0} katalogisierte Bilder liegen außerhalb " +
+                "der neu gewählten Überwachungsordner und würden aus dem " +
+                "PCasa-Katalog entfernt.\n\n" +
+                "Bereits von neuen Wurzeln abgedeckte Bilder behalten " +
+                "ihre IDs, GPS-Daten, Tags und Thumbnails.\n\n" +
+                "Die Originaldateien bleiben unverändert.\n\n" +
+                "Möchtest Du diese Ordnerauswahl wirklich übernehmen?",
+                UiLanguage.T("Ordnerauswahl übernehmen"),
+                MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+        }
         DialogResult = true;
     }
 
