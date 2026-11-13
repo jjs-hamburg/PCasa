@@ -417,6 +417,7 @@ public partial class MainWindow
             SyncGallerySortMenu();
             SyncGalleryAttributeFilterUi();
             RefreshTagDraftControls();
+            RefreshEditorToolLabels();
         }
         else
             Dispatcher.BeginInvoke(new Action(() =>
@@ -424,6 +425,7 @@ public partial class MainWindow
                 SyncGallerySortMenu();
                 SyncGalleryAttributeFilterUi();
                 RefreshTagDraftControls();
+                RefreshEditorToolLabels();
             }));
     }
 
