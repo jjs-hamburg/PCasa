@@ -18,37 +18,27 @@ public partial class MainWindow
     {
         AddAutoImageButton("✦", "Auf gut Glück!", "auto-fix",
             "Helligkeit, Kontrast und Farbstich automatisch korrigieren");
-        AddAutoImageButton("◐", "Kontrast", "auto-contrast",
+        AddAutoImageButton("◐", "Kontrast (automatisch)", "auto-contrast",
             "Kontrast automatisch optimieren");
-        AddAutoImageButton("◉", "Farbe", "auto-color",
+        AddAutoImageButton("◉", "Farbe (automatisch)", "auto-color",
             "Farbstich automatisch korrigieren");
 
-        var brighten = new Button {
-            Width = 67, Height = 59, Padding = new Thickness(2),
-            Margin = new Thickness(3), ToolTip = UiLanguage.T(
-                "Aufhellen oder abdunkeln")
-        };
-        brighten.Content = new StackPanel {
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Children = {
-                new TextBlock { Text = "☀", FontSize = 23,
-                    TextAlignment = TextAlignment.Center },
-                new TextBlock { Text = UiLanguage.T("Aufhellen"),
-                    FontSize = 10, TextAlignment = TextAlignment.Center }
-            }
-        };
-        brighten.Click += (_, _) => BeginBrightness();
-        ViewerToolsList.Children.Add(brighten);
-        BrightnessBackButton.Click += (_, _) => LeaveBrightness();
         BrightnessResetButton.Click += (_, _) => BrightnessSlider.Value = 0;
         BrightnessSlider.ValueChanged += (_, _) =>
         {
-            if (!_brightnessActive) return;
+            if (!_brightnessActive && Math.Abs(BrightnessSlider.Value) < .00001)
+                return;
+            if (!_brightnessActive && !BeginBrightness())
+            {
+                BrightnessSlider.Value = 0;
+                return;
+            }
             _brightnessAmount = BrightnessSlider.Value;
             BrightnessValueText.Text =
                 _brightnessAmount.ToString("+0.00;-0.00;0.00",
                     System.Globalization.CultureInfo.CurrentCulture) + " EV";
             QueueBrightnessPreview();
+            UpdateEditControls();
         };
     }
 
@@ -56,7 +46,7 @@ public partial class MainWindow
         string kind, string tooltip)
     {
         var button = new Button {
-            Width = 67, Height = 59, Padding = new Thickness(2),
+            Width = 83, Height = 65, Padding = new Thickness(2),
             Margin = new Thickness(3),
             ToolTip = UiLanguage.T(tooltip)
         };
@@ -66,7 +56,8 @@ public partial class MainWindow
                 new TextBlock { Text = symbol, FontSize = 23,
                     TextAlignment = TextAlignment.Center },
                 new TextBlock { Text = UiLanguage.T(label),
-                    FontSize = 9.4, TextAlignment = TextAlignment.Center }
+                    FontSize = 10, TextAlignment = TextAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap, MaxWidth = 78 }
             }
         };
         button.Click += (_, _) => ApplyAutomaticImageEdit(kind);
@@ -78,7 +69,7 @@ public partial class MainWindow
         if (!EnsureEditSession() || _cropSavePending) return;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) LeaveBrightness();
+        if (_brightnessActive) ApplyEditTool();
         if (_photoEditSession is null) return;
         _photoEditSession.Apply(new PhotoEditStep(kind));
         SetViewerBitmap(_photoEditSession.Render());
@@ -86,22 +77,18 @@ public partial class MainWindow
         UpdateEditControls();
     }
 
-    private void BeginBrightness()
+    private bool BeginBrightness()
     {
-        if (!EnsureEditSession() || _cropSavePending) return;
+        if (_cropSavePending || !EnsureEditSession()) return false;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
-        if (_brightnessActive) LeaveBrightness();
         _brightnessPreviewBase = _photoEditSession!.Render();
-        _brightnessAmount = 0;
+        _brightnessAmount = BrightnessSlider.Value;
         _brightnessActive = true;
-        BrightnessSlider.Value = 0;
-        BrightnessValueText.Text = "0,00 EV";
-        ViewerToolsOverview.Visibility = Visibility.Collapsed;
-        ViewerCropOptions.Visibility = Visibility.Collapsed;
-        ViewerStraightenOptions.Visibility = Visibility.Collapsed;
-        ViewerBrightnessOptions.Visibility = Visibility.Visible;
+        // Slider remains visible in the main editor; its changes never
+        // replace or resize the editor panel.
         UpdateEditControls();
+        return true;
     }
 
     // A preview is made from an immutable in-memory BitmapSource on a worker
@@ -148,8 +135,8 @@ public partial class MainWindow
         _brightnessPreviewCancellation?.Dispose();
         _brightnessPreviewCancellation = null;
         _brightnessPreviewBase = null;
-        ViewerBrightnessOptions.Visibility = Visibility.Collapsed;
-        ViewerToolsOverview.Visibility = Visibility.Visible;
+        BrightnessSlider.Value = 0;
+        BrightnessValueText.Text = "0,00 EV";
         if (_photoEditSession is not null)
         {
             SetViewerBitmap(_photoEditSession.Render());
