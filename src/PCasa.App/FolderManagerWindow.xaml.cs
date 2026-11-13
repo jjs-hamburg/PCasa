@@ -183,9 +183,10 @@ public partial class FolderManagerWindow : Window
             .Concat(_uncheckedRoots.Values.Select(entry =>
                 (Root: entry.Root, Included: false)))
             .OrderBy(entry => entry.Root.LocalPath,
-                StringComparer.CurrentCultureIgnoreCase);
+                StringComparer.OrdinalIgnoreCase);
         foreach (var (root, included) in shown)
         {
+            var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 5) };
             var check = new CheckBox
             {
                 Content = root.LocalPath,
@@ -206,7 +207,72 @@ public partial class FolderManagerWindow : Window
                 if (_updatingChecks || _busy) return;
                 RemoveStagedRoot(root.Id);
             };
-            MonitoredRootsList.Children.Add(check);
+            panel.Children.Add(check);
+
+            // The right pane must show the SAME catalogued children already
+            // shown on the left. When an ancestor root is included these
+            // children are covered (check mark, disabled). If that root is
+            // explicitly unchecked, its existing children can be selected
+            // as distinct replacement roots WITHOUT re-importing their
+            // pictures or losing thumbnail IDs. All drives work identically.
+            var catalogued = _catalogPhotoFolders
+                .Where(folder => folder.MonitoredFolderId == root.Id &&
+                    !PathEquals(folder.LocalPath, root.LocalPath))
+                .GroupBy(folder => FolderExclusionRules.Normalize(folder.LocalPath),
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(group => (Path: group.Key,
+                    Count: group.Sum(folder => folder.ImageCount)))
+                .OrderBy(folder => folder.Path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (catalogued.Length > 0)
+            {
+                var children = new StackPanel { Margin = new Thickness(12, 3, 0, 5) };
+                foreach (var folder in catalogued)
+                {
+                    var exact = _monitoredRoots.FirstOrDefault(candidate =>
+                        PathEquals(candidate.LocalPath, folder.Path));
+                    var covering = FindCoveringRoot(folder.Path);
+                    var covered = covering is not null &&
+                        !FolderExclusionRules.IsExcluded(folder.Path,
+                            _exclusions.GetValueOrDefault(covering.Id)
+                                ?? Array.Empty<string>());
+                    var item = new CheckBox
+                    {
+                        Content = Path.GetRelativePath(root.LocalPath, folder.Path) +
+                            $" ({folder.Count:N0})",
+                        ToolTip = folder.Path + (covered
+                            ? " · von der überwachten Wurzel abgedeckt"
+                            : " · als eigene Überwachungswurzel auswählbar"),
+                        IsChecked = covered,
+                        IsEnabled = !_busy && (!covered || exact is not null),
+                        Margin = new Thickness(0, 3, 0, 3)
+                    };
+                    item.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
+                    item.Checked += (_, _) =>
+                    {
+                        if (_updatingChecks || _busy) return;
+                        StageNewRoot(folder.Path);
+                        Reload();
+                    };
+                    item.Unchecked += (_, _) =>
+                    {
+                        if (_updatingChecks || _busy) return;
+                        var selected = _monitoredRoots.FirstOrDefault(candidate =>
+                            PathEquals(candidate.LocalPath, folder.Path));
+                        if (selected is not null)
+                            RemoveStagedRoot(selected.Id);
+                    };
+                    children.Children.Add(item);
+                }
+                panel.Children.Add(new Expander
+                {
+                    Header = $"Katalogisierte Unterordner ({catalogued.Length:N0})",
+                    Content = children,
+                    IsExpanded = catalogued.Length <= 60 || !included,
+                    Margin = new Thickness(3, 0, 0, 3)
+                });
+            }
+            MonitoredRootsList.Children.Add(panel);
         }
     }
 
@@ -481,13 +547,15 @@ public partial class FolderManagerWindow : Window
             RestoreStagedRoot(prior.Root.Id);
             return;
         }
-        var classification = PathClassifier.Classify(normalized);
+        // Do not probe a potentially offline NAS on the WPF dispatcher.
+        // Classification is authoritative in FolderManagerSelectionService
+        // on the scheduler worker when the user clicks OK.
         var provisional = new MonitoredFolder
         {
             Id = _nextTemporaryRootId--,
-            LocalPath = classification.LocalPath,
-            CanonicalPath = classification.CanonicalPath,
-            IsNetwork = classification.IsNetwork
+            LocalPath = normalized,
+            CanonicalPath = normalized,
+            IsNetwork = normalized.StartsWith(@"\\", StringComparison.Ordinal)
         };
         _monitoredRoots = _monitoredRoots.Append(provisional).ToArray();
         _exclusions[provisional.Id] = Array.Empty<string>();
