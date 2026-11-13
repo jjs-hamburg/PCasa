@@ -32,8 +32,20 @@ public partial class MainWindow
         if (_displayedBrowseIndex.Any(item => item.ImageId == id &&
             VideoFormats.IsVideo(item.FileName)))
         {
-            AddContextAction(menu, "Vorschaubild aktualisieren",
-                () => _ = RefreshVideoThumbnailAsync(id));
+            // Right-clicking a member of a multi-selection preserves it.
+            // Build one immutable list of ALL selected videos now; never
+            // limit a multi-selection action to the right-clicked image.
+            var videoIds = _selectedImageIds
+                .Where(selectedId => _displayedBrowseIndex.Any(item =>
+                    item.ImageId == selectedId &&
+                    VideoFormats.IsVideo(item.FileName)))
+                .Distinct().ToArray();
+            if (videoIds.Length == 0) videoIds = [id];
+            var captured = videoIds;
+            AddContextAction(menu, captured.Length > 1
+                ? "Vorschaubilder aktualisieren"
+                : "Vorschaubild aktualisieren",
+                () => _ = RefreshVideoThumbnailsAsync(captured));
         }
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };
@@ -46,39 +58,69 @@ public partial class MainWindow
         menu.IsOpen = true;
     }
 
-    private async Task RefreshVideoThumbnailAsync(long imageId)
+    private async Task RefreshVideoThumbnailsAsync(long[] imageIds)
     {
-        const string label = "Video-Vorschaubild aktualisieren";
+        if (imageIds.Length == 0) return;
+        const string label = "Video-Vorschaubilder aktualisieren";
         string? key = null;
         try
         {
-            var paths = await SelectedGalleryPathsAsync([imageId]);
-            if (paths.Length != 1 || !VideoFormats.IsVideo(paths[0]) ||
-                Dispatcher.HasShutdownStarted)
-                return;
-            var source = paths[0];
-            key = "thumbnail:video-refresh:" + imageId + ":" +
-                Guid.NewGuid().ToString("N");
-            BeginVisibleManualOperation(key, UiLanguage.T(label), 1);
-            // One manual P0 package, and one ID. Never re-enumerate the NAS,
-            // recatalogue the folder or regenerate unrelated photo tiers.
+            // One snapshot, one catalog lookup and one P0 manual operation.
+            // The selected set cannot change under this running action.
+            var selected = await SelectedGalleryImagePathsAsync(imageIds);
+            var videos = selected.Where(item => VideoFormats.IsVideo(item.Path))
+                .DistinctBy(item => item.Id).ToArray();
+            if (videos.Length == 0 || Dispatcher.HasShutdownStarted) return;
+            key = "thumbnail:video-refresh:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, UiLanguage.T(label), videos.Length);
+            var failures = new List<(string Name, string Error)>();
             await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
                 token =>
                 {
-                    token.ThrowIfCancellationRequested();
-                    VideoThumbnailSource.Resolve(source, token,
-                        forceRefresh: true);
-                    new BrowseCacheRepository(_database).InvalidateImage(imageId);
-                    _browseCacheBuilder?.RebuildSingleImage(imageId, token);
+                    var repository = new BrowseCacheRepository(_database);
+                    var builder = _browseCacheBuilder ?? new BrowseCacheBuilder(
+                        repository, new BrowseThumbnailProfileRepository(_database));
+                    for (var index = 0; index < videos.Length; index++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var item = videos[index];
+                        try
+                        {
+                            // Regenerate the local Windows frame first.
+                            // Only when that succeeded invalidate/rebuild the
+                            // packed tiers for the SAME catalog image ID.
+                            VideoThumbnailSource.Resolve(item.Path, token,
+                                forceRefresh: true);
+                            repository.InvalidateImage(item.Id);
+                            builder.RebuildSingleImage(item.Id, token);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            failures.Add((Path.GetFileName(item.Path), ex.Message));
+                            PCasaDiagnostics.Write("Video.ThumbnailRefresh", ex);
+                        }
+                        _scheduler.ReportProgress(key, UiLanguage.T(label),
+                            index + 1, videos.Length);
+                    }
                     return Task.CompletedTask;
                 }, workKind: SchedulerWorkKind.Catalog);
+
             if (Dispatcher.HasShutdownStarted) return;
-            _browsePageCache?.InvalidateImage(imageId);
+            foreach (var item in videos)
+                _browsePageCache?.InvalidateImage(item.Id);
+            // Exactly one gallery refresh after the entire marked batch.
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
-            StatusText.Text = UiLanguage.T(
-                "Video-Vorschaubild neu erzeugt. Bei fehlendem Windows-Codec " +
-                "bleibt das Platzhalterbild sichtbar.");
+            StatusText.Text = UiLanguage.Format(
+                "{0:N0} Videos geprüft, {1:N0} Fehler.",
+                videos.Length, failures.Count);
+            if (failures.Count > 0)
+                PcasaDialog.Show(this,
+                    string.Join("\n", failures.Take(12).Select(item =>
+                        item.Name + ": " + item.Error)),
+                    UiLanguage.T(label),
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { ShowFileActionError(ex); }
