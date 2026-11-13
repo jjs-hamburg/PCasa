@@ -455,8 +455,8 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         if (_decodedBytes + _retainedBytes > MaximumDecodedBytes)
         {
             // Favor the newly visible page over an old-index preview bridge.
+            // Keep newly saved image pixels until the fresh packed cache is ready.
             _retainedBitmaps.Clear();
-            _liveEditedThumbnails.Clear();
             _retainedBytes = 0;
         }
         while (_decodedBytes > MaximumDecodedBytes && _lru.Last is { } last)
