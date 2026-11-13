@@ -10,6 +10,7 @@ using System.Windows.Input;
 using Microsoft.VisualBasic.FileIO;
 using PCasa.App.Controls;
 using PCasa.App.Data;
+using PCasa.App.Models;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -32,15 +33,10 @@ public partial class MainWindow
         if (_displayedBrowseIndex.Any(item => item.ImageId == id &&
             VideoFormats.IsVideo(item.FileName)))
         {
-            // Right-clicking a member of a multi-selection preserves it.
-            // Build one immutable list of ALL selected videos now; never
-            // limit a multi-selection action to the right-clicked image.
-            var videoIds = _selectedImageIds
-                .Where(selectedId => _displayedBrowseIndex.Any(item =>
-                    item.ImageId == selectedId &&
-                    VideoFormats.IsVideo(item.FileName)))
-                .Distinct().ToArray();
-            if (videoIds.Length == 0) videoIds = [id];
+            // One O(N) index projection and one immutable selection.
+            // Do not scan the 500k photo index once PER selected video.
+            var videoIds = SelectVideoThumbnailIds(id, _selectedImageIds,
+                _displayedBrowseIndex);
             var captured = videoIds;
             AddContextAction(menu, captured.Length > 1
                 ? "Vorschaubilder aktualisieren"
@@ -56,6 +52,19 @@ public partial class MainWindow
         AddContextAction(menu, "Duplizieren", () => DuplicateImage(id));
         AddContextAction(menu, "Löschen", () => _ = DeleteSelectedImagesAsync());
         menu.IsOpen = true;
+    }
+
+    internal static long[] SelectVideoThumbnailIds(long clickedId,
+        IReadOnlyCollection<long> selectedIds,
+        IReadOnlyList<BrowseThumbnailIndexEntry> index)
+    {
+        var videoIds = index.Where(item => VideoFormats.IsVideo(item.FileName))
+            .Select(item => item.ImageId).ToHashSet();
+        // The right click preserves an existing multi-selection. If that
+        // thumbnail was not selected it becomes a one-item selection.
+        var clickedIsSelected = selectedIds.Contains(clickedId);
+        return (clickedIsSelected ? selectedIds : [clickedId])
+            .Where(videoIds.Contains).Distinct().ToArray();
     }
 
     private async Task RefreshVideoThumbnailsAsync(long[] imageIds)
