@@ -26,6 +26,11 @@ public sealed class PhotoEditSession
     {
         ImageId = imageId;
         _original = original ?? throw new ArgumentNullException(nameof(original));
+        // An edit may be rendered on the WPF UI thread and subsequently on
+        // the durable MTA writer. Freeze the decoded source on its OWNER
+        // thread before any cross-thread handoff.
+        if (!_original.IsFrozen)
+            _original.Freeze();
     }
     public bool HasChanges => _cursor > 0;
     public bool CanUndo => _cursor > 0;
