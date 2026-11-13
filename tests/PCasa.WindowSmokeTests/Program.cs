@@ -1890,9 +1890,9 @@ internal static class Program
                 progressWindow.Finish();
             }
 
-            // The manager's read-only tree is now intentionally INDEPENDENT
-            // of the durable scheduler. Exercise actual WPF folder expansion
-            // using a local directory that has never been catalogued.
+            // The manager shows only explicitly monitored roots (plus
+            // minimal grouping ancestors), never arbitrary filesystem
+            // directories. Add folder owns physical directory browsing.
             var fixtureDirectory = Path.Combine(Path.GetTempPath(),
                 "PCasa-ManagerForeground-" + Guid.NewGuid().ToString("N"));
             var fixtureChild = Path.Combine(fixtureDirectory, "NeverIndexed");
@@ -1933,19 +1933,21 @@ internal static class Program
                     .Single(item => string.Equals(ManagerPath(item),
                         fixtureDirectory, StringComparison.OrdinalIgnoreCase));
                 fixtureNode.IsExpanded = true;
-                var deadline = DateTime.UtcNow.AddSeconds(10);
-                while (!fixtureNode.Items.OfType<TreeViewItem>().Any(item =>
-                           string.Equals(ManagerPath(item),
-                               fixtureChild, StringComparison.OrdinalIgnoreCase)) &&
-                       DateTime.UtcNow < deadline)
-                    Flush(manager);
-                if (!fixtureNode.Items.OfType<TreeViewItem>().Any(item =>
-                        string.Equals(ManagerPath(item),
-                            fixtureChild, StringComparison.OrdinalIgnoreCase)))
+                Flush(manager);
+                if (NestedManagerItems(managedTree).Any(item =>
+                        string.Equals(ManagerPath(item), fixtureChild,
+                            StringComparison.OrdinalIgnoreCase)))
                     throw new Exception(
-                        "Manager foreground enumeration did not reveal non-indexed folder.");
+                        "Manager unexpectedly enumerated an unmonitored physical child.");
+                var displayed = NestedManagerItems(managedTree)
+                    .Where(item => item.Tag is not null).ToArray();
+                if (displayed.Length == 0 ||
+                    !displayed.Any(item => string.Equals(
+                        ManagerPath(item), fixtureDirectory,
+                        StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception("Monitored directory missing from manager.");
                 Console.WriteLine(
-                    "PASS: Folder manager expands uncatalogued physical folders independently of scheduler.");
+                    "PASS: Manager contains monitored roots only, not unrelated filesystem folders.");
             }
             finally
             {
