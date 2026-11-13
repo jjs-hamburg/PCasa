@@ -180,6 +180,41 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Uniform translated editor icons, Picasa-style floating tool panel, stable footer and bottom histogram.");
 
+            // Undo/Redo tips must name the actual next edit, not only the
+            // generic operation. The same persisted cursor drives both.
+            var sessionField = typeof(PCasa.App.MainWindow).GetField(
+                "_photoEditSession", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var updateEditor = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateEditControls", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var editOriginal = BitmapSource.Create(2, 2, 96, 96,
+                PixelFormats.Bgra32, null, new byte[16], 8);
+            var editorSession = new PhotoEditSession(777, editOriginal);
+            var previousSession = sessionField.GetValue(window);
+            try
+            {
+                editorSession.Apply(new PhotoEditStep("auto-contrast"));
+                sessionField.SetValue(window, editorSession);
+                updateEditor.Invoke(window, null);
+                var undoTip = Convert.ToString(
+                    ((Button)window.FindName("CropUndoButton")!).ToolTip);
+                if (undoTip is null || !undoTip.Contains("Kontrast (automatisch)"))
+                    throw new Exception("Undo tooltip did not describe next edit.");
+                editorSession.Undo();
+                updateEditor.Invoke(window, null);
+                var redoTip = Convert.ToString(
+                    ((Button)window.FindName("CropRedoButton")!).ToolTip);
+                if (redoTip is null || !redoTip.Contains("Kontrast (automatisch)"))
+                    throw new Exception("Redo tooltip did not describe restored edit.");
+            }
+            finally
+            {
+                sessionField.SetValue(window, previousSession);
+                updateEditor.Invoke(window, null);
+            }
+            Console.WriteLine("PASS: Undo/Redo tooltips name the next actual image edit.");
+
             var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Single appearance dialog menu missing.");
             void ConfigureAppearance(Action<PCasa.App.AppearanceSettingsWindow> configure,
