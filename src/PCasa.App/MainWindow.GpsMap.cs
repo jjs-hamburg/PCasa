@@ -60,6 +60,9 @@ public partial class MainWindow
     // While the map is fitting a new selection, ignore moveend-triggered
     // reclusters. The first projection must use the FINAL camera zoom.
     private long _gpsPendingFitQueryRevision = -1;
+    // A photo change is navigation, not a command to fit and reset the zoom.
+    // Only the first populated GPS view is fitted automatically.
+    private bool _gpsPhotoCameraEstablished;
     private double _gpsCurrentMapZoom = 2;
     // The map's own monotonically increasing camera-event sequence.
     // Old queued Chromium messages cannot overwrite a newer viewport.
@@ -514,6 +517,9 @@ public partial class MainWindow
             else if (data.Kind == "ready")
             {
                 _gpsCameraRevision = -1;
+                // A newly loaded map document has not yet fitted a photo.
+                // Provider STYLE changes do not emit this handshake.
+                _gpsPhotoCameraEstablished = false;
                 _gpsBrowserReady = true;
                 GpsMapStatus.Visibility = Visibility.Collapsed;
                 ApplyGpsMapProvider();
@@ -543,6 +549,7 @@ public partial class MainWindow
                 // scheduler projection using the actual displayed zoom.
                 _gpsPendingFitQueryRevision = -1;
                 _gpsCameraRevision = data.CameraRevision;
+                _gpsPhotoCameraEstablished = true;
                 _gpsCurrentMapZoom = finalZoom;
                 _ = PublishGpsClustersAsync();
             }
@@ -570,6 +577,10 @@ public partial class MainWindow
                      data.CameraRevision >= _gpsCameraRevision)
             {
                 _gpsCameraRevision = data.CameraRevision;
+                // After a user pans/zooms among photo markers, later photo
+                // clicks must not reset that chosen map scale.
+                if (_gpsPoints.Count > 0)
+                    _gpsPhotoCameraEstablished = true;
                 // The map is the owner of camera movements; this only
                 // persists them, without changing the displayed camera.
                 _appearance.GpsMapCenterLat = lat;
@@ -998,8 +1009,26 @@ public partial class MainWindow
             if (_gpsGoogleWebsiteActive)
                 NavigateGoogleMapsToSelection();
             else if (selectionChanged || pointsChanged || sourceFocusChanged)
-                _ = PublishGpsClustersAsync(fitSelection:
-                    selectedGps.Length > 0 || activeSourceFocus is not null);
+            {
+                // First GPS view: fit the selection once so its points are
+                // visible. After that, changing photos (gallery OR filmstrip)
+                // only centers the next point; the user zoom is preserved.
+                var firstPhotoFit = !_gpsPhotoCameraEstablished &&
+                    points.Any(p => p.Selected);
+                var photoChanged = selectionChanged || sourceFocusChanged;
+                if (!firstPhotoFit && photoChanged && focused is not null &&
+                    _gpsBrowserReady &&
+                    _gpsBrowser is { IsDisposed: false } currentMap)
+                {
+                    // Supersede any earlier fit before focusing this photo.
+                    _gpsPendingFitQueryRevision = -1;
+                    currentMap.ExecuteScriptAsync("window.pcasaFocusGpsPhoto?.(" +
+                        _gpsPointRevision + "," +
+                        focused.Lat.ToString("R", CultureInfo.InvariantCulture) + "," +
+                        focused.Lon.ToString("R", CultureInfo.InvariantCulture) + ")");
+                }
+                _ = PublishGpsClustersAsync(fitSelection: firstPhotoFit);
+            }
             // An unchanged selection keeps its existing pending projection.
             // Live catalog refreshes cannot starve the GPS renderer.
             if (_appearance.ShowGpsFilmstrip)
