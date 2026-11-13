@@ -103,6 +103,20 @@ public partial class MainWindow
         };
     }
 
+    private const string MapTilerHybridUrl =
+        "https://api.maptiler.com/maps/hybrid/style.json?key={key}";
+    private const string MapTilerSatelliteUrl =
+        "https://api.maptiler.com/maps/satellite-v4/style.json?key={key}";
+
+    private static bool IsPresetMapTilerProvider(GpsMapProvider? provider)
+        => provider is not null &&
+           (provider.Url.StartsWith(
+                "https://api.maptiler.com/maps/hybrid/style.json",
+                StringComparison.OrdinalIgnoreCase) ||
+            provider.Url.StartsWith(
+                "https://api.maptiler.com/maps/satellite-v4/style.json",
+                StringComparison.OrdinalIgnoreCase));
+
     private void UpdateGpsProviderMenu()
     {
         // One compact launcher: source selection and user-owned provider
@@ -126,17 +140,24 @@ public partial class MainWindow
         var add = new MenuItem { Header = UiLanguage.T("Eigener Kartenanbieter") + " …" };
         add.Click += (_, _) => OpenGpsProviderEditor(null);
         menu.Items.Add(add);
-        // Optional MapTiler Satellite Hybrid uses the user's OWN encrypted
-        // key. PCasa neither embeds a shared key nor incurs a paid account.
-        var mapTiler = new MenuItem { Header = "MapTiler · Satellit / Hybrid (eigener Schlüssel) …" };
-        mapTiler.Click += (_, _) => OpenGpsProviderEditor(new GpsMapProvider
+        // An existing MapTiler configuration already appears as a selectable
+        // source above, and can be edited via "Kartenanbieter konfigurieren".
+        // Never show another "create MapTiler" action that makes duplicates.
+        if (!_appearance.GpsProviders.Any(IsPresetMapTilerProvider))
         {
-            Name = "MapTiler · Satellite Hybrid",
-            Format = "style",
-            Url = "https://api.maptiler.com/maps/hybrid/style.json?key={key}",
-            Attribution = "© MapTiler · © OpenStreetMap contributors"
-        });
-        menu.Items.Add(mapTiler);
+            var mapTiler = new MenuItem
+            {
+                Header = "MapTiler einrichten (eigener API-Key) …"
+            };
+            mapTiler.Click += (_, _) => OpenGpsProviderEditor(new GpsMapProvider
+            {
+                Name = "MapTiler · Hybrid",
+                Format = "style",
+                Url = MapTilerHybridUrl,
+                Attribution = "© MapTiler · © OpenStreetMap contributors"
+            });
+            menu.Items.Add(mapTiler);
+        }
         if (_appearance.GpsProviders.Any(p => p.Id == active.Id))
         {
             var edit = new MenuItem { Header = UiLanguage.T("Kartenanbieter konfigurieren") + " …" };
@@ -1134,26 +1155,66 @@ public partial class MainWindow
 
     private void OpenGpsProviderEditor(GpsMapProvider? provider)
     {
+        var mapTiler = IsPresetMapTilerProvider(provider);
         GpsProviderNameBox.Text = provider?.Name ?? "";
         GpsProviderUrlBox.Text = provider?.Url ?? "";
         GpsProviderAttributionBox.Text = provider?.Attribution ?? "";
-        GpsProviderFormatBox.SelectedIndex = provider?.Format == "xyz" ? 1 : 0;
+        GpsProviderXyzRadio.IsChecked = provider?.Format == "xyz";
+        GpsProviderStyleRadio.IsChecked = provider?.Format != "xyz";
+        GpsProviderFormatPanel.Visibility = mapTiler
+            ? Visibility.Collapsed : Visibility.Visible;
+        GpsMapTilerStylePanel.Visibility = mapTiler
+            ? Visibility.Visible : Visibility.Collapsed;
+        GpsMapTilerSatelliteRadio.IsChecked = mapTiler &&
+            provider!.Url.Contains("/maps/satellite-v4/", StringComparison.OrdinalIgnoreCase);
+        GpsMapTilerHybridRadio.IsChecked = !mapTiler ||
+            GpsMapTilerSatelliteRadio.IsChecked != true;
+        GpsProviderUrlLabel.Visibility = mapTiler
+            ? Visibility.Collapsed : Visibility.Visible;
+        GpsProviderUrlBox.Visibility = mapTiler
+            ? Visibility.Collapsed : Visibility.Visible;
+        GpsProviderGetKeyButton.Visibility = mapTiler
+            ? Visibility.Visible : Visibility.Collapsed;
         GpsProviderKeyBox.Clear(); // Never reveal the existing DPAPI secret.
         GpsProviderError.Text = "";
         GpsProviderEditor.Tag = provider?.Id;
         GpsProviderEditor.Visibility = Visibility.Visible;
     }
 
+    private void GpsProviderGetKey_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(
+                "https://cloud.maptiler.com/account/keys/")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("GPS.MapTilerKey", ex);
+            GpsProviderError.Text = "MapTiler konnte nicht im Browser geöffnet werden.";
+        }
+    }
+
     private void GpsProviderSave_Click(object sender, RoutedEventArgs e)
     {
         var previousId = GpsProviderEditor.Tag as string;
         var old = _appearance.GpsProviders.FirstOrDefault(p => p.Id == previousId);
+        var mapTiler = GpsMapTilerStylePanel.Visibility == Visibility.Visible;
+        var satellite = GpsMapTilerSatelliteRadio.IsChecked == true;
         var provider = new GpsMapProvider
         {
             Id = old?.Id ?? Guid.NewGuid().ToString("N"),
-            Name = GpsProviderNameBox.Text.Trim(),
-            Format = GpsProviderFormatBox.SelectedIndex == 1 ? "xyz" : "style",
-            Url = GpsProviderUrlBox.Text.Trim(),
+            Name = mapTiler
+                ? satellite ? "MapTiler · Satellit" : "MapTiler · Hybrid"
+                : GpsProviderNameBox.Text.Trim(),
+            Format = mapTiler || GpsProviderStyleRadio.IsChecked == true
+                ? "style" : "xyz",
+            Url = mapTiler
+                ? satellite ? MapTilerSatelliteUrl : MapTilerHybridUrl
+                : GpsProviderUrlBox.Text.Trim(),
             Attribution = GpsProviderAttributionBox.Text.Trim(),
             ProtectedKey = GpsProviderKeyBox.Password.Length > 0
                 ? GpsMapProvider.EncryptKey(GpsProviderKeyBox.Password)
