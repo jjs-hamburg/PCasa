@@ -118,7 +118,7 @@ public partial class MainWindow
 
     private async Task RunDeferredCacheMaintenanceAsync()
     {
-        if (_cacheMaintenanceRunning || _folderRemovalPending ||
+        if (_updateDownloadActive || _cacheMaintenanceRunning || _folderRemovalPending ||
             _backgroundMonitorClosing || _folderManagerOpen ||
             _isScanning || _backgroundWorkerRunning || _browseCacheBuilding ||
             _backgroundPending.Count > 0 || _catalogRemovalService is null)
@@ -219,7 +219,8 @@ public partial class MainWindow
 
     private async void RefreshBackgroundMonitor()
     {
-        if (!_backgroundScanInitialized || _backgroundMonitorClosing ||
+        if (_updateDownloadActive || !_backgroundScanInitialized ||
+            _backgroundMonitorClosing ||
             _backgroundFolderMonitor is null || _backgroundScanSettings is null)
             return;
         if (_backgroundMonitorRefreshRunning)
@@ -1103,7 +1104,7 @@ public partial class MainWindow
                 request.Kind == BackgroundFolderChangeKind.RescanRoot
                     ? SchedulerPriority.Idle : SchedulerPriority.Background,
                 long.MaxValue).Priority <= SchedulerPriority.UserAction);
-        if (_backgroundWorkerRunning ||
+        if (_updateDownloadActive || _backgroundWorkerRunning ||
             _folderRemovalPending ||
             _backgroundScanSettings?.Enabled != true ||
             !_browseInitialized ||
@@ -1768,7 +1769,8 @@ public partial class MainWindow
                 }
             }
 
-            if (!_folderRemovalPending && _backgroundPending.Count > 0 &&
+            if (!_updateDownloadActive && !_folderRemovalPending &&
+                _backgroundPending.Count > 0 &&
                 _backgroundScanSettings?.Enabled == true)
             {
                 _backgroundDebounceTimer?.Start();
