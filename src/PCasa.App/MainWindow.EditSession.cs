@@ -15,7 +15,8 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private sealed record EditWriteRecipe(
-        long ImageId, long FolderId, string Path, PhotoEditStep[] Steps);
+        long ImageId, long FolderId, string Path, PhotoEditStep[] Steps,
+        string? CopyPath = null);
 
     private PhotoEditSession? _photoEditSession;
     private bool _straightenActive;
@@ -251,6 +252,7 @@ public partial class MainWindow
         CropApplyButton.IsEnabled = !_cropSavePending && editingTool;
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (editingTool || _photoEditSession?.HasChanges == true);
+        CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
         CropCancelButton.IsEnabled = !_cropSavePending;
         ViewerCropFooter.Visibility = editingTool ||
             _photoEditSession?.HasChanges == true
@@ -310,7 +312,7 @@ public partial class MainWindow
         UpdateEditControls();
     }
 
-    private void SaveEdits()
+    private async void SaveEdits(bool asCopy = false)
     {
         if (_cropSavePending || _viewerImageInfo is not { } info) return;
         if (_cropActive || _straightenActive)
@@ -333,22 +335,36 @@ public partial class MainWindow
         _cropSavePending = true;
         UpdateEditControls();
         BeginVisibleManualOperation(key, UiLanguage.T("Bildbearbeitung speichern"), 1);
-        Task task;
         try
         {
-            task = _scheduler.EnqueueDurableRecipeAsync(key, "image-edit-v1",
+            if (asCopy)
+            {
+                // A NAS File.Exists must never block the WPF dispatcher.
+                // Persist this exact destination in the durable recipe so a
+                // resumed operation cannot silently make -Kopie-2 instead.
+                var copyPath = await Task.Run(() =>
+                    JpegCropWriter.GetAvailableCopyPath(request.Path));
+                request = request with { CopyPath = copyPath };
+            }
+            var task = _scheduler.EnqueueDurableRecipeAsync(key, "image-edit-v1",
                 JsonSerializer.Serialize(request),
                 SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
             _taskManagerWindow?.RequestRefresh();
+            _ = ObserveEditCommitAsync(task, key, request);
         }
-        catch
+        catch (Exception ex)
         {
+            // Includes an unreachable source folder while choosing the copy
+            // name. The unsaved edit session stays available for a retry.
             _cropSavePending = false;
             EndVisibleManualOperation(key);
             UpdateEditControls();
-            throw;
+            PCasaDiagnostics.Write("Image.Edit.Enqueue", ex);
+            if (!Dispatcher.HasShutdownStarted)
+                PcasaDialog.Show(this, ex.Message,
+                    UiLanguage.T("Bildbearbeitung speichern"),
+                    MessageBoxButton.OK, MessageBoxImage.Error);
         }
-        _ = ObserveEditCommitAsync(task, key, request);
     }
 
     private SchedulerTaskPackage BuildEditPackage(string key, string payload)
@@ -360,8 +376,14 @@ public partial class MainWindow
         {
             _scheduler.ReportProgress(key, UiLanguage.T("Bildbearbeitung speichern"),
                 0, 1, request.Path);
-            JpegCropWriter.Save(request.Path, request.Steps, token);
-            new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
+            if (request.CopyPath is { Length: > 0 } destination)
+                JpegCropWriter.SaveAsCopy(request.Path, destination,
+                    request.Steps, token);
+            else
+            {
+                JpegCropWriter.Save(request.Path, request.Steps, token);
+                new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
+            }
             _scheduler.ReportProgress(key, UiLanguage.T("Bildbearbeitung speichern"),
                 1, 1, request.Path);
             return Task.CompletedTask;
@@ -391,24 +413,43 @@ public partial class MainWindow
             _cropSavePending = false;
             if (success)
             {
-                if (_photoEditSession?.ImageId == request.ImageId)
-                    _browsePageCache?.ShowEditedImage(
-                        request.ImageId, _photoEditSession.Render());
-                _photoEditSession = null;
-                if (_cropActive) EndCrop();
-                if (_straightenActive) LeaveStraighten();
-                _viewerOriginalCache.Remove(request.ImageId);
-                _ = RefreshRestoreBadgesAsync();
-                // Source file, catalog and the packed thumbnail become stale
-                // together. A single scanner recipe owns the full rescan.
-                QueueBackgroundChange(new BackgroundFolderChange(
-                    request.FolderId, request.Path,
-                    BackgroundFolderChangeKind.ScanFile,
-                    Recursive: false, ForceExifRefresh: true));
-                if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
-                    ShowViewerImage(keepCurrentAsPlaceholder: true);
-                _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
+                if (request.CopyPath is { Length: > 0 } copyPath)
+                {
+                    // The viewer still represents the ORIGINAL photo.
+                    // Remove its temporary edit preview; never mark the
+                    // original as edited or invalidate its thumbnail.
+                    if (_photoEditSession?.ImageId == request.ImageId)
+                        CancelEditSession();
+                    // New files enter the existing catalog scanner exactly
+                    // once, under the original monitored folder.
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        request.FolderId, copyPath,
+                        BackgroundFolderChangeKind.ScanFile,
+                        Recursive: false, ForceExifRefresh: true));
+                    StatusText.Text = UiLanguage.T("Kopie gespeichert: ") +
+                        Path.GetFileName(copyPath);
+                }
+                else
+                {
+                    if (_photoEditSession?.ImageId == request.ImageId)
+                        _browsePageCache?.ShowEditedImage(
+                            request.ImageId, _photoEditSession.Render());
+                    _photoEditSession = null;
+                    if (_cropActive) EndCrop();
+                    if (_straightenActive) LeaveStraighten();
+                    _viewerOriginalCache.Remove(request.ImageId);
+                    _ = RefreshRestoreBadgesAsync();
+                    // Source file, catalog and the packed thumbnail become
+                    // stale together. One scanner recipe owns the rescan.
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        request.FolderId, request.Path,
+                        BackgroundFolderChangeKind.ScanFile,
+                        Recursive: false, ForceExifRefresh: true));
+                    if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
+                        ShowViewerImage(keepCurrentAsPlaceholder: true);
+                    _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
+                        warmViewport: false);
+                }
             }
             UpdateEditControls();
             }
