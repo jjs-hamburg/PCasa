@@ -27,7 +27,17 @@ public partial class MainWindow
             Attribution = "OpenFreeMap © OpenMapTiles · OpenStreetMap contributors" },
         new() { Id = "openfreemap-bright", Name = "OpenFreeMap · Bright",
             Format = "style", Url = "https://tiles.openfreemap.org/styles/bright",
-            Attribution = "OpenFreeMap © OpenMapTiles · OpenStreetMap contributors" }
+            Attribution = "OpenFreeMap © OpenMapTiles · OpenStreetMap contributors" },
+        // Freely usable 2016 mosaic (CC BY 4.0). No bundled satellite tiles
+        // or proprietary key; MapLibre fetches only visible XYZ tiles.
+        new() { Id = "eox-satellite", Name = "Satellit · EOxCloudless 2016",
+            Format = "xyz",
+            Url = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg",
+            Attribution = "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017) · CC BY 4.0" },
+        new() { Id = "eox-hybrid", Name = "Hybrid · EOxCloudless 2016",
+            Format = "xyz",
+            Url = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/{z}/{y}/{x}.jpg",
+            Attribution = "EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017) · CC BY 4.0 · Overlay © OpenStreetMap contributors, EOX" }
     ];
 
     private ChromiumWebBrowser? _gpsBrowser;
@@ -116,6 +126,17 @@ public partial class MainWindow
         var add = new MenuItem { Header = UiLanguage.T("Eigener Kartenanbieter") + " …" };
         add.Click += (_, _) => OpenGpsProviderEditor(null);
         menu.Items.Add(add);
+        // Optional MapTiler Satellite Hybrid uses the user's OWN encrypted
+        // key. PCasa neither embeds a shared key nor incurs a paid account.
+        var mapTiler = new MenuItem { Header = "MapTiler · Satellit / Hybrid (eigener Schlüssel) …" };
+        mapTiler.Click += (_, _) => OpenGpsProviderEditor(new GpsMapProvider
+        {
+            Name = "MapTiler · Satellite Hybrid",
+            Format = "style",
+            Url = "https://api.maptiler.com/maps/hybrid/style.json?key={key}",
+            Attribution = "© MapTiler · © OpenStreetMap contributors"
+        });
+        menu.Items.Add(mapTiler);
         if (_appearance.GpsProviders.Any(p => p.Id == active.Id))
         {
             var edit = new MenuItem { Header = UiLanguage.T("Kartenanbieter konfigurieren") + " …" };
@@ -612,7 +633,7 @@ public partial class MainWindow
             var url = p.ResolveUrl();
             var payload = JsonSerializer.Serialize(new
             {
-                format = p.Format, url, attribution = p.Attribution
+                id = p.Id, format = p.Format, url, attribution = p.Attribution
             });
             _gpsBrowser.ExecuteScriptAsync("window.pcasaApplyProvider(" + payload + ")");
             _gpsAppliedProviderId = p.Id;
