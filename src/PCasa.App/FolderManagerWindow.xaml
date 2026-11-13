@@ -79,9 +79,9 @@
                 <TextBlock x:Name="SelectedModeText" Margin="0,18,0,0"
                            Opacity="0.8" TextWrapping="Wrap" />
                 <TextBlock Margin="0,13,0,0" Opacity="0.7" TextWrapping="Wrap"
-                           Text="Nur überwachte Wurzeln sind sichtbar. Weitere Verzeichnisse ausschließlich über 'Ordner hinzufügen' wählen." />
+                           Text="{loc:Tr Key='Der linke Baum zeigt überwachte Wurzeln und bereits katalogisierte Bildordner. Zusätzliche Verzeichnisse über Ordner hinzufügen wählen.'}" />
                 <TextBlock Margin="0,12,0,0" Opacity="0.7" TextWrapping="Wrap"
-                           Text="Bereits überwachte Unterordner benötigen keine zusätzliche Wurzel. Ausgeschlossene Unterordner lassen sich über 'Ordner hinzufügen' wieder einschließen." />
+                           Text="{loc:Tr Key='Ein Ordner mit aktivierter übergeordneter Wurzel wird bereits überwacht. Zuerst die Wurzel abwählen, dann gewünschte Unterordner links markieren.'}" />
                 <CheckBox x:Name="ServerSyncCheckBox"
                           Margin="0,24,0,0" Visibility="Collapsed"
                           Content="{loc:Tr Key='Server-Synchronisierung dieser Wurzel'}"
@@ -99,7 +99,8 @@
                         Padding="14,7" Click="RemoveFolder_Click" />
                 <CheckBox x:Name="BackgroundScanCheckBox"
                           Margin="24,0,0,0" VerticalAlignment="Center"
-                          Content="{loc:Tr Key='Automatisch im Hintergrund einlesen'}"
+                          Content="{loc:Tr Key='Ordneränderungen automatisch erkennen'}"
+                          ToolTip="{loc:Tr Key='Überwachte Ordner werden im Baum ausgewählt. Diese Option schaltet nur die automatische Erkennung neuer und geänderter Dateien ein oder aus. Manuelle Scans bleiben möglich.'}"
                           Click="BackgroundScan_Click" />
             </StackPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
