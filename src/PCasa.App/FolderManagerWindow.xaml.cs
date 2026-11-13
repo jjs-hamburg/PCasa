@@ -117,10 +117,12 @@ public partial class FolderManagerWindow : Window
                 group => group.Sum(folder => folder.ImageCount),
                 StringComparer.OrdinalIgnoreCase);
 
+        // Sorting by path LENGTH previously put short drive roots (S:\)
+        // before C:\ or G:\. Build the tree in natural path order so drive
+        // letters and siblings are alphabetical, independent of depth.
         var visiblePaths = rootsByPath.Keys.Concat(catalogByPath.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path.Length)
-            .ThenBy(path => path, StringComparer.CurrentCultureIgnoreCase);
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
         foreach (var visiblePath in visiblePaths)
         {
             TreeViewItem? parent = null;
