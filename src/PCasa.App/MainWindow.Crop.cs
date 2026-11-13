@@ -275,6 +275,23 @@ public partial class MainWindow
             UpdateEditControls();
         };
         CropApplyButton.Click += (_, _) => ApplyEditTool();
+        ViewerToolCancelButton.Click += (_, _) =>
+        {
+            // Cancel only the live crop/straighten mask. Previously applied
+            // unsaved operations remain available for Save/Undo.
+            if (_cropActive)
+            {
+                EndCrop();
+                if (_photoEditSession is not null)
+                {
+                    SetViewerBitmap(_photoEditSession.Render());
+                    ApplyViewerImageLayout();
+                }
+            }
+            else if (_straightenActive)
+                LeaveStraighten();
+            UpdateEditControls();
+        };
         CropSaveButton.Click += (_, _) => SaveEdits();
         CropSaveCopyButton.Click += (_, _) => SaveEdits(asCopy: true);
         CropCancelButton.Click += (_, _) => CancelEditSession();
@@ -363,7 +380,8 @@ public partial class MainWindow
         ViewerCropOverlay.ReleaseMouseCapture();
         ViewerCropOverlay.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
-        // Footer is a fixed row; leaving Crop only disables its actions.
+        ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
+        // Sidebar's footer stays fixed when leaving crop.
         ViewerCropFooter.Visibility = Visibility.Visible;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         _cropHistory.Clear();
