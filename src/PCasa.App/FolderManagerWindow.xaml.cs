@@ -79,6 +79,10 @@ public partial class FolderManagerWindow : Window
     }
 
 
+    // The manager is a view of the MONITORED configuration, not a second
+    // file explorer. Only explicit roots and the minimum ancestor paths
+    // needed to group them under a single drive/share are projected.
+    // Physical directory enumeration belongs exclusively to Add folder.
     private void Reload(string? expandSystemFolder = null)
     {
         _selected = null;
@@ -86,84 +90,57 @@ public partial class FolderManagerWindow : Window
         _folderNodes.Clear();
         _enumeratedPaths.Clear();
 
-        // System locations remain accessible as shortcuts; mounted drives
-        // have ONE physical hierarchy, regardless of how many independent
-        // monitored roots they contain. No recursive disk scan at startup.
-        foreach (var (name, path) in _systemFolders)
+        foreach (var root in _monitoredRoots.OrderBy(r => r.LocalPath.Length)
+                     .ThenBy(r => r.LocalPath, StringComparer.CurrentCultureIgnoreCase))
         {
-            var root = FindCoveringRoot(path);
-            var item = CreateItem(new ManagedNode(root, path,
-                IsRoot: root is not null && PathEquals(root.LocalPath, path),
-                IsSystemFolder: true, Label: name));
-            FolderManagerTree.Items.Add(item);
-            if (PathEquals(expandSystemFolder, path))
-                item.IsExpanded = true;
-        }
-
-        var volumes = DriveInfo.GetDrives().Select(drive => drive.Name)
-            .Concat(_monitoredRoots.Select(root =>
-                Path.GetPathRoot(root.LocalPath) ?? root.LocalPath))
-            .Select(FolderExclusionRules.Normalize)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase);
-
-        foreach (var volume in volumes)
-        {
-            var root = FindCoveringRoot(volume);
-            var item = CreateItem(new ManagedNode(root, volume,
-                IsRoot: root is not null && PathEquals(root.LocalPath, volume),
-                Label: Path.TrimEndingDirectorySeparator(volume)));
-            _folderNodes[volume] = item;
-            FolderManagerTree.Items.Add(item);
-        }
-
-        foreach (var monitored in _monitoredRoots)
-        {
-            var target = FolderExclusionRules.Normalize(monitored.LocalPath);
-            var volume = FolderExclusionRules.Normalize(
-                Path.GetPathRoot(target) ?? target);
-            if (!_folderNodes.TryGetValue(volume, out var parent)) continue;
-            var relative = Path.GetRelativePath(volume, target);
-            if (relative == ".") continue;
-            var current = volume;
-            foreach (var component in relative.Split(
-                         Path.DirectorySeparatorChar,
-                         StringSplitOptions.RemoveEmptyEntries))
+            TreeViewItem? parent = null;
+            foreach (var path in ConfiguredPathHierarchy(root.LocalPath))
             {
-                current = FolderExclusionRules.Normalize(
-                    Path.Combine(current, component));
-                if (_folderNodes.TryGetValue(current, out var existing))
+                if (!_folderNodes.TryGetValue(path, out var item))
                 {
-                    parent = existing;
-                    continue;
+                    var exact = _monitoredRoots.FirstOrDefault(r =>
+                        PathEquals(r.LocalPath, path));
+                    item = CreateItem(new ManagedNode(exact, path,
+                        IsRoot: exact is not null));
+                    _folderNodes[path] = item;
+                    if (parent is null) FolderManagerTree.Items.Add(item);
+                    else parent.Items.Add(item);
                 }
-                var covering = FindCoveringRoot(current);
-                var item = CreateItem(new ManagedNode(covering, current,
-                    IsRoot: covering is not null &&
-                            PathEquals(covering.LocalPath, current)));
-                parent.Items.Add(item);
-                _folderNodes[current] = item;
                 parent = item;
             }
         }
 
-        // Expand paths leading to explicitly selected roots, without waiting
-        // for directory enumeration. Folder_Expanded merges physical siblings
-        // into these existing nodes asynchronously.
-        foreach (var root in _monitoredRoots)
-        {
-            var full = FolderExclusionRules.Normalize(root.LocalPath);
-            foreach (var pair in _folderNodes)
-                if (!PathEquals(pair.Key, full) &&
-                    FolderExclusionRules.IsAtOrBelow(full, pair.Key))
-                    pair.Value.IsExpanded = true;
-        }
+        foreach (var (path, item) in _folderNodes)
+            item.IsExpanded = item.Items.Count > 0;
+
         if (expandSystemFolder is not null &&
             _folderNodes.TryGetValue(
                 FolderExclusionRules.Normalize(expandSystemFolder), out var selected))
             selected.IsSelected = true;
+
         RefreshMonitoredRootsList();
         UpdateSelectedDetails();
+    }
+
+    private static IEnumerable<string> ConfiguredPathHierarchy(string path)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        var volume = Path.GetPathRoot(normalized);
+        if (string.IsNullOrEmpty(volume))
+        {
+            yield return normalized;
+            yield break;
+        }
+        var current = FolderExclusionRules.Normalize(volume);
+        yield return current;
+        var relative = Path.GetRelativePath(volume, normalized);
+        if (relative == ".") yield break;
+        foreach (var part in relative.Split(Path.DirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = FolderExclusionRules.Normalize(Path.Combine(current, part));
+            yield return current;
+        }
     }
 
     private void RefreshMonitoredRootsList()
@@ -266,39 +243,21 @@ public partial class FolderManagerWindow : Window
         checkbox.Tag = item;
         checkbox.Checked += InclusionCheckbox_Changed;
         checkbox.Unchecked += InclusionCheckbox_Changed;
-        if (node.Root is not null && IsExcluded(node))
-        {
-            checkbox.Foreground = new SolidColorBrush(Color.FromRgb(171, 50, 50));
-        }
-
-        // Only expand actual directories as needed; never recursively enumerate
-        // the whole source tree while the manager window is opening.
-        item.Items.Add(new TreeViewItem { Header = UiLanguage.T("Unterordner laden …"), IsEnabled = false });
-        item.Expanded += Folder_Expanded;
+        // Excluded and unrelated physical folders do not appear here.
+        // No red folder names or surprise filesystem children.
         return item;
     }
 
     private bool IsIncluded(ManagedNode node)
         => node.Root is not null && !IsExcluded(node);
 
-    // An unchecked physical folder can be added directly as a new root.
+    // Only explicit monitored roots are directly toggleable. Drive and
+    // intermediate path nodes are structural and show partial state.
     private bool CanToggle(ManagedNode node)
-        => !_busy && !HasExcludedAncestor(node);
+        => !_busy && node.IsRoot;
 
     private bool? DisplayIncludedState(ManagedNode node)
-    {
-        if (IsIncluded(node))
-        {
-            if (_exclusions.TryGetValue(node.Root!.Id, out var exclusions) &&
-                exclusions.Any(path => FolderExclusionRules.IsAtOrBelow(
-                    path, node.LocalPath)))
-                return null; // Partially included subtree.
-            return true;
-        }
-        return _monitoredRoots.Any(root =>
-            FolderExclusionRules.IsAtOrBelow(root.LocalPath, node.LocalPath))
-            ? null : false; // Only some descendants have own roots.
-    }
+        => node.IsRoot ? true : null; // Ancestors group checked roots.
 
     private bool IsExcluded(ManagedNode node)
         => node.Root is not null &&
@@ -388,7 +347,7 @@ public partial class FolderManagerWindow : Window
     {
         SelectedFolderText.Text = _selected?.LocalPath ?? UiLanguage.T("Bitte links einen Ordner auswählen.");
         SelectedModeText.Text = _selected is null ? ""
-            : _selected.Root is null ? UiLanguage.T("Noch nicht überwacht. Ordner im Baum aktivieren.")
+            : _selected.Root is null ? UiLanguage.T("Laufwerk oder Pfadgruppe mit überwachten Unterordnern.")
             : _selected.IsRoot ? UiLanguage.T("Überwachte Wurzel. Kann über das Häkchen des Systemordners oder über „Wurzel entfernen“ abgewählt werden.")
             : IsExcluded(_selected) ? UiLanguage.T("Von der PCasa-Bibliothek ausgeschlossen.")
             : UiLanguage.T("Dieser Ordner wird von PCasa eingelesen.");
@@ -430,10 +389,7 @@ public partial class FolderManagerWindow : Window
             var excluded = IsExcluded(node);
             checkBox.IsChecked = DisplayIncludedState(node);
             checkBox.IsEnabled = CanToggle(node);
-            if (excluded)
-                checkBox.Foreground = new SolidColorBrush(Color.FromRgb(171, 50, 50));
-            else
-                checkBox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
+            checkBox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
         }
 
         foreach (var child in item.Items.OfType<TreeViewItem>())
@@ -448,45 +404,13 @@ public partial class FolderManagerWindow : Window
 
         item.IsSelected = true;
         var include = box.IsChecked == true;
-        if (node.Root is null)
-        {
-            if (include)
-                StageNewRoot(node.LocalPath);
-            Reload(expandSystemFolder: node.LocalPath);
-            return;
-        }
-
+        if (node.Root is null || !node.IsRoot) return;
         var root = node.Root;
-        if (node.IsRoot)
-        {
-            if (!include)
-            {
-                RemoveStagedRoot(root.Id);
-            }
-            else
-                UpdateLoadedCheckboxes();
-            return;
-        }
+        if (!include) RemoveStagedRoot(root.Id);
+        else UpdateLoadedCheckboxes();
+        return;
 
-        var excluded = _exclusions.TryGetValue(root.Id, out var existing)
-            ? existing.ToHashSet(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var normalized = FolderExclusionRules.Normalize(node.LocalPath);
-        if (include)
-        {
-            // A parent must be included before one of its children.
-            excluded.RemoveWhere(path => string.Equals(
-                FolderExclusionRules.Normalize(path), normalized,
-                StringComparison.OrdinalIgnoreCase));
-        }
-        else
-        {
-            excluded.RemoveWhere(path => FolderExclusionRules.IsAtOrBelow(path, normalized));
-            excluded.Add(normalized);
-        }
-        _exclusions[root.Id] = excluded.OrderBy(path => path,
-            StringComparer.OrdinalIgnoreCase).ToArray();
-        UpdateLoadedCheckboxes();
+
     }
 
     private void StageNewRoot(string path)
@@ -494,6 +418,24 @@ public partial class FolderManagerWindow : Window
         var normalized = FolderExclusionRules.Normalize(path);
         if (_monitoredRoots.Any(root => PathEquals(root.LocalPath, normalized)))
             return;
+        var covering = FindCoveringRoot(normalized);
+        if (covering is not null)
+        {
+            var excluded = _exclusions.GetValueOrDefault(covering.Id) ??
+                Array.Empty<string>();
+            var blocked = excluded.FirstOrDefault(path =>
+                FolderExclusionRules.IsAtOrBelow(normalized, path) &&
+                !PathEquals(path, normalized));
+            if (blocked is not null)
+                throw new InvalidOperationException(
+                    "Der übergeordnete Ordner ist ausgeschlossen: " + blocked);
+            // A child already belongs to its monitored root. If previously
+            // excluded explicitly, re-include just that subtree; never add
+            // an overlapping scanner root.
+            _exclusions[covering.Id] = excluded.Where(path =>
+                !PathEquals(path, normalized)).ToArray();
+            return;
+        }
         var prior = _uncheckedRoots.Values.FirstOrDefault(item =>
             PathEquals(item.Root.LocalPath, normalized));
         if (prior.Root is not null)
