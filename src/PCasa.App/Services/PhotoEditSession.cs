@@ -12,7 +12,8 @@ namespace PCasa.App.Services;
 /// </summary>
 public sealed record PhotoEditStep(
     string Kind, double X = 0, double Y = 0,
-    double Width = 1, double Height = 1, double Degrees = 0);
+    double Width = 1, double Height = 1, double Degrees = 0,
+    double Amount = 0);
 
 public sealed class PhotoEditSession
 {
@@ -107,6 +108,15 @@ public sealed class PhotoEditSession
                     bitmap = RotateAndAutoCrop(bitmap, fine);
                 }
             }
+            else if (step.Kind is "auto-fix" or "auto-contrast" or
+                     "auto-color" or "brightness")
+            {
+                if (!double.IsFinite(step.Amount) ||
+                    Math.Abs(step.Amount) > 3)
+                    throw new InvalidDataException(
+                        "Ungültige Helligkeitskorrektur.");
+                bitmap = RenderTone(bitmap, step.Kind, step.Amount);
+            }
             else throw new InvalidDataException(
                 "Unbekannte Bildbearbeitung: " + step.Kind);
             if (bitmap.PixelWidth < 16 || bitmap.PixelHeight < 16)
@@ -114,6 +124,133 @@ public sealed class PhotoEditSession
             bitmap.Freeze();
         }
         return bitmap;
+    }
+
+    // All tonal tools use the SAME pixel path on the UI preview and on
+    // the MTA durable JPEG writer. Every tool is exactly ONE undoable step;
+    // no temporary JPEG, sidecar or independent write path is introduced.
+    private static BitmapSource RenderTone(BitmapSource source,
+        string kind, double amount)
+    {
+        var argb = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+        int width = argb.PixelWidth, height = argb.PixelHeight;
+        var stride = checked(width * 4);
+        var pixels = new byte[checked(stride * height)];
+        argb.CopyPixels(pixels, stride, 0);
+
+        if (kind is "auto-color" or "auto-fix")
+            AdjustWhiteBalance(pixels);
+        if (kind is "auto-contrast" or "auto-fix")
+            StretchLuminance(pixels);
+        if (kind == "brightness" && Math.Abs(amount) > .0001)
+        {
+            // Signed exposure-like correction; 0 is EXACT identity.
+            // Negative values darken, positive values brighten.
+            var multiplier = Math.Pow(2, amount);
+            var lut = new byte[256];
+            for (var i = 0; i < 256; i++)
+                lut[i] = (byte)Math.Clamp(
+                    (int)Math.Round(i * multiplier), 0, 255);
+            for (var i = 0; i < pixels.Length; i += 4)
+            {
+                if (pixels[i + 3] == 0) continue;
+                pixels[i] = lut[pixels[i]];
+                pixels[i + 1] = lut[pixels[i + 1]];
+                pixels[i + 2] = lut[pixels[i + 2]];
+            }
+        }
+
+        var result = BitmapSource.Create(width, height,
+            source.DpiX, source.DpiY, PixelFormats.Bgra32,
+            null, pixels, stride);
+        result.Freeze();
+        return result;
+    }
+
+    private static void StretchLuminance(byte[] pixels)
+    {
+        // Ignore transparent pixels. One shared luminance histogram gives a
+        // single black/white mapping and avoids arbitrary color shifts.
+        var histogram = new long[256];
+        long count = 0;
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] == 0) continue;
+            var luminance = (54 * pixels[i + 2] +
+                183 * pixels[i + 1] + 19 * pixels[i] + 128) >> 8;
+            histogram[luminance]++;
+            count++;
+        }
+        if (count == 0) return;
+        long lowTarget = Math.Max(1, count / 100);
+        long highTarget = Math.Max(1, count / 100);
+        long total = 0;
+        int low = 0, high = 255;
+        for (; low < 255; low++)
+        {
+            total += histogram[low];
+            if (total >= lowTarget) break;
+        }
+        total = 0;
+        for (; high > 0; high--)
+        {
+            total += histogram[high];
+            if (total >= highTarget) break;
+        }
+        if (high - low < 12) return; // Flat solid image: no amplification.
+        var lut = new byte[256];
+        var scale = 255.0 / (high - low);
+        for (var value = 0; value < 256; value++)
+            lut[value] = (byte)Math.Clamp(
+                (int)Math.Round((value - low) * scale), 0, 255);
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] == 0) continue;
+            pixels[i] = lut[pixels[i]];
+            pixels[i + 1] = lut[pixels[i + 1]];
+            pixels[i + 2] = lut[pixels[i + 2]];
+        }
+    }
+
+    private static void AdjustWhiteBalance(byte[] pixels)
+    {
+        // Gray-world estimate calculated on usable mid-tones; highlights
+        // and near-black regions are excluded. Limit gains to avoid
+        // extreme shifts in strongly single-colored scenes.
+        double red = 0, green = 0, blue = 0;
+        long count = 0;
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] == 0) continue;
+            var r = pixels[i + 2];
+            var g = pixels[i + 1];
+            var b = pixels[i];
+            var lum = (54 * r + 183 * g + 19 * b) >> 8;
+            if (lum < 32 || lum > 225) continue;
+            red += r;
+            green += g;
+            blue += b;
+            count++;
+        }
+        if (count == 0) return;
+        var neutral = (red + green + blue) / 3;
+        var gains = new[] {
+            Math.Clamp(neutral / Math.Max(1, blue), .8, 1.25),
+            Math.Clamp(neutral / Math.Max(1, green), .8, 1.25),
+            Math.Clamp(neutral / Math.Max(1, red), .8, 1.25)
+        };
+        var table = new byte[3, 256];
+        for (var channel = 0; channel < 3; channel++)
+        for (var value = 0; value < 256; value++)
+            table[channel, value] = (byte)Math.Clamp(
+                (int)Math.Round(value * gains[channel]), 0, 255);
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if (pixels[i + 3] == 0) continue;
+            pixels[i] = table[0, pixels[i]];
+            pixels[i + 1] = table[1, pixels[i + 1]];
+            pixels[i + 2] = table[2, pixels[i + 2]];
+        }
     }
 
     /// <summary>
