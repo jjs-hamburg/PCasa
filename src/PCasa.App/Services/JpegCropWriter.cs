@@ -25,6 +25,35 @@ public static class JpegCropWriter
     /// </summary>
     public static void Save(string originalPath,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
+        => SaveCore(originalPath, null, operations, token);
+
+    // The destination name is picked outside the UI dispatcher and persisted
+    // in the same durable edit recipe as the source image and the steps.
+    // No overwrite: even a retried durable job must not replace an existing
+    // copy or accidentally modify the source.
+    public static string GetAvailableCopyPath(string originalPath)
+    {
+        var source = Path.GetFullPath(originalPath);
+        var directory = Path.GetDirectoryName(source)!;
+        var baseName = Path.GetFileNameWithoutExtension(source);
+        var extension = Path.GetExtension(source);
+        var initial = Path.Combine(directory, baseName + "-Kopie" + extension);
+        if (!File.Exists(initial)) return initial;
+        for (var number = 2; number < 100000; number++)
+        {
+            var path = Path.Combine(directory,
+                baseName + "-Kopie-" + number + extension);
+            if (!File.Exists(path)) return path;
+        }
+        throw new IOException("Kein freier Dateiname für die Bildkopie.");
+    }
+
+    public static void SaveAsCopy(string originalPath, string copyPath,
+        IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
+        => SaveCore(originalPath, copyPath, operations, token);
+
+    private static void SaveCore(string originalPath, string? copyPath,
+        IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
     {
         var extension = Path.GetExtension(originalPath);
         if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
@@ -33,8 +62,30 @@ public static class JpegCropWriter
                 UiLanguage.T("Nur JPEG-Fotos können zugeschnitten werden."));
         if (operations.Count == 0)
             throw new InvalidDataException("Keine Bildbearbeitung zu speichern.");
-        using var lease = SourceFileLocks.Enter(originalPath, token);
         var fullPath = Path.GetFullPath(originalPath);
+        string? destination = copyPath is null ? null : Path.GetFullPath(copyPath);
+        if (destination is not null)
+        {
+            // A copy is ALWAYS a sibling of the source and must use our
+            // explicit -Kopie / -Kopie-2 naming scheme.
+            var dir = Path.GetDirectoryName(fullPath)!;
+            var stem = Path.GetFileNameWithoutExtension(fullPath) + "-Kopie";
+            var suffix = Path.GetFileNameWithoutExtension(destination);
+            var extra = suffix.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
+                ? suffix[stem.Length..] : "INVALID";
+            if (!string.Equals(Path.GetDirectoryName(destination), dir,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetExtension(destination), extension,
+                    StringComparison.OrdinalIgnoreCase) ||
+                (extra.Length != 0 &&
+                 !(extra.StartsWith("-", StringComparison.Ordinal) &&
+                   int.TryParse(extra[1..], out var sequence) && sequence >= 2)))
+                throw new InvalidDataException("Ungültiger Pfad für die Bildkopie.");
+        }
+
+        // One source lock and one validated temporary JPEG for both save
+        // modes; the only difference is the final atomic disk operation.
+        using var lease = SourceFileLocks.Enter(fullPath, token);
         var original = new FileInfo(fullPath);
         var originalWriteTime = original.LastWriteTimeUtc;
         var staged = Path.Combine(Path.GetDirectoryName(fullPath)!,
@@ -42,6 +93,9 @@ public static class JpegCropWriter
         try
         {
             token.ThrowIfCancellationRequested();
+            if (destination is not null && File.Exists(destination))
+                throw new IOException("Die Bildkopie existiert bereits: " +
+                    Path.GetFileName(destination));
             BitmapSource pixels;
             using (var input = new FileStream(fullPath, FileMode.Open, FileAccess.Read,
                        FileShare.Read, 131072, FileOptions.SequentialScan))
@@ -67,7 +121,7 @@ public static class JpegCropWriter
                 encoder.Save(output);
                 output.Flush(flushToDisk: true);
             }
-            // Same single metadata-copy code path for Crop and Straighten.
+            // Preserve EXIF/IPTC/XMP/GPS from the original in BOTH modes.
             // Pixels are already upright; EXIF Orientation must reset to 1.
             CopyMetadata(fullPath, staged, width, height, token);
             using (var verify = new FileStream(staged, FileMode.Open,
@@ -84,15 +138,25 @@ public static class JpegCropWriter
                 _ = SHA256.HashData(verify);
             }
             token.ThrowIfCancellationRequested();
-            new UndoHistoryService(UndoOptions.Load())
-                .CaptureBeforeSave(fullPath, token);
-            token.ThrowIfCancellationRequested();
-            File.Replace(staged, fullPath, null);
-            try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
-            catch (IOException ex)
-            { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
-            catch (UnauthorizedAccessException ex)
-            { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
+            if (destination is not null)
+            {
+                // File.Move never replaces an existing file. A racing
+                // process or durable retry therefore cannot destroy a copy.
+                File.Move(staged, destination);
+            }
+            else
+            {
+                // Only in-place writes need a pre-save Undo snapshot.
+                new UndoHistoryService(UndoOptions.Load())
+                    .CaptureBeforeSave(fullPath, token);
+                token.ThrowIfCancellationRequested();
+                File.Replace(staged, fullPath, null);
+                try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
+                catch (IOException ex)
+                { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
+                catch (UnauthorizedAccessException ex)
+                { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
+            }
         }
         finally
         {
