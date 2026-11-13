@@ -232,6 +232,7 @@ public partial class MainWindow
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
         ViewerStraightenGrid.Children.Clear();
         ViewerStraightenOptions.Visibility = Visibility.Collapsed;
+        ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         if (_photoEditSession is not null)
         {
@@ -243,6 +244,8 @@ public partial class MainWindow
 
     private void UpdateEditControls()
     {
+        ViewerOnImageToolsBar.Visibility = _cropActive || _straightenActive
+            ? Visibility.Visible : Visibility.Collapsed;
         CropUndoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanUndo == true;
         CropRedoButton.IsEnabled = !_cropSavePending &&
@@ -252,7 +255,10 @@ public partial class MainWindow
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
-        CropApplyButton.IsEnabled = !_cropSavePending && editingTool;
+        ViewerToolCancelButton.IsEnabled = !_cropSavePending &&
+            (_cropActive || _straightenActive);
+        CropApplyButton.IsEnabled = !_cropSavePending &&
+            (_cropActive || _straightenActive);
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (editingTool || _photoEditSession?.HasChanges == true);
         CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
