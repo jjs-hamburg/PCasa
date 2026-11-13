@@ -31,6 +31,7 @@ public partial class MainWindow
     private string _cropRatioMode = "Original";
     private bool _cropToolsReady;
     private BitmapSource? _cropPreviewOriginal;
+    private Rect? _cropPreviewRectBefore;
     private (double ImageWidth, double ImageHeight, double CanvasWidth,
         double CanvasHeight, double ScrollX, double ScrollY)? _cropPreviewLayout;
 
@@ -156,11 +157,11 @@ public partial class MainWindow
         var tool = new Button
         {
             ToolTip = UiLanguage.T("Zuschneiden"),
-            Width = 105, Height = 88, Padding = new Thickness(5),
-            Margin = new Thickness(4, 5, 4, 5)
+            Width = 67, Height = 59, Padding = new Thickness(2),
+            Margin = new Thickness(3, 3, 3, 3)
         };
         var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-        var frame = new Viewbox { Width = 46, Height = 43, Margin = new Thickness(0, 0, 0, 4) };
+        var frame = new Viewbox { Width = 30, Height = 27, Margin = new Thickness(0, 0, 0, 2) };
         frame.Child = new ShapePath
         {
             Data = Geometry.Parse("M4,3 L4,24 L25,24 M3,9 L24,9 L24,29 M9,3 L9,24 M3,19 L24,19"),
@@ -184,24 +185,24 @@ public partial class MainWindow
         })
         {
             var button = new Button { Tag = name, ToolTip = name,
-                Width = 54, Height = 55, Margin = new Thickness(2),
-                Padding = new Thickness(2) };
+                Width = 46, Height = 46, Margin = new Thickness(2),
+                Padding = new Thickness(1) };
             var glyph = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
             var width = ratio == -1.0 ? 28 : ratio == 0.0 ? 26 :
                 29 * Math.Sqrt(ratio);
             var height = ratio <= 0 ? 22 : 29 / Math.Sqrt(ratio);
             var shape = new Rectangle
             {
-                Width = Math.Min(34, width), Height = Math.Min(31, height),
+                Width = Math.Min(29, width), Height = Math.Min(25, height),
                 Stroke = Brushes.SlateGray, StrokeThickness = 1.25,
                 Fill = Brushes.Transparent, Margin = new Thickness(0, 2, 0, 2)
             };
-            var iconFrame = new Grid { Width = 37, Height = 34 };
+            var iconFrame = new Grid { Width = 34, Height = 28 };
             iconFrame.Children.Add(shape);
             glyph.Children.Add(iconFrame);
             glyph.Children.Add(new TextBlock
             {
-                Text = name, FontSize = 9.5, TextAlignment = TextAlignment.Center
+                Text = name, FontSize = 9, TextAlignment = TextAlignment.Center
             });
             button.Content = glyph;
             button.Click += CropRatio_Click;
@@ -230,6 +231,7 @@ public partial class MainWindow
                 var height = Math.Clamp((int)Math.Ceiling(area.Height * source.PixelHeight),
                     1, source.PixelHeight - y);
                 _cropPreviewOriginal = source;
+                _cropPreviewRectBefore = _cropRect;
                 _cropPreviewLayout = (PhotoViewerImage.Width, PhotoViewerImage.Height,
                     PhotoViewerCanvas.Width, PhotoViewerCanvas.Height,
                     PhotoViewerScroller.HorizontalOffset, PhotoViewerScroller.VerticalOffset);
@@ -258,19 +260,24 @@ public partial class MainWindow
         ViewerCropOverlay.MouseLeftButtonUp += Crop_MouseUp;
         ViewerCropOverlay.LostMouseCapture += (_, _) => _cropDragging = false;
         PhotoViewerImage.SizeChanged += (_, _) => DrawCropFrame();
-        CropUndoButton.Click += (_, _) => MoveCropHistory(-1);
-        CropRedoButton.Click += (_, _) => MoveCropHistory(1);
+        CropUndoButton.Click += (_, _) => MoveEditHistory(-1);
+        CropRedoButton.Click += (_, _) => MoveEditHistory(1);
         CropHorizontalButton.Click += (_, _) => FlipCropOrientation(true);
         CropVerticalButton.Click += (_, _) => FlipCropOrientation(false);
         CropBackButton.Click += (_, _) =>
         {
-            ViewerToolsOverview.Visibility = Visibility.Visible;
-            ViewerCropOptions.Visibility = Visibility.Collapsed;
-            ViewerCropFooter.Visibility = Visibility.Collapsed;
-            ViewerCropOverlay.Visibility = Visibility.Collapsed;
+            EndCrop(); // Discard only the unaccepted tool mask.
+            if (_photoEditSession is not null)
+            {
+                SetViewerBitmap(_photoEditSession.Render());
+                ApplyViewerImageLayout();
+            }
+            UpdateEditControls();
         };
-        CropSaveButton.Click += (_, _) => SaveCrop();
-        CropCancelButton.Click += (_, _) => EndCrop();
+        CropApplyButton.Click += (_, _) => ApplyEditTool();
+        CropSaveButton.Click += (_, _) => SaveEdits();
+        CropCancelButton.Click += (_, _) => CancelEditSession();
+        InitializeStraightenTools();
     }
 
     private void BeginCrop()
@@ -283,6 +290,15 @@ public partial class MainWindow
                 UiLanguage.T("Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert."),
                 UiLanguage.T("Zuschneiden"), MessageBoxButton.OK, MessageBoxImage.Information);
             return;
+        }
+        if (!EnsureEditSession()) return;
+        if (_straightenActive) LeaveStraighten();
+        if (_photoEditSession is null) return;
+        // Work on the currently accepted, unsaved image, not an old source.
+        if (_photoEditSession.HasChanges)
+        {
+            SetViewerBitmap(_photoEditSession.Render());
+            ApplyViewerImageLayout();
         }
         if (PhotoViewerImage.Source is not BitmapSource bitmap || bitmap.PixelWidth == 0)
             return;
@@ -309,6 +325,7 @@ public partial class MainWindow
         DrawCropFrame();
         UpdateCropHistoryControls();
         UpdateCropSelectionButtons();
+        UpdateEditControls();
     }
 
     private void EndCropPreview()
@@ -316,6 +333,9 @@ public partial class MainWindow
         if (_cropPreviewOriginal is not { } source) return;
         _cropPreviewOriginal = null;
         PhotoViewerImage.Source = source;
+        if (_cropPreviewRectBefore is { } originalBounds)
+            _cropRect = originalBounds;
+        _cropPreviewRectBefore = null;
         if (_cropPreviewLayout is { } layout)
         {
             PhotoViewerImage.Width = layout.ImageWidth;
@@ -328,6 +348,8 @@ public partial class MainWindow
         }
         if (_cropActive) ViewerCropOverlay.Visibility = Visibility.Visible;
         DrawCropFrame();
+        _ = Dispatcher.BeginInvoke(new Action(DrawCropFrame),
+            System.Windows.Threading.DispatcherPriority.Render);
     }
 
     private void EndCrop()
@@ -346,19 +368,23 @@ public partial class MainWindow
 
     private bool ConfirmCropExit()
     {
-        if (!_cropActive) return true;
-        var baseline = _cropHistory.Count > 0 ? _cropHistory[0] : null;
-        if (baseline is not null &&
-            (_cropRect != baseline.Bounds || _cropRatio != baseline.AspectRatio ||
-             _cropRatioMode != baseline.Mode))
+        if (_cropSavePending) return false;
+        var hasAccepted = _photoEditSession?.HasChanges == true;
+        var editedMask = _cropActive && _cropHistory.Count > 0 &&
+            (_cropRect != _cropHistory[0].Bounds ||
+             _cropRatio != _cropHistory[0].AspectRatio ||
+             _cropRatioMode != _cropHistory[0].Mode);
+        var pendingAngle = _straightenActive &&
+            (Math.Abs(_straightenAngle) > .00001 || _straightenQuarterTurns != 0);
+        if (hasAccepted || editedMask || pendingAngle)
         {
             var response = PcasaDialog.Show(this,
-                UiLanguage.T("Zuschneiden ohne Speichern verlassen?"),
-                UiLanguage.T("Zuschneiden"),
+                UiLanguage.T("Ungespeicherte Bildbearbeitungen verwerfen?"),
+                UiLanguage.T("Bearbeiten"),
                 MessageBoxButton.YesNo, MessageBoxImage.Question);
             if (response != MessageBoxResult.Yes) return false;
         }
-        EndCrop();
+        CancelEditSession();
         return true;
     }
 
@@ -682,12 +708,7 @@ public partial class MainWindow
         DrawCropFrame();
     }
 
-    private void UpdateCropHistoryControls()
-    {
-        CropUndoButton.IsEnabled = _cropHistoryIndex > 0;
-        CropRedoButton.IsEnabled = _cropHistoryIndex >= 0 &&
-            _cropHistoryIndex < _cropHistory.Count - 1;
-    }
+    private void UpdateCropHistoryControls() => UpdateEditControls();
 
     private void MoveCropHistory(int delta)
     {
@@ -703,49 +724,6 @@ public partial class MainWindow
     }
 
     private bool _cropSavePending;
-
-    private void SaveCrop()
-    {
-        if (_cropSavePending || !_cropActive || _viewerImageInfo is not { } info) return;
-        var area = FitToImageAspect(_cropRect);
-        if (area.Width <= .01 || area.Height <= .01) return;
-        var imageId = info.Id;
-        long folderId;
-        using (var db = _database.OpenConnection())
-        using (var command = db.CreateCommand())
-        {
-            command.CommandText = "SELECT folder_id FROM images WHERE id=$id";
-            command.Parameters.AddWithValue("$id", imageId);
-            folderId = Convert.ToInt64(command.ExecuteScalar() ??
-                throw new InvalidDataException("Foto nicht im Katalog."));
-        }
-        var request = new CropWriteRecipe(imageId, folderId, info.LocalPath,
-            area.X, area.Y, area.Width, area.Height);
-        var key = "image:crop:" + Guid.NewGuid().ToString("N");
-        _cropSavePending = true;
-        CropSaveButton.IsEnabled = false;
-        CropCancelButton.IsEnabled = false;
-        BeginVisibleManualOperation(key, "Bild zuschneiden", 1);
-        Task task;
-        try
-        {
-            task = _scheduler.EnqueueDurableRecipeAsync(key, "image-crop-v1",
-                JsonSerializer.Serialize(request),
-                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
-            _taskManagerWindow?.RequestRefresh();
-        }
-        catch
-        {
-            EndVisibleManualOperation(key);
-            _cropSavePending = false;
-            CropSaveButton.IsEnabled = true;
-            CropCancelButton.IsEnabled = true;
-            throw;
-        }
-        // Preserve the selected crop while the durable write is pending;
-        // if metadata copying fails the user can retry rather than lose it.
-        _ = ObserveCropAsync(task, key, request);
-    }
 
     private SchedulerTaskPackage BuildCropPackage(string key, string payload)
     {
@@ -763,40 +741,5 @@ public partial class MainWindow
         return package;
     }
 
-    private async Task ObserveCropAsync(Task task, string key, CropWriteRecipe request)
-    {
-        var success = false;
-        try { await task; success = true; }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            PCasaDiagnostics.Write("Image.Crop", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                PcasaDialog.Show(this, ex.Message, UiLanguage.T("Zuschneiden"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-        finally
-        {
-            if (!Dispatcher.HasShutdownStarted)
-            {
-                EndVisibleManualOperation(key);
-                _cropSavePending = false;
-                CropSaveButton.IsEnabled = true;
-                CropCancelButton.IsEnabled = true;
-                if (success)
-                {
-                    if (_cropActive && _viewerImageInfo?.Id == request.ImageId)
-                        EndCrop();
-                    _ = RefreshRestoreBadgesAsync();
-                    _viewerOriginalCache.Remove(request.ImageId);
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        request.FolderId, request.Path,
-                        BackgroundFolderChangeKind.ScanFile,
-                        Recursive: false, ForceExifRefresh: true));
-                    if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
-                        ShowViewerImage(keepCurrentAsPlaceholder: true);
-                }
-            }
-        }
-    }
+
 }
