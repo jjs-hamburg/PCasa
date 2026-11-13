@@ -124,6 +124,89 @@ internal static class CropFlow
             File.Delete(isolatedVersion.SnapshotPath);
             if (isolated.HasRestorableVersion(path))
                 throw new Exception("Missing Undo snapshot must never show Restore.");
+            // Alpha.21: Crop and straighten are ONE unsaved, globally
+            // reversible edit session. The MTA writer replays all accepted
+            // steps in exactly one verified commit, preserving embedded GPS.
+            BitmapSource editorSource;
+            using (var source = File.OpenRead(path))
+                editorSource = BitmapDecoder.Create(source,
+                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad).Frames.Single();
+            var session = new PhotoEditSession(1001, editorSource);
+            if (session.Original is BitmapFrame || !session.Original.IsFrozen)
+                throw new Exception("Editor source remains coupled to an STA decoder.");
+            if (session.HasChanges || session.CanUndo || session.CanRedo)
+                throw new Exception("New edit session is not initially clean.");
+            session.Apply(new PhotoEditStep("crop", .1, .1, .8, .8));
+            var cropSize = (session.Render().PixelWidth, session.Render().PixelHeight);
+            session.Apply(new PhotoEditStep("rotate", Degrees: 90));
+            var turned = session.Render();
+            if (turned.PixelWidth != cropSize.Item2 ||
+                turned.PixelHeight != cropSize.Item1 || !session.CanUndo)
+                throw new Exception("Quarter-turn did not swap cropped image axes.");
+            session.Undo();
+            if (!session.CanRedo || session.Render().PixelWidth != cropSize.Item1)
+                throw new Exception("Global undo did not revert rotated crop.");
+            session.Redo();
+            if (!session.CanUndo || session.CanRedo ||
+                session.Render().PixelWidth != cropSize.Item2)
+                throw new Exception("Global redo did not restore rotation.");
+            session.Apply(new PhotoEditStep("rotate", Degrees: 2.5));
+            if (session.CanRedo)
+                throw new Exception("A new edit after undo/redo kept a stale redo branch.");
+            var expected = session.Render();
+            // Arbitrary angles must work on the real MTA worker, not just in
+            // a preview. WPF TransformedBitmap rejects non-90-degree angles.
+            var mtaPreview = Task.Run(() => PhotoEditSession.Render(
+                session.Original, session.AppliedSteps)).GetAwaiter().GetResult();
+            if (mtaPreview.PixelWidth != expected.PixelWidth ||
+                mtaPreview.PixelHeight != expected.PixelHeight)
+                throw new Exception("MTA straightening disagrees with UI geometry.");
+            // White corners after small-angle straightening must stay white:
+            // the auto-crop must not leave black/transparent triangles.
+            var white = new byte[320 * 200 * 4];
+            Array.Fill(white, (byte)255);
+            var whiteSource = BitmapSource.Create(320, 200, 96, 96,
+                PixelFormats.Bgra32, null, white, 320 * 4);
+            // Freeze at the origin before the MTA test worker receives it.
+            whiteSource.Freeze();
+            var whiteTurn = Task.Run(() => PhotoEditSession.Render(
+                whiteSource, [new PhotoEditStep("rotate", Degrees: 2.5)]))
+                .GetAwaiter().GetResult();
+            var corners = new byte[checked(whiteTurn.PixelWidth * whiteTurn.PixelHeight * 4)];
+            whiteTurn.CopyPixels(corners, whiteTurn.PixelWidth * 4, 0);
+            foreach (var (cx, cy) in new[]
+            {
+                (0, 0), (whiteTurn.PixelWidth - 1, 0),
+                (0, whiteTurn.PixelHeight - 1),
+                (whiteTurn.PixelWidth - 1, whiteTurn.PixelHeight - 1)
+            })
+            {
+                var offset = (cy * whiteTurn.PixelWidth + cx) * 4;
+                if (corners[offset] != 255 || corners[offset + 1] != 255 ||
+                    corners[offset + 2] != 255 || corners[offset + 3] != 255)
+                    throw new Exception("Straightening left a dark corner.");
+            }
+            Task.Run(() => JpegCropWriter.Save(path, session.AppliedSteps,
+                CancellationToken.None)).GetAwaiter().GetResult();
+            using (var saved = File.OpenRead(path))
+            {
+                var result = BitmapDecoder.Create(saved, BitmapCreateOptions.None,
+                    BitmapCacheOption.OnLoad).Frames.Single();
+                if (result.PixelWidth != expected.PixelWidth ||
+                    result.PixelHeight != expected.PixelHeight)
+                    throw new Exception(
+                        "Single-commit full-resolution edit differs from preview.");
+            }
+            var preserved = ReadExif(exif, "-n", "-GPSLatitude",
+                "-GPSLongitude", "-Keywords", path);
+            if (!preserved.Contains("53.5") || !preserved.Contains("10.25") ||
+                !preserved.Contains("PCasaCropSmoke"))
+                throw new Exception(
+                    "Combined Crop/Rotate/straighten lost original metadata.");
+            if (Directory.GetFiles(root, ".pcasa-crop-*").Length != 0)
+                throw new Exception("Multi-step editor leaked a staged JPEG.");
+            Console.WriteLine(
+                "PASS: Global editor Undo/Redo, Crop+90°+straighten single P0 JPEG commit, embedded GPS preserved.");
             Console.WriteLine("PASS: Restore availability rejects corrupted and missing snapshots.");
             Console.WriteLine("PASS: Crop -> Restore -> Crop reuses same path without file lock.");
             Console.WriteLine("PASS: MTA JPEG crop, source RAW untouched, GPS/keywords preserved, byte-perfect central Undo.");

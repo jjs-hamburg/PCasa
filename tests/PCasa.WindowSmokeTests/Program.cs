@@ -1309,6 +1309,33 @@ internal static class Program
                 // gallery. Start the separate interior-policy assertion with
                 // its synthetic fixture again; never interpret an empty
                 // real catalog as a failure of the interior boundary rule.
+                // Reaching the preceding LIVE edge may have started a
+                // legitimate asynchronous refresh of the runner's empty
+                // catalog. Drain that publication BEFORE restoring the
+                // isolated synthetic index; otherwise the late completion
+                // can overwrite the fixture during Flush().
+                var publisherField = scrollType.GetField(
+                    "_galleryRefreshCompletion", scrollFlags)!;
+                for (var retry = 0; retry < 100; retry++)
+                {
+                    Flush(window);
+                    if (publisherField.GetValue(window) is not Task active ||
+                        active.IsCompleted)
+                        break;
+                    System.Threading.Thread.Sleep(20);
+                }
+                if (publisherField.GetValue(window) is Task pendingPublisher &&
+                    !pendingPublisher.IsCompleted)
+                    throw new Exception("Catalog publisher did not settle before isolated gallery test.");
+                // The synthetic gallery is not a real database snapshot.
+                // Prevent a previously scheduled 750ms catalog-timer tick
+                // from publishing the empty test database over that fixture.
+                var fixtureCatalogTimer = (DispatcherTimer?)scrollType.GetField(
+                    "_catalogPublicationTimer", scrollFlags)!.GetValue(window);
+                fixtureCatalogTimer?.Stop();
+                scrollType.GetField("_catalogPublicationPending", scrollFlags)!
+                    .SetValue(window, 0);
+                scanDirtyField.SetValue(window, false);
                 pages.SetIndex(synthetic);
                 surface.SetData(synthetic, groups, pages);
                 Flush(window);
@@ -1893,7 +1920,16 @@ internal static class Program
                 static string? ManagerPath(TreeViewItem item)
                     => item.Tag?.GetType().GetProperty("LocalPath")
                         ?.GetValue(item.Tag) as string;
-                var fixtureNode = managedTree.Items.OfType<TreeViewItem>()
+                static IEnumerable<TreeViewItem> NestedManagerItems(ItemsControl root)
+                {
+                    foreach (var child in root.Items.OfType<TreeViewItem>())
+                    {
+                        yield return child;
+                        foreach (var grandchild in NestedManagerItems(child))
+                            yield return grandchild;
+                    }
+                }
+                var fixtureNode = NestedManagerItems(managedTree)
                     .Single(item => string.Equals(ManagerPath(item),
                         fixtureDirectory, StringComparison.OrdinalIgnoreCase));
                 fixtureNode.IsExpanded = true;
@@ -2066,7 +2102,17 @@ internal static class Program
                         Math.Abs(gpsPhotoFrame.ActualWidth - workspace.ActualWidth) > 2 ||
                         Math.Abs(gpsPhotoFrame.ActualHeight - workspace.ActualHeight) > 2)
                         throw new Exception(
-                            "The fullscreen photo does not cover the entire GPS workspace.");
+                            "The fullscreen photo does not cover the entire GPS workspace. " +
+                            $"GpsFullscreen={(bool)gpsFullscreenFlag.GetValue(window)!}; " +
+                            $"Overlay={gpsOverlay.Visibility}; " +
+                            $"GridColumn={Grid.GetColumn(gpsOverlay)}; " +
+                            $"GridSpan={Grid.GetColumnSpan(gpsOverlay)}; " +
+                            $"OverlayZ={Panel.GetZIndex(gpsOverlay)}; " +
+                            $"SidebarZ={Panel.GetZIndex(gpsSidebar)}; " +
+                            $"Frame={gpsPhotoFrame.ActualWidth:F2}x{gpsPhotoFrame.ActualHeight:F2}; " +
+                            $"OverlaySize={gpsOverlay.ActualWidth:F2}x{gpsOverlay.ActualHeight:F2}; " +
+                            $"Workspace={workspace.ActualWidth:F2}x{workspace.ActualHeight:F2}; " +
+                            $"Sidebar={gpsSidebar.ActualWidth:F2}x{gpsSidebar.ActualHeight:F2}");
                     // A real filmstrip double-click (not only the image
                     // loader method) must reopen the floating window while
                     // preserving the fullscreen GPS mode.

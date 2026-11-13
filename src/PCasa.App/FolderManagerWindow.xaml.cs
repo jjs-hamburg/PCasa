@@ -18,11 +18,20 @@ public partial class FolderManagerWindow : Window
     private readonly ForegroundReadService _foregroundReadService;
     private readonly BackgroundScanSettings _backgroundScanSettings;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
+    // Roots unchecked during the dialog remain available for rechecking in
+    // the right pane, with their original IDs and exclusion rules intact.
+    // Only OK persists the final staged selection.
+    private readonly Dictionary<long,
+        (MonitoredFolder Root, IReadOnlyList<string> Exclusions)> _uncheckedRoots = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly IReadOnlyList<(string Name, string Path)> _systemFolders;
     private IReadOnlyList<MonitoredFolder> _monitoredRoots = Array.Empty<MonitoredFolder>();
     private ManagedNode? _selected;
     private bool _updatingChecks;
+    private readonly Dictionary<string, TreeViewItem> _folderNodes =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _enumeratedPaths =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _busy;
     private long _nextTemporaryRootId = -1;
 
@@ -74,39 +83,143 @@ public partial class FolderManagerWindow : Window
     {
         _selected = null;
         FolderManagerTree.Items.Clear();
-        // Rebuild only WPF nodes from the staged selection. Reloading from
-        // SQLite here would discard pending changes (or save them too early).
+        _folderNodes.Clear();
+        _enumeratedPaths.Clear();
 
-        // Picasa-style hierarchy: these are normal expandable tree entries.
-        // Once included, their subfolders use exactly the same exclusion
-        // handling as any user-added monitored folder.
+        // System locations remain accessible as shortcuts; mounted drives
+        // have ONE physical hierarchy, regardless of how many independent
+        // monitored roots they contain. No recursive disk scan at startup.
         foreach (var (name, path) in _systemFolders)
         {
-            var coveringRoot = FindCoveringRoot(path);
-            var isRoot = coveringRoot is not null &&
-                PathEquals(coveringRoot.LocalPath, path);
-            var item = CreateItem(new ManagedNode(
-                coveringRoot, path, isRoot, IsSystemFolder: true, Label: name));
+            var root = FindCoveringRoot(path);
+            var item = CreateItem(new ManagedNode(root, path,
+                IsRoot: root is not null && PathEquals(root.LocalPath, path),
+                IsSystemFolder: true, Label: name));
             FolderManagerTree.Items.Add(item);
             if (PathEquals(expandSystemFolder, path))
-            {
                 item.IsExpanded = true;
-                item.IsSelected = true;
+        }
+
+        var volumes = DriveInfo.GetDrives().Select(drive => drive.Name)
+            .Concat(_monitoredRoots.Select(root =>
+                Path.GetPathRoot(root.LocalPath) ?? root.LocalPath))
+            .Select(FolderExclusionRules.Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase);
+
+        foreach (var volume in volumes)
+        {
+            var root = FindCoveringRoot(volume);
+            var item = CreateItem(new ManagedNode(root, volume,
+                IsRoot: root is not null && PathEquals(root.LocalPath, volume),
+                Label: Path.TrimEndingDirectorySeparator(volume)));
+            _folderNodes[volume] = item;
+            FolderManagerTree.Items.Add(item);
+        }
+
+        foreach (var monitored in _monitoredRoots)
+        {
+            var target = FolderExclusionRules.Normalize(monitored.LocalPath);
+            var volume = FolderExclusionRules.Normalize(
+                Path.GetPathRoot(target) ?? target);
+            if (!_folderNodes.TryGetValue(volume, out var parent)) continue;
+            var relative = Path.GetRelativePath(volume, target);
+            if (relative == ".") continue;
+            var current = volume;
+            foreach (var component in relative.Split(
+                         Path.DirectorySeparatorChar,
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = FolderExclusionRules.Normalize(
+                    Path.Combine(current, component));
+                if (_folderNodes.TryGetValue(current, out var existing))
+                {
+                    parent = existing;
+                    continue;
+                }
+                var covering = FindCoveringRoot(current);
+                var item = CreateItem(new ManagedNode(covering, current,
+                    IsRoot: covering is not null &&
+                            PathEquals(covering.LocalPath, current)));
+                parent.Items.Add(item);
+                _folderNodes[current] = item;
+                parent = item;
             }
         }
 
-        foreach (var folder in _monitoredRoots)
+        // Expand paths leading to explicitly selected roots, without waiting
+        // for directory enumeration. Folder_Expanded merges physical siblings
+        // into these existing nodes asynchronously.
+        foreach (var root in _monitoredRoots)
         {
-            if (_systemFolders.Any(special => PathEquals(special.Path, folder.LocalPath)))
-                continue;
-
-            FolderManagerTree.Items.Add(CreateItem(
-                new ManagedNode(folder,
-                    FolderExclusionRules.Normalize(folder.LocalPath),
-                    IsRoot: true)));
+            var full = FolderExclusionRules.Normalize(root.LocalPath);
+            foreach (var pair in _folderNodes)
+                if (!PathEquals(pair.Key, full) &&
+                    FolderExclusionRules.IsAtOrBelow(full, pair.Key))
+                    pair.Value.IsExpanded = true;
         }
-
+        if (expandSystemFolder is not null &&
+            _folderNodes.TryGetValue(
+                FolderExclusionRules.Normalize(expandSystemFolder), out var selected))
+            selected.IsSelected = true;
+        RefreshMonitoredRootsList();
         UpdateSelectedDetails();
+    }
+
+    private void RefreshMonitoredRootsList()
+    {
+        MonitoredRootsList.Children.Clear();
+        var shown = _monitoredRoots
+            .Select(root => (Root: root, Included: true))
+            .Concat(_uncheckedRoots.Values.Select(entry =>
+                (Root: entry.Root, Included: false)))
+            .OrderBy(entry => entry.Root.LocalPath,
+                StringComparer.CurrentCultureIgnoreCase);
+        foreach (var (root, included) in shown)
+        {
+            var check = new CheckBox
+            {
+                Content = root.LocalPath,
+                ToolTip = root.LocalPath,
+                Tag = root.Id,
+                IsChecked = included,
+                Margin = new Thickness(2, 3, 0, 3),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            check.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
+            check.Checked += (_, _) =>
+            {
+                if (_updatingChecks || _busy) return;
+                RestoreStagedRoot(root.Id);
+            };
+            check.Unchecked += (_, _) =>
+            {
+                if (_updatingChecks || _busy) return;
+                RemoveStagedRoot(root.Id);
+            };
+            MonitoredRootsList.Children.Add(check);
+        }
+    }
+
+    private void RemoveStagedRoot(long rootId)
+    {
+        var root = _monitoredRoots.FirstOrDefault(candidate =>
+            candidate.Id == rootId);
+        if (root is null) return;
+        _uncheckedRoots[rootId] = (root,
+            _exclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>());
+        _monitoredRoots = _monitoredRoots
+            .Where(candidate => candidate.Id != rootId).ToArray();
+        _exclusions.Remove(rootId);
+        Reload();
+    }
+
+    private void RestoreStagedRoot(long rootId)
+    {
+        if (!_uncheckedRoots.Remove(rootId, out var previous)) return;
+        _monitoredRoots = _monitoredRoots.Append(previous.Root).ToArray();
+        _exclusions[rootId] = previous.Exclusions;
+        Reload();
     }
 
     private static bool PathEquals(string? a, string? b)
@@ -123,8 +236,10 @@ public partial class FolderManagerWindow : Window
 
     private TreeViewItem CreateItem(ManagedNode node)
     {
-        var name = node.Label ?? (node.IsRoot ? node.LocalPath
-            : Path.GetFileName(Path.TrimEndingDirectorySeparator(node.LocalPath)));
+        var name = node.Label ?? Path.GetFileName(
+            Path.TrimEndingDirectorySeparator(node.LocalPath));
+        if (node.IsRoot && node.LocalPath == Path.GetPathRoot(node.LocalPath))
+            name = node.LocalPath;
         if (string.IsNullOrWhiteSpace(name)) name = node.LocalPath;
 
         var checkbox = new CheckBox
@@ -133,7 +248,8 @@ public partial class FolderManagerWindow : Window
             ToolTip = node.LocalPath,
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(1, 0, 1, 0),
-            IsChecked = IsIncluded(node),
+            IsChecked = DisplayIncludedState(node),
+            IsThreeState = true,
             IsEnabled = CanToggle(node)
         };
         checkbox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
@@ -165,9 +281,24 @@ public partial class FolderManagerWindow : Window
     private bool IsIncluded(ManagedNode node)
         => node.Root is not null && !IsExcluded(node);
 
+    // An unchecked physical folder can be added directly as a new root.
     private bool CanToggle(ManagedNode node)
-        => !_busy && !HasExcludedAncestor(node) &&
-           (node.IsSystemFolder || node.Root is not null);
+        => !_busy && !HasExcludedAncestor(node);
+
+    private bool? DisplayIncludedState(ManagedNode node)
+    {
+        if (IsIncluded(node))
+        {
+            if (_exclusions.TryGetValue(node.Root!.Id, out var exclusions) &&
+                exclusions.Any(path => FolderExclusionRules.IsAtOrBelow(
+                    path, node.LocalPath)))
+                return null; // Partially included subtree.
+            return true;
+        }
+        return _monitoredRoots.Any(root =>
+            FolderExclusionRules.IsAtOrBelow(root.LocalPath, node.LocalPath))
+            ? null : false; // Only some descendants have own roots.
+    }
 
     private bool IsExcluded(ManagedNode node)
         => node.Root is not null &&
@@ -188,8 +319,7 @@ public partial class FolderManagerWindow : Window
         if (sender is not TreeViewItem item ||
             !ReferenceEquals(sender, e.OriginalSource) ||
             item.Tag is not ManagedNode node ||
-            item.Items.Count != 1 ||
-            item.Items[0] is not TreeViewItem { Tag: null })
+            !_enumeratedPaths.Add(node.LocalPath))
         {
             return;
         }
@@ -204,15 +334,30 @@ public partial class FolderManagerWindow : Window
                 node.LocalPath, token);
 
             if (token.IsCancellationRequested) return;
-            item.Items.Clear();
+            foreach (var placeholder in item.Items.OfType<TreeViewItem>()
+                         .Where(child => child.Tag is null).ToArray())
+                item.Items.Remove(placeholder);
             foreach (var directory in directories)
             {
                 var normalized = FolderExclusionRules.Normalize(directory);
+                if (item.Items.OfType<TreeViewItem>().Any(child =>
+                        child.Tag is ManagedNode known &&
+                        PathEquals(known.LocalPath, normalized)))
+                    continue;
                 var root = FindCoveringRoot(normalized);
-                item.Items.Add(CreateItem(new ManagedNode(
-                    root, normalized,
-                    IsRoot: root is not null && PathEquals(root.LocalPath, normalized))));
+                var child = CreateItem(new ManagedNode(root, normalized,
+                    IsRoot: root is not null &&
+                            PathEquals(root.LocalPath, normalized)));
+                item.Items.Add(child);
+                _folderNodes.TryAdd(normalized, child);
             }
+            // Sort only this one level; existing expanded nodes are preserved.
+            var sorted = item.Items.OfType<TreeViewItem>()
+                .Where(child => child.Tag is ManagedNode)
+                .OrderBy(child => ((ManagedNode)child.Tag).LocalPath,
+                    StringComparer.CurrentCultureIgnoreCase).ToArray();
+            item.Items.Clear();
+            foreach (var child in sorted) item.Items.Add(child);
         }
         catch (OperationCanceledException)
         {
@@ -220,12 +365,15 @@ public partial class FolderManagerWindow : Window
         catch (Exception ex)
         {
             if (token.IsCancellationRequested) return;
-            item.Items.Clear();
-            item.Items.Add(new TreeViewItem
-            {
-                Header = UiLanguage.T("Unterordner nicht erreichbar: ") + ex.Message,
-                IsEnabled = false
-            });
+            _enumeratedPaths.Remove(node.LocalPath);
+            // Preserve known monitored descendants even if a NAS drive is
+            // disconnected. A later expansion can retry the physical scan.
+            if (!item.Items.OfType<TreeViewItem>().Any(child => child.Tag is null))
+                item.Items.Add(new TreeViewItem
+                {
+                    Header = UiLanguage.T("Unterordner nicht erreichbar: ") + ex.Message,
+                    IsEnabled = false
+                });
         }
     }
 
@@ -280,7 +428,7 @@ public partial class FolderManagerWindow : Window
         if (item.Tag is ManagedNode node && item.Header is CheckBox checkBox)
         {
             var excluded = IsExcluded(node);
-            checkBox.IsChecked = IsIncluded(node);
+            checkBox.IsChecked = DisplayIncludedState(node);
             checkBox.IsEnabled = CanToggle(node);
             if (excluded)
                 checkBox.Foreground = new SolidColorBrush(Color.FromRgb(171, 50, 50));
@@ -313,10 +461,7 @@ public partial class FolderManagerWindow : Window
         {
             if (!include)
             {
-                _monitoredRoots = _monitoredRoots.Where(candidate =>
-                    candidate.Id != root.Id).ToArray();
-                _exclusions.Remove(root.Id);
-                Reload(expandSystemFolder: node.IsSystemFolder ? node.LocalPath : null);
+                RemoveStagedRoot(root.Id);
             }
             else
                 UpdateLoadedCheckboxes();
@@ -349,6 +494,13 @@ public partial class FolderManagerWindow : Window
         var normalized = FolderExclusionRules.Normalize(path);
         if (_monitoredRoots.Any(root => PathEquals(root.LocalPath, normalized)))
             return;
+        var prior = _uncheckedRoots.Values.FirstOrDefault(item =>
+            PathEquals(item.Root.LocalPath, normalized));
+        if (prior.Root is not null)
+        {
+            RestoreStagedRoot(prior.Root.Id);
+            return;
+        }
         var classification = PathClassifier.Classify(normalized);
         var provisional = new MonitoredFolder
         {
@@ -384,10 +536,7 @@ public partial class FolderManagerWindow : Window
     private void RemoveFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_selected is not { IsRoot: true, Root: { } root } || _busy) return;
-        _monitoredRoots = _monitoredRoots.Where(candidate =>
-            candidate.Id != root.Id).ToArray();
-        _exclusions.Remove(root.Id);
-        Reload();
+        RemoveStagedRoot(root.Id);
     }
 
     private void ServerSync_Click(object sender, RoutedEventArgs e)

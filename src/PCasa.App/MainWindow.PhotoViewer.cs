@@ -338,6 +338,7 @@ public partial class MainWindow
         // Keep the original pixel count for genuine 100% zoom; use only the
         // decoded bitmap's aspect to identify the axis swap.
         if (bitmap is { PixelWidth: > 0, PixelHeight: > 0 } &&
+            _photoEditSession is null && !_straightenActive &&
             _viewerImageInfo is { Width: > 0, Height: > 0 } info &&
             ViewerImageGeometry.NeedsAxisSwap(info.Width, info.Height,
                 bitmap.PixelWidth, bitmap.PixelHeight))
@@ -376,7 +377,7 @@ public partial class MainWindow
                 }, token);
 
             if (IsCurrentViewerRequest(version, token) && !_viewerHasOriginal &&
-                preview is not null)
+                _photoEditSession is null && preview is not null)
             {
                 SetViewerBitmap(preview);
             }
@@ -415,7 +416,8 @@ public partial class MainWindow
             {
                 _viewerHasOriginal = true;
                 CacheViewerOriginal(imageId, requiredSize, bitmap);
-                SetViewerBitmap(bitmap);
+                if (_photoEditSession?.ImageId != imageId)
+                    SetViewerBitmap(bitmap);
                 SetViewerQualityMessage(null);
             }
         }
@@ -538,9 +540,11 @@ public partial class MainWindow
 
         var (width, height) = ViewerViewportSize();
         var dpi = VisualTreeHelper.GetDpi(ActiveViewerRoot);
+        var shown = _photoEditSession is not null || _straightenActive
+            ? ActiveViewerImage.Source as BitmapSource : null;
         return 100d * Math.Min(
-            width * dpi.DpiScaleX / info.Width,
-            height * dpi.DpiScaleY / info.Height);
+            width * dpi.DpiScaleX / (shown?.PixelWidth ?? info.Width),
+            height * dpi.DpiScaleY / (shown?.PixelHeight ?? info.Height));
     }
 
     private void ApplyViewerImageLayout()
@@ -560,19 +564,23 @@ public partial class MainWindow
         var scroller = ActiveViewerScroller;
         var canvas = ActiveViewerCanvas;
         var image = ActiveViewerImage;
+        var shown = _photoEditSession is not null || _straightenActive
+            ? image.Source as BitmapSource : null;
+        var sourceWidth = shown?.PixelWidth ?? info.Width;
+        var sourceHeight = shown?.PixelHeight ?? info.Height;
         var (viewportWidth, viewportHeight) = ViewerViewportSize();
         var dpi = VisualTreeHelper.GetDpi(ActiveViewerRoot);
         var scale = _viewerFitToScreen
-            ? Math.Min(viewportWidth / (double)info.Width,
-                viewportHeight / (double)info.Height)
+            ? Math.Min(viewportWidth / (double)sourceWidth,
+                viewportHeight / (double)sourceHeight)
             : _viewerZoomPercent / (100d * dpi.DpiScaleX);
 
         var imageWidth = _viewerFitToScreen
-            ? Math.Max(1, info.Width * scale)
-            : Math.Max(1, info.Width * _viewerZoomPercent / (100d * dpi.DpiScaleX));
+            ? Math.Max(1, sourceWidth * scale)
+            : Math.Max(1, sourceWidth * _viewerZoomPercent / (100d * dpi.DpiScaleX));
         var imageHeight = _viewerFitToScreen
-            ? Math.Max(1, info.Height * scale)
-            : Math.Max(1, info.Height * _viewerZoomPercent / (100d * dpi.DpiScaleY));
+            ? Math.Max(1, sourceHeight * scale)
+            : Math.Max(1, sourceHeight * _viewerZoomPercent / (100d * dpi.DpiScaleY));
 
         var center = _viewerPendingImageCenter ?? CaptureViewerCenter();
         _viewerPendingImageCenter = null;

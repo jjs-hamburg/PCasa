@@ -37,6 +37,9 @@ public sealed class BrowseThumbnailPageCache : IDisposable
 
     private readonly Dictionary<ThumbnailContentKey, BitmapSource>
         _retainedBitmaps = new();
+    // A small in-memory bridge displays the saved pixels immediately while
+    // the packed cache is regenerated asynchronously; no disk sidecars.
+    private readonly Dictionary<long, BitmapSource> _liveEditedThumbnails = new();
     private long _retainedBytes;
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> _index =
@@ -111,6 +114,26 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         }
     }
 
+    public void ShowEditedImage(long imageId, BitmapSource source)
+    {
+        if (source.PixelWidth <= 0 || source.PixelHeight <= 0) return;
+        var scale = Math.Min(1.0, 512.0 /
+            Math.Max(source.PixelWidth, source.PixelHeight));
+        BitmapSource reduced = scale < 1
+            ? new System.Windows.Media.Imaging.TransformedBitmap(source,
+                new System.Windows.Media.ScaleTransform(scale, scale))
+            : source;
+        if (reduced.CanFreeze) reduced.Freeze();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            if (_liveEditedThumbnails.Count >= 64)
+                _liveEditedThumbnails.Remove(_liveEditedThumbnails.Keys.First());
+            _liveEditedThumbnails[imageId] = reduced;
+        }
+        PageReady?.Invoke(this, EventArgs.Empty);
+    }
+
     public bool TryGet(int imageIndex, out BitmapSource? bitmap)
     {
         lock (_sync)
@@ -121,6 +144,9 @@ public sealed class BrowseThumbnailPageCache : IDisposable
                 return false;
             }
 
+            if (_liveEditedThumbnails.TryGetValue(
+                    _index[imageIndex].ImageId, out bitmap))
+                return true;
             var pageNumber = imageIndex / PageSize;
             if (_pages.TryGetValue(pageNumber, out var page) &&
                 page.Bitmaps is { } bitmaps)
@@ -429,6 +455,7 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         if (_decodedBytes + _retainedBytes > MaximumDecodedBytes)
         {
             // Favor the newly visible page over an old-index preview bridge.
+            // Keep newly saved image pixels until the fresh packed cache is ready.
             _retainedBitmaps.Clear();
             _retainedBytes = 0;
         }
@@ -478,6 +505,7 @@ public sealed class BrowseThumbnailPageCache : IDisposable
             _lru.Clear();
             _decodedBytes = 0;
             _retainedBitmaps.Clear();
+            _liveEditedThumbnails.Clear();
             _retainedBytes = 0;
             _index = Array.Empty<BrowseThumbnailIndexEntry>();
         }

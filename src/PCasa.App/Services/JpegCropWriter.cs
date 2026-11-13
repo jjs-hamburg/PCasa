@@ -15,15 +15,24 @@ namespace PCasa.App.Services;
 public static class JpegCropWriter
 {
     public static void Save(string originalPath, Rect normalized, CancellationToken token)
+        => Save(originalPath, [new PhotoEditStep("crop", normalized.X, normalized.Y,
+            normalized.Width, normalized.Height)], token);
+
+    /// <summary>
+    /// Atomic multi-step editor commit: replay the unsaved UI history once,
+    /// at full resolution, then preserve original metadata and capture Undo
+    /// before replacing the JPEG. No intermediate JPEG writes or sidecars.
+    /// </summary>
+    public static void Save(string originalPath,
+        IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
     {
         var extension = Path.GetExtension(originalPath);
         if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
             !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException(UiLanguage.T("Nur JPEG-Fotos können zugeschnitten werden."));
-        if (normalized.Width <= .01 || normalized.Height <= .01 ||
-            normalized.X < 0 || normalized.Y < 0 ||
-            normalized.Right > 1.000001 || normalized.Bottom > 1.000001)
-            throw new InvalidDataException(UiLanguage.T("Der Zuschneidebereich ist ungültig."));
+            throw new NotSupportedException(
+                UiLanguage.T("Nur JPEG-Fotos können zugeschnitten werden."));
+        if (operations.Count == 0)
+            throw new InvalidDataException("Keine Bildbearbeitung zu speichern.");
         using var lease = SourceFileLocks.Enter(originalPath, token);
         var fullPath = Path.GetFullPath(originalPath);
         var original = new FileInfo(fullPath);
@@ -46,29 +55,20 @@ public static class JpegCropWriter
                 image.Freeze();
                 pixels = ExifOrientation.Apply(image, input);
             }
-            var left = Math.Clamp((int)Math.Floor(normalized.X * pixels.PixelWidth),
-                0, pixels.PixelWidth - 1);
-            var top = Math.Clamp((int)Math.Floor(normalized.Y * pixels.PixelHeight),
-                0, pixels.PixelHeight - 1);
-            var width = Math.Clamp((int)Math.Round(normalized.Width * pixels.PixelWidth),
-                1, pixels.PixelWidth - left);
-            var height = Math.Clamp((int)Math.Round(normalized.Height * pixels.PixelHeight),
-                1, pixels.PixelHeight - top);
-            if (width < 16 || height < 16)
-                throw new InvalidDataException(UiLanguage.T("Der Ausschnitt ist zu klein."));
-            var cropped = new CroppedBitmap(pixels, new Int32Rect(left, top, width, height));
-            cropped.Freeze();
+            var result = PhotoEditSession.Render(pixels, operations);
+            var width = result.PixelWidth;
+            var height = result.PixelHeight;
+            token.ThrowIfCancellationRequested();
             var encoder = new JpegBitmapEncoder { QualityLevel = 95 };
-            encoder.Frames.Add(BitmapFrame.Create(cropped));
+            encoder.Frames.Add(BitmapFrame.Create(result));
             using (var output = new FileStream(staged, FileMode.CreateNew,
                        FileAccess.Write, FileShare.None))
             {
                 encoder.Save(output);
                 output.Flush(flushToDisk: true);
             }
-            // ExifTool is the existing release dependency. Preserve all
-            // writable original EXIF, IPTC, XMP, GPS and ICC. The crop pixels
-            // were baked in display orientation: reset EXIF Orientation.
+            // Same single metadata-copy code path for Crop and Straighten.
+            // Pixels are already upright; EXIF Orientation must reset to 1.
             CopyMetadata(fullPath, staged, width, height, token);
             using (var verify = new FileStream(staged, FileMode.Open,
                        FileAccess.Read, FileShare.Read))
@@ -78,21 +78,21 @@ public static class JpegCropWriter
                 if (candidate.Frames.Count != 1 ||
                     candidate.Frames[0].PixelWidth != width ||
                     candidate.Frames[0].PixelHeight != height)
-                    throw new InvalidDataException(UiLanguage.T("Die Zuschneidedatei ist nicht vollständig."));
+                    throw new InvalidDataException(
+                        UiLanguage.T("Die Zuschneidedatei ist nicht vollständig."));
                 verify.Position = 0;
                 _ = SHA256.HashData(verify);
             }
             token.ThrowIfCancellationRequested();
-            // Never replace the original if the Undo capture fails.
-            new UndoHistoryService(UndoOptions.Load()).CaptureBeforeSave(fullPath, token);
+            new UndoHistoryService(UndoOptions.Load())
+                .CaptureBeforeSave(fullPath, token);
             token.ThrowIfCancellationRequested();
             File.Replace(staged, fullPath, null);
-            // At this point the crop is committed. A failure to restore the
-            // file timestamp must never turn a successful edit into an error.
             try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
-            catch (IOException ex) { PCasaDiagnostics.Write("Image.Crop.Timestamp", ex); }
+            catch (IOException ex)
+            { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
             catch (UnauthorizedAccessException ex)
-            { PCasaDiagnostics.Write("Image.Crop.Timestamp", ex); }
+            { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
         }
         finally
         {

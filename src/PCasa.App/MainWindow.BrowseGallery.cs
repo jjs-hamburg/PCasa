@@ -1350,6 +1350,24 @@ public partial class MainWindow
     private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
     {
             _activePhotoFolderId = photoFolderId;
+            // Fast path: the gallery index is already local. A click must
+            // display the selected folder NOW, never await a full 500k-photo
+            // catalog reload or any pending NAS scanner publication.
+            if (BrowseSurface.GetFolderOffset(photoFolderId) is double cachedOffset)
+            {
+                BrowseScrollViewer.ScrollToVerticalOffset(cachedOffset);
+                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+                UpdateActiveFolderDisplay(photoFolderId,
+                    updateTreeSelection: false);
+                if (_scanGalleryPublicationDeferred)
+                {
+                    _scanGalleryPublicationDeferred = false;
+                    _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
+                        warmViewport: false);
+                }
+                return;
+            }
             // An explicit folder choice is a deliberate navigation. The
             // postponed scanner catalog is published BEFORE deriving the
             // destination folder's current geometry, not after navigating.

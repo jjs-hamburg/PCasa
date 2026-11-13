@@ -1362,9 +1362,8 @@ internal static class FolderAddFlow
                     }
 
                     var tree = (TreeView)manager.FindName("FolderManagerTree");
-                    var actualRoot = tree.Items.OfType<TreeViewItem>()
-                        .FirstOrDefault(item =>
-                            SamePath(ManagedPath(item), rootPath));
+                    var actualRoot = Walk(tree).FirstOrDefault(item =>
+                        SamePath(ManagedPath(item), rootPath));
                     if (actualRoot is null)
                         throw new Exception(
                             "Folder manager opened without persisted Explorer parent.");

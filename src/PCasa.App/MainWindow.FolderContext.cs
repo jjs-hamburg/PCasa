@@ -350,4 +350,29 @@ public partial class MainWindow
                 ex.Message, "PCasa", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
+
+    // Context menu contents reflect the currently selected physical folder;
+    // never display an action that cannot apply to that folder.
+    private void FoldersTree_ContextMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu) return;
+        var tag = ContextFolder();
+        var add = menu.Items.OfType<MenuItem>().FirstOrDefault(item =>
+            item.Name == "ContextAddToPcasaMenuItem");
+        var remove = menu.Items.OfType<MenuItem>().FirstOrDefault(item =>
+            item.Name == "ContextRemoveFromPcasaMenuItem");
+        if (add is null || remove is null) return;
+        if (tag is null)
+        {
+            add.Visibility = Visibility.Collapsed;
+            remove.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var root = DisplayedMonitoredRoot(tag.FullPath);
+        var covered = root is not null &&
+            !FolderExclusionRules.IsExcluded(tag.FullPath,
+                DisplayedExcludedPaths(root.Id));
+        add.Visibility = covered ? Visibility.Collapsed : Visibility.Visible;
+        remove.Visibility = covered ? Visibility.Visible : Visibility.Collapsed;
+    }
 }

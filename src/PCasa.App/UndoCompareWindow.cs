@@ -149,7 +149,7 @@ internal sealed class UndoCompareWindow : Window
         bitmap.StreamSource = stream;
         bitmap.EndInit();
         bitmap.Freeze();
-        return bitmap;
+        return ExifOrientation.Apply(bitmap, stream);
     }
 
     private void ShowVersion()

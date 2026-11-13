@@ -108,6 +108,7 @@ public partial class MainWindow
             _scheduler.ReportProgress(key,UiLanguage.T("Bild wiederherstellen"),0,1,request.Path);
             new UndoHistoryService(UndoOptions.Load()).Restore(
                 request.Path,request.VersionId,token);
+            new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
             _scheduler.ReportProgress(key,UiLanguage.T("Bild wiederherstellen"),1,1,request.Path);
             return Task.CompletedTask;
         });
