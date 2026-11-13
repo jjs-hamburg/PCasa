@@ -1073,8 +1073,11 @@ public partial class MainWindow
     {
         for (var ancestor = original; ancestor is not null;)
         {
-            if (ancestor is ScrollBar or Thumb or ButtonBase or PhotoZoomNavigator)
+            if (ancestor is ScrollBar or Thumb or ButtonBase or PhotoZoomNavigator ||
+                ReferenceEquals(ancestor, ViewerOnImageToolsBar))
             {
+                // The floating Picasa-style crop/straighten controls do not
+                // belong to the photo pan/close gesture even in empty space.
                 return true;
             }
 
