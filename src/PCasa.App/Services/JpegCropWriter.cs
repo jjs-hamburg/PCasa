@@ -97,7 +97,7 @@ public static class JpegCropWriter
                     Path.GetFileName(destination));
             EditableImageFormats.ValidateStillImage(fullPath);
             var pixels = EditableImageFormats.DecodeForEdit(fullPath);
-            var result = PhotoEditSession.Render(pixels, operations);
+            var result = PhotoEditSession.Render(pixels, operations, token);
             var width = result.PixelWidth;
             var height = result.PixelHeight;
             token.ThrowIfCancellationRequested();
