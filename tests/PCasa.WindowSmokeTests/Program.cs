@@ -164,9 +164,23 @@ internal static class Program
             var floatingTools = (Border)window.FindName("ViewerOnImageToolsBar")!;
             var cropOptions = (StackPanel)window.FindName("ViewerCropOptions")!;
             var straightenOptions = (StackPanel)window.FindName("ViewerStraightenOptions")!;
-            if (!Descendants<StackPanel>(floatingTools).Contains(cropOptions) ||
-                !Descendants<StackPanel>(floatingTools).Contains(straightenOptions))
-                throw new Exception("Crop/Straighten options are not in image overlay.");
+            // The floating toolbar is Collapsed until Crop/Straighten starts.
+            // A collapsed WPF subtree need not exist in the VISUAL tree yet,
+            // but its XAML logical ancestry is still fully defined.
+            // Verify the actual logical parent chain instead of depending on
+            // whether a hidden ScrollViewer has generated a visual template.
+            static bool IsWithinLogicalParent(DependencyObject item,
+                DependencyObject ancestor)
+            {
+                for (DependencyObject? parent = item; parent is not null;
+                     parent = LogicalTreeHelper.GetParent(parent))
+                    if (ReferenceEquals(parent, ancestor)) return true;
+                return false;
+            }
+            if (!IsWithinLogicalParent(cropOptions, floatingTools) ||
+                !IsWithinLogicalParent(straightenOptions, floatingTools))
+                throw new Exception(
+                    "Crop/Straighten options are not in image overlay's logical tree.");
             var toolbarFooter = (Grid)window.FindName("ViewerCropFooter")!;
             var histogram = (Canvas)window.FindName("ViewerHistogramCanvas")!;
             var histogramBorder = (Border)((StackPanel)histogram.Parent).Parent;
