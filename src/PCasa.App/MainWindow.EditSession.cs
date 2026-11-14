@@ -31,7 +31,8 @@ public partial class MainWindow
     private bool EnsureEditSession()
     {
         if (!_viewerOpen || _viewerImageInfo is not { } info ||
-            PhotoViewerImage.Source is not BitmapSource bitmap)
+            PhotoViewerImage.Source is not BitmapSource bitmap ||
+            _pendingEditImageIds.Contains(info.Id))
             return false;
         if (!EditableImageFormats.Supports(info.LocalPath))
         {
