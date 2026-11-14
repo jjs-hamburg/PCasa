@@ -103,6 +103,7 @@ public partial class MainWindow
 
     private void ApplyAutomaticImageEdit(string kind)
     {
+        EndMaskPreview();
         if (!EnsureEditSession() || _cropSavePending) return;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
