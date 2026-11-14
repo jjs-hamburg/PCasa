@@ -6,7 +6,7 @@ using System.Windows.Media.Imaging;
 namespace PCasa.App.Services;
 
 /// <summary>
-/// One in-memory edit transaction per JPEG. Crop and rotation share a single
+/// One in-memory edit transaction per still image. All tools share a single
 /// cursor; no original is modified until the user's explicit Save command.
 /// The same operations are replayed at full resolution by the P0 writer.
 /// </summary>
