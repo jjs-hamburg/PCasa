@@ -78,12 +78,14 @@ public static class PhotoEditMasks
                 {
                     var i = y * width + x, p = i * 4;
                     if (pixels[p + 3] == 0) continue;
-                    var delta = Math.Sqrt(Math.Pow(pixels[p] - b0, 2) +
-                        Math.Pow(pixels[p + 1] - g0, 2) +
-                        Math.Pow(pixels[p + 2] - r0, 2));
+                    var db = pixels[p] - b0;
+                    var dg = pixels[p + 1] - g0;
+                    var dr = pixels[p + 2] - r0;
+                    var delta = Math.Sqrt(db * db + dg * dg + dr * dr);
+                    var dx = (x + .5) / width - .5;
+                    var dy = (y + .5) / height - .5;
                     var central = 1 - Math.Min(1,
-                        Math.Sqrt(Math.Pow((x + .5) / width - .5, 2) +
-                                  Math.Pow((y + .5) / height - .5, 2)) * 1.5);
+                        Math.Sqrt(dx * dx + dy * dy) * 1.5);
                     var score = Math.Clamp((delta - 22) / 85, 0, 1) *
                         (.55 + .45 * central);
                     score = score * score * (3 - 2 * score);
