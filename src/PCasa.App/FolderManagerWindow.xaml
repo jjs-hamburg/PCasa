@@ -45,7 +45,7 @@
             <Border Grid.Column="0" BorderBrush="{DynamicResource PcasaDividerBrush}" BorderThickness="1"
                     Background="{DynamicResource PcasaPanelBrush}">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Überwachte Ordner – nach Laufwerk zusammengefasst"
+                    <TextBlock DockPanel.Dock="Top" Text="{loc:Tr Key='Überwachte Ordner – nach Laufwerk zusammengefasst'}"
                                FontWeight="SemiBold" Margin="12,11,12,9" />
                     <TreeView x:Name="FolderManagerTree"
                               Background="Transparent"
@@ -69,7 +69,7 @@
               <StackPanel>
                 <TextBlock Text="{loc:Tr Key='Explizit überwachte Ordner'}"
                            FontWeight="SemiBold" Margin="0,0,0,7"/>
-                <TextBlock Text="Überwachungswurzeln aktivieren oder entfernen. Änderungen gelten erst mit OK."
+                <TextBlock Text="{loc:Tr Key='Überwachungswurzeln aktivieren oder entfernen. Änderungen gelten erst mit OK.'}"
                            TextWrapping="Wrap" Opacity=".7" Margin="0,0,0,8"/>
                 <StackPanel x:Name="MonitoredRootsList" Margin="1,0,0,14"/>
                 <Separator Margin="0,4,0,12"/>
