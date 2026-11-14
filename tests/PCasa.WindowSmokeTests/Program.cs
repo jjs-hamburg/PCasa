@@ -52,6 +52,20 @@ internal static class Program
         PCasa.App.MainWindow? window = null;
         try
         {
+            LocalizationFlow.Run();
+            var canDeletePermanently = typeof(PCasa.App.MainWindow).GetMethod(
+                "MayDeletePermanently",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            bool Permanent(string path) => (bool)canDeletePermanently.Invoke(
+                null, new object[] { path })!;
+            if (!Permanent(@"\\server\share\photo.jpg") ||
+                Permanent(Path.Combine(Path.GetTempPath(), "photo.jpg")))
+                throw new Exception(
+                    "Deletion confirmation misclassified local recycle-bin and UNC paths.");
+            Console.WriteLine(
+                "PASS: Manual gallery deletion can classify recycle-bin policy without scheduler or NAS probe.");
+
             var app = new PCasa.App.App();
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
@@ -155,6 +169,14 @@ internal static class Program
                 if (translatedAuto.Text != "Contrast (automatic)")
                     throw new Exception(
                         "Dynamic editor tool captions did not switch to English.");
+                if (!Equals(((Button)window.FindName("BrightnessResetButton")!).Content,
+                        "Reset") ||
+                    !Equals(((CheckBox)window.FindName("StraightenWideRangeCheckBox")!).Content,
+                        "Extended range ±45°") ||
+                    !Equals(((Slider)window.FindName("StraightenAngleSlider")!).ToolTip,
+                        "Fine adjustment: arrow keys 0.05°. Extended range up to ±45°."))
+                    throw new Exception(
+                        "Editor controls retained untranslated German captions or tooltips.");
             }
             finally
             {
@@ -2310,6 +2332,12 @@ internal static class Program
                 System.Reflection.BindingFlags.Instance;
             var viewerOpenField = viewerType.GetField("_viewerOpen", reflectFlags)!;
             var viewerInfoField = viewerType.GetField("_viewerImageInfo", reflectFlags)!;
+            // The synthetic photo is not in the catalog. Isolate its
+            // viewer state from any real photo sequence created by an
+            // earlier smoke fixture: delayed Fit refinement must not
+            // start ShowViewerImage and clear the synthetic image info.
+            var viewerSequenceForFixture = viewerType.GetField("_viewerSequence", reflectFlags)!;
+            var previousViewerSequence = viewerSequenceForFixture.GetValue(window);
             var fitField = viewerType.GetField("_viewerFitToScreen", reflectFlags)!;
             var zoomField = viewerType.GetField("_viewerZoomPercent", reflectFlags)!;
             var fullscreenField = viewerType.GetField("_viewerFullscreenWindow", reflectFlags)!;
@@ -2332,6 +2360,7 @@ internal static class Program
             Console.WriteLine("PASS: Viewer and comparison use gallery background without fixed black bars.");
             try
             {
+                viewerSequenceForFixture.SetValue(window, null);
                 viewerOpenField.SetValue(window, true);
                 viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
                     999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 4000, 1000));
@@ -2819,6 +2848,7 @@ internal static class Program
                     stillOpen.Close();
                 viewerOpenField.SetValue(window, false);
                 viewerInfoField.SetValue(window, null);
+                viewerSequenceForFixture.SetValue(window, previousViewerSequence);
                 panel.Visibility = Visibility.Collapsed;
             }
 

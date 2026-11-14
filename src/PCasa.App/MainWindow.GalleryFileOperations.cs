@@ -43,7 +43,7 @@ public partial class MainWindow
             .Select(item => item.Path).ToArray();
 
     private async Task<(long Id, string Path)[]> SelectedGalleryImagePathsAsync(
-        long[] selectedIds)
+        long[] selectedIds, SchedulerPriority priority = SchedulerPriority.Interactive)
     {
         if (selectedIds.Length == 0) return [];
 
@@ -71,7 +71,7 @@ public partial class MainWindow
             // from changing this particular drag or clipboard request.
             var uncachedPaths = await _scheduler.RunAsync(
                 $"catalog:selected-gallery-paths:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
+                priority,
                 token =>
                 {
                     var result = new Dictionary<long, string>();
@@ -798,6 +798,27 @@ public partial class MainWindow
         return package;
     }
 
+    // Checking the recycle-bin policy must never enter the scheduler or
+    // resolve a mapped drive through WNetGetUniversalName over a stalled VPN.
+    // GetDriveType reads the locally configured Windows volume type. When it
+    // is unknown, conservatively warn that deletion may be permanent.
+    internal static bool MayDeletePermanently(string path)
+    {
+        if (path.StartsWith(@"\\", StringComparison.Ordinal)) return true;
+        try
+        {
+            var root = Path.GetPathRoot(path);
+            return string.IsNullOrWhiteSpace(root) ||
+                new DriveInfo(root).DriveType is DriveType.Network or
+                    DriveType.Unknown or DriveType.NoRootDirectory;
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or
+            UnauthorizedAccessException or NotSupportedException)
+        {
+            return true;
+        }
+    }
+
     private async Task DeleteSelectedImagesAsync()
     {
         if (_selectedImageIds.Count == 0) return;
@@ -805,25 +826,26 @@ public partial class MainWindow
         bool anyNetwork;
         try
         {
-            // Reads use scheduler lanes; capture the intended selection before
-            // presenting the confirmation dialog.
-            selected = await SelectedGalleryImagePathsAsync(_selectedImageIds.ToArray());
+            // Gallery selection/paths are a published in-memory snapshot in
+            // the common case. A missing tier uses a P0 catalog lookup:
+            // confirmation for a MANUAL delete cannot queue behind scanning.
+            selected = await SelectedGalleryImagePathsAsync(
+                _selectedImageIds.ToArray(), SchedulerPriority.ManualAction);
             if (selected.Length == 0) return;
-            anyNetwork = await _scheduler.RunAsync(
-                $"gallery:delete-network-probe:{Guid.NewGuid():N}",
-                SchedulerPriority.Interactive,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return selected.Any(item => PathClassifier.Classify(item.Path).IsNetwork);
-                }, workKind: SchedulerWorkKind.SourceProbe);
+            // No scheduler work and no network provider lookup before the
+            // user's confirmation. Actual existence, identity and deletion
+            // remain inside the durable P0 delete package after confirmation.
+            anyNetwork = selected.Any(item => MayDeletePermanently(item.Path));
         }
         catch (Exception ex) { ShowFileActionError(ex); return; }
 
         var prompt = anyNetwork
-            ? $"{selected.Length:N0} Bilddatei(en) löschen?\n\n" +
-              UiLanguage.T("Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht.")
-            : $"{selected.Length:N0} Bilddatei(en) in den Windows-Papierkorb verschieben?";
+            ? UiLanguage.Format("{0:N0} Bilddatei(en) löschen?", selected.Length) +
+              "\n\n" + UiLanguage.T(
+                  "Mindestens eine liegt auf einem Netzlaufwerk und wird dort ENDGÜLTIG gelöscht.")
+            : UiLanguage.Format(
+                "{0:N0} Bilddatei(en) in den Windows-Papierkorb verschieben?",
+                selected.Length);
         if (PcasaDialog.Show(this, prompt, UiLanguage.T("Bilder löschen"),
                 MessageBoxButton.YesNo, MessageBoxImage.Warning,
                 MessageBoxResult.No) != MessageBoxResult.Yes) return;

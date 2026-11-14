@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using PCasa.App.Services;
 
 namespace PCasa.App.Controls;
 
@@ -80,8 +81,9 @@ public sealed class PicasaGalleryScrollBar : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Cursor = Cursors.SizeNS,
-            ToolTip = "Ziehen: Scrollgeschwindigkeit steuern"
         };
+        _grip.SetBinding(FrameworkElement.ToolTipProperty,
+            UiLanguage.BindingFor("Ziehen: Scrollgeschwindigkeit steuern"));
         var gripTemplate = new ControlTemplate(typeof(Thumb));
         var border = new FrameworkElementFactory(typeof(Border));
         border.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
@@ -173,11 +175,12 @@ public sealed class PicasaGalleryScrollBar : UserControl
             Margin = new Thickness(1),
             Padding = new Thickness(0),
             Content = icon,
-            ToolTip = tooltip,
             Delay = 360,
             Interval = 95,
             Focusable = false
         };
+        arrow.SetBinding(FrameworkElement.ToolTipProperty,
+            UiLanguage.BindingFor(tooltip));
         arrow.SetResourceReference(BackgroundProperty, "PcasaPanelAltBrush");
         arrow.SetResourceReference(StyleProperty, "PcasaGalleryArrowStyle");
         arrow.Click += (_, _) => action();

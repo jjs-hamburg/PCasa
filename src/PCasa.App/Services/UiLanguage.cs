@@ -29,6 +29,12 @@ public sealed class UiLanguage : INotifyPropertyChanged
 
     public static string T(string germanSource) => Current.Translate(germanSource);
 
+    // C#-constructed controls must use the same revision-bound converter
+    // as loc:Tr markup; a one-time UiLanguage.T assignment would remain
+    // German after switching to English while the window is open.
+    public static Binding BindingFor(string germanSource) =>
+        TrExtension.CreateBinding(germanSource);
+
     public static string Format(string germanTemplate, params object?[] values) =>
         string.Format(CultureInfo.CurrentCulture, T(germanTemplate), values);
 
@@ -78,16 +84,17 @@ public sealed class TrExtension : MarkupExtension
     public TrExtension() { }
     public TrExtension(string key) => Key = key;
 
-    public override object ProvideValue(IServiceProvider serviceProvider)
-    {
-        return new Binding(nameof(UiLanguage.Revision))
+    internal static Binding CreateBinding(string key) =>
+        new(nameof(UiLanguage.Revision))
         {
             Source = UiLanguage.Current,
             Converter = Translator.Instance,
-            ConverterParameter = Key,
+            ConverterParameter = key,
             Mode = BindingMode.OneWay
-        }.ProvideValue(serviceProvider);
-    }
+        };
+
+    public override object ProvideValue(IServiceProvider serviceProvider)
+        => CreateBinding(Key).ProvideValue(serviceProvider);
 
     private sealed class Translator : IValueConverter
     {

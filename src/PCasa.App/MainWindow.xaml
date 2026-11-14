@@ -531,7 +531,7 @@
                             <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
-                        <MenuItem Header="GPX..." Click="GpxOptions_Click"/>
+                        <MenuItem Header="{loc:Tr Key='GPX-Optionen'}" Click="GpxOptions_Click"/>
                         <MenuItem Header="{loc:Tr Key='Bildbearbeitung'}">
                             <MenuItem Header="{loc:Tr Key='Undo-Einstellungen'}" Click="UndoOptions_Click"/>
                         </MenuItem>
@@ -613,7 +613,7 @@
                                     Style="{StaticResource PcasaSearchSortButtonStyle}"
                                     ToolTip="{loc:Tr Key='Eigenschaftsfilter auswählen'}"
                                     Click="GalleryAttributeFilterSelector_Click">
-                                <TextBlock x:Name="GalleryAttributeFilterLabel" Text="Filter" FontSize="12"
+                                <TextBlock x:Name="GalleryAttributeFilterLabel" Text="{loc:Tr Key='Filter'}" FontSize="12"
                                            VerticalAlignment="Center"/>
                                 <Button.ContextMenu><ContextMenu>
                                     <MenuItem x:Name="GalleryAttributeAllMediaMenu" Header="{loc:Tr Key='Alle Medien'}" Tag="None"
@@ -782,7 +782,7 @@
                     <StackPanel x:Name="PhotoZoomToolbar" Grid.Column="3"
                                 Orientation="Horizontal" VerticalAlignment="Center"
                                 Visibility="Collapsed">
-                        <Button Content="Fit to Screen" MinWidth="103" Height="30"
+                        <Button Content="{loc:Tr Key='An Fenster anpassen'}" MinWidth="103" Height="30"
                                 Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
                         <Button Content="100 %" MinWidth="58" Height="30"
                                 Margin="0,0,12,0" Click="PhotoViewerActualSize_Click" />
@@ -1283,16 +1283,16 @@
                                             SmallChange=".05" LargeChange=".5"
                                             TickFrequency=".05" IsSnapToTickEnabled="False"
                                             IsMoveToPointEnabled="True"
-                                            ToolTip="Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°."
+                                            ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"
                                             VerticalAlignment="Center"/>
                                     <TextBlock x:Name="StraightenAngleValue" Width="65"
                                                Text="0,00°" TextAlignment="Right"
                                                VerticalAlignment="Center" Margin="7,0,0,0"/>
                                 </StackPanel>
                                 <CheckBox x:Name="StraightenWideRangeCheckBox"
-                                          Content="Großer Bereich ±45°"
+                                          Content="{loc:Tr Key='Großer Bereich ±45°'}"
                                           FontSize="11" Margin="0,0,0,9"
-                                          ToolTip="Normal: feinfühlig ±10°. Optional: gesamter Winkelbereich ±45°."/>
+                                          ToolTip="{loc:Tr Key='Normal: feinfühlig ±10°. Optional: gesamter Winkelbereich ±45°.'}"/>
                                 <StackPanel Orientation="Horizontal">
                                     <Button x:Name="StraightenLeftButton" Content="↶ 90°"
                                             Height="28" Padding="10,2" Margin="0,0,7,0"
@@ -1498,7 +1498,7 @@
 <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,0,0,6"><ToggleButton x:Name="GpsFilmstripToggle" Width="37" Height="29" Margin="0,0,4,2" Padding="4" ToolTip="{loc:Tr Key='GPS Filmstrip'}" Checked="GpsFilmstripToggle_Changed" Unchecked="GpsFilmstripToggle_Changed" ToolTipService.ShowOnDisabled="True">
    <Viewbox Width="22" Height="22"><Canvas Width="28" Height="28"><Rectangle Canvas.Left="3" Canvas.Top="4" Width="22" Height="20" RadiusX="2" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8"/><Ellipse Canvas.Left="17" Canvas.Top="8" Width="4" Height="4" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/><Path Data="M5,21 L11,14 L15,18 L18,15 L23,21" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.8" Fill="Transparent"/></Canvas></Viewbox>
   </ToggleButton><ToggleButton x:Name="GpsGpxToggle" Height="29" Margin="0,0,4,2"
-                Padding="4" Width="37" ToolTip="GPX Import" Checked="GpsGpxToggle_Changed"
+                Padding="4" Width="37" ToolTip="{loc:Tr Key='GPX-Import'}" Checked="GpsGpxToggle_Changed"
                 Unchecked="GpsGpxToggle_Changed">
     <Viewbox Width="22" Height="22"><Canvas Width="28" Height="28"><Path Data="M6,2 H18 L24,8 V26 H6 Z M18,2 V8 H24" Stroke="{DynamicResource PcasaTextBrush}" Fill="Transparent" StrokeThickness="1.8"/><TextBlock Canvas.Left="7" Canvas.Top="12" Text="GPX" FontSize="9" FontWeight="Bold" Foreground="{DynamicResource PcasaTextBrush}"/></Canvas></Viewbox>
   </ToggleButton></StackPanel>
@@ -1556,23 +1556,23 @@
                                     <TextBlock Text="{loc:Tr Key='Name'}"/>
                                     <TextBox x:Name="GpsProviderNameBox" Margin="0,0,0,6"/>
                                     <StackPanel x:Name="GpsProviderFormatPanel">
-                                        <TextBlock Text="URL-Typ (nicht Kartenstil)" FontSize="11" />
+                                        <TextBlock Text="{loc:Tr Key='URL-Typ (nicht Kartenstil)'}" FontSize="11" />
                                         <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
                                             <RadioButton x:Name="GpsProviderStyleRadio" Content="MapLibre JSON" IsChecked="True"
                                                          GroupName="GpsProviderFormat" Margin="0,0,12,0" />
-                                            <RadioButton x:Name="GpsProviderXyzRadio" Content="XYZ-Kacheln"
+                                            <RadioButton x:Name="GpsProviderXyzRadio" Content="{loc:Tr Key='XYZ-Kacheln'}"
                                                          GroupName="GpsProviderFormat" />
                                         </StackPanel>
                                     </StackPanel>
                                     <StackPanel x:Name="GpsMapTilerStylePanel" Visibility="Collapsed">
-                                        <TextBlock Text="MapTiler-Kartenstil" FontSize="11" />
+                                        <TextBlock Text="{loc:Tr Key='MapTiler-Kartenstil'}" FontSize="11" />
                                         <StackPanel Orientation="Horizontal" Margin="0,3,0,8">
-                                            <RadioButton x:Name="GpsMapTilerHybridRadio" Content="Hybrid (mit Beschriftung)"
+                                            <RadioButton x:Name="GpsMapTilerHybridRadio" Content="{loc:Tr Key='Hybrid (mit Beschriftung)'}"
                                                          IsChecked="True" GroupName="GpsMapTilerStyle" Margin="0,0,12,0" />
-                                            <RadioButton x:Name="GpsMapTilerSatelliteRadio" Content="Satellit"
+                                            <RadioButton x:Name="GpsMapTilerSatelliteRadio" Content="{loc:Tr Key='Satellit'}"
                                                          GroupName="GpsMapTilerStyle" />
                                         </StackPanel>
-                                        <TextBlock Text="MapLibre JSON wird automatisch verwendet."
+                                        <TextBlock Text="{loc:Tr Key='MapLibre JSON wird automatisch verwendet.'}"
                                                    FontSize="10" Opacity=".75" Margin="0,0,0,7"/>
                                     </StackPanel>
                                     <TextBlock x:Name="GpsProviderUrlLabel" Text="HTTPS-URL"/>
@@ -1582,7 +1582,7 @@
                                     <TextBlock Text="{loc:Tr Key='API-Schlüssel optional'}"/>
                                     <PasswordBox x:Name="GpsProviderKeyBox" Margin="0,0,0,6"/>
                                     <Button x:Name="GpsProviderGetKeyButton"
-                                            Content="MapTiler API-Key holen (Browser)"
+                                            Content="{loc:Tr Key='MapTiler API-Key holen (Browser)'}"
                                             HorizontalAlignment="Left" Padding="9,4"
                                             Margin="0,0,0,9" Visibility="Collapsed"
                                             Click="GpsProviderGetKey_Click" />
@@ -1604,11 +1604,11 @@
                             <Grid Margin="4">
                                 <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                                 <DockPanel Grid.Row="0">
-                                    <Button x:Name="GpsGpxToGalleryButton" Content="GPX → Galerie"
+                                    <Button x:Name="GpsGpxToGalleryButton" Content="{loc:Tr Key='GPX → Galerie'}"
                                             IsEnabled="False" DockPanel.Dock="Right"
                                             Margin="4,0,0,2" Padding="8,1"
                                             Click="GpsGpxToGallery_Click"/>
-                                    <TextBlock x:Name="GpsGpxHeader" Text="GPX Import"
+                                    <TextBlock x:Name="GpsGpxHeader" Text="{loc:Tr Key='GPX-Import'}"
                                                FontSize="12" FontWeight="SemiBold"
                                                VerticalAlignment="Center" Margin="5,0,0,0"/>
                                 </DockPanel>
@@ -1633,7 +1633,7 @@
                                     </DataTemplate></ListBox.ItemTemplate>
                                 </ListBox>
                                 <TextBlock x:Name="GpsGpxEmptyText" Grid.Row="1"
-                                  Text="Keine GPX-Dateien." FontSize="12"
+                                  Text="{loc:Tr Key='Keine GPX-Dateien.'}" FontSize="12"
                                   Foreground="{DynamicResource PcasaMutedTextBrush}"
                                   VerticalAlignment="Center" HorizontalAlignment="Center"
                                   IsHitTestVisible="False" Visibility="Collapsed"/>
