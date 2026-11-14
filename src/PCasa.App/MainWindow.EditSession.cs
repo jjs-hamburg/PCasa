@@ -421,7 +421,87 @@ public partial class MainWindow
                 1, 1, request.Path);
             return Task.CompletedTask;
         });
+        if (request.CopyPath is { Length: > 0 } copy)
+        {
+            // The save AND catalog import are ONE durable P0 package.
+            // Never rely on a low-priority background watcher to make a
+            // newly saved copy available to the viewer minutes later.
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                var root = _folderRepository.GetAll().FirstOrDefault(folder =>
+                    folder.Id == request.FolderId)
+                    ?? throw new InvalidOperationException(
+                        "Der Überwachungsordner der Bildkopie fehlt.");
+                var result = _folderScanner.ScanFile(root, copy,
+                    cancellationToken: token, publishCatalogChange: false,
+                    forceExifRefresh: true);
+                if (result.Failed > 0 || result.Added == 0 &&
+                    !File.Exists(copy))
+                    throw new IOException(
+                        "Die gespeicherte Bildkopie konnte nicht katalogisiert werden.");
+                return Task.CompletedTask;
+            });
+        }
         return package;
+    }
+
+    private async Task ActivateSavedCopyAsync(EditWriteRecipe request)
+    {
+        var copy = request.CopyPath
+            ?? throw new InvalidOperationException("Kein Kopiepfad vorhanden.");
+        // The scanner has already committed the image and packed tiers in the
+        // SAME manual package. Read the identity from SQLite off-dispatcher;
+        // do not guess it from a filename or wait for automatic P3 scanning.
+        var copyId = await _galleryCatalogReader.ReadAsync(token =>
+        {
+            token.ThrowIfCancellationRequested();
+            using var db = _database.OpenConnection();
+            using var command = db.CreateCommand();
+            command.CommandText =
+                "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+            command.Parameters.AddWithValue("$path", copy);
+            return command.ExecuteScalar() is { } value
+                ? (long?)Convert.ToInt64(value) : null;
+        });
+        if (copyId is not long newId)
+            throw new InvalidDataException("Die Bildkopie wurde nicht im Katalog gefunden.");
+
+        await RefreshBrowseGalleryAsync(forceIndexReload: true);
+        if (!_viewerOpen || _viewerImageInfo?.Id != request.ImageId)
+            return; // User already navigated away; never hijack that viewer.
+
+        var sequence = PhotoSequence.Create(_displayedBrowseIndex,
+            BrowseSurface.HiddenFolderIds, newId, _viewerSettings.SequenceScope);
+        var next = sequence.IndexOfImage(newId);
+        if (next < 0)
+        {
+            // An active search/property filter may hide the new copy. It is
+            // still the just-saved CURRENT photo. Show a temporary one-image
+            // sequence instead of jumping back to the original.
+            var indexed = await _galleryCatalogReader.ReadAsync(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                return _browseCacheRepository?.GetIndexEntry(
+                    _activeBrowseTier ?? 192, newId);
+            });
+            if (indexed is null)
+                throw new InvalidDataException("Die Bildkopie besitzt keinen Galerieeintrag.");
+            sequence = PhotoSequence.Create(new[] { indexed },
+                new HashSet<long>(), newId, PhotoSequenceScope.Gallery);
+            next = sequence.IndexOfImage(newId);
+        }
+
+        // Clear the old undo/crop state without restoring the original photo
+        // as the selected viewer identity.
+        _photoEditSession = null;
+        if (_cropActive) EndCrop();
+        if (_straightenActive) LeaveStraighten();
+        if (_brightnessActive) LeaveBrightness();
+        _viewerSequence = sequence;
+        _viewerCurrentIndex = next;
+        SelectViewerImage(newId);
+        ShowViewerImage();
     }
 
     private async Task ObserveEditCommitAsync(
@@ -448,19 +528,23 @@ public partial class MainWindow
             {
                 if (request.CopyPath is { Length: > 0 } copyPath)
                 {
-                    // The viewer still represents the ORIGINAL photo.
-                    // Remove its temporary edit preview; never mark the
-                    // original as edited or invalidate its thumbnail.
-                    if (_photoEditSession?.ImageId == request.ImageId)
-                        CancelEditSession();
-                    // New files enter the existing catalog scanner exactly
-                    // once, under the original monitored folder.
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        request.FolderId, copyPath,
-                        BackgroundFolderChangeKind.ScanFile,
-                        Recursive: false, ForceExifRefresh: true));
-                    StatusText.Text = UiLanguage.T("Kopie gespeichert: ") +
-                        Path.GetFileName(copyPath);
+                    // The P0 edit package already imported and indexed the
+                    // new JPEG. An explicit gallery refresh exposes its ID;
+                    // then the viewer switches to the COPY, never the source.
+                    try
+                    {
+                        await ActivateSavedCopyAsync(request);
+                        StatusText.Text = UiLanguage.T("Kopie gespeichert: ") +
+                            Path.GetFileName(copyPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        PCasaDiagnostics.Write("Image.Edit.CopyFocus", ex);
+                        if (!Dispatcher.HasShutdownStarted)
+                            PcasaDialog.Show(this, ex.Message,
+                                UiLanguage.T("Bildbearbeitung speichern"),
+                                MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
                 }
                 else
                 {
