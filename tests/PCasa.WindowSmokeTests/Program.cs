@@ -1475,6 +1475,9 @@ internal static class Program
             var tierForScanner = scrollType.GetField(
                 "_activeBrowseTier", scrollFlags)!;
             var previousTierForScanner = tierForScanner.GetValue(window);
+            var browseInitializedField = scrollType.GetField(
+                "_browseInitialized", scrollFlags)!;
+            var wasBrowseInitialized = (bool)browseInitializedField.GetValue(window)!;
             try
             {
                 folderBeforeScroll.SetValue(window, (long?)100);
@@ -1553,11 +1556,21 @@ internal static class Program
                 // gallery. Start the separate interior-policy assertion with
                 // its synthetic fixture again; never interpret an empty
                 // real catalog as a failure of the interior boundary rule.
-                // Reaching the preceding LIVE edge may have started a
-                // legitimate asynchronous refresh of the runner's empty
-                // catalog. Drain that publication BEFORE restoring the
-                // isolated synthetic index; otherwise the late completion
-                // can overwrite the fixture during Flush().
+                // This next test uses SYNTHETIC rows that do not exist in
+                // the runner's empty SQLite catalog. The preceding live-edge
+                // probe can legitimately schedule a real catalog refresh.
+                // Disable real catalog publication ONLY for this synthetic
+                // test phase (not in PCasa's production code), and invalidate
+                // any already in-flight async read. Without BOTH guards a
+                // late empty-catalog result races with SetData(synthetic)
+                // and incorrectly makes this old smoke fixture disappear.
+                browseInitializedField.SetValue(window, false);
+                ((LatestViewRequest)scrollType.GetField(
+                    "_browseRefreshRequests", scrollFlags)!.GetValue(window)!)
+                    .Invalidate();
+
+                // Drain the existing real catalog publisher before placing
+                // synthetic data back into the WPF gallery surface.
                 var publisherField = scrollType.GetField(
                     "_galleryRefreshCompletion", scrollFlags)!;
                 for (var retry = 0; retry < 100; retry++)
@@ -1660,6 +1673,9 @@ internal static class Program
                 tierForScanner.SetValue(window, previousTierForScanner);
                 scroller.ScrollToVerticalOffset(2800);
                 Flush(window);
+                // End of synthetic scanner publication policy probe. The
+                // normal gallery publisher is available again afterwards.
+                browseInitializedField.SetValue(window, wasBrowseInitialized);
             }
 
             // Regression: a background import inserts entire rows while the
