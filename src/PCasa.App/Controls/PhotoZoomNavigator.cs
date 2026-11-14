@@ -74,9 +74,10 @@ public sealed class PhotoZoomNavigator : Border
             Height = 20,
             MinWidth = 20,
             FontSize = 12,
-            ToolTip = UiLanguage.T("Übersicht ausblenden"),
             Cursor = Cursors.Hand
         };
+        close.SetBinding(FrameworkElement.ToolTipProperty,
+            UiLanguage.BindingFor("Übersicht ausblenden"));
         Grid.SetColumn(close, 1);
         close.Click += (_, e) =>
         {
