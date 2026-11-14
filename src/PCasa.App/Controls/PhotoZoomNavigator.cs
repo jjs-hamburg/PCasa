@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using PCasa.App.Services;
 
 namespace PCasa.App.Controls;
 
@@ -73,7 +74,7 @@ public sealed class PhotoZoomNavigator : Border
             Height = 20,
             MinWidth = 20,
             FontSize = 12,
-            ToolTip = "Übersicht ausblenden",
+            ToolTip = UiLanguage.T("Übersicht ausblenden"),
             Cursor = Cursors.Hand
         };
         Grid.SetColumn(close, 1);
