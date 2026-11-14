@@ -2430,6 +2430,48 @@ internal static class Program
                 zoomField.SetValue(window, 100d);
                 applyLayout.Invoke(window, null);
                 Flush(window);
+                // Alpha.28 regression: replacing an edit preview at 200%
+                // must NOT reinterpret its 1000px width as the original
+                // physical 4000px width or recenter the visible photo.
+                var editStateField = viewerType.GetField(
+                    "_photoEditSession", reflectFlags)!;
+                var oldEditState = editStateField.GetValue(window);
+                var oldViewerSource = viewerImage.Source;
+                try
+                {
+                    var editPixels = BitmapSource.Create(1000, 250, 96, 96,
+                        PixelFormats.Bgra32, null,
+                        new byte[1000 * 250 * 4], 1000 * 4);
+                    var editState = new PhotoEditSession(999, editPixels);
+                    editStateField.SetValue(window, editState);
+                    viewerImage.Source = editPixels;
+                    fitField.SetValue(window, false);
+                    zoomField.SetValue(window, 200d);
+                    applyLayout.Invoke(window, null);
+                    Flush(window);
+                    var widthBeforeSlider = viewerImage.Width;
+                    var preview = PhotoEditSession.Render(editPixels,
+                        [new PhotoEditStep("contrast", Amount: .25)]);
+                    viewerImage.Source = preview;
+                    applyLayout.Invoke(window, null);
+                    Flush(window);
+                    if ((bool)fitField.GetValue(window)! ||
+                        Math.Abs((double)zoomField.GetValue(window)! - 200) > .01 ||
+                        Math.Abs(widthBeforeSlider - viewerImage.Width) > 1)
+                        throw new Exception(
+                            "Alpha.28 filter preview reset zoom from the original pixels.");
+                    Console.WriteLine(
+                        "PASS: WPF 200% edit-preview replacement retains physical zoom.");
+                }
+                finally
+                {
+                    editStateField.SetValue(window, oldEditState);
+                    viewerImage.Source = oldViewerSource;
+                    fitField.SetValue(window, true);
+                    zoomField.SetValue(window, 100d);
+                    applyLayout.Invoke(window, null);
+                    Flush(window);
+                }
                 // Exercise a real measured sidebar transition while the
                 // picture viewer is active, without invoking network/GPS IO.
                 var sidebarModeField = viewerType.GetField("_sidebarMode", reflectFlags)!;
