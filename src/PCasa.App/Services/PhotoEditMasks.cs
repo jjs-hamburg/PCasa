@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -76,7 +77,8 @@ public static class PhotoEditMasks
                 if ((y & 63) == 0) token.ThrowIfCancellationRequested();
                 for (var x = 0; x < width; x++)
                 {
-                    var i = y * width + x, p = i * 4;
+                    var i = y * width + x;
+                    var p = i * 4;
                     if (pixels[p + 3] == 0) continue;
                     var db = pixels[p] - b0;
                     var dg = pixels[p + 1] - g0;
@@ -106,7 +108,9 @@ public static class PhotoEditMasks
             if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();
             var p = i * 4;
             if (pixels[p + 3] == 0) continue;
-            var b = pixels[p], g = pixels[p + 1], r = pixels[p + 2];
+            var b = pixels[p];
+            var g = pixels[p + 1];
+            var r = pixels[p + 2];
             var luminance = Lum(b, g, r);
             var blue = b >= r * 1.08 && b >= g * .91 && luminance >= 62;
             var cloud = luminance >= 165 &&
@@ -128,7 +132,8 @@ public static class PhotoEditMasks
         {
             if ((head & 0xffff) == 0) token.ThrowIfCancellationRequested();
             var current = queue[head++];
-            var x = current % width, y = current / width;
+            var x = current % width;
+            var y = current / width;
             void Visit(int neighbor)
             {
                 if (!candidate[neighbor] || mask[neighbor] != 0) return;
