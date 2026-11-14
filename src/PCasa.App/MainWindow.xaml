@@ -1014,6 +1014,24 @@
                                     </StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
                                         <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Schärfradius'}" FontSize="11"/>
+                                        <Slider x:Name="SharpenRadiusSlider" Width="112"
+                                                Minimum="1" Maximum="3" Value="1"
+                                                SmallChange=".25" LargeChange=".5"
+                                                IsMoveToPointEnabled="True"
+                                                ToolTip="{loc:Tr Key='Schärfradius'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Detailerhalt'}" FontSize="11"/>
+                                        <Slider x:Name="SharpenDetailSlider" Width="112"
+                                                Minimum="0" Maximum="1" Value=".5"
+                                                SmallChange=".05" LargeChange=".2"
+                                                IsMoveToPointEnabled="True"
+                                                ToolTip="{loc:Tr Key='Detailerhalt'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Lichter'}" FontSize="11"/>
                                         <Slider x:Name="HighlightsSlider" Width="112"
                                                 Minimum="-1" Maximum="1" Value="0"
