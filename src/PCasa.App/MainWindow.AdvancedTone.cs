@@ -38,6 +38,8 @@ public partial class MainWindow
             slider.ValueChanged += (_, _) => ChangeAdvancedTone(kind, slider.Value);
             reset.Click += (_, _) => slider.Value = 0;
         }
+        SharpenAutoButton.Click += (_, _) =>
+            ApplyAutomaticImageEdit("auto-sharpen");
         SharpenRadiusSlider.ValueChanged += (_, _) =>
         {
             if (_advancedToneActive && _advancedToneKind == "sharpen")
