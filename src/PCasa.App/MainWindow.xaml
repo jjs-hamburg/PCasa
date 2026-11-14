@@ -966,6 +966,155 @@
                                     </DockPanel>
 
                                 </StackPanel>
+                                <!-- All manual corrections share the ONE undoable edit
+                                     session and the SAME full-resolution P0 writer. -->
+                                <StackPanel x:Name="ViewerAdvancedToneOptions"
+                                            Margin="3,10,3,4">
+                                    <TextBlock Text="{loc:Tr Key='Feinabstimmung'}"
+                                               FontWeight="SemiBold" FontSize="12"
+                                               Margin="0,2,0,5"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Rauschen (Helligkeit)'}" FontSize="11"/>
+                                        <Slider x:Name="DenoiseLumaSlider" Width="112"
+                                                Minimum="0" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Rauschen (Helligkeit)'}"/>
+                                        <Button x:Name="DenoiseLumaResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Rauschen (Farbe)'}" FontSize="11"/>
+                                        <Slider x:Name="DenoiseChromaSlider" Width="112"
+                                                Minimum="0" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Rauschen (Farbe)'}"/>
+                                        <Button x:Name="DenoiseChromaResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Schärfen'}" FontSize="11"/>
+                                        <Slider x:Name="SharpenSlider" Width="112"
+                                                Minimum="0" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Schärfen'}"/>
+                                        <Button x:Name="SharpenResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <Button x:Name="SharpenAutoButton"
+                                            Content="{loc:Tr Key='Schärfen (automatisch)'}"
+                                            ToolTip="{loc:Tr Key='Feine Bilddetails vorsichtig automatisch schärfen'}"
+                                            Height="25" Padding="7,1"
+                                            HorizontalAlignment="Left"
+                                            Margin="159,0,0,5"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Schärfradius'}" FontSize="11"/>
+                                        <Slider x:Name="SharpenRadiusSlider" Width="112"
+                                                Minimum="1" Maximum="3" Value="1"
+                                                SmallChange=".25" LargeChange=".5"
+                                                IsMoveToPointEnabled="True"
+                                                ToolTip="{loc:Tr Key='Schärfradius'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Detailerhalt'}" FontSize="11"/>
+                                        <Slider x:Name="SharpenDetailSlider" Width="112"
+                                                Minimum="0" Maximum="1" Value=".5"
+                                                SmallChange=".05" LargeChange=".2"
+                                                IsMoveToPointEnabled="True"
+                                                ToolTip="{loc:Tr Key='Detailerhalt'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Lichter'}" FontSize="11"/>
+                                        <Slider x:Name="HighlightsSlider" Width="112"
+                                                Minimum="-1" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Lichter'}"/>
+                                        <Button x:Name="HighlightsResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Tiefen'}" FontSize="11"/>
+                                        <Slider x:Name="ShadowsSlider" Width="112"
+                                                Minimum="-1" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Tiefen'}"/>
+                                        <Button x:Name="ShadowsResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Kontrast (manuell)'}" FontSize="11"/>
+                                        <Slider x:Name="ContrastSlider" Width="112"
+                                                Minimum="-1" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Kontrast (manuell)'}"/>
+                                        <Button x:Name="ContrastResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Farbtemperatur'}" FontSize="11"/>
+                                        <Slider x:Name="TemperatureSlider" Width="112"
+                                                Minimum="-1" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Farbtemperatur'}"/>
+                                        <Button x:Name="TemperatureResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Farbstich (Grün/Magenta)'}" FontSize="11"/>
+                                        <Slider x:Name="TintSlider" Width="112"
+                                                Minimum="-1" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Farbstich (Grün/Magenta)'}"/>
+                                        <Button x:Name="TintResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
+                                        <TextBlock Width="159" VerticalAlignment="Center"
+                                                   Text="{loc:Tr Key='Sättigung'}" FontSize="11"/>
+                                        <Slider x:Name="SaturationSlider" Width="112"
+                                                Minimum="-1" Maximum="1" Value="0"
+                                                SmallChange=".025" LargeChange=".1"
+                                                IsMoveToPointEnabled="True"
+                                                TickFrequency=".025" VerticalAlignment="Center"
+                                                ToolTip="{loc:Tr Key='Sättigung'}"/>
+                                        <Button x:Name="SaturationResetButton" Width="27"
+                                                Content="↺" Margin="5,0,0,0" Padding="2,0"
+                                                ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
+                                    </StackPanel>
+                                </StackPanel>
                             </StackPanel>
                         </Grid>
                     </ScrollViewer>

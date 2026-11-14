@@ -149,6 +149,16 @@ internal static class Program
                 automaticTools.Children.Count != 3 ||
                 automaticTools.Orientation != Orientation.Horizontal)
                 throw new Exception("Expected two manual tools and three autos in one row.");
+            // Automatic sharpening belongs next to its radius/detail
+            // controls, not as a fourth icon overflowing the auto row.
+            var sharpenAuto = (Button)window.FindName("SharpenAutoButton")!;
+            var sharpenRadius = (Slider)window.FindName("SharpenRadiusSlider")!;
+            var sharpenDetail = (Slider)window.FindName("SharpenDetailSlider")!;
+            if (sharpenAuto is null || sharpenRadius is null ||
+                sharpenDetail is null ||
+                !Equals(sharpenAuto.Content, UiLanguage.T("Schärfen (automatisch)")))
+                throw new Exception(
+                    "Auto-sharpen and radius/detail controls are missing from the tonal editor.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
                 .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
             var toolButtons = toolCards.Select(card =>
@@ -2365,6 +2375,21 @@ internal static class Program
                 viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
                     999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 4000, 1000));
                 panel.Visibility = Visibility.Visible;
+                // Alpha.27: every viewer exit uses ConfirmCropExit, which must
+                // NEVER block when a durable image-save recipe is running.
+                // The tested synthetic photo needs no real source file.
+                var editPending = viewerType.GetField("_cropSavePending", reflectFlags)!;
+                var confirmEditorExit = viewerType.GetMethod("ConfirmCropExit", reflectFlags)!;
+                editPending.SetValue(window, true);
+                try
+                {
+                    if (!(bool)confirmEditorExit.Invoke(window, null)!)
+                        throw new Exception(
+                            "Gallery navigation is blocked by an in-flight image save.");
+                }
+                finally { editPending.SetValue(window, false); }
+                Console.WriteLine(
+                    "PASS: Save-as-copy does not block viewer-to-gallery navigation.");
                 Flush(window);
                 fitField.SetValue(window, true);
                 zoomField.SetValue(window, 100d);

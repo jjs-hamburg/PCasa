@@ -121,10 +121,10 @@ public static class PhotoViewerImageLoader
         using var thumbnail = RawImageSource.LoadDisplayThumbnail(
             displayPath, info.LocalPath, size, size, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        using var prepared = thumbnail.HasAlpha()
-            ? thumbnail.Flatten(background: new[] { 255.0, 255.0, 255.0 })
-            : thumbnail.Copy();
-        var pixels = prepared.PngsaveBuffer(
+        // Preserve transparency in modern still formats. The editor must
+        // preview the SAME alpha-bearing pixels its writer will transform;
+        // flattening to white is a lossy display-only conversion.
+        var pixels = thumbnail.PngsaveBuffer(
             compression: 1,
             keep: Enums.ForeignKeep.Icc);
         cancellationToken.ThrowIfCancellationRequested();

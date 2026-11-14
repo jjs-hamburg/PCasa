@@ -287,22 +287,23 @@ public partial class MainWindow
         CropCancelButton.Click += (_, _) => CancelEditSession();
         InitializeStraightenTools();
         InitializeAutoImageTools();
+        InitializeAdvancedToneTools();
     }
 
     private void BeginCrop()
     {
         if (!_viewerOpen || _viewerImageInfo is not { LocalPath: { } path } ||
-            !System.IO.Path.GetExtension(path).Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
-            !System.IO.Path.GetExtension(path).Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+            !EditableImageFormats.Supports(path))
         {
             PcasaDialog.Show(this,
-                UiLanguage.T("Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert."),
+                UiLanguage.T("Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."),
                 UiLanguage.T("Zuschneiden"), MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (!EnsureEditSession()) return;
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) ApplyEditTool();
+        if (_advancedToneActive) ApplyEditTool();
         if (_photoEditSession is null) return;
         // Work on the currently accepted, unsaved image, not an old source.
         if (_photoEditSession.HasChanges)
@@ -380,7 +381,16 @@ public partial class MainWindow
 
     private bool ConfirmCropExit()
     {
-        if (_cropSavePending) return false;
+        // Saving is a durable manual job, not an editor modal state. The
+        // already submitted recipe owns its pixels and continues after
+        // closing the viewer; do not ask to discard those saved changes.
+        if (_cropSavePending ||
+            (_viewerImageInfo is { } info &&
+             _pendingEditImageIds.Contains(info.Id)))
+        {
+            CancelEditSession();
+            return true;
+        }
         var hasAccepted = _photoEditSession?.HasChanges == true;
         var editedMask = _cropActive && _cropHistory.Count > 0 &&
             (_cropRect != _cropHistory[0].Bounds ||
@@ -390,7 +400,10 @@ public partial class MainWindow
             (Math.Abs(_straightenAngle) > .00001 || _straightenQuarterTurns != 0);
         var pendingBrightness = _brightnessActive &&
             Math.Abs(_brightnessAmount) > .00001;
-        if (hasAccepted || editedMask || pendingAngle || pendingBrightness)
+        var pendingAdvanced = _advancedToneActive &&
+            Math.Abs(_advancedToneAmount) > .00001;
+        if (hasAccepted || editedMask || pendingAngle || pendingBrightness ||
+            pendingAdvanced)
         {
             var response = PcasaDialog.Show(this,
                 UiLanguage.T("Ungespeicherte Bildbearbeitungen verwerfen?"),
