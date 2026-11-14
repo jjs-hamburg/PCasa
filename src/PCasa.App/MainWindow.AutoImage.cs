@@ -108,7 +108,7 @@ public partial class MainWindow
         if (_brightnessActive) ApplyEditTool();
         if (_advancedToneActive) ApplyEditTool();
         if (_photoEditSession is null) return;
-        _photoEditSession.Apply(new PhotoEditStep(kind));
+        _photoEditSession.Apply(new PhotoEditStep(kind, Mask: _selectedEditMask));
         SetViewerBitmap(_photoEditSession.Render());
         ApplyViewerImageLayout();
         UpdateEditControls();
