@@ -159,6 +159,41 @@ internal static class Program
                 !Equals(sharpenAuto.Content, UiLanguage.T("Schärfen (automatisch)")))
                 throw new Exception(
                     "Auto-sharpen and radius/detail controls are missing from the tonal editor.");
+            // Alpha.28: no scrollable wall of sliders; one compact tab
+            // at a time, with masks available through a dedicated button.
+            var editPanel = (Grid)window.FindName("ViewerEditingPanel")!;
+            static bool HasEditorScroll(DependencyObject node)
+            {
+                foreach (var child in LogicalTreeHelper.GetChildren(node)
+                             .OfType<DependencyObject>())
+                {
+                    if (child is ScrollViewer || HasEditorScroll(child))
+                        return true;
+                }
+                return false;
+            }
+            if (HasEditorScroll(editPanel))
+                throw new Exception("Editor still contains a scrolling tool list.");
+            var quickTab = (ToggleButton)window.FindName("EditorTabQuick")!;
+            var maskTab = (ToggleButton)window.FindName("EditorTabMasks")!;
+            var masksPanel = (StackPanel)window.FindName("ViewerPanelMasks")!;
+            var detailPanel = (StackPanel)window.FindName("ViewerPanelDetail")!;
+            maskTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (masksPanel.Visibility != Visibility.Visible ||
+                detailPanel.Visibility != Visibility.Collapsed ||
+                maskTab.IsChecked != true)
+                throw new Exception("Mask button did not replace the editor tool group.");
+            var skyTab = (ToggleButton)window.FindName("EditorMaskSky")!;
+            skyTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            var maskLabel = (TextBlock)window.FindName("EditorActiveMaskText")!;
+            if (skyTab.IsChecked != true || !maskLabel.Text.Contains("Himmel"))
+                throw new Exception("Sky mask did not become the current selection.");
+            quickTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (masksPanel.Visibility != Visibility.Collapsed ||
+                quickTab.IsChecked != true)
+                throw new Exception("Editor group failed to return to quick tools.");
+            Console.WriteLine(
+                "PASS: Alpha.28 compact, non-scrolling tool groups and selected mask state.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
                 .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
             var toolButtons = toolCards.Select(card =>
