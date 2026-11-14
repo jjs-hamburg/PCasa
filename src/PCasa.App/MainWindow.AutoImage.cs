@@ -59,6 +59,7 @@ public partial class MainWindow
             button.ToolTip = UiLanguage.T(tooltip);
         }
         UpdateEditHistoryTooltips();
+        if (_editorPanelsReady) RefreshEditorMaskStatusText();
     }
 
     private void InitializeAutoImageTools()
