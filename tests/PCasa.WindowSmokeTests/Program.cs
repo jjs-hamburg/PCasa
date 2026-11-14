@@ -1650,10 +1650,28 @@ internal static class Program
                     if ((bool)scrollDefer.Invoke(window,
                             new object?[] { edge.FolderId })!)
                         throw new Exception("Current folder's own edge was frozen.");
-                    scannerNotification.Invoke(window, new object[] {
-                        atStart ? @"C:\synthetic\other-folder-top.jpg" :
-                            @"C:\synthetic\other-folder-bottom.jpg", incomingOtherFolder });
-                    Flush(window);
+                    // The isolated fixture disables the REAL catalog
+                    // publisher while synthetic rows are installed. But
+                    // OnCatalogImageIndexed deliberately ignores notifications
+                    // until the browse gallery is initialized. Temporarily
+                    // enable that normal notification gate while exercising
+                    // a FOREIGN-folder event: its own defer rule prevents any
+                    // catalog read, so the synthetic index stays intact.
+                    // Otherwise this test would assert on an event that the
+                    // harness silently discarded itself.
+                    try
+                    {
+                        browseInitializedField.SetValue(window, true);
+                        scannerNotification.Invoke(window, new object[] {
+                            atStart ? @"C:\synthetic\other-folder-top.jpg" :
+                                @"C:\synthetic\other-folder-bottom.jpg",
+                            incomingOtherFolder });
+                        Flush(window);
+                    }
+                    finally
+                    {
+                        browseInitializedField.SetValue(window, false);
+                    }
                     var queued = (int)catalogPending.GetValue(window)!;
                     var deferred = (bool)scanDirtyField.GetValue(window)!;
                     if (queued != 0 || !deferred)
