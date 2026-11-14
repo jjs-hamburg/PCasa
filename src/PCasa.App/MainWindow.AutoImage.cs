@@ -69,6 +69,8 @@ public partial class MainWindow
             "Kontrast automatisch optimieren");
         AddAutoImageButton("◉", "Farbe (automatisch)", "auto-color",
             "Farbstich automatisch korrigieren");
+        AddAutoImageButton("✧", "Schärfen (automatisch)", "auto-sharpen",
+            "Feine Bilddetails vorsichtig automatisch schärfen");
 
         BrightnessResetButton.Click += (_, _) => BrightnessSlider.Value = 0;
         BrightnessSlider.ValueChanged += (_, _) =>
