@@ -249,6 +249,7 @@ public partial class MainWindow
             "denoise-luma" => UiLanguage.T("Rauschen (Helligkeit)"),
             "denoise-chroma" => UiLanguage.T("Rauschen (Farbe)"),
             "sharpen" => UiLanguage.T("Schärfen"),
+            "auto-sharpen" => UiLanguage.T("Schärfen (automatisch)"),
             "highlights" => UiLanguage.T("Lichter"),
             "shadows" => UiLanguage.T("Tiefen"),
             "contrast" => UiLanguage.T("Kontrast (manuell)"),
@@ -328,7 +329,9 @@ public partial class MainWindow
             var amount = _advancedToneAmount;
             LeaveAdvancedTone();
             if (Math.Abs(amount) > .00001)
-                _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount));
+                _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount,
+                    Radius: kind == "sharpen" ? SharpenRadiusSlider.Value : 1,
+                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5));
         }
         else return false;
         SetViewerBitmap(_photoEditSession.Render());
