@@ -13,7 +13,7 @@ namespace PCasa.App.Services;
 public sealed record PhotoEditStep(
     string Kind, double X = 0, double Y = 0,
     double Width = 1, double Height = 1, double Degrees = 0,
-    double Amount = 0);
+    double Amount = 0, double Radius = 1, double Detail = .5);
 
 public sealed class PhotoEditSession
 {
@@ -115,13 +115,14 @@ public sealed class PhotoEditSession
                      "auto-color" or "brightness" or "denoise-luma" or
                      "denoise-chroma" or "sharpen" or "highlights" or
                      "shadows" or "contrast" or "temperature" or
-                     "tint" or "saturation")
+                     "tint" or "saturation" or "auto-sharpen")
             {
                 if (!double.IsFinite(step.Amount) ||
                     Math.Abs(step.Amount) > 3)
                     throw new InvalidDataException(
                         "Ungültige Helligkeitskorrektur.");
-                bitmap = RenderTone(bitmap, step.Kind, step.Amount, token);
+                bitmap = RenderTone(bitmap, step.Kind, step.Amount, token,
+                    step.Radius, step.Detail);
             }
             else throw new InvalidDataException(
                 "Unbekannte Bildbearbeitung: " + step.Kind);
@@ -136,8 +137,16 @@ public sealed class PhotoEditSession
     // the MTA durable JPEG writer. Every tool is exactly ONE undoable step;
     // no temporary JPEG, sidecar or independent write path is introduced.
     private static BitmapSource RenderTone(BitmapSource source,
-        string kind, double amount, CancellationToken token)
+        string kind, double amount, CancellationToken token,
+        double radius, double detail)
     {
+        if (kind == "auto-sharpen")
+        {
+            kind = "sharpen";
+            amount = .4;
+            radius = 1;
+            detail = .65;
+        }
         var argb = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
         int width = argb.PixelWidth, height = argb.PixelHeight;
         var stride = checked(width * 4);
@@ -167,7 +176,8 @@ public sealed class PhotoEditSession
         }
 
         if (kind is "sharpen" or "denoise-luma" or "denoise-chroma")
-            ApplySpatialTone(pixels, width, height, kind, amount, token);
+            ApplySpatialTone(pixels, width, height, kind, amount,
+                radius, detail, token);
         else if (kind is "highlights" or "shadows" or "contrast" or
                  "temperature" or "tint" or "saturation")
             ApplyManualTone(pixels, kind, amount, token);
@@ -237,18 +247,23 @@ public sealed class PhotoEditSession
     // the original luminance when denoising color. Noise in smooth skies is
     // not indiscriminately boosted by sharpening.
     private static void ApplySpatialTone(byte[] pixels, int width, int height,
-        string kind, double amount, CancellationToken token)
+        string kind, double amount, double radius, double detail,
+        CancellationToken token)
     {
-        if (amount <= .00001 || width < 3 || height < 3) return;
+        var sampleRadius = kind == "sharpen"
+            ? Math.Clamp((int)Math.Round(radius), 1, 3) : 1;
+        if (amount <= .00001 || width <= sampleRadius * 2 ||
+            height <= sampleRadius * 2) return;
+        detail = Math.Clamp(detail, 0, 1);
         var source = (byte[])pixels.Clone();
         amount = Math.Clamp(amount, 0, 1);
         static double Luma(byte[] data, int index) =>
             (.2126 * data[index + 2] + .7152 * data[index + 1] +
                 .0722 * data[index]);
-        for (var y = 1; y < height - 1; y++)
+        for (var y = sampleRadius; y < height - sampleRadius; y++)
         {
             if ((y & 31) == 0) token.ThrowIfCancellationRequested();
-            for (var x = 1; x < width - 1; x++)
+            for (var x = sampleRadius; x < width - sampleRadius; x++)
             {
                 var index = (y * width + x) * 4;
                 if (source[index + 3] == 0) continue;
@@ -258,7 +273,8 @@ public sealed class PhotoEditSession
                 for (var dy = -1; dy <= 1; dy++)
                 for (var dx = -1; dx <= 1; dx++)
                 {
-                    var neighbor = index + (dy * width + dx) * 4;
+                    var neighbor = index +
+                        (dy * width + dx) * 4 * sampleRadius;
                     if (source[neighbor + 3] == 0) continue;
                     var nLuma = Luma(source, neighbor);
                     // Do not blur over high-contrast boundaries.
@@ -294,7 +310,7 @@ public sealed class PhotoEditSession
                     continue;
                 }
                 var delta = kind == "sharpen"
-                    ? (Math.Abs(center - local) < 2.5 ? 0 :
+                    ? (Math.Abs(center - local) < 1 + (1 - detail) * 7 ? 0 :
                         Math.Clamp((center - local) * amount * 2.1, -52, 52))
                     : (local - center) * amount;
                 for (var channel = 0; channel < 3; channel++)
