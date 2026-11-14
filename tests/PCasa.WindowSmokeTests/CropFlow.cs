@@ -180,7 +180,7 @@ internal static class CropFlow
             }
             catch (IOException) { }
             if (!File.ReadAllBytes(firstCopy).SequenceEqual(firstCopyBytes) ||
-                Directory.GetFiles(root, ".pcasa-crop-*").Length != 0)
+                Directory.GetFiles(root, ".pcasa-edit-*").Length != 0)
                 throw new Exception("Duplicate copy save damaged a previous result or leaked temp files.");
 
             File.WriteAllBytes(raw, [1, 2, 3, 4]);
@@ -219,7 +219,7 @@ internal static class CropFlow
                 throw new Exception("Central pre-save Undo version was not created.");
             if (!File.ReadAllBytes(versions[0].SnapshotPath).SequenceEqual(original))
                 throw new Exception("Undo backup does not match the original bytes.");
-            if (Directory.GetFiles(root, ".pcasa-crop-*").Length > 0)
+            if (Directory.GetFiles(root, ".pcasa-edit-*").Length > 0)
                 throw new Exception("Temporary crop files were not removed.");
             // Regression for the reported Windows file-lock sequence:
             // Crop -> restore -> crop the same path again, on MTA workers.
@@ -347,7 +347,7 @@ internal static class CropFlow
                 !preserved.Contains("PCasaCropSmoke"))
                 throw new Exception(
                     "Combined Crop/Rotate/straighten lost original metadata.");
-            if (Directory.GetFiles(root, ".pcasa-crop-*").Length != 0)
+            if (Directory.GetFiles(root, ".pcasa-edit-*").Length != 0)
                 throw new Exception("Multi-step editor leaked a staged JPEG.");
             Console.WriteLine(
                 "PASS: Global editor Undo/Redo, Crop+90°+straighten single P0 JPEG commit, embedded GPS preserved.");
