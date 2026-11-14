@@ -13,7 +13,8 @@ namespace PCasa.App.Services;
 public sealed record PhotoEditStep(
     string Kind, double X = 0, double Y = 0,
     double Width = 1, double Height = 1, double Degrees = 0,
-    double Amount = 0, double Radius = 1, double Detail = .5);
+    double Amount = 0, double Radius = 1, double Detail = .5,
+    string Mask = "all");
 
 public sealed class PhotoEditSession
 {
@@ -122,7 +123,7 @@ public sealed class PhotoEditSession
                     throw new InvalidDataException(
                         "Ungültige Helligkeitskorrektur.");
                 bitmap = RenderTone(bitmap, step.Kind, step.Amount, token,
-                    step.Radius, step.Detail);
+                    step.Radius, step.Detail, step.Mask);
             }
             else throw new InvalidDataException(
                 "Unbekannte Bildbearbeitung: " + step.Kind);
@@ -138,7 +139,7 @@ public sealed class PhotoEditSession
     // no temporary JPEG, sidecar or independent write path is introduced.
     private static BitmapSource RenderTone(BitmapSource source,
         string kind, double amount, CancellationToken token,
-        double radius, double detail)
+        double radius, double detail, string maskMode)
     {
         if (kind == "auto-sharpen")
         {
@@ -152,6 +153,10 @@ public sealed class PhotoEditSession
         var stride = checked(width * 4);
         var pixels = new byte[checked(stride * height)];
         argb.CopyPixels(pixels, stride, 0);
+        // The immutable edit step owns its mask selection, not a mutable UI
+        // state. Undo, preview and the durable full-resolution replay agree.
+        var masked = !string.Equals(maskMode, "all", StringComparison.Ordinal);
+        var beforeMask = masked ? (byte[])pixels.Clone() : null;
 
         if (kind is "auto-color" or "auto-fix")
             AdjustWhiteBalance(pixels);
@@ -181,6 +186,31 @@ public sealed class PhotoEditSession
         else if (kind is "highlights" or "shadows" or "contrast" or
                  "temperature" or "tint" or "saturation")
             ApplyManualTone(pixels, kind, amount, token);
+
+        if (beforeMask is not null)
+        {
+            var weights = PhotoEditMasks.Compute(beforeMask,
+                width, height, maskMode, token);
+            for (var i = 0; i < weights.Length; i++)
+            {
+                if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();
+                var p = i * 4;
+                var w = weights[i];
+                if (w == 255) continue;
+                if (w == 0)
+                {
+                    pixels[p] = beforeMask[p];
+                    pixels[p + 1] = beforeMask[p + 1];
+                    pixels[p + 2] = beforeMask[p + 2];
+                    continue;
+                }
+                for (var channel = 0; channel < 3; channel++)
+                    pixels[p + channel] = (byte)Math.Clamp(
+                        (int)Math.Round(beforeMask[p + channel] +
+                            (pixels[p + channel] - beforeMask[p + channel]) *
+                            (w / 255.0)), 0, 255);
+            }
+        }
 
         var result = BitmapSource.Create(width, height,
             source.DpiX, source.DpiY, PixelFormats.Bgra32,

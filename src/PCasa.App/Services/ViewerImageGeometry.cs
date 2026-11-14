@@ -8,6 +8,25 @@ namespace PCasa.App.Services;
 /// </summary>
 public static class ViewerImageGeometry
 {
+    public static (double Width, double Height) LogicalEditPixels(
+        int catalogWidth, int catalogHeight,
+        int originalPreviewWidth, int originalPreviewHeight,
+        int currentPreviewWidth, int currentPreviewHeight)
+    {
+        if (catalogWidth < 1 || catalogHeight < 1 ||
+            originalPreviewWidth < 1 || originalPreviewHeight < 1 ||
+            currentPreviewWidth < 1 || currentPreviewHeight < 1)
+            throw new ArgumentOutOfRangeException(nameof(catalogWidth));
+        // Editing works on a screen-sized decode. A tonal step may replace
+        // that bitmap but must not change physical 100% zoom and pan. Crop
+        // and rotation change logical pixel size in proportion to the
+        // original full-resolution geometry.
+        return (currentPreviewWidth *
+                    (catalogWidth / (double)originalPreviewWidth),
+                currentPreviewHeight *
+                    (catalogHeight / (double)originalPreviewHeight));
+    }
+
     public static bool NeedsAxisSwap(int sourceWidth, int sourceHeight,
         int decodedWidth, int decodedHeight)
     {

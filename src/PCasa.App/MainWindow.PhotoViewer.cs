@@ -526,6 +526,23 @@ public partial class MainWindow
             Math.Clamp((scroller.VerticalOffset + viewportHeight / 2 - top) / imageHeight, 0, 1));
     }
 
+    private (double Width, double Height) GetViewerLogicalImageSize(
+        PhotoViewerImageInfo info)
+    {
+        var rendered = ActiveViewerImage.Source as BitmapSource;
+        var previewOriginal = _photoEditSession?.Original;
+        if (rendered is null || previewOriginal is null ||
+            previewOriginal.PixelWidth < 1 || previewOriginal.PixelHeight < 1)
+            return (info.Width, info.Height);
+
+        // Crop/rotate may change the decoded edit-buffer dimensions.
+        // Their physical size changes proportionally, but tonal edits do not.
+        return ViewerImageGeometry.LogicalEditPixels(
+            info.Width, info.Height,
+            previewOriginal.PixelWidth, previewOriginal.PixelHeight,
+            rendered.PixelWidth, rendered.PixelHeight);
+    }
+
     private double CurrentViewerZoomPercent()
     {
         if (!_viewerFitToScreen)
@@ -540,11 +557,10 @@ public partial class MainWindow
 
         var (width, height) = ViewerViewportSize();
         var dpi = VisualTreeHelper.GetDpi(ActiveViewerRoot);
-        var shown = _photoEditSession is not null || _straightenActive
-            ? ActiveViewerImage.Source as BitmapSource : null;
+        var (logicalWidth, logicalHeight) = GetViewerLogicalImageSize(info);
         return 100d * Math.Min(
-            width * dpi.DpiScaleX / (shown?.PixelWidth ?? info.Width),
-            height * dpi.DpiScaleY / (shown?.PixelHeight ?? info.Height));
+            width * dpi.DpiScaleX / logicalWidth,
+            height * dpi.DpiScaleY / logicalHeight);
     }
 
     private void ApplyViewerImageLayout()
@@ -564,10 +580,11 @@ public partial class MainWindow
         var scroller = ActiveViewerScroller;
         var canvas = ActiveViewerCanvas;
         var image = ActiveViewerImage;
-        var shown = _photoEditSession is not null || _straightenActive
-            ? image.Source as BitmapSource : null;
-        var sourceWidth = shown?.PixelWidth ?? info.Width;
-        var sourceHeight = shown?.PixelHeight ?? info.Height;
+        // The edit session works on a decoded SCREEN-SIZED preview.
+        // Zoom is expressed in full-resolution image pixels, not preview pixels.
+        // Never reinterpret e.g. a 1600px preview as a 1600px original when
+        // an edit slider replaces the bitmap. Keep existing pan and 100% zoom.
+        var (sourceWidth, sourceHeight) = GetViewerLogicalImageSize(info);
         var (viewportWidth, viewportHeight) = ViewerViewportSize();
         var dpi = VisualTreeHelper.GetDpi(ActiveViewerRoot);
         var scale = _viewerFitToScreen

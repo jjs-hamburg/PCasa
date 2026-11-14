@@ -300,6 +300,7 @@ public partial class MainWindow
     private bool ApplyEditTool()
     {
         if (_photoEditSession is null) return false;
+        EndMaskPreview();
         if (_cropActive)
         {
             var area = FitToImageAspect(_cropRect);
@@ -322,7 +323,7 @@ public partial class MainWindow
             LeaveBrightness();
             if (Math.Abs(exposure) > .00001)
                 _photoEditSession.Apply(new PhotoEditStep(
-                    "brightness", Amount: exposure));
+                    "brightness", Amount: exposure, Mask: _selectedEditMask));
         }
         else if (_advancedToneActive)
         {
@@ -332,7 +333,8 @@ public partial class MainWindow
             if (Math.Abs(amount) > .00001)
                 _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount,
                     Radius: kind == "sharpen" ? SharpenRadiusSlider.Value : 1,
-                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5));
+                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5,
+                    Mask: _selectedEditMask));
         }
         else return false;
         SetViewerBitmap(_photoEditSession.Render());
@@ -344,6 +346,7 @@ public partial class MainWindow
     private void MoveEditHistory(int direction)
     {
         if (_cropSavePending || _photoEditSession is null) return;
+        EndMaskPreview();
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
@@ -363,6 +366,7 @@ public partial class MainWindow
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
         if (_advancedToneActive) LeaveAdvancedTone();
+        EndMaskPreview();
         var original = _photoEditSession?.Original;
         _photoEditSession = null;
         if (original is not null)
@@ -375,6 +379,7 @@ public partial class MainWindow
 
     private async void SaveEdits(bool asCopy = false)
     {
+        EndMaskPreview();
         if (_cropSavePending || _viewerImageInfo is not { } info ||
             _pendingEditImageIds.Contains(info.Id)) return;
         if (_cropActive || _straightenActive || _brightnessActive ||
