@@ -288,6 +288,7 @@ public partial class MainWindow
         InitializeStraightenTools();
         InitializeAutoImageTools();
         InitializeAdvancedToneTools();
+        InitializeEditorPanels();
     }
 
     private void BeginCrop()
