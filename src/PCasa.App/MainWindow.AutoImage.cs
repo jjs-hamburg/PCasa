@@ -142,6 +142,7 @@ public partial class MainWindow
         var token = cancellation.Token;
         var revision = ++_brightnessPreviewRevision;
         var amount = _brightnessAmount;
+        var mask = _selectedEditMask;
         var source = _brightnessPreviewBase;
         try
         {
@@ -150,7 +151,8 @@ public partial class MainWindow
             token.ThrowIfCancellationRequested();
             var rendered = await Task.Run(() =>
                 PhotoEditSession.Render(source,
-                    [new PhotoEditStep("brightness", Amount: amount)]), token);
+                    [new PhotoEditStep("brightness", Amount: amount,
+                        Mask: mask)], token), token);
             if (token.IsCancellationRequested || !_brightnessActive ||
                 revision != _brightnessPreviewRevision ||
                 Dispatcher.HasShutdownStarted)
