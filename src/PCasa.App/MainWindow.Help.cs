@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Security.Authentication;
 using System.Text.Json;
 using System.Windows;
 using PCasa.App.Services;
@@ -290,6 +291,7 @@ public partial class MainWindow
         var destination = Path.Combine(folder, filename);
         var partial = destination + ".part";
         downloadWindow.Show();
+        var automaticRetryCount = 0;
         try
         {
             Directory.CreateDirectory(folder);
@@ -307,13 +309,22 @@ public partial class MainWindow
                 }
                 if (offset < expectedBytes)
                 {
-                    using var installerClient = new HttpClient
+                    // GitHub assets redirect to CDN hosts. Some satellite,
+                    // VPN or TLS-inspecting paths drop encrypted HTTP/2 or
+                    // TLS 1.3 records mid-stream (Schannel: decryption
+                    // operation failed). Use Windows-supported TLS 1.2 and
+                    // HTTP/1.1 for this large binary only. Keep normal
+                    // certificate verification and SHA-256 validation.
+                    using var handler = new HttpClientHandler
+                    {
+                        SslProtocols = SslProtocols.Tls12,
+                        AutomaticDecompression = DecompressionMethods.None
+                    };
+                    using var installerClient = new HttpClient(handler)
                     {
                         Timeout = TimeSpan.FromMinutes(30),
-                        // Prefer modern CDN transport, but retain HTTP/1.1
-                        // fallback for proxies and satellite/VPN connections.
-                        DefaultRequestVersion = HttpVersion.Version20,
-                        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
+                        DefaultRequestVersion = HttpVersion.Version11,
+                        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact
                     };
                     installerClient.DefaultRequestHeaders.UserAgent.ParseAdd("PCasa-Windows/0.1");
                     using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -389,12 +400,24 @@ public partial class MainWindow
                         CryptographicException or InvalidDataException or TaskCanceledException)
                 {
                     PCasaDiagnostics.Write("Update.Download.Interrupted", ex);
-                    // A failed attempt must not leave an executable or a stale
-                    // partial. Reuse the vetted release URL and SHA-256.
-                    // A failed SHA-256 digest invalidates the entire prefix;
-                    // other transport failures can preserve verified byte count.
+                    // The .part file contains only authenticated plaintext
+                    // bytes delivered by TLS; the next Range request resumes.
+                    // A digest mismatch invalidates that entire prefix.
                     if (ex is CryptographicException && File.Exists(partial))
                         File.Delete(partial);
+                    if ((ex is HttpRequestException or IOException or TaskCanceledException) &&
+                        automaticRetryCount < 4)
+                    {
+                        var retryDelay = TimeSpan.FromSeconds(
+                            Math.Min(8, 1 << automaticRetryCount));
+                        automaticRetryCount++;
+                        await Task.Delay(retryDelay, downloadWindow.Cancellation);
+                        continue;
+                    }
+                    // Four resumable automatic attempts precede the existing
+                    // explicit Retry/Cancel dialog; neither path ever runs an
+                    // unverified installer or retains a stale .exe file.
+                    automaticRetryCount = 0;
                     if (!await downloadWindow.AskRetryAsync(ex))
                         return null;
                 }
