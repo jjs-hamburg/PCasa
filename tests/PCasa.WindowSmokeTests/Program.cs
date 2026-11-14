@@ -149,6 +149,16 @@ internal static class Program
                 automaticTools.Children.Count != 3 ||
                 automaticTools.Orientation != Orientation.Horizontal)
                 throw new Exception("Expected two manual tools and three autos in one row.");
+            // Automatic sharpening belongs next to its radius/detail
+            // controls, not as a fourth icon overflowing the auto row.
+            var sharpenAuto = (Button)window.FindName("SharpenAutoButton")!;
+            var sharpenRadius = (Slider)window.FindName("SharpenRadiusSlider")!;
+            var sharpenDetail = (Slider)window.FindName("SharpenDetailSlider")!;
+            if (sharpenAuto is null || sharpenRadius is null ||
+                sharpenDetail is null ||
+                !Equals(sharpenAuto.Content, UiLanguage.T("Schärfen (automatisch)")))
+                throw new Exception(
+                    "Auto-sharpen and radius/detail controls are missing from the tonal editor.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
                 .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
             var toolButtons = toolCards.Select(card =>
