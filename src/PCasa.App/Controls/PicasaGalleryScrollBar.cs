@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using PCasa.App.Services;
 
 namespace PCasa.App.Controls;
 
@@ -80,7 +81,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             Cursor = Cursors.SizeNS,
-            ToolTip = "Ziehen: Scrollgeschwindigkeit steuern"
+            ToolTip = UiLanguage.T("Ziehen: Scrollgeschwindigkeit steuern")
         };
         var gripTemplate = new ControlTemplate(typeof(Thumb));
         var border = new FrameworkElementFactory(typeof(Border));
