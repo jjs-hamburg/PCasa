@@ -29,6 +29,74 @@ internal static class CropFlow
             }
             var bitmap = BitmapSource.Create(480, 320, 96, 96,
                 PixelFormats.Bgra32, null, pixels, 480 * 4);
+
+            // Alpha.28: editor previews must use full-resolution zoom
+            // geometry even when filters replace a smaller preview buffer.
+            var physical = ViewerImageGeometry.LogicalEditPixels(
+                6000, 4000, 1500, 1000, 1500, 1000);
+            if (physical != (6000d, 4000d))
+                throw new Exception("An unchanged edit preview reset logical zoom.");
+            var croppedPhysical = ViewerImageGeometry.LogicalEditPixels(
+                6000, 4000, 1500, 1000, 750, 500);
+            if (croppedPhysical != (3000d, 2000d))
+                throw new Exception("Zoom geometry lost physical crop dimensions.");
+
+            // The exact SAME masked step is used in real-time preview and
+            // the durable full-resolution write; no mask sidecar is saved.
+            var maskPixels = new byte[16 * 16 * 4];
+            for (var y = 0; y < 16; y++)
+            for (var x = 0; x < 16; x++)
+            {
+                var index = (y * 16 + x) * 4;
+                maskPixels[index] = y < 8 ? (byte)245 : (byte)48;
+                maskPixels[index + 1] = y < 8 ? (byte)175 : (byte)95;
+                maskPixels[index + 2] = y < 8 ? (byte)100 : (byte)155;
+                maskPixels[index + 3] = 255;
+            }
+            var skyMask = PhotoEditMasks.Compute(maskPixels, 16, 16, "sky");
+            if (skyMask[2 * 16 + 8] < 200 || skyMask[14 * 16 + 8] != 0)
+                throw new Exception("Automatic sky mask leaked into the foreground.");
+            var highlights = PhotoEditMasks.Compute(maskPixels, 16, 16, "mask-highlights");
+            var shadows = PhotoEditMasks.Compute(maskPixels, 16, 16, "mask-shadows");
+            if (highlights.Length != 256 || shadows.Length != 256)
+                throw new Exception("Mask dimension is not image dimension.");
+            var maskSource = BitmapSource.Create(16, 16, 96, 96,
+                PixelFormats.Bgra32, null, maskPixels, 16 * 4);
+            var maskedTone = PhotoEditSession.Render(maskSource,
+                [new PhotoEditStep("saturation", Amount: 1, Mask: "sky")]);
+            var maskedOutput = new byte[maskPixels.Length];
+            maskedTone.CopyPixels(maskedOutput, 16 * 4, 0);
+            var below = (14 * 16 + 8) * 4;
+            var above = (2 * 16 + 8) * 4;
+            if (!maskedOutput.AsSpan(below, 4)
+                    .SequenceEqual(maskPixels.AsSpan(below, 4)))
+                throw new Exception("Sky-only adjustment modified unselected foreground.");
+            if (maskedOutput.AsSpan(above, 3)
+                    .SequenceEqual(maskPixels.AsSpan(above, 3)))
+                throw new Exception("Sky mask did not affect selected pixels.");
+            Console.WriteLine("PASS: Zoom geometry, automatic sky/luminance masks and selective edits.");
+
+            // Color-saliency foreground vs background must be complementary.
+            var subjectPixels = new byte[16 * 16 * 4];
+            for (var y = 0; y < 16; y++)
+            for (var x = 0; x < 16; x++)
+            {
+                var p = (y * 16 + x) * 4;
+                subjectPixels[p] = 95; subjectPixels[p + 1] = 95;
+                subjectPixels[p + 2] = 95; subjectPixels[p + 3] = 255;
+                if (x >= 4 && x <= 11 && y >= 4 && y <= 11)
+                {
+                    subjectPixels[p] = 35;
+                    subjectPixels[p + 1] = 55;
+                    subjectPixels[p + 2] = 240;
+                }
+            }
+            var subject = PhotoEditMasks.Compute(subjectPixels, 16, 16, "subject");
+            var background = PhotoEditMasks.Compute(subjectPixels, 16, 16, "background");
+            if (subject[8 * 16 + 8] < 140 || background[8 * 16 + 8] > 115 ||
+                subject[0] != 0 || background[0] != 255)
+                throw new Exception("Automatic foreground and background masks disagree.");
+
             var encoder = new JpegBitmapEncoder { QualityLevel = 91 };
             encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using (var output = File.Create(path)) encoder.Save(output);
