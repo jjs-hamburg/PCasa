@@ -62,11 +62,12 @@ public sealed class PhotoEditSession
     public BitmapSource Render() => Render(_original, AppliedSteps);
 
     public static BitmapSource Render(BitmapSource original,
-        IEnumerable<PhotoEditStep> steps)
+        IEnumerable<PhotoEditStep> steps, CancellationToken token = default)
     {
         BitmapSource bitmap = original;
         foreach (var step in steps)
         {
+            token.ThrowIfCancellationRequested();
             if (step.Kind == "crop")
             {
                 if (!double.IsFinite(step.X) || !double.IsFinite(step.Y) ||
@@ -111,13 +112,16 @@ public sealed class PhotoEditSession
                 }
             }
             else if (step.Kind is "auto-fix" or "auto-contrast" or
-                     "auto-color" or "brightness")
+                     "auto-color" or "brightness" or "denoise-luma" or
+                     "denoise-chroma" or "sharpen" or "highlights" or
+                     "shadows" or "contrast" or "temperature" or
+                     "tint" or "saturation")
             {
                 if (!double.IsFinite(step.Amount) ||
                     Math.Abs(step.Amount) > 3)
                     throw new InvalidDataException(
                         "Ungültige Helligkeitskorrektur.");
-                bitmap = RenderTone(bitmap, step.Kind, step.Amount);
+                bitmap = RenderTone(bitmap, step.Kind, step.Amount, token);
             }
             else throw new InvalidDataException(
                 "Unbekannte Bildbearbeitung: " + step.Kind);
@@ -132,7 +136,7 @@ public sealed class PhotoEditSession
     // the MTA durable JPEG writer. Every tool is exactly ONE undoable step;
     // no temporary JPEG, sidecar or independent write path is introduced.
     private static BitmapSource RenderTone(BitmapSource source,
-        string kind, double amount)
+        string kind, double amount, CancellationToken token)
     {
         var argb = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
         int width = argb.PixelWidth, height = argb.PixelHeight;
@@ -162,11 +166,142 @@ public sealed class PhotoEditSession
             }
         }
 
+        if (kind is "sharpen" or "denoise-luma" or "denoise-chroma")
+            ApplySpatialTone(pixels, width, height, kind, amount, token);
+        else if (kind is "highlights" or "shadows" or "contrast" or
+                 "temperature" or "tint" or "saturation")
+            ApplyManualTone(pixels, kind, amount, token);
+
         var result = BitmapSource.Create(width, height,
             source.DpiX, source.DpiY, PixelFormats.Bgra32,
             null, pixels, stride);
         result.Freeze();
         return result;
+    }
+
+    // All 8-bit manual adjustments operate on the same immutable Bgra32
+    // transaction pixels as crop/rotation. Neutral slider position is exact
+    // identity, including alpha. Values are deliberately bounded to [-1, 1].
+    private static void ApplyManualTone(
+        byte[] pixels, string kind, double amount, CancellationToken token)
+    {
+        if (Math.Abs(amount) < .00001) return;
+        amount = Math.Clamp(amount, -1, 1);
+        static double Smooth(double value)
+        {
+            value = Math.Clamp(value, 0, 1);
+            return value * value * (3 - 2 * value);
+        }
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            if ((i & 0x3ffff) == 0) token.ThrowIfCancellationRequested();
+            if (pixels[i + 3] == 0) continue;
+            double b = pixels[i], g = pixels[i + 1], r = pixels[i + 2];
+            var y = (.2126 * r + .7152 * g + .0722 * b);
+            switch (kind)
+            {
+                case "contrast":
+                    var multiplier = 1 + amount * .8;
+                    r = 127.5 + (r - 127.5) * multiplier;
+                    g = 127.5 + (g - 127.5) * multiplier;
+                    b = 127.5 + (b - 127.5) * multiplier;
+                    break;
+                case "shadows":
+                    var shadowDelta = amount * 70 * (1 - Smooth((y - 18) / 145));
+                    r += shadowDelta; g += shadowDelta; b += shadowDelta;
+                    break;
+                case "highlights":
+                    var highlightDelta = amount * 70 * Smooth((y - 100) / 140);
+                    r += highlightDelta; g += highlightDelta; b += highlightDelta;
+                    break;
+                case "saturation":
+                    r = y + (r - y) * (1 + amount);
+                    g = y + (g - y) * (1 + amount);
+                    b = y + (b - y) * (1 + amount);
+                    break;
+                case "temperature":
+                    r += amount * 33; b -= amount * 33;
+                    break;
+                case "tint":
+                    r += amount * 15; g -= amount * 30; b += amount * 15;
+                    break;
+            }
+            pixels[i] = (byte)Math.Clamp((int)Math.Round(b), 0, 255);
+            pixels[i + 1] = (byte)Math.Clamp((int)Math.Round(g), 0, 255);
+            pixels[i + 2] = (byte)Math.Clamp((int)Math.Round(r), 0, 255);
+        }
+    }
+
+    // Edge-aware 3x3 smoothing for luma/chroma and thresholded luminance
+    // unsharp masking. Work from a frozen snapshot, preserve alpha and keep
+    // the original luminance when denoising color. Noise in smooth skies is
+    // not indiscriminately boosted by sharpening.
+    private static void ApplySpatialTone(byte[] pixels, int width, int height,
+        string kind, double amount, CancellationToken token)
+    {
+        if (amount <= .00001 || width < 3 || height < 3) return;
+        var source = (byte[])pixels.Clone();
+        amount = Math.Clamp(amount, 0, 1);
+        static double Luma(byte[] data, int index) =>
+            (.2126 * data[index + 2] + .7152 * data[index + 1] +
+                .0722 * data[index]);
+        for (var y = 1; y < height - 1; y++)
+        {
+            if ((y & 31) == 0) token.ThrowIfCancellationRequested();
+            for (var x = 1; x < width - 1; x++)
+            {
+                var index = (y * width + x) * 4;
+                if (source[index + 3] == 0) continue;
+                var center = Luma(source, index);
+                double sumWeight = 0, sumLuma = 0;
+                double chromaB = 0, chromaG = 0, chromaR = 0;
+                for (var dy = -1; dy <= 1; dy++)
+                for (var dx = -1; dx <= 1; dx++)
+                {
+                    var neighbor = index + (dy * width + dx) * 4;
+                    if (source[neighbor + 3] == 0) continue;
+                    var nLuma = Luma(source, neighbor);
+                    // Do not blur over high-contrast boundaries.
+                    var distance = Math.Abs(center - nLuma);
+                    var weight = (dx == 0 && dy == 0 ? 4.0 :
+                        dx == 0 || dy == 0 ? 2.0 : 1.0);
+                    if (kind != "sharpen")
+                        weight *= Math.Max(.02, 1 - distance /
+                            (12 + amount * 68));
+                    sumWeight += weight;
+                    sumLuma += weight * nLuma;
+                    if (kind == "denoise-chroma")
+                    {
+                        chromaB += weight * (source[neighbor] - nLuma);
+                        chromaG += weight * (source[neighbor + 1] - nLuma);
+                        chromaR += weight * (source[neighbor + 2] - nLuma);
+                    }
+                }
+                if (sumWeight <= 0) continue;
+                var local = sumLuma / sumWeight;
+                if (kind == "denoise-chroma")
+                {
+                    var blend = amount * .92;
+                    pixels[index] = (byte)Math.Clamp((int)Math.Round(
+                        source[index] * (1 - blend) +
+                        (center + chromaB / sumWeight) * blend), 0, 255);
+                    pixels[index + 1] = (byte)Math.Clamp((int)Math.Round(
+                        source[index + 1] * (1 - blend) +
+                        (center + chromaG / sumWeight) * blend), 0, 255);
+                    pixels[index + 2] = (byte)Math.Clamp((int)Math.Round(
+                        source[index + 2] * (1 - blend) +
+                        (center + chromaR / sumWeight) * blend), 0, 255);
+                    continue;
+                }
+                var delta = kind == "sharpen"
+                    ? (Math.Abs(center - local) < 2.5 ? 0 :
+                        Math.Clamp((center - local) * amount * 2.1, -52, 52))
+                    : (local - center) * amount;
+                for (var channel = 0; channel < 3; channel++)
+                    pixels[index + channel] = (byte)Math.Clamp(
+                        (int)Math.Round(source[index + channel] + delta), 0, 255);
+            }
+        }
     }
 
     private static void StretchLuminance(byte[] pixels)
