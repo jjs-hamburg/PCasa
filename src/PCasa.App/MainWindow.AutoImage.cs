@@ -106,6 +106,7 @@ public partial class MainWindow
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) ApplyEditTool();
+        if (_advancedToneActive) ApplyEditTool();
         if (_photoEditSession is null) return;
         _photoEditSession.Apply(new PhotoEditStep(kind));
         SetViewerBitmap(_photoEditSession.Render());
@@ -118,6 +119,7 @@ public partial class MainWindow
         if (_cropSavePending || !EnsureEditSession()) return false;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
+        if (_advancedToneActive) ApplyEditTool();
         _brightnessPreviewBase = _photoEditSession!.Render();
         _brightnessAmount = BrightnessSlider.Value;
         _brightnessActive = true;
