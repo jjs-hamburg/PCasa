@@ -1024,6 +1024,63 @@ internal static class GalleryFileOperationFlow
                 throw new Exception("Native Windows properties invocation is missing.");
             Console.WriteLine("PASS: File properties use native Windows shell API.");
 
+            // Alpha.26: Save as copy must import with P0 and become the
+            // CURRENT viewer photo, rather than restoring its source.
+            // Use a real JPEG and the same catalog/gallery/viewer pipeline
+            // as the UI. The original bytes must remain untouched.
+            var editSource = Path.Combine(first, "alpha26-edit.jpg");
+            WriteJpeg(editSource);
+            var originalEditBytes = File.ReadAllBytes(editSource);
+            var scanForEditor = new FolderScanner(new ImageCatalogRepository(db),
+                new ThumbnailCache(), folderRepo);
+            if (scanForEditor.ScanFile(sourceRoot, editSource).Failed != 0)
+                throw new Exception("Cannot index Save-as-copy test source.");
+            var editorImageId = CatalogIdAt(db, editSource);
+            var refreshGallery = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshBrowseGalleryAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var refreshed = (Task)refreshGallery.Invoke(window,
+                new object[] { true, false, false })!;
+            Until(window, () => refreshed.IsCompleted,
+                "Manual gallery refresh for editor source did not finish.");
+            refreshed.GetAwaiter().GetResult();
+            var viewerOpenMethod = typeof(PCasa.App.MainWindow).GetMethod(
+                "BrowseSurface_ImageOpened",
+                BindingFlags.Instance | BindingFlags.NonPublic)!;
+            viewerOpenMethod.Invoke(window,
+                [null, new BrowseImageClickedEventArgs(editorImageId,
+                    ModifierKeys.None)]);
+            var viewerInfoField = typeof(PCasa.App.MainWindow).GetField(
+                "_viewerImageInfo", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var viewerImage = (Image)window.FindName("PhotoViewerImage")!;
+            Until(window, () =>
+                viewerInfoField.GetValue(window) is PhotoViewerImageInfo loaded &&
+                loaded.Id == editorImageId &&
+                viewerImage.Source is BitmapSource,
+                "Save-as-copy test source did not open in real viewer.");
+            var editSessionField = typeof(PCasa.App.MainWindow).GetField(
+                "_photoEditSession", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var editSession = new PhotoEditSession(editorImageId,
+                (BitmapSource)viewerImage.Source);
+            editSession.Apply(new PhotoEditStep("crop", .1, .1, .65, .65));
+            editSessionField.SetValue(window, editSession);
+            var saveAsCopy = typeof(PCasa.App.MainWindow).GetMethod(
+                "SaveEdits", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            saveAsCopy.Invoke(window, [true]);
+            var expectedEditCopy = Path.Combine(first, "alpha26-edit-Kopie.jpg");
+            Until(window, () =>
+                File.Exists(expectedEditCopy) &&
+                CatalogContains(db, expectedEditCopy) &&
+                viewerInfoField.GetValue(window) is PhotoViewerImageInfo loaded &&
+                loaded.Id == CatalogIdAt(db, expectedEditCopy),
+                "Save as copy did not import and select the new JPEG in the viewer.");
+            if (!File.ReadAllBytes(editSource).SequenceEqual(originalEditBytes) ||
+                ((PhotoViewerImageInfo)viewerInfoField.GetValue(window)!).Id ==
+                    editorImageId)
+                throw new Exception("Save as copy modified source or returned to original.");
+            Console.WriteLine(
+                "PASS: Save as copy preserves source and selects newly cataloged JPEG in viewer.");
+
             window.Close();
             window = null;
             Console.WriteLine("RESULT: Real WPF gallery copy/move/catalog tests passed.");
