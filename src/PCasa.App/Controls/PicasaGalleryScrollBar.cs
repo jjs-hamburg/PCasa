@@ -174,7 +174,7 @@ public sealed class PicasaGalleryScrollBar : UserControl
             Margin = new Thickness(1),
             Padding = new Thickness(0),
             Content = icon,
-            ToolTip = tooltip,
+            ToolTip = UiLanguage.T(tooltip),
             Delay = 360,
             Interval = 95,
             Focusable = false
