@@ -11,7 +11,6 @@ public partial class MainWindow
     private bool _editorPanelsReady;
     private string _editorPanel = "Quick";
     private string _selectedEditMask = "all";
-    private string _selectedEditMaskLabel = "Alle";
     private BitmapSource? _maskPreviewOriginal;
     private CancellationTokenSource? _maskPreviewCancellation;
     private int _maskPreviewRevision;
@@ -22,6 +21,7 @@ public partial class MainWindow
         _editorPanelsReady = true;
         SwitchEditorPanel("Quick");
         EditorMaskAll.IsChecked = true;
+        RefreshEditorMaskStatusText();
     }
 
     private void EditorTab_Click(object sender, RoutedEventArgs e)
@@ -57,15 +57,34 @@ public partial class MainWindow
         if (_advancedToneActive || _brightnessActive)
             ApplyEditTool();
         _selectedEditMask = mask;
-        _selectedEditMaskLabel = UiLanguage.T(toggle.Content?.ToString() ?? "Alle");
-        EditorActiveMaskText.Text = UiLanguage.T("Aktive Maske: ") +
-            _selectedEditMaskLabel;
+        RefreshEditorMaskStatusText();
         foreach (var option in new[] { EditorMaskAll, EditorMaskSky,
             EditorMaskSubject, EditorMaskBackground,
             EditorMaskMaskHighlights, EditorMaskMaskShadows })
             option.IsChecked = ReferenceEquals(option, toggle);
         if (_maskPreviewOriginal is not null)
             QueueMaskPreview();
+    }
+
+    private void RefreshEditorMaskStatusText()
+    {
+        if (!_editorPanelsReady) return;
+        if (_selectedEditMask == "all")
+        {
+            EditorActiveMaskText.Text = UiLanguage.T("Maske: gesamtes Bild");
+            return;
+        }
+        var title = _selectedEditMask switch
+        {
+            "sky" => "Himmel (einfach)",
+            "subject" => "Motiv (einfach)",
+            "background" => "Hintergrund (einfach)",
+            "mask-highlights" => "Helle Bereiche",
+            "mask-shadows" => "Dunkle Bereiche",
+            _ => "Alle"
+        };
+        EditorActiveMaskText.Text = UiLanguage.T("Aktive Maske: ") +
+            UiLanguage.T(title);
     }
 
     private void EditorMaskPreview_Click(object sender, RoutedEventArgs e)
