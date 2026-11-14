@@ -33,12 +33,10 @@ public partial class MainWindow
         if (!_viewerOpen || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap)
             return false;
-        var extension = Path.GetExtension(info.LocalPath);
-        if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
-            !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        if (!EditableImageFormats.Supports(info.LocalPath))
         {
             PcasaDialog.Show(this, UiLanguage.T(
-                "Zuschneiden ist nur für JPG-Fotos verfügbar. RAW-Dateien bleiben unverändert."),
+                "Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."),
                 UiLanguage.T("Bearbeiten"),
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return false;
@@ -96,6 +94,7 @@ public partial class MainWindow
         if (!EnsureEditSession()) return;
         if (_cropActive) EndCrop();
         if (_brightnessActive) ApplyEditTool();
+        if (_advancedToneActive) ApplyEditTool();
         _straightenPreviewBase = _photoEditSession!.Render();
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = true;
@@ -247,6 +246,15 @@ public partial class MainWindow
             "brightness" => UiLanguage.T("Aufhellen / Abdunkeln") + " " +
                 step.Amount.ToString("+0.##;-0.##;0",
                     System.Globalization.CultureInfo.CurrentCulture) + " EV",
+            "denoise-luma" => UiLanguage.T("Rauschen (Helligkeit)"),
+            "denoise-chroma" => UiLanguage.T("Rauschen (Farbe)"),
+            "sharpen" => UiLanguage.T("Schärfen"),
+            "highlights" => UiLanguage.T("Lichter"),
+            "shadows" => UiLanguage.T("Tiefen"),
+            "contrast" => UiLanguage.T("Kontrast (manuell)"),
+            "temperature" => UiLanguage.T("Farbtemperatur"),
+            "tint" => UiLanguage.T("Farbstich (Grün/Magenta)"),
+            "saturation" => UiLanguage.T("Sättigung"),
             _ => UiLanguage.T("Bildbearbeitung")
         };
         var undo = _photoEditSession?.NextUndoStep;
@@ -269,7 +277,8 @@ public partial class MainWindow
         CropRedoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanRedo == true;
         var editingTool = _cropActive || _straightenActive ||
-            (_brightnessActive && Math.Abs(_brightnessAmount) > .00001);
+            (_brightnessActive && Math.Abs(_brightnessAmount) > .00001) ||
+            (_advancedToneActive && Math.Abs(_advancedToneAmount) > .00001);
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
@@ -313,6 +322,14 @@ public partial class MainWindow
                 _photoEditSession.Apply(new PhotoEditStep(
                     "brightness", Amount: exposure));
         }
+        else if (_advancedToneActive)
+        {
+            var kind = _advancedToneKind!;
+            var amount = _advancedToneAmount;
+            LeaveAdvancedTone();
+            if (Math.Abs(amount) > .00001)
+                _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount));
+        }
         else return false;
         SetViewerBitmap(_photoEditSession.Render());
         ApplyViewerImageLayout();
@@ -326,6 +343,7 @@ public partial class MainWindow
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
+        if (_advancedToneActive) LeaveAdvancedTone();
         if (direction < 0) _photoEditSession.Undo();
         else _photoEditSession.Redo();
         SetViewerBitmap(_photoEditSession.Render());
@@ -335,10 +353,12 @@ public partial class MainWindow
 
     private void CancelEditSession()
     {
-        if (_cropSavePending) return;
+        // An already submitted immutable P0 recipe is independent of the
+        // viewer. Leaving the editor never cancels that durable write.
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
+        if (_advancedToneActive) LeaveAdvancedTone();
         var original = _photoEditSession?.Original;
         _photoEditSession = null;
         if (original is not null)
@@ -353,7 +373,8 @@ public partial class MainWindow
     {
         if (_cropSavePending || _viewerImageInfo is not { } info ||
             _pendingEditImageIds.Contains(info.Id)) return;
-        if (_cropActive || _straightenActive || _brightnessActive)
+        if (_cropActive || _straightenActive || _brightnessActive ||
+            _advancedToneActive)
             if (!ApplyEditTool()) return;
         if (_photoEditSession is not { HasChanges: true } session ||
             session.ImageId != info.Id) return;
@@ -513,6 +534,7 @@ public partial class MainWindow
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
+        if (_advancedToneActive) LeaveAdvancedTone();
         _viewerSequence = sequence;
         _viewerCurrentIndex = next;
         SelectViewerImage(newId);
