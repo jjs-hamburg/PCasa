@@ -7,7 +7,7 @@ using System.Windows.Media.Imaging;
 namespace PCasa.App.Services;
 
 /// <summary>
-/// Full-resolution JPEG cropping, performed only by the durable manual/P0
+/// Full-resolution still-photo editing, performed only by the durable manual/P0
 /// scheduler worker. Original bytes remain untouched until the central Undo
 /// archive is verified and the staged result passes full decoding/metadata
 /// validation. RAW never enters this writer; no sidecar is retained.
@@ -20,8 +20,8 @@ public static class JpegCropWriter
 
     /// <summary>
     /// Atomic multi-step editor commit: replay the unsaved UI history once,
-    /// at full resolution, then preserve original metadata and capture Undo
-    /// before replacing the JPEG. No intermediate JPEG writes or sidecars.
+    /// at full resolution, retain source format/metadata and capture Undo
+    /// before replacing the original. No sidecars.
     /// </summary>
     public static void Save(string originalPath,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
@@ -56,10 +56,9 @@ public static class JpegCropWriter
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
     {
         var extension = Path.GetExtension(originalPath);
-        if (!extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) &&
-            !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+        if (!EditableImageFormats.Supports(originalPath))
             throw new NotSupportedException(
-                UiLanguage.T("Nur JPEG-Fotos können zugeschnitten werden."));
+                UiLanguage.T("Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
         if (operations.Count == 0)
             throw new InvalidDataException("Keine Bildbearbeitung zu speichern.");
         var fullPath = Path.GetFullPath(originalPath);
@@ -83,60 +82,35 @@ public static class JpegCropWriter
                 throw new InvalidDataException("Ungültiger Pfad für die Bildkopie.");
         }
 
-        // One source lock and one validated temporary JPEG for both save
-        // modes; the only difference is the final atomic disk operation.
+        // One source lock and one validated temporary image for both save
+        // modes. Preserve the original extension; avoid JPEG conversion.
         using var lease = SourceFileLocks.Enter(fullPath, token);
         var original = new FileInfo(fullPath);
         var originalWriteTime = original.LastWriteTimeUtc;
         var staged = Path.Combine(Path.GetDirectoryName(fullPath)!,
-            ".pcasa-crop-" + Guid.NewGuid().ToString("N") + ".jpg");
+            ".pcasa-edit-" + Guid.NewGuid().ToString("N") + extension);
         try
         {
             token.ThrowIfCancellationRequested();
             if (destination is not null && File.Exists(destination))
                 throw new IOException("Die Bildkopie existiert bereits: " +
                     Path.GetFileName(destination));
-            BitmapSource pixels;
-            using (var input = new FileStream(fullPath, FileMode.Open, FileAccess.Read,
-                       FileShare.Read, 131072, FileOptions.SequentialScan))
-            {
-                var image = new BitmapImage();
-                image.BeginInit();
-                image.CacheOption = BitmapCacheOption.OnLoad;
-                image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
-                image.StreamSource = input;
-                image.EndInit();
-                image.Freeze();
-                pixels = ExifOrientation.Apply(image, input);
-            }
+            EditableImageFormats.ValidateStillImage(fullPath);
+            var pixels = EditableImageFormats.DecodeForEdit(fullPath);
             var result = PhotoEditSession.Render(pixels, operations);
             var width = result.PixelWidth;
             var height = result.PixelHeight;
             token.ThrowIfCancellationRequested();
-            var encoder = new JpegBitmapEncoder { QualityLevel = 95 };
-            encoder.Frames.Add(BitmapFrame.Create(result));
-            using (var output = new FileStream(staged, FileMode.CreateNew,
-                       FileAccess.Write, FileShare.None))
-            {
-                encoder.Save(output);
-                output.Flush(flushToDisk: true);
-            }
+            EditableImageFormats.Encode(result, staged);
             // Preserve EXIF/IPTC/XMP/GPS from the original in BOTH modes.
             // Pixels are already upright; EXIF Orientation must reset to 1.
             CopyMetadata(fullPath, staged, width, height, token);
-            using (var verify = new FileStream(staged, FileMode.Open,
-                       FileAccess.Read, FileShare.Read))
-            {
-                var candidate = BitmapDecoder.Create(verify,
-                    BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-                if (candidate.Frames.Count != 1 ||
-                    candidate.Frames[0].PixelWidth != width ||
-                    candidate.Frames[0].PixelHeight != height)
-                    throw new InvalidDataException(
-                        UiLanguage.T("Die Zuschneidedatei ist nicht vollständig."));
-                verify.Position = 0;
+            var savedDimensions = EditableImageFormats.Dimensions(staged);
+            if (savedDimensions.Width != width || savedDimensions.Height != height)
+                throw new InvalidDataException(
+                    UiLanguage.T("Die bearbeitete Bilddatei ist nicht vollständig."));
+            using (var verify = File.OpenRead(staged))
                 _ = SHA256.HashData(verify);
-            }
             token.ThrowIfCancellationRequested();
             if (destination is not null)
             {
