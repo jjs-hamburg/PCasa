@@ -52,6 +52,20 @@ internal static class Program
         PCasa.App.MainWindow? window = null;
         try
         {
+            LocalizationFlow.Run();
+            var canDeletePermanently = typeof(PCasa.App.MainWindow).GetMethod(
+                "MayDeletePermanently",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            bool Permanent(string path) => (bool)canDeletePermanently.Invoke(
+                null, new object[] { path })!;
+            if (!Permanent(@"\\server\share\photo.jpg") ||
+                Permanent(Path.Combine(Path.GetTempPath(), "photo.jpg")))
+                throw new Exception(
+                    "Deletion confirmation misclassified local recycle-bin and UNC paths.");
+            Console.WriteLine(
+                "PASS: Manual gallery deletion can classify recycle-bin policy without scheduler or NAS probe.");
+
             var app = new PCasa.App.App();
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
@@ -155,6 +169,14 @@ internal static class Program
                 if (translatedAuto.Text != "Contrast (automatic)")
                     throw new Exception(
                         "Dynamic editor tool captions did not switch to English.");
+                if (!Equals(((Button)window.FindName("BrightnessResetButton")!).Content,
+                        "Reset") ||
+                    !Equals(((CheckBox)window.FindName("StraightenWideRangeCheckBox")!).Content,
+                        "Extended range ±45°") ||
+                    !Equals(((Slider)window.FindName("StraightenAngleSlider")!).ToolTip,
+                        "Fine adjustment: arrow keys 0.05°. Extended range up to ±45°."))
+                    throw new Exception(
+                        "Editor controls retained untranslated German captions or tooltips.");
             }
             finally
             {
