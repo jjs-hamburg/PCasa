@@ -537,10 +537,10 @@ public partial class MainWindow
 
         // Crop/rotate may change the decoded edit-buffer dimensions.
         // Their physical size changes proportionally, but tonal edits do not.
-        var scaleX = info.Width / (double)previewOriginal.PixelWidth;
-        var scaleY = info.Height / (double)previewOriginal.PixelHeight;
-        return (Math.Max(1, rendered.PixelWidth * scaleX),
-                Math.Max(1, rendered.PixelHeight * scaleY));
+        return ViewerImageGeometry.LogicalEditPixels(
+            info.Width, info.Height,
+            previewOriginal.PixelWidth, previewOriginal.PixelHeight,
+            rendered.PixelWidth, rendered.PixelHeight);
     }
 
     private double CurrentViewerZoomPercent()
