@@ -2332,6 +2332,12 @@ internal static class Program
                 System.Reflection.BindingFlags.Instance;
             var viewerOpenField = viewerType.GetField("_viewerOpen", reflectFlags)!;
             var viewerInfoField = viewerType.GetField("_viewerImageInfo", reflectFlags)!;
+            // The synthetic photo is not in the catalog. Isolate its
+            // viewer state from any real photo sequence created by an
+            // earlier smoke fixture: delayed Fit refinement must not
+            // start ShowViewerImage and clear the synthetic image info.
+            var viewerSequenceForFixture = viewerType.GetField("_viewerSequence", reflectFlags)!;
+            var previousViewerSequence = viewerSequenceForFixture.GetValue(window);
             var fitField = viewerType.GetField("_viewerFitToScreen", reflectFlags)!;
             var zoomField = viewerType.GetField("_viewerZoomPercent", reflectFlags)!;
             var fullscreenField = viewerType.GetField("_viewerFullscreenWindow", reflectFlags)!;
@@ -2354,6 +2360,7 @@ internal static class Program
             Console.WriteLine("PASS: Viewer and comparison use gallery background without fixed black bars.");
             try
             {
+                viewerSequenceForFixture.SetValue(window, null);
                 viewerOpenField.SetValue(window, true);
                 viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
                     999, @"C:\synthetic\no-file.jpg", "no-file.jpg", 4000, 1000));
@@ -2841,6 +2848,7 @@ internal static class Program
                     stillOpen.Close();
                 viewerOpenField.SetValue(window, false);
                 viewerInfoField.SetValue(window, null);
+                viewerSequenceForFixture.SetValue(window, previousViewerSequence);
                 panel.Visibility = Visibility.Collapsed;
             }
 
