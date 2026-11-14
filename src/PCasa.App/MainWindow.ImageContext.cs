@@ -10,6 +10,7 @@ using System.Windows.Input;
 using Microsoft.VisualBasic.FileIO;
 using PCasa.App.Controls;
 using PCasa.App.Data;
+using PCasa.App.Models;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -32,8 +33,15 @@ public partial class MainWindow
         if (_displayedBrowseIndex.Any(item => item.ImageId == id &&
             VideoFormats.IsVideo(item.FileName)))
         {
-            AddContextAction(menu, "Vorschaubild aktualisieren",
-                () => _ = RefreshVideoThumbnailAsync(id));
+            // One O(N) index projection and one immutable selection.
+            // Do not scan the 500k photo index once PER selected video.
+            var videoIds = SelectVideoThumbnailIds(id, _selectedImageIds,
+                _displayedBrowseIndex);
+            var captured = videoIds;
+            AddContextAction(menu, captured.Length > 1
+                ? "Vorschaubilder aktualisieren"
+                : "Vorschaubild aktualisieren",
+                () => _ = RefreshVideoThumbnailsAsync(captured));
         }
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };
@@ -46,39 +54,82 @@ public partial class MainWindow
         menu.IsOpen = true;
     }
 
-    private async Task RefreshVideoThumbnailAsync(long imageId)
+    internal static long[] SelectVideoThumbnailIds(long clickedId,
+        IReadOnlyCollection<long> selectedIds,
+        IReadOnlyList<BrowseThumbnailIndexEntry> index)
     {
-        const string label = "Video-Vorschaubild aktualisieren";
+        var videoIds = index.Where(item => VideoFormats.IsVideo(item.FileName))
+            .Select(item => item.ImageId).ToHashSet();
+        // The right click preserves an existing multi-selection. If that
+        // thumbnail was not selected it becomes a one-item selection.
+        IEnumerable<long> candidates = selectedIds.Contains(clickedId)
+            ? selectedIds : new[] { clickedId };
+        return candidates.Where(videoIds.Contains).Distinct().ToArray();
+    }
+
+    private async Task RefreshVideoThumbnailsAsync(long[] imageIds)
+    {
+        if (imageIds.Length == 0) return;
+        const string label = "Video-Vorschaubilder aktualisieren";
         string? key = null;
         try
         {
-            var paths = await SelectedGalleryPathsAsync([imageId]);
-            if (paths.Length != 1 || !VideoFormats.IsVideo(paths[0]) ||
-                Dispatcher.HasShutdownStarted)
-                return;
-            var source = paths[0];
-            key = "thumbnail:video-refresh:" + imageId + ":" +
-                Guid.NewGuid().ToString("N");
-            BeginVisibleManualOperation(key, UiLanguage.T(label), 1);
-            // One manual P0 package, and one ID. Never re-enumerate the NAS,
-            // recatalogue the folder or regenerate unrelated photo tiers.
+            // One snapshot, one catalog lookup and one P0 manual operation.
+            // The selected set cannot change under this running action.
+            var selected = await SelectedGalleryImagePathsAsync(imageIds);
+            var videos = selected.Where(item => VideoFormats.IsVideo(item.Path))
+                .DistinctBy(item => item.Id).ToArray();
+            if (videos.Length == 0 || Dispatcher.HasShutdownStarted) return;
+            key = "thumbnail:video-refresh:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, UiLanguage.T(label), videos.Length);
+            var failures = new List<(string Name, string Error)>();
             await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
                 token =>
                 {
-                    token.ThrowIfCancellationRequested();
-                    VideoThumbnailSource.Resolve(source, token,
-                        forceRefresh: true);
-                    new BrowseCacheRepository(_database).InvalidateImage(imageId);
-                    _browseCacheBuilder?.RebuildSingleImage(imageId, token);
+                    var repository = new BrowseCacheRepository(_database);
+                    var builder = _browseCacheBuilder ?? new BrowseCacheBuilder(
+                        repository, new BrowseThumbnailProfileRepository(_database));
+                    for (var index = 0; index < videos.Length; index++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var item = videos[index];
+                        try
+                        {
+                            // Regenerate the local Windows frame first.
+                            // Only when that succeeded invalidate/rebuild the
+                            // packed tiers for the SAME catalog image ID.
+                            VideoThumbnailSource.Resolve(item.Path, token,
+                                forceRefresh: true);
+                            repository.InvalidateImage(item.Id);
+                            builder.RebuildSingleImage(item.Id, token);
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            failures.Add((Path.GetFileName(item.Path), ex.Message));
+                            PCasaDiagnostics.Write("Video.ThumbnailRefresh", ex);
+                        }
+                        _scheduler.ReportProgress(key, UiLanguage.T(label),
+                            index + 1, videos.Length);
+                    }
                     return Task.CompletedTask;
                 }, workKind: SchedulerWorkKind.Catalog);
+
             if (Dispatcher.HasShutdownStarted) return;
-            _browsePageCache?.InvalidateImage(imageId);
+            foreach (var item in videos)
+                _browsePageCache?.InvalidateImage(item.Id);
+            // Exactly one gallery refresh after the entire marked batch.
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
-            StatusText.Text = UiLanguage.T(
-                "Video-Vorschaubild neu erzeugt. Bei fehlendem Windows-Codec " +
-                "bleibt das Platzhalterbild sichtbar.");
+            StatusText.Text = UiLanguage.Format(
+                "{0:N0} Videos geprüft, {1:N0} Fehler.",
+                videos.Length, failures.Count);
+            if (failures.Count > 0)
+                PcasaDialog.Show(this,
+                    string.Join("\n", failures.Take(12).Select(item =>
+                        item.Name + ": " + item.Error)),
+                    UiLanguage.T(label),
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { ShowFileActionError(ex); }

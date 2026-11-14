@@ -1073,8 +1073,11 @@ public partial class MainWindow
     {
         for (var ancestor = original; ancestor is not null;)
         {
-            if (ancestor is ScrollBar or Thumb or ButtonBase or PhotoZoomNavigator)
+            if (ancestor is ScrollBar or Thumb or ButtonBase or PhotoZoomNavigator ||
+                ReferenceEquals(ancestor, ViewerOnImageToolsBar))
             {
+                // The floating Picasa-style crop/straighten controls do not
+                // belong to the photo pan/close gesture even in empty space.
                 return true;
             }
 
@@ -1283,6 +1286,7 @@ public partial class MainWindow
             e.Handled = true;
             if (!_comparisonActive && !_cropSavePending &&
                 (_cropActive || _straightenActive ||
+                 (_brightnessActive && Math.Abs(_brightnessAmount) > .00001) ||
                  _photoEditSession?.HasChanges == true))
                 SaveEdits(asCopy:
                     (Keyboard.Modifiers & ModifierKeys.Shift) != 0);

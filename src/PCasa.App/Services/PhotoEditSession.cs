@@ -45,6 +45,8 @@ public sealed class PhotoEditSession
     public bool HasChanges => _cursor > 0;
     public bool CanUndo => _cursor > 0;
     public bool CanRedo => _cursor < _steps.Count;
+    public PhotoEditStep? NextUndoStep => CanUndo ? _steps[_cursor - 1] : null;
+    public PhotoEditStep? NextRedoStep => CanRedo ? _steps[_cursor] : null;
     public IReadOnlyList<PhotoEditStep> AppliedSteps =>
         _steps.Take(_cursor).ToArray();
 

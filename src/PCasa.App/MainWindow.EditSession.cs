@@ -47,25 +47,13 @@ public partial class MainWindow
 
     private void InitializeStraightenTools()
     {
-        var button = new Button
+        AddEditorTool(new TextBlock
         {
-            Width = 67, Height = 59, Padding = new Thickness(2),
-            Margin = new Thickness(3, 3, 3, 3),
-            ToolTip = UiLanguage.T("Begradigen / Drehen")
-        };
-        var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-        stack.Children.Add(new TextBlock
-        {
-            Text = "⟲", FontSize = 24, TextAlignment = TextAlignment.Center
-        });
-        stack.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Begradigen"), FontSize = 9.5,
+            Text = "⟲", FontSize = 25,
+            HorizontalAlignment = HorizontalAlignment.Center,
             TextAlignment = TextAlignment.Center
-        });
-        button.Content = stack;
-        button.Click += (_, _) => BeginStraighten();
-        ViewerToolsList.Children.Add(button);
+        }, "Begradigen", "Begradigen / Drehen",
+            () => BeginStraighten());
 
         StraightenBackButton.Click += (_, _) => LeaveStraighten();
         StraightenLeftButton.Click += (_, _) =>
@@ -232,6 +220,7 @@ public partial class MainWindow
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
         ViewerStraightenGrid.Children.Clear();
         ViewerStraightenOptions.Visibility = Visibility.Collapsed;
+        ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         if (_photoEditSession is not null)
         {
@@ -241,8 +230,37 @@ public partial class MainWindow
         UpdateEditControls();
     }
 
+    private void UpdateEditHistoryTooltips()
+    {
+        static string ActionName(PhotoEditStep step) => step.Kind switch
+        {
+            "crop" => UiLanguage.T("Zuschneiden"),
+            "rotate" => UiLanguage.T("Begradigen") + " " +
+                step.Degrees.ToString("+0.##;-0.##;0",
+                    System.Globalization.CultureInfo.CurrentCulture) + "°",
+            "auto-fix" => UiLanguage.T("Auf gut Glück!"),
+            "auto-contrast" => UiLanguage.T("Kontrast (automatisch)"),
+            "auto-color" => UiLanguage.T("Farbe (automatisch)"),
+            "brightness" => UiLanguage.T("Aufhellen / Abdunkeln") + " " +
+                step.Amount.ToString("+0.##;-0.##;0",
+                    System.Globalization.CultureInfo.CurrentCulture) + " EV",
+            _ => UiLanguage.T("Bildbearbeitung")
+        };
+        var undo = _photoEditSession?.NextUndoStep;
+        var redo = _photoEditSession?.NextRedoStep;
+        CropUndoButton.ToolTip = undo is null
+            ? UiLanguage.T("Rückgängig machen")
+            : UiLanguage.Format("Rückgängig: {0}", ActionName(undo));
+        CropRedoButton.ToolTip = redo is null
+            ? UiLanguage.T("Wiederholen")
+            : UiLanguage.Format("Wiederholen: {0}", ActionName(redo));
+    }
+
     private void UpdateEditControls()
     {
+        UpdateEditHistoryTooltips();
+        ViewerOnImageToolsBar.Visibility = _cropActive || _straightenActive
+            ? Visibility.Visible : Visibility.Collapsed;
         CropUndoButton.IsEnabled = !_cropSavePending &&
             _photoEditSession?.CanUndo == true;
         CropRedoButton.IsEnabled = !_cropSavePending &&
@@ -252,7 +270,10 @@ public partial class MainWindow
         // Keep all four buttons in a fixed footprint below the histogram.
         // A disabled action is still visible; the histogram never jumps.
         CropApplyButton.Visibility = Visibility.Visible;
-        CropApplyButton.IsEnabled = !_cropSavePending && editingTool;
+        ViewerToolCancelButton.IsEnabled = !_cropSavePending &&
+            (_cropActive || _straightenActive);
+        CropApplyButton.IsEnabled = !_cropSavePending &&
+            (_cropActive || _straightenActive);
         CropSaveButton.IsEnabled = !_cropSavePending &&
             (editingTool || _photoEditSession?.HasChanges == true);
         CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;

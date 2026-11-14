@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using PCasa.App.Controls;
 using PCasa.App.Models;
@@ -91,6 +92,143 @@ internal static class Program
                 !Equals(helpCommands[1].Header, "Über PCasa"))
                 throw new Exception("Help must contain exactly Check for Update and About.");
             Console.WriteLine("PASS: Menu reduced and reorganized with bilingual Help commands.");
+
+            // Alpha.25: one selected video must never hide other selected
+            // videos from the context refresh; non-video photos are ignored.
+            var videoIdsForTest = new BrowseThumbnailIndexEntry[]
+            {
+                new(10, 2, 192, "", 0, 0, 1, 1,
+                    FileName: "one.mp4"),
+                new(11, 2, 192, "", 0, 0, 1, 1,
+                    FileName: "two.mov"),
+                new(12, 2, 192, "", 0, 0, 1, 1,
+                    FileName: "photo.jpg")
+            };
+            var selectVideoMethod = typeof(PCasa.App.MainWindow).GetMethod(
+                "SelectVideoThumbnailIds",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var chosenVideos = (long[])selectVideoMethod.Invoke(null,
+                [10L, new long[] { 10, 11, 12 }, videoIdsForTest])!;
+            if (!chosenVideos.OrderBy(id => id).SequenceEqual(new long[] { 10, 11 }))
+                throw new Exception(
+                    "Multi-video context action did not preserve all selected videos.");
+            var replacedVideos = (long[])selectVideoMethod.Invoke(null,
+                [10L, new long[] { 11, 12 }, videoIdsForTest])!;
+            if (!replacedVideos.SequenceEqual(new long[] { 10 }))
+                throw new Exception(
+                    "Right-clicking an unselected video did not replace the selection.");
+            Console.WriteLine(
+                "PASS: Video Refresh Thumbnail preserves two-video selection and excludes photos.");
+
+            // The five editors use identically sized ICON buttons with
+            // captions outside them; the three autos form their own row.
+            var initEditing = typeof(PCasa.App.MainWindow).GetMethod(
+                "InitializeCropTools",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            initEditing.Invoke(window, null);
+            Flush(window);
+            var manualTools = (WrapPanel)window.FindName("ViewerToolsList")!;
+            var automaticTools = (StackPanel)window.FindName("ViewerAutoToolsList")!;
+            if (manualTools.Children.Count != 2 ||
+                automaticTools.Children.Count != 3 ||
+                automaticTools.Orientation != Orientation.Horizontal)
+                throw new Exception("Expected two manual tools and three autos in one row.");
+            var toolCards = manualTools.Children.Cast<StackPanel>()
+                .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
+            var toolButtons = toolCards.Select(card =>
+                card.Children.OfType<Button>().Single()).ToArray();
+            if (toolButtons.Any(button =>
+                    button.Width != toolButtons[0].Width ||
+                    button.Height != toolButtons[0].Height) ||
+                toolCards.Any(card =>
+                    card.Children.OfType<TextBlock>().Count() != 1))
+                throw new Exception("Editor icon controls are not uniform.");
+            var activeLanguage = UiLanguage.Current.Code;
+            try
+            {
+                UiLanguage.Current.Select("en");
+                Flush(window);
+                var translatedAuto = (TextBlock)
+                    ((StackPanel)automaticTools.Children[1]).Children[1];
+                if (translatedAuto.Text != "Contrast (automatic)")
+                    throw new Exception(
+                        "Dynamic editor tool captions did not switch to English.");
+            }
+            finally
+            {
+                UiLanguage.Current.Select(activeLanguage);
+                Flush(window);
+            }
+            var floatingTools = (Border)window.FindName("ViewerOnImageToolsBar")!;
+            var cropOptions = (StackPanel)window.FindName("ViewerCropOptions")!;
+            var straightenOptions = (StackPanel)window.FindName("ViewerStraightenOptions")!;
+            // The floating toolbar is Collapsed until Crop/Straighten starts.
+            // A collapsed WPF subtree need not exist in the VISUAL tree yet,
+            // but its XAML logical ancestry is still fully defined.
+            // Verify the actual logical parent chain instead of depending on
+            // whether a hidden ScrollViewer has generated a visual template.
+            static bool IsWithinLogicalParent(DependencyObject item,
+                DependencyObject ancestor)
+            {
+                for (DependencyObject? parent = item; parent is not null;
+                     parent = LogicalTreeHelper.GetParent(parent))
+                    if (ReferenceEquals(parent, ancestor)) return true;
+                return false;
+            }
+            if (!IsWithinLogicalParent(cropOptions, floatingTools) ||
+                !IsWithinLogicalParent(straightenOptions, floatingTools))
+                throw new Exception(
+                    "Crop/Straighten options are not in image overlay's logical tree.");
+            var toolbarFooter = (Grid)window.FindName("ViewerCropFooter")!;
+            var histogram = (Canvas)window.FindName("ViewerHistogramCanvas")!;
+            var histogramBorder = (Border)((StackPanel)histogram.Parent).Parent;
+            if (Grid.GetRow(toolbarFooter) != 2 ||
+                Grid.GetRow(histogramBorder) != 3 ||
+                toolbarFooter.Children.OfType<Button>().Count() != 3)
+                throw new Exception("Histogram footer is not a stable single-row toolbar.");
+            var toneReset = (Button)window.FindName("BrightnessResetButton")!;
+            var toneSlider = (Slider)window.FindName("BrightnessSlider")!;
+            if (toneReset.Parent != toneSlider.Parent)
+                throw new Exception("Brighten/Darken Reset must sit directly by slider.");
+            Console.WriteLine(
+                "PASS: Uniform translated editor icons, Picasa-style floating tool panel, stable footer and bottom histogram.");
+
+            // Undo/Redo tips must name the actual next edit, not only the
+            // generic operation. The same persisted cursor drives both.
+            var sessionField = typeof(PCasa.App.MainWindow).GetField(
+                "_photoEditSession", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var updateEditor = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateEditControls", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var editOriginal = BitmapSource.Create(2, 2, 96, 96,
+                PixelFormats.Bgra32, null, new byte[16], 8);
+            var editorSession = new PhotoEditSession(777, editOriginal);
+            var previousSession = sessionField.GetValue(window);
+            try
+            {
+                editorSession.Apply(new PhotoEditStep("auto-contrast"));
+                sessionField.SetValue(window, editorSession);
+                updateEditor.Invoke(window, null);
+                var undoTip = Convert.ToString(
+                    ((Button)window.FindName("CropUndoButton")!).ToolTip);
+                if (undoTip is null || !undoTip.Contains("Kontrast (automatisch)"))
+                    throw new Exception("Undo tooltip did not describe next edit.");
+                editorSession.Undo();
+                updateEditor.Invoke(window, null);
+                var redoTip = Convert.ToString(
+                    ((Button)window.FindName("CropRedoButton")!).ToolTip);
+                if (redoTip is null || !redoTip.Contains("Kontrast (automatisch)"))
+                    throw new Exception("Redo tooltip did not describe restored edit.");
+            }
+            finally
+            {
+                sessionField.SetValue(window, previousSession);
+                updateEditor.Invoke(window, null);
+            }
+            Console.WriteLine("PASS: Undo/Redo tooltips name the next actual image edit.");
 
             var appearanceMenu = (MenuItem?)window.FindName("AppearanceSettingsMenuItem")
                 ?? throw new Exception("Single appearance dialog menu missing.");
@@ -1337,6 +1475,9 @@ internal static class Program
             var tierForScanner = scrollType.GetField(
                 "_activeBrowseTier", scrollFlags)!;
             var previousTierForScanner = tierForScanner.GetValue(window);
+            var browseInitializedField = scrollType.GetField(
+                "_browseInitialized", scrollFlags)!;
+            var wasBrowseInitialized = (bool)browseInitializedField.GetValue(window)!;
             try
             {
                 folderBeforeScroll.SetValue(window, (long?)100);
@@ -1415,11 +1556,21 @@ internal static class Program
                 // gallery. Start the separate interior-policy assertion with
                 // its synthetic fixture again; never interpret an empty
                 // real catalog as a failure of the interior boundary rule.
-                // Reaching the preceding LIVE edge may have started a
-                // legitimate asynchronous refresh of the runner's empty
-                // catalog. Drain that publication BEFORE restoring the
-                // isolated synthetic index; otherwise the late completion
-                // can overwrite the fixture during Flush().
+                // This next test uses SYNTHETIC rows that do not exist in
+                // the runner's empty SQLite catalog. The preceding live-edge
+                // probe can legitimately schedule a real catalog refresh.
+                // Disable real catalog publication ONLY for this synthetic
+                // test phase (not in PCasa's production code), and invalidate
+                // any already in-flight async read. Without BOTH guards a
+                // late empty-catalog result races with SetData(synthetic)
+                // and incorrectly makes this old smoke fixture disappear.
+                browseInitializedField.SetValue(window, false);
+                ((LatestViewRequest)scrollType.GetField(
+                    "_browseRefreshRequests", scrollFlags)!.GetValue(window)!)
+                    .Invalidate();
+
+                // Drain the existing real catalog publisher before placing
+                // synthetic data back into the WPF gallery surface.
                 var publisherField = scrollType.GetField(
                     "_galleryRefreshCompletion", scrollFlags)!;
                 for (var retry = 0; retry < 100; retry++)
@@ -1499,10 +1650,28 @@ internal static class Program
                     if ((bool)scrollDefer.Invoke(window,
                             new object?[] { edge.FolderId })!)
                         throw new Exception("Current folder's own edge was frozen.");
-                    scannerNotification.Invoke(window, new object[] {
-                        atStart ? @"C:\synthetic\other-folder-top.jpg" :
-                            @"C:\synthetic\other-folder-bottom.jpg", incomingOtherFolder });
-                    Flush(window);
+                    // The isolated fixture disables the REAL catalog
+                    // publisher while synthetic rows are installed. But
+                    // OnCatalogImageIndexed deliberately ignores notifications
+                    // until the browse gallery is initialized. Temporarily
+                    // enable that normal notification gate while exercising
+                    // a FOREIGN-folder event: its own defer rule prevents any
+                    // catalog read, so the synthetic index stays intact.
+                    // Otherwise this test would assert on an event that the
+                    // harness silently discarded itself.
+                    try
+                    {
+                        browseInitializedField.SetValue(window, true);
+                        scannerNotification.Invoke(window, new object[] {
+                            atStart ? @"C:\synthetic\other-folder-top.jpg" :
+                                @"C:\synthetic\other-folder-bottom.jpg",
+                            incomingOtherFolder });
+                        Flush(window);
+                    }
+                    finally
+                    {
+                        browseInitializedField.SetValue(window, false);
+                    }
                     var queued = (int)catalogPending.GetValue(window)!;
                     var deferred = (bool)scanDirtyField.GetValue(window)!;
                     if (queued != 0 || !deferred)
@@ -1522,6 +1691,9 @@ internal static class Program
                 tierForScanner.SetValue(window, previousTierForScanner);
                 scroller.ScrollToVerticalOffset(2800);
                 Flush(window);
+                // End of synthetic scanner publication policy probe. The
+                // normal gallery publisher is available again afterwards.
+                browseInitializedField.SetValue(window, wasBrowseInitialized);
             }
 
             // Regression: a background import inserts entire rows while the
@@ -2087,33 +2259,41 @@ internal static class Program
                     "PASS: Manager shows indexed children under one monitored root, " +
                     "without inventing roots, scanning folders or changing catalog identities.");
 
-                // Replacing any monitored root with a selected catalogued
-                // child must be expressible in the RIGHT pane without a NAS
-                // probe. Cancel must remain a purely staged decision.
+                // Alpha.25: only the left tree owns the folder selection.
+                // Expanding one level must not expand nested levels. No
+                // catalogued child may be repeated as a right-side checkbox.
                 var rightList = (StackPanel)manager.FindName("MonitoredRootsList");
-                var originalCheck = Descendants<CheckBox>(rightList)
-                    .Single(box => Equals(box.Tag, fixture.Id));
-                originalCheck.IsChecked = false;
+                if (Descendants<CheckBox>(rightList).Any())
+                    throw new Exception("Right pane still duplicates editable folder tree.");
+                var fixtureAfter = NestedManagerItems(managedTree).Single(item =>
+                    string.Equals(ManagerPath(item), fixtureDirectory,
+                        StringComparison.OrdinalIgnoreCase));
+                var intermediatePath = Path.GetDirectoryName(cataloguedChild)!;
+                var intermediateItem = NestedManagerItems(fixtureAfter).Single(item =>
+                    string.Equals(ManagerPath(item), intermediatePath,
+                        StringComparison.OrdinalIgnoreCase));
+                if (intermediateItem.IsExpanded)
+                    throw new Exception("Expanding one tree level automatically opened its descendants.");
+                var oldRootCheck = (CheckBox)fixtureAfter.Header;
+                oldRootCheck.IsChecked = false;
                 Flush(manager);
-                rightList = (StackPanel)manager.FindName("MonitoredRootsList");
-                var rightChild = Descendants<CheckBox>(rightList)
-                    .SingleOrDefault(box => box.ToolTip is string t &&
-                        t.StartsWith(cataloguedChild,
-                            StringComparison.OrdinalIgnoreCase));
-                if (rightChild is null || !rightChild.IsEnabled ||
-                    rightChild.IsChecked != false)
+                var childAfter = NestedManagerItems(managedTree).Single(item =>
+                    string.Equals(ManagerPath(item), cataloguedChild,
+                        StringComparison.OrdinalIgnoreCase));
+                if (childAfter.Header is not CheckBox leftChild ||
+                    !leftChild.IsEnabled || leftChild.IsChecked != false)
                     throw new Exception(
-                        "Catalogued descendant is not selectable after its parent root is unchecked.");
-                rightChild.IsChecked = true;
+                        "Left tree did not allow choosing an indexed child after removing its broad root.");
+                leftChild.IsChecked = true;
                 Flush(manager);
                 var narrowedRoots = manager.SelectedConfiguration.Roots;
                 if (narrowedRoots.Count != 1 ||
                     !string.Equals(narrowedRoots[0].LocalPath,
                         cataloguedChild, StringComparison.OrdinalIgnoreCase))
                     throw new Exception(
-                        "Right-pane selection failed to replace the root with a catalogued child.");
+                        "Left-tree selection failed to replace the root without rescanning.");
                 Console.WriteLine(
-                    "PASS: Monitored root can be replaced with catalogued children in the right pane.");
+                    "PASS: One-level expansion and left-tree-only catalog-preserving root replacement.");
             }
             finally
             {

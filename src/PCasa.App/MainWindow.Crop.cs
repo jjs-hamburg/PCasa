@@ -154,29 +154,19 @@ public partial class MainWindow
     {
         if (_cropToolsReady) return;
         _cropToolsReady = true;
-        var tool = new Button
+        var frame = new Viewbox
         {
-            ToolTip = UiLanguage.T("Zuschneiden"),
-            Width = 67, Height = 59, Padding = new Thickness(2),
-            Margin = new Thickness(3, 3, 3, 3)
+            Width = 30, Height = 27,
+            HorizontalAlignment = HorizontalAlignment.Center
         };
-        var stack = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-        var frame = new Viewbox { Width = 30, Height = 27, Margin = new Thickness(0, 0, 0, 2) };
         frame.Child = new ShapePath
         {
             Data = Geometry.Parse("M4,3 L4,24 L25,24 M3,9 L24,9 L24,29 M9,3 L9,24 M3,19 L24,19"),
             StrokeThickness = 1.25, Stroke = Brushes.SlateGray,
             Stretch = Stretch.Uniform
         };
-        stack.Children.Add(frame);
-        stack.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Zuschneiden"), TextAlignment = TextAlignment.Center,
-            FontSize = 11
-        });
-        tool.Content = stack;
-        tool.Click += (_, _) => BeginCrop();
-        ViewerToolsList.Children.Add(tool);
+        AddEditorTool(frame, "Zuschneiden", "Zuschneiden",
+            () => BeginCrop());
         foreach (var (name, ratio) in new[]
         {
             ("Original", -1.0), ("Frei", 0.0), ("1:1", 1.0),
@@ -275,6 +265,23 @@ public partial class MainWindow
             UpdateEditControls();
         };
         CropApplyButton.Click += (_, _) => ApplyEditTool();
+        ViewerToolCancelButton.Click += (_, _) =>
+        {
+            // Cancel only the live crop/straighten mask. Previously applied
+            // unsaved operations remain available for Save/Undo.
+            if (_cropActive)
+            {
+                EndCrop();
+                if (_photoEditSession is not null)
+                {
+                    SetViewerBitmap(_photoEditSession.Render());
+                    ApplyViewerImageLayout();
+                }
+            }
+            else if (_straightenActive)
+                LeaveStraighten();
+            UpdateEditControls();
+        };
         CropSaveButton.Click += (_, _) => SaveEdits();
         CropSaveCopyButton.Click += (_, _) => SaveEdits(asCopy: true);
         CropCancelButton.Click += (_, _) => CancelEditSession();
@@ -363,7 +370,8 @@ public partial class MainWindow
         ViewerCropOverlay.ReleaseMouseCapture();
         ViewerCropOverlay.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
-        // Footer is a fixed row; leaving Crop only disables its actions.
+        ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
+        // Sidebar's footer stays fixed when leaving crop.
         ViewerCropFooter.Visibility = Visibility.Visible;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         _cropHistory.Clear();
