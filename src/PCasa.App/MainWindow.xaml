@@ -1012,6 +1012,12 @@
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </StackPanel>
+                                    <Button x:Name="SharpenAutoButton"
+                                            Content="{loc:Tr Key='Schärfen (automatisch)'}"
+                                            ToolTip="{loc:Tr Key='Feine Bilddetails vorsichtig automatisch schärfen'}"
+                                            Height="25" Padding="7,1"
+                                            HorizontalAlignment="Left"
+                                            Margin="159,0,0,5"/>
                                     <StackPanel Orientation="Horizontal" Margin="0,3,0,3">
                                         <TextBlock Width="159" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Schärfradius'}" FontSize="11"/>
