@@ -40,6 +40,101 @@ internal static class CropFlow
                 "-GPSLongitudeRef=E", "-Keywords=PCasaCropSmoke", path);
             var original = File.ReadAllBytes(path);
 
+            // Alpha.27: all supported still formats, not RAW, videos or
+            // animated/multipage images. No silent JPEG conversion.
+            foreach (var suffix in new[] {
+                ".jpg", ".jpeg", ".png", ".tif", ".tiff",
+                ".bmp", ".gif", ".webp", ".heic", ".heif",
+                ".avif", ".jxl" })
+                if (!EditableImageFormats.Supports(Path.Combine(root, "still" + suffix)))
+                    throw new Exception("Static still-image edit format missing: " + suffix);
+            foreach (var suffix in new[] { ".arw", ".nef", ".cr3", ".mp4", ".mov" })
+                if (EditableImageFormats.Supports(Path.Combine(root, "readonly" + suffix)))
+                    throw new Exception("RAW/video must remain read-only: " + suffix);
+
+            // Full-resolution preview and writer replay the SAME step kinds.
+            // Each slider operation may be undone independently, even if the
+            // final decoded source originated from a modern libvips codec.
+            var toneSteps = new[] {
+                new PhotoEditStep("denoise-luma", Amount: .65),
+                new PhotoEditStep("denoise-chroma", Amount: .7),
+                new PhotoEditStep("sharpen", Amount: .6, Radius: 2, Detail: .8),
+                new PhotoEditStep("highlights", Amount: -.35),
+                new PhotoEditStep("shadows", Amount: .35),
+                new PhotoEditStep("contrast", Amount: .2),
+                new PhotoEditStep("temperature", Amount: .2),
+                new PhotoEditStep("tint", Amount: -.2),
+                new PhotoEditStep("saturation", Amount: .2),
+                new PhotoEditStep("auto-sharpen")
+            };
+            var edits = new PhotoEditSession(901, bitmap);
+            foreach (var step in toneSteps) edits.Apply(step);
+            if (edits.AppliedSteps.Count != toneSteps.Length ||
+                !edits.CanUndo) throw new Exception("Advanced tools do not share Undo.");
+            edits.Undo();
+            if (edits.AppliedSteps.Count != toneSteps.Length - 1 || !edits.CanRedo)
+                throw new Exception("Advanced editor Undo/Redo failed.");
+            edits.Redo();
+            var tonePreview = Task.Run(() => edits.Render())
+                .GetAwaiter().GetResult();
+            if (tonePreview.PixelWidth != 480 || tonePreview.PixelHeight != 320)
+                throw new Exception("Advanced corrections changed pixel dimensions.");
+            Console.WriteLine(
+                "PASS: Alpha.27 sharpening/denoising/tone adjustments share preview, MTA and Undo history.");
+
+            // Transparency must not be flattened or saved as JPEG. The format
+            // is a real PNG on disk and is validated after the durable writer.
+            var pngPath = Path.Combine(root, "alpha.png");
+            var alphaPixels = new byte[64 * 48 * 4];
+            for (var p = 0; p < alphaPixels.Length; p += 4)
+            {
+                alphaPixels[p] = 80;
+                alphaPixels[p + 1] = 150;
+                alphaPixels[p + 2] = 200;
+                alphaPixels[p + 3] = (byte)((p / 4) % 64 < 32 ? 255 : 96);
+            }
+            var alphaBitmap = BitmapSource.Create(64, 48, 96, 96,
+                PixelFormats.Bgra32, null, alphaPixels, 64 * 4);
+            var pngEncoder = new PngBitmapEncoder();
+            pngEncoder.Frames.Add(BitmapFrame.Create(alphaBitmap));
+            using (var pngOutput = File.Create(pngPath)) pngEncoder.Save(pngOutput);
+            var pngBefore = File.ReadAllBytes(pngPath);
+            var pngCopy = JpegCropWriter.GetAvailableCopyPath(pngPath);
+            Task.Run(() => JpegCropWriter.SaveAsCopy(pngPath, pngCopy,
+                [new PhotoEditStep("contrast", Amount: .15)],
+                CancellationToken.None)).GetAwaiter().GetResult();
+            if (!File.ReadAllBytes(pngPath).SequenceEqual(pngBefore))
+                throw new Exception("PNG save-as-copy changed original bytes.");
+            using (var pngInput = File.OpenRead(pngCopy))
+            {
+                var frame = BitmapDecoder.Create(pngInput, BitmapCreateOptions.None,
+                    BitmapCacheOption.OnLoad).Frames.Single();
+                var rgba = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+                var resulting = new byte[64 * 48 * 4];
+                rgba.CopyPixels(resulting, 64 * 4, 0);
+                if (resulting[3] != 255 ||
+                    resulting[(40 * 4) + 3] != 96)
+                    throw new Exception("PNG alpha channel was lost in edit copy.");
+            }
+            Console.WriteLine("PASS: PNG edits preserve extension, transparency and original source bytes.");
+
+            // An animation is one media item but NOT a still-photo edit
+            // target. Never reduce a multi-frame GIF to a single image.
+            var animatedPath = Path.Combine(root, "animated.gif");
+            var gifEncoder = new GifBitmapEncoder();
+            gifEncoder.Frames.Add(BitmapFrame.Create(bitmap));
+            gifEncoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using (var gifOutput = File.Create(animatedPath))
+                gifEncoder.Save(gifOutput);
+            try
+            {
+                EditableImageFormats.ValidateStillImage(animatedPath);
+                throw new Exception("Animated GIF was silently accepted for editing.");
+            }
+            catch (NotSupportedException) { }
+            Console.WriteLine("PASS: Animated images are never flattened by editor.");
+
+
             // Alpha.23: "Save as copy" is a full-resolution durable JPEG
             // write. It must never alter the source, overwrite an existing
             // sibling, strip GPS/tags or leave any temp/sidecar files.
