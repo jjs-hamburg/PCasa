@@ -436,8 +436,10 @@ public partial class MainWindow
                 var result = _folderScanner.ScanFile(root, copy,
                     cancellationToken: token, publishCatalogChange: false,
                     forceExifRefresh: true);
-                if (result.Failed > 0 || result.Added == 0 &&
-                    !File.Exists(copy))
+                // ScanResult reports the number of files inspected, not
+                // an Added property. Zero means the saved copy was not
+                // available/eligible for catalog import.
+                if (result.Failed > 0 || result.ImageFilesSeen == 0)
                     throw new IOException(
                         "Die gespeicherte Bildkopie konnte nicht katalogisiert werden.");
                 return Task.CompletedTask;
