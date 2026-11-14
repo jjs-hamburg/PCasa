@@ -322,7 +322,7 @@ public partial class MainWindow
             LeaveBrightness();
             if (Math.Abs(exposure) > .00001)
                 _photoEditSession.Apply(new PhotoEditStep(
-                    "brightness", Amount: exposure));
+                    "brightness", Amount: exposure, Mask: _selectedEditMask));
         }
         else if (_advancedToneActive)
         {
@@ -332,7 +332,8 @@ public partial class MainWindow
             if (Math.Abs(amount) > .00001)
                 _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount,
                     Radius: kind == "sharpen" ? SharpenRadiusSlider.Value : 1,
-                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5));
+                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5,
+                    Mask: _selectedEditMask));
         }
         else return false;
         SetViewerBitmap(_photoEditSession.Render());
@@ -363,6 +364,7 @@ public partial class MainWindow
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
         if (_advancedToneActive) LeaveAdvancedTone();
+        EndMaskPreview();
         var original = _photoEditSession?.Original;
         _photoEditSession = null;
         if (original is not null)
