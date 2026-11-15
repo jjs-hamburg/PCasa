@@ -3,6 +3,12 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using System.ComponentModel;
+
 using PCasa.App.Models;
 using PCasa.App.Services;
 
@@ -11,6 +17,98 @@ namespace PCasa.App;
 public partial class MainWindow
 {
     private ExternalEditorSettings _externalEditors = ExternalEditorSettings.Load();
+    private readonly Dictionary<string, ImageSource> _externalEditorIconCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private long _externalEditorDisplayedImageId = -1;
+    private string? _externalEditorDisplayedFileName;
+
+    // The cards match the exact geometry of Crop / Straighten tool buttons.
+    // Only applications configured for this image format are shown.
+    private void RefreshExternalEditorToolButtons(long imageId, string fileName)
+    {
+        _externalEditorDisplayedImageId = imageId;
+        _externalEditorDisplayedFileName = fileName;
+        if (!_cropToolsReady) return;
+        ExternalEditorToolsList.Children.Clear();
+
+        foreach (var configured in _externalEditors.ForFile(fileName))
+        {
+            if (!File.Exists(configured.ExecutablePath)) continue;
+            var editor = configured; // Capture immutable program per card.
+            var button = new Button
+            {
+                Width = 74,
+                Height = 49,
+                Padding = new Thickness(2),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                ToolTip = editor.Name,
+                Content = CreateExternalEditorIcon(editor.ExecutablePath)
+            };
+            button.Click += (_, _) => _ = StartExternalEditorAsync(imageId, editor);
+            var caption = new TextBlock
+            {
+                Text = editor.Name,
+                Width = 82,
+                Height = 31,
+                FontSize = 10,
+                TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 5, 0, 0),
+                ToolTip = editor.Name
+            };
+            var card = new StackPanel
+            {
+                Width = 86,
+                Margin = new Thickness(1, 2, 1, 3)
+            };
+            card.Children.Add(button);
+            card.Children.Add(caption);
+            ExternalEditorToolsList.Children.Add(card);
+        }
+    }
+
+    private UIElement CreateExternalEditorIcon(string executable)
+    {
+        try
+        {
+            if (!_externalEditorIconCache.TryGetValue(executable, out var source))
+            {
+                using var extracted = System.Drawing.Icon.ExtractAssociatedIcon(executable)
+                    ?? throw new InvalidDataException("No icon in program.");
+                var bitmap = Imaging.CreateBitmapSourceFromHIcon(extracted.Handle,
+                    Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(30, 30));
+                bitmap.Freeze();
+                source = bitmap;
+                _externalEditorIconCache[executable] = source;
+            }
+            return new Image
+            {
+                Source = source,
+                Width = 30, Height = 30,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or ArgumentException or Win32Exception or InvalidDataException
+            or NotSupportedException)
+        {
+            PCasaDiagnostics.Write("ExternalEditor.Icon", ex);
+            return new TextBlock
+            {
+                Text = "↗", FontSize = 24,
+                Foreground = Brushes.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+        }
+    }
+
 
     private string? CachedExternalEditorSource(long id)
     {
@@ -39,12 +137,7 @@ public partial class MainWindow
             menu.Items.Add(item);
         }
         if (programs.Count > 0) menu.Items.Add(new Separator());
-        var manage = new MenuItem
-        {
-            Header = UiLanguage.T("Programme verwalten …")
-        };
-        manage.Click += (_, _) => ConfigureExternalEditors();
-        menu.Items.Add(manage);
+        // Program configuration is exclusively under Options.
         // The unconfigured system fallback deliberately remains last.
         var windows = new MenuItem
         {
@@ -54,24 +147,22 @@ public partial class MainWindow
         menu.Items.Add(windows);
     }
 
-    private void ExternalEditQuick_Click(object sender, RoutedEventArgs e)
-    {
-        if (_viewerImageInfo is not { } info) return;
-        var context = new ContextMenu
-        {
-            PlacementTarget = ExternalEditQuickButton,
-            Placement = PlacementMode.Bottom
-        };
-        PopulateExternalEditorMenu(context, info.Id, info.LocalPath);
-        context.IsOpen = true;
-    }
+    private void ExternalEditorsOptions_Click(object sender, RoutedEventArgs e)
+        => ConfigureExternalEditors();
 
     private void ConfigureExternalEditors()
     {
         var dialog = new ExternalEditorsWindow(_externalEditors) { Owner = this };
         if (dialog.ShowDialog() == true &&
             dialog.SavedSettings is { } saved)
+        {
             _externalEditors = saved;
+            _externalEditorIconCache.Clear();
+            if (_externalEditorDisplayedImageId > 0 &&
+                _externalEditorDisplayedFileName is { } fileName)
+                RefreshExternalEditorToolButtons(_externalEditorDisplayedImageId,
+                    fileName);
+        }
     }
 
     private async Task StartExternalEditorAsync(long id, ExternalEditorProgram? editor)

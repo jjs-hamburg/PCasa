@@ -197,11 +197,41 @@ internal static class Program
             var quickTab = (TabItem)window.FindName("EditorTabQuick")!;
             var lightTab = (TabItem)window.FindName("EditorTabLight")!;
             var detailPanel = (StackPanel)window.FindName("ViewerPanelDetail")!;
+            // Inspect the ACTUAL TextBlock in the applied control template.
+            // TabItem.Foreground alone can be white while its header glyphs
+            // still render black because of the third-party WPF theme.
             lightTab.IsSelected = true;
-            if (lightTab.Foreground is not SolidColorBrush tabTextBrush ||
-                tabTextBrush.Color.R < 220 || tabTextBrush.Color.G < 220 ||
-                tabTextBrush.Color.B < 220)
-                throw new Exception("Tabs have unreadable dark text.");
+            lightTab.ApplyTemplate();
+            var lightCaption = (TextBlock?)lightTab.Template.FindName(
+                "TabCaption", lightTab);
+            if (lightCaption?.Foreground is not SolidColorBrush lightBrush ||
+                lightBrush.Color.R < 220 || lightBrush.Color.G < 220 ||
+                lightBrush.Color.B < 220)
+                throw new Exception("The rendered Light tab caption is unreadable.");
+            quickTab.IsSelected = true;
+            quickTab.ApplyTemplate();
+            var quickCaption = (TextBlock?)quickTab.Template.FindName(
+                "TabCaption", quickTab);
+            if (quickCaption?.Foreground is not SolidColorBrush quickBrush ||
+                quickBrush.Color.R < 220 || quickBrush.Color.G < 220 ||
+                quickBrush.Color.B < 220)
+                throw new Exception("The unselected Quick caption is unreadable.");
+            lightTab.IsSelected = true;
+            if (window.FindName("EditUndoOptionsMenuItem") is not MenuItem ||
+                window.FindName("ExternalEditorsOptionsMenuItem") is not MenuItem)
+                throw new Exception("Undo settings and external program setup missing from their main menus.");
+            var mainMenu = (Menu)window.FindName("MainMenu")!;
+            var editMenu = mainMenu.Items.OfType<MenuItem>().First(item =>
+                item.Header?.ToString() == "Edit" || item.Header?.ToString() == "Bearbeiten");
+            var optionsMenu = mainMenu.Items.OfType<MenuItem>().First(item =>
+                item.Header?.ToString() == "Options" || item.Header?.ToString() == "Optionen");
+            if (!editMenu.Items.OfType<MenuItem>().Any(item =>
+                    item.Name == "EditUndoOptionsMenuItem") ||
+                !optionsMenu.Items.OfType<MenuItem>().Any(item =>
+                    item.Name == "ExternalEditorsOptionsMenuItem") ||
+                optionsMenu.Items.OfType<MenuItem>().Any(item =>
+                    item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
+                throw new Exception("Undo or editor program configuration is in the wrong menu.");
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;
             if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
@@ -218,8 +248,9 @@ internal static class Program
             quickTab.IsSelected = true;
             if (detailPanel.Visibility != Visibility.Collapsed ||
                 !quickTab.IsSelected ||
-                window.FindName("ExternalEditQuickButton") is not Button)
-                throw new Exception("Quick tools or external-edit command are missing.");
+                window.FindName("ExternalEditorToolsList") is not WrapPanel ||
+                window.FindName("ExternalEditQuickButton") is not null)
+                throw new Exception("Quick must show configured program icons, not a dropdown.");
             var topazPhoto = new ExternalEditorProgram("Topaz Photo",
                 @"C:\Topaz\Photo.exe", "photo");
             var topazVideo = new ExternalEditorProgram("Topaz Video",
@@ -236,6 +267,54 @@ internal static class Program
             var emptyProgram = new ExternalEditorProgram("Unconfigured", "", "photo");
             if (emptyProgram.Matches("image.jpg"))
                 throw new Exception("An unconfigured editor became executable.");
+            // Icons are generated from the real executable path.
+            // The menu order and 74x49 button geometry must match Crop.
+            var configuredField = typeof(PCasa.App.MainWindow).GetField(
+                "_externalEditors", System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var originalSettings = configuredField.GetValue(window);
+            var refreshCards = typeof(PCasa.App.MainWindow).GetMethod(
+                "RefreshExternalEditorToolButtons",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance)!;
+            var externalCards = (WrapPanel)window.FindName("ExternalEditorToolsList")!;
+            var runningExecutable = Environment.ProcessPath
+                ?? throw new Exception("Test process has no executable path.");
+            try
+            {
+                configuredField.SetValue(window, new ExternalEditorSettings
+                {
+                    Programs =
+                    [
+                        new("Topaz Photo", runningExecutable, "photo"),
+                        new("Topaz Video", runningExecutable, "video"),
+                        new("Topaz Gigapixel", runningExecutable, ".jpg;.png")
+                    ]
+                });
+                refreshCards.Invoke(window, [1001L, "picture.jpg"]);
+                if (externalCards.Children.Count != 2)
+                    throw new Exception("External program cards did not filter by image type.");
+                var cards = externalCards.Children.Cast<StackPanel>().ToArray();
+                var cardButtons = cards.Select(card => card.Children.OfType<Button>()
+                    .Single()).ToArray();
+                var titles = cards.Select(card =>
+                    card.Children.OfType<TextBlock>().Single().Text).ToArray();
+                if (!titles.SequenceEqual(new[] { "Topaz Photo", "Topaz Gigapixel" }) ||
+                    cardButtons.Any(btn => btn.Width != 74 || btn.Height != 49 ||
+                        btn.Content is not FrameworkElement) ||
+                    cards.Any(card => card.Width != 86))
+                    throw new Exception("External editor cards are not icon/caption tools.");
+                refreshCards.Invoke(window, [1002L, "movie.mp4"]);
+                if (externalCards.Children.Count != 1 ||
+                    ((StackPanel)externalCards.Children[0]).Children
+                        .OfType<TextBlock>().Single().Text != "Topaz Video")
+                    throw new Exception("Video editor cards showed photo applications.");
+            }
+            finally
+            {
+                configuredField.SetValue(window, originalSettings);
+                refreshCards.Invoke(window, [0L, "none.jpg"]);
+            }
             Console.WriteLine(
                 "PASS: Alpha.31 readable four tabs, masks retired and external program filters.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
