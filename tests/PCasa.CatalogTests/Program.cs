@@ -159,6 +159,7 @@ internal static class Program
         Run("Unavailable root never deletes catalog", UnavailableRootKeepsCatalog, failures);
         Run("Missing thumbnail tier is rebuilt", MissingThumbnailCanRebuild, failures);
         Run("Repeated browse index keeps decoded thumbnail pages", IdenticalIndexRetainsPage, failures);
+        Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
         Run("Moved images reuse their decoded pixels without blanking unrelated folders", ChangedIndexRetainsUnmodifiedImages, failures);
@@ -3989,6 +3990,71 @@ internal static class Program
         cache.SetIndex(Array.Empty<BrowseThumbnailIndexEntry>());
         if (cache.Count != 0 || cache.TryGet(0, out _))
             throw new Exception("Changed browse index did not invalidate obsolete pages.");
+    }
+
+    private static void TargetedThumbnailRebuildRetainsNeighbor()
+    {
+        using var sandbox = new Sandbox();
+        var firstPath = Path.Combine(sandbox.Images, "refresh-one.jpg");
+        var secondPath = Path.Combine(sandbox.Images, "refresh-two.jpg");
+        WriteJpeg(firstPath);
+        WriteJpeg(secondPath);
+        var (db, root, scanner) = sandbox.Prepare();
+        if (scanner.Scan(root).Failed != 0)
+            throw new Exception("Could not prepare manual thumbnail refresh fixture.");
+        var repository = new BrowseCacheRepository(db);
+        var profiles = new BrowseThumbnailProfileRepository(db);
+        var tier = profiles.Get().Tiers[0];
+        var entries = repository.GetIndex(tier).ToArray();
+        if (entries.Length != 2) throw new Exception("Missing refresh fixtures.");
+        using var cache = new BrowseThumbnailPageCache();
+        cache.SetIndex(entries);
+        cache.WarmRangeAsync(0, 1).GetAwaiter().GetResult();
+        if (!cache.TryGet(0, out var earlier) || earlier is null ||
+            !cache.TryGet(1, out var neighbor) || neighbor is null)
+            throw new Exception("Initial thumbnails not decoded.");
+
+        var builder = new BrowseCacheBuilder(repository, profiles);
+        builder.RebuildSingleImage(entries[0].ImageId);
+        var newer = repository.GetIndexEntry(tier, entries[0].ImageId)
+            ?? throw new Exception("Requested thumbnail was not rebuilt.");
+        if (newer.PackFile == entries[0].PackFile &&
+            newer.ByteOffset == entries[0].ByteOffset)
+            throw new Exception("Refresh reused existing packed thumbnail bytes.");
+        using var reader = new PackedThumbnailReader();
+        var decoded = reader.Load(newer)
+            ?? throw new Exception("Regenerated thumbnail cannot be decoded.");
+        cache.ReplaceThumbnailEntries(
+            new Dictionary<long, BrowseThumbnailIndexEntry>
+                { [entries[0].ImageId] = newer },
+            new Dictionary<long, BitmapSource>
+                { [entries[0].ImageId] = decoded });
+        if (!cache.TryGet(0, out var replaced) ||
+            !ReferenceEquals(decoded, replaced) ||
+            !cache.TryGet(1, out var preserved) ||
+            !ReferenceEquals(neighbor, preserved))
+            throw new Exception("Targeted refresh evicted another decoded thumbnail.");
+
+        // A source that went offline must not destroy its last good cache.
+        File.Move(firstPath, firstPath + ".offline");
+        try
+        {
+            try
+            {
+                builder.RebuildSingleImage(entries[0].ImageId);
+                throw new Exception("An offline original unexpectedly refreshed.");
+            }
+            catch (FileNotFoundException) { }
+            var stillValid = repository.GetIndexEntry(tier, entries[0].ImageId);
+            if (stillValid is null ||
+                stillValid.ByteOffset != newer.ByteOffset ||
+                stillValid.PackFile != newer.PackFile)
+                throw new Exception("Failed refresh deleted the last good thumbnail.");
+        }
+        finally
+        {
+            File.Move(firstPath + ".offline", firstPath);
+        }
     }
 
     private static void GallerySortUsesCatalogMetadata()

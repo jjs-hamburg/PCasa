@@ -140,6 +140,74 @@ public sealed class BrowseThumbnailPageCache : IDisposable
         PageReady?.Invoke(this, EventArgs.Empty);
     }
 
+    // Change only the requested thumbnails. Their packed byte locations
+    // change during an explicit rebuild, but all other cached pages, their
+    // outstanding readers, the gallery ordering and scroll stay untouched.
+    // Fresh bitmaps were decoded off the dispatcher by the P0 operation.
+    public void ReplaceThumbnailEntries(
+        IReadOnlyDictionary<long, BrowseThumbnailIndexEntry> updatedEntries,
+        IReadOnlyDictionary<long, BitmapSource> decodedImages)
+    {
+        ArgumentNullException.ThrowIfNull(updatedEntries);
+        ArgumentNullException.ThrowIfNull(decodedImages);
+        if (updatedEntries.Count == 0) return;
+
+        lock (_sync)
+        {
+            if (_disposed || _index.Count == 0) return;
+            BrowseThumbnailIndexEntry[]? patched = null;
+            var reloadPages = new HashSet<int>();
+            for (var i = 0; i < _index.Count; i++)
+            {
+                var original = _index[i];
+                if (!updatedEntries.TryGetValue(original.ImageId, out var renewed))
+                    continue;
+                var newer = ThumbnailRefreshProjection.ReplaceLocation(original, renewed);
+                patched ??= _index.ToArray();
+                patched[i] = newer;
+                _liveEditedThumbnails.Remove(original.ImageId);
+                if (_retainedBitmaps.Remove(ThumbnailContentKey.From(original),
+                        out var retained))
+                    _retainedBytes -= (long)retained.PixelWidth *
+                        Math.Max(1, retained.PixelHeight) * 4L;
+                var pageNumber = i / PageSize;
+                if (!_pages.TryGetValue(pageNumber, out var page)) continue;
+
+                if (page.Bitmaps is { } bitmaps &&
+                    decodedImages.TryGetValue(original.ImageId, out var bitmap))
+                {
+                    var offset = i % PageSize;
+                    var previous = bitmaps[offset];
+                    bitmaps[offset] = bitmap;
+                    var previousBytes = previous is null ? 0L :
+                        (long)previous.PixelWidth * Math.Max(1, previous.PixelHeight) * 4;
+                    var currentBytes = (long)bitmap.PixelWidth *
+                        Math.Max(1, bitmap.PixelHeight) * 4;
+                    var delta = currentBytes - previousBytes;
+                    page.EstimatedBytes += delta;
+                    _decodedBytes += delta;
+                }
+                else
+                {
+                    // An in-flight page captured the OLD index and must not
+                    // publish stale pixels. Only that page is retried.
+                    page.Cancellation.Cancel();
+                    if (page.LruNode is not null) _lru.Remove(page.LruNode);
+                    _decodedBytes -= page.EstimatedBytes;
+                    _pages.Remove(pageNumber);
+                    page.Cancellation.Dispose();
+                    reloadPages.Add(pageNumber);
+                }
+            }
+            if (patched is null) return;
+            _index = patched;
+            foreach (var pageNumber in reloadPages)
+                _ = RequestPageLocked(pageNumber);
+            EvictIfNeeded(-1);
+        }
+        PageReady?.Invoke(this, EventArgs.Empty);
+    }
+
     public void ShowEditedImage(long imageId, BitmapSource source)
     {
         if (source.PixelWidth <= 0 || source.PixelHeight <= 0) return;

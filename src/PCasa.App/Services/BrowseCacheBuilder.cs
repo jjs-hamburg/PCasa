@@ -105,15 +105,19 @@ public sealed class BrowseCacheBuilder
         var candidate = _repository.GetImageCandidate(imageId)
             ?? throw new FileNotFoundException(
                 "Die ausgewählte Datei ist nicht mehr im PCasa-Katalog.");
-        BuildCandidate(candidate, _profileRepository.Get(), cancellationToken);
+        // User-requested refresh always decodes the ORIGINAL, even when
+        // every tier already exists. No legacy thumbnail is reused.
+        // Existing packed entries remain valid until the new tiers commit.
+        BuildCandidate(candidate, _profileRepository.Get(), cancellationToken,
+            forceOriginal: true);
     }
 
     private void BuildCandidate(
         BrowseCacheCandidate candidate,
         BrowseThumbnailProfile profile,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool forceOriginal = false)
     {
-        var missing = profile.Tiers
+        var missing = forceOriginal ? profile.Tiers.ToArray() : profile.Tiers
             .Where(tier => !candidate.ExistingTiers.Contains(tier)).ToArray();
 
         // Open and close a pack writer for THIS candidate only. Holding one
@@ -129,7 +133,8 @@ public sealed class BrowseCacheBuilder
         {
             // Video placeholders stored in the legacy JPEG cache must not
             // override a newly regenerated Windows video frame.
-            var available = !VideoFormats.IsVideo(candidate.LocalPath) &&
+            var available = !forceOriginal &&
+                !VideoFormats.IsVideo(candidate.LocalPath) &&
                 File.Exists(candidate.ThumbnailPath);
             var legacyTiers = available
                 ? missing.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()

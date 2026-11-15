@@ -107,33 +107,49 @@ internal static class Program
                 throw new Exception("Help must contain exactly Check for Update and About.");
             Console.WriteLine("PASS: Menu reduced and reorganized with bilingual Help commands.");
 
-            // Alpha.25: one selected video must never hide other selected
-            // videos from the context refresh; non-video photos are ignored.
-            var videoIdsForTest = new BrowseThumbnailIndexEntry[]
+            // Alpha.29: one manual refresh command applies to ANY photo
+            // or video and only to the selected image IDs. No other image
+            // in a half-million entry catalog should enter its P0 package.
+            var thumbEntries = new BrowseThumbnailIndexEntry[]
             {
-                new(10, 2, 192, "", 0, 0, 1, 1,
-                    FileName: "one.mp4"),
-                new(11, 2, 192, "", 0, 0, 1, 1,
-                    FileName: "two.mov"),
-                new(12, 2, 192, "", 0, 0, 1, 1,
-                    FileName: "photo.jpg")
+                new(10, 2, 192, "", 0, 0, 1, 1, FileName: "one.mp4"),
+                new(11, 2, 192, "", 0, 0, 1, 1, FileName: "two.mov"),
+                new(12, 2, 192, "", 0, 0, 1, 1, FileName: "photo.jpg"),
+                new(13, 2, 192, "", 0, 0, 1, 1, FileName: "other.jpg")
             };
-            var selectVideoMethod = typeof(PCasa.App.MainWindow).GetMethod(
-                "SelectVideoThumbnailIds",
+            var selectThumbnailMethod = typeof(PCasa.App.MainWindow).GetMethod(
+                "SelectThumbnailIds",
                 System.Reflection.BindingFlags.Static |
                 System.Reflection.BindingFlags.NonPublic)!;
-            var chosenVideos = (long[])selectVideoMethod.Invoke(null,
-                [10L, new long[] { 10, 11, 12 }, videoIdsForTest])!;
-            if (!chosenVideos.OrderBy(id => id).SequenceEqual(new long[] { 10, 11 }))
+            var mixed = (long[])selectThumbnailMethod.Invoke(null,
+                [12L, new long[] { 10, 11, 12 }, thumbEntries])!;
+            if (!mixed.OrderBy(id => id).SequenceEqual(new long[] { 10, 11, 12 }))
                 throw new Exception(
-                    "Multi-video context action did not preserve all selected videos.");
-            var replacedVideos = (long[])selectVideoMethod.Invoke(null,
-                [10L, new long[] { 11, 12 }, videoIdsForTest])!;
-            if (!replacedVideos.SequenceEqual(new long[] { 10 }))
+                    "Refresh Thumbnail excluded selected photos or included another photo.");
+            var onlyClicked = (long[])selectThumbnailMethod.Invoke(null,
+                [13L, new long[] { 10, 11, 12 }, thumbEntries])!;
+            if (!onlyClicked.SequenceEqual(new long[] { 13 }))
                 throw new Exception(
-                    "Right-clicking an unselected video did not replace the selection.");
+                    "Right-clicking an unselected photo refreshed the whole selection.");
+            var old = thumbEntries[2] with { HasRestore = true, HasGps = true };
+            var renewed = old with
+            {
+                PackFile = "new.pack", ByteOffset = 314, ByteLength = 19,
+                PixelWidth = 200, PixelHeight = 150, HasRestore = false
+            };
+            var replaced = ThumbnailRefreshProjection.ReplaceLocation(old, renewed);
+            if (!replaced.HasRestore || !replaced.HasGps ||
+                replaced.ByteOffset != 314 || replaced.ImageId != old.ImageId)
+                throw new Exception(
+                    "Targeted thumbnail refresh changed catalog badges or image identity.");
+            var changedList = ThumbnailRefreshProjection.Replace(thumbEntries,
+                new Dictionary<long, BrowseThumbnailIndexEntry> { [12L] = renewed });
+            if (!ReferenceEquals(changedList[0], thumbEntries[0]) ||
+                !ReferenceEquals(changedList[1], thumbEntries[1]) ||
+                !ReferenceEquals(changedList[3], thumbEntries[3]))
+                throw new Exception("One thumbnail refresh replaced unrelated index entries.");
             Console.WriteLine(
-                "PASS: Video Refresh Thumbnail preserves two-video selection and excludes photos.");
+                "PASS: Photo/video thumbnail refresh honors selected IDs and preserves unrelated index entries.");
 
             // The five editors use identically sized ICON buttons with
             // captions outside them; the three autos form their own row.

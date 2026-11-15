@@ -988,13 +988,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Lichter'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""HighlightsSlider" 
+                                        <Slider x:Name="HighlightsSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Lichter'}"/>
-                                        <Button Grid.Column="2""HighlightsResetButton" Width="25"
+                                        <Button x:Name="HighlightsResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1002,13 +1002,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Tiefen'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""ShadowsSlider" 
+                                        <Slider x:Name="ShadowsSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Tiefen'}"/>
-                                        <Button Grid.Column="2""ShadowsResetButton" Width="25"
+                                        <Button x:Name="ShadowsResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1016,13 +1016,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Kontrast (manuell)'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""ContrastSlider" 
+                                        <Slider x:Name="ContrastSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Kontrast (manuell)'}"/>
-                                        <Button Grid.Column="2""ContrastResetButton" Width="25"
+                                        <Button x:Name="ContrastResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1032,13 +1032,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Farbtemperatur'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""TemperatureSlider" 
+                                        <Slider x:Name="TemperatureSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Farbtemperatur'}"/>
-                                        <Button Grid.Column="2""TemperatureResetButton" Width="25"
+                                        <Button x:Name="TemperatureResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1046,13 +1046,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Farbstich (Grün/Magenta)'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""TintSlider" 
+                                        <Slider x:Name="TintSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Farbstich (Grün/Magenta)'}"/>
-                                        <Button Grid.Column="2""TintResetButton" Width="25"
+                                        <Button x:Name="TintResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1060,13 +1060,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Sättigung'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""SaturationSlider" 
+                                        <Slider x:Name="SaturationSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Sättigung'}"/>
-                                        <Button Grid.Column="2""SaturationResetButton" Width="25"
+                                        <Button x:Name="SaturationResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1076,13 +1076,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Rauschen (Helligkeit)'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""DenoiseLumaSlider" 
+                                        <Slider x:Name="DenoiseLumaSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="0" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Rauschen (Helligkeit)'}"/>
-                                        <Button Grid.Column="2""DenoiseLumaResetButton" Width="25"
+                                        <Button x:Name="DenoiseLumaResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1090,13 +1090,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Rauschen (Farbe)'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""DenoiseChromaSlider" 
+                                        <Slider x:Name="DenoiseChromaSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="0" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Rauschen (Farbe)'}"/>
-                                        <Button Grid.Column="2""DenoiseChromaResetButton" Width="25"
+                                        <Button x:Name="DenoiseChromaResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>
@@ -1104,13 +1104,13 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Schärfen'}" FontSize="11"/>
-                                        <Slider Grid.Column="1" Margin="4,0,4,0""SharpenSlider" 
+                                        <Slider x:Name="SharpenSlider" Grid.Column="1" Margin="4,0,4,0" 
                                                 Minimum="0" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Schärfen'}"/>
-                                        <Button Grid.Column="2""SharpenResetButton" Width="25"
+                                        <Button x:Name="SharpenResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
                                     </Grid>

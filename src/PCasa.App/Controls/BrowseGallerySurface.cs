@@ -183,6 +183,20 @@ public sealed class BrowseGallerySurface : FrameworkElement
             InvalidateVisual();
     }
 
+    // Patch only decoded thumbnail locations, without resetting folder layout
+    // or changing the scroll offset. A rotated/reframed thumbnail may require
+    // a section-height update, but the caller preserves the current anchor.
+    public void ReplaceThumbnailEntries(
+        IReadOnlyDictionary<long, BrowseThumbnailIndexEntry> replacements)
+    {
+        if (replacements.Count == 0) return;
+        var changedGeometry = ThumbnailRefreshProjection.ChangesLayout(
+            _index, replacements);
+        _index = ThumbnailRefreshProjection.Replace(_index, replacements);
+        if (changedGeometry) InvalidateLayout();
+        else InvalidateVisual();
+    }
+
     public void SetSelection(IReadOnlySet<long> selectedImageIds)
     {
         _selectedImageIds = selectedImageIds ?? new HashSet<long>();

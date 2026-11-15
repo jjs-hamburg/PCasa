@@ -797,5 +797,6 @@
   "Pinselgröße": "Brush size",
   "Zum Markieren auf dem Bild malen; danach Markieren beenden.": "Paint over the subject in the photo, then finish marking.",
   "Lokale Masken: automatische Vorschläge und manuelle Motivmarkierung": "Local masks: automatic suggestions and manual subject marking",
-  "Motiv: bitte markieren": "Subject: please mark the area"
+  "Motiv: bitte markieren": "Subject: please mark the area",
+  "{0:N0} Vorschaubilder aktualisiert, {1:N0} Fehler.": "Updated {0:N0} thumbnails, {1:N0} errors."
 }
