@@ -220,11 +220,8 @@ internal static class Program
             if (window.FindName("EditUndoOptionsMenuItem") is not MenuItem ||
                 window.FindName("ExternalEditorsOptionsMenuItem") is not MenuItem)
                 throw new Exception("Undo settings and external program setup missing from their main menus.");
-            var mainMenu = (Menu)window.FindName("MainMenu")!;
-            var editMenu = mainMenu.Items.OfType<MenuItem>().First(item =>
-                item.Header?.ToString() == "Edit" || item.Header?.ToString() == "Bearbeiten");
-            var optionsMenu = mainMenu.Items.OfType<MenuItem>().First(item =>
-                item.Header?.ToString() == "Options" || item.Header?.ToString() == "Optionen");
+            // Reuse the already-resolved top-level menus from the initial
+            // smoke assertions, rather than redeclaring names in this scope.
             if (!editMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Name == "EditUndoOptionsMenuItem") ||
                 !optionsMenu.Items.OfType<MenuItem>().Any(item =>
