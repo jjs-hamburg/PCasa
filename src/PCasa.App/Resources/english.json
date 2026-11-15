@@ -798,5 +798,14 @@
   "Zum Markieren auf dem Bild malen; danach Markieren beenden.": "Paint over the subject in the photo, then finish marking.",
   "Lokale Masken: automatische Vorschläge und manuelle Motivmarkierung": "Local masks: automatic suggestions and manual subject marking",
   "Motiv: bitte markieren": "Subject: please mark the area",
-  "{0:N0} Vorschaubilder aktualisiert, {1:N0} Fehler.": "Updated {0:N0} thumbnails, {1:N0} errors."
+  "{0:N0} Vorschaubilder aktualisiert, {1:N0} Fehler.": "Updated {0:N0} thumbnails, {1:N0} errors.",
+  "Motiv grob markieren": "Mark subject roughly",
+  "Himmel korrigieren": "Refine sky mask",
+  "Bereich ausschließen": "Exclude area",
+  "Motiv: bitte grob markieren": "Subject: mark a rough region",
+  "Himmel (Horizont/Konturen)": "Sky (horizon and edges)",
+  "Motiv (konturgeführt)": "Subject (edge-guided)",
+  "Hintergrund (Motiv schützen)": "Background (protect subject)",
+  "Motiv innen grob markieren; Konturen werden automatisch ermittelt. Mit Bereich ausschließen den Hintergrund korrigieren.": "Mark the inside of the subject roughly; edges are refined automatically. Use Exclude area to correct background.",
+  "Motiv: konturgeführte Auswahl nach grober Markierung. Himmel: Horizonterkennung, manuell korrigierbar.": "Subject: edge-guided selection from rough marks. Sky: horizon detection with manual correction."
 }

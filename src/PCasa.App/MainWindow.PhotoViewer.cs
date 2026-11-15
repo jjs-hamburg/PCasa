@@ -348,12 +348,18 @@ public partial class MainWindow
             ApplyViewerImageLayout();
         }
         PhotoViewerImage.Source = bitmap;
-        UpdateViewerHistogram(bitmap);
         if (_viewerFullscreenImage is not null)
-        {
             _viewerFullscreenImage.Source = bitmap;
-        }
-
+        // A persisted crop may be visible before the background scanner
+        // publishes its new dimensions. Correct the geometry after BOTH
+        // viewport images received the replacement bitmap.
+        if (bitmap is { PixelWidth: > 0, PixelHeight: > 0 } &&
+            _photoEditSession is null &&
+            _viewerImageInfo is { Width: > 0, Height: > 0 } current &&
+            ViewerImageGeometry.NeedsAspectCorrection(current.Width,
+                current.Height, bitmap.PixelWidth, bitmap.PixelHeight))
+            ApplyViewerImageLayout();
+        UpdateViewerHistogram(bitmap);
         UpdateViewerNavigator();
     }
 
@@ -532,14 +538,20 @@ public partial class MainWindow
     {
         var rendered = ActiveViewerImage.Source as BitmapSource;
         var previewOriginal = _photoEditSession?.Original;
-        if (rendered is null || previewOriginal is null ||
+        if (rendered is null) return (info.Width, info.Height);
+        if (previewOriginal is null ||
             previewOriginal.PixelWidth < 1 || previewOriginal.PixelHeight < 1)
-            return (info.Width, info.Height);
+            return ViewerImageGeometry.CorrectStaleAspect(info.Width,
+                info.Height, rendered.PixelWidth, rendered.PixelHeight);
 
         // Crop/rotate may change the decoded edit-buffer dimensions.
         // Their physical size changes proportionally, but tonal edits do not.
-        return ViewerImageGeometry.LogicalEditPixels(
+        var dimensions = ViewerImageGeometry.CorrectStaleAspect(
             info.Width, info.Height,
+            previewOriginal.PixelWidth, previewOriginal.PixelHeight);
+        return ViewerImageGeometry.LogicalEditPixels(
+            (int)Math.Round(dimensions.Width),
+            (int)Math.Round(dimensions.Height),
             previewOriginal.PixelWidth, previewOriginal.PixelHeight,
             rendered.PixelWidth, rendered.PixelHeight);
     }
@@ -664,8 +676,10 @@ public partial class MainWindow
         }
 
         var (viewportWidth, viewportHeight) = ViewerViewportSize();
+        var (logicalWidth, logicalHeight) = GetViewerLogicalImageSize(info);
         navigator.Update(
-            bitmap, CurrentViewerZoomPercent(), info.Width, info.Height,
+            bitmap, CurrentViewerZoomPercent(),
+            (int)Math.Round(logicalWidth), (int)Math.Round(logicalHeight),
             image.Width, image.Height,
             viewportWidth, viewportHeight,
             Math.Max(viewportWidth, canvas.Width),
@@ -941,7 +955,7 @@ public partial class MainWindow
         _viewerPendingImageCenter = CaptureViewerCenter();
         var fullscreenImage = new Image
         {
-            Stretch = Stretch.Fill,
+            Stretch = Stretch.Uniform,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             IsHitTestVisible = false,

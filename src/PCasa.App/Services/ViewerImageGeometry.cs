@@ -27,6 +27,31 @@ public static class ViewerImageGeometry
                     (catalogHeight / (double)originalPreviewHeight));
     }
 
+    public static bool NeedsAspectCorrection(int catalogWidth, int catalogHeight,
+        int decodedWidth, int decodedHeight)
+    {
+        if (catalogWidth < 1 || catalogHeight < 1 ||
+            decodedWidth < 1 || decodedHeight < 1) return false;
+        var expected = catalogWidth / (double)catalogHeight;
+        var actual = decodedWidth / (double)decodedHeight;
+        return Math.Abs(Math.Log(actual / expected)) > .035;
+    }
+
+    // An edit may have completed on disk while the asynchronous catalog still
+    // holds the PRE-CROP dimensions. Do not force the new square bitmap into
+    // that old rectangle. Keep the old longest dimension as a temporary zoom
+    // estimate; the next catalog refresh supplies exact new pixel dimensions.
+    public static (double Width, double Height) CorrectStaleAspect(
+        int catalogWidth, int catalogHeight, int decodedWidth, int decodedHeight)
+    {
+        if (!NeedsAspectCorrection(catalogWidth, catalogHeight,
+                decodedWidth, decodedHeight))
+            return (catalogWidth, catalogHeight);
+        var factor = Math.Max(catalogWidth, catalogHeight) /
+            (double)Math.Max(decodedWidth, decodedHeight);
+        return (decodedWidth * factor, decodedHeight * factor);
+    }
+
     public static bool NeedsAxisSwap(int sourceWidth, int sourceHeight,
         int decodedWidth, int decodedHeight)
     {

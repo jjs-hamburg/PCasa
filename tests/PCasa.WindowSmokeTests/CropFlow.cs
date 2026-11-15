@@ -54,6 +54,19 @@ internal static class CropFlow
             if (croppedPhysical != (3000d, 2000d))
                 throw new Exception("Zoom geometry lost physical crop dimensions.");
 
+            // Alpha.30: a persisted square crop must never be forced into
+            // the original landscape rectangle while catalog rescan is pending.
+            var corrected = ViewerImageGeometry.CorrectStaleAspect(
+                6000, 4000, 1200, 1200);
+            if (Math.Abs(corrected.Width - corrected.Height) > .001 ||
+                ViewerImageGeometry.NeedsAspectCorrection(
+                    (int)corrected.Width, (int)corrected.Height, 1200, 1200))
+                throw new Exception("Square saved crop stretches into a portrait.");
+            var originalAspect = ViewerImageGeometry.CorrectStaleAspect(
+                6000, 4000, 1200, 800);
+            if (originalAspect != (6000d, 4000d))
+                throw new Exception("Original uncropped zoom geometry changed.");
+
             // The exact SAME masked step is used in real-time preview and
             // the durable full-resolution write; no mask sidecar is saved.
             var maskPixels = new byte[16 * 16 * 4];
@@ -108,9 +121,38 @@ internal static class CropFlow
             var subject = PhotoEditMasks.Compute(subjectPixels, 16, 16, "subject");
             var background = PhotoEditMasks.Compute(subjectPixels, 16, 16, "background");
             if (subject.Any(value => value != 0) ||
-                background[8 * 16 + 8] > 115 ||
-                background[0] != 255)
-                throw new Exception("Subject selection must require painter input.");
+                background.Any(value => value != 0))
+                throw new Exception("Automatic foreground/background cannot guess a person without hints.");
+            // One loose stroke inside a flat-color person should grow to its
+            // actual boundaries rather than remain a round paint stamp.
+            var coarse = new[] { new PhotoMaskStroke(.5, .5, .16) };
+            var inferred = PhotoEditMasks.Compute(subjectPixels, 16, 16,
+                "subject", strokes: coarse);
+            var protectedBackground = PhotoEditMasks.Compute(subjectPixels,
+                16, 16, "background", strokes: coarse);
+            if (inferred[6 * 16 + 6] < 160 ||
+                inferred[1 * 16 + 1] > 30 ||
+                protectedBackground[6 * 16 + 6] > 95 ||
+                protectedBackground[1 * 16 + 1] < 200)
+                throw new Exception("Seeded subject segmentation did not follow the color contour.");
+            // A sea can have almost the same blue as the sky. The
+            // continuous horizontal horizon must stop a top-edge flood.
+            const int sceneWidth = 40, sceneHeight = 30;
+            var coast = new byte[sceneWidth * sceneHeight * 4];
+            for (var y = 0; y < sceneHeight; y++)
+            for (var x = 0; x < sceneWidth; x++)
+            {
+                var p = (y * sceneWidth + x) * 4;
+                coast[p] = y < 14 ? (byte)225 : (byte)174;
+                coast[p + 1] = y < 14 ? (byte)174 : (byte)135;
+                coast[p + 2] = y < 14 ? (byte)110 : (byte)91;
+                coast[p + 3] = 255;
+            }
+            var coastSky = PhotoEditMasks.Compute(coast, sceneWidth,
+                sceneHeight, "sky");
+            if (coastSky[5 * sceneWidth + 20] < 200 ||
+                coastSky[24 * sceneWidth + 20] > 15)
+                throw new Exception("Horizon detection included the sea in the sky mask.");
 
             // Alpha.29: a user-painted subject is independent of preview
             // resolution and persists in the same immutable P0 recipe.

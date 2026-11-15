@@ -50,47 +50,18 @@ public static class PhotoEditMasks
             return mask;
         }
 
-        // A subject is defined by the photographer. Never silently guess a
-        // person or object merely from central color differences.
-        if (mode == "subject" && strokes is not { Count: > 0 })
-            return mask;
-
-        if (mode is "subject" or "background" &&
-            strokes is { Count: > 0 })
+        // A rough subject hint is not the final silhouette. Compute an
+        // edge-aware mask once on a bounded analysis grid; use its inverse
+        // for Background, so a marked person is never also in Background.
+        if (mode is "subject" or "background")
         {
-            // Paint the selected subject in normalized source coordinates. The
-            // same strokes replay at original resolution in the P0 writer.
-            // Brush work is bounded to each stamp's box, not pixels*strokes.
-            foreach (var stroke in strokes)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!double.IsFinite(stroke.X) || !double.IsFinite(stroke.Y) ||
-                    !double.IsFinite(stroke.Radius) || stroke.Radius <= 0 ||
-                    stroke.Radius > .2 || stroke.X < 0 || stroke.X > 1 ||
-                    stroke.Y < 0 || stroke.Y > 1)
-                    throw new InvalidDataException("Invalid manual subject mask stroke.");
-                var radius = Math.Max(1, stroke.Radius * Math.Min(width, height));
-                var cx = stroke.X * (width - 1);
-                var cy = stroke.Y * (height - 1);
-                var x0 = Math.Max(0, (int)Math.Floor(cx - radius));
-                var x1 = Math.Min(width - 1, (int)Math.Ceiling(cx + radius));
-                var y0 = Math.Max(0, (int)Math.Floor(cy - radius));
-                var y1 = Math.Min(height - 1, (int)Math.Ceiling(cy + radius));
-                for (var y = y0; y <= y1; y++)
-                for (var x = x0; x <= x1; x++)
-                {
-                    var distance = Math.Sqrt((x - cx) * (x - cx) +
-                        (y - cy) * (y - cy)) / radius;
-                    if (distance > 1) continue;
-                    // Soft 12% falloff, without blurring across the whole photo.
-                    var coverage = (byte)Math.Round(255 *
-                        Math.Clamp((1 - distance) / .12, 0, 1));
-                    var i = y * width + x;
-                    mask[i] = stroke.Erase
-                        ? (byte)Math.Min(mask[i], 255 - coverage)
-                        : (byte)Math.Max(mask[i], coverage);
-                }
-            }
+            // Without user hints, identifying an arbitrary person or object
+            // is not reliable. Prefer an empty mask over a false "AI" guess.
+            if (strokes is not { Count: > 0 } ||
+                !strokes.Any(stroke => !stroke.Erase))
+                return mask;
+            mask = SeededMaskSegmentation.Compute(pixels, width, height,
+                strokes, token);
             if (mode == "background")
                 for (var i = 0; i < length; i++)
                     mask[i] = (byte)(255 - mask[i]);
@@ -99,68 +70,16 @@ public static class PhotoEditMasks
             return mask;
         }
 
-        if (mode is "subject" or "background")
-        {
-            // Estimate edge/background color from only the image perimeter;
-            // favor centrally located regions which differ from those edges.
-            // This is a deterministic approximation, not an object detector.
-            double edgeR = 0, edgeG = 0, edgeB = 0;
-            var count = 0;
-            var stride = Math.Max(1, Math.Min(width, height) / 100);
-            void Sample(int x, int y)
-            {
-                var p = (y * width + x) * 4;
-                if (pixels[p + 3] == 0) return;
-                edgeB += pixels[p]; edgeG += pixels[p + 1];
-                edgeR += pixels[p + 2]; count++;
-            }
-            for (var x = 0; x < width; x += stride)
-            {
-                Sample(x, 0); Sample(x, height - 1);
-            }
-            for (var y = 0; y < height; y += stride)
-            {
-                Sample(0, y); Sample(width - 1, y);
-            }
-            var b0 = edgeB / Math.Max(1, count);
-            var g0 = edgeG / Math.Max(1, count);
-            var r0 = edgeR / Math.Max(1, count);
-            for (var y = 0; y < height; y++)
-            {
-                if ((y & 63) == 0) token.ThrowIfCancellationRequested();
-                for (var x = 0; x < width; x++)
-                {
-                    var i = y * width + x;
-                    var p = i * 4;
-                    if (pixels[p + 3] == 0) continue;
-                    var db = pixels[p] - b0;
-                    var dg = pixels[p + 1] - g0;
-                    var dr = pixels[p + 2] - r0;
-                    var delta = Math.Sqrt(db * db + dg * dg + dr * dr);
-                    var dx = (x + .5) / width - .5;
-                    var dy = (y + .5) / height - .5;
-                    var central = 1 - Math.Min(1,
-                        Math.Sqrt(dx * dx + dy * dy) * 1.5);
-                    var score = Math.Clamp((delta - 22) / 85, 0, 1) *
-                        (.55 + .45 * central);
-                    score = score * score * (3 - 2 * score);
-                    mask[i] = (byte)Math.Clamp(
-                        (int)Math.Round((mode == "subject" ? score : 1 - score) * 255),
-                        0, 255);
-                }
-            }
-            return mask;
-        }
-
         // Sky: choose blue or near-neutral bright candidates that are
         // connected to the TOP edge. No unrelated blue object lower down can
         // become part of the sky mask without a connected candidate path.
         var candidate = new bool[length];
+        var skyLimit = SkyHorizonDetector.Limit(pixels, width, height, token);
         for (var i = 0; i < length; i++)
         {
             if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();
             var p = i * 4;
-            if (pixels[p + 3] == 0) continue;
+            if (pixels[p + 3] == 0 || i / width >= skyLimit) continue;
             var b = pixels[p];
             var g = pixels[p + 1];
             var r = pixels[p + 2];
@@ -215,7 +134,45 @@ public static class PhotoEditMasks
                 mask[i] = (byte)(value / 16);
             }
         }
+        // Explicit sky correction hints can restore small foreground
+        // cutouts or erase blue water left by an uncertain horizon.
+        if (strokes is { Count: > 0 })
+            ApplySkyCorrections(mask, width, height, strokes, token);
         return mask;
+    }
+
+    private static void ApplySkyCorrections(byte[] mask, int width, int height,
+        IReadOnlyList<PhotoMaskStroke> strokes, CancellationToken token)
+    {
+        foreach (var stroke in strokes)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!double.IsFinite(stroke.X) || !double.IsFinite(stroke.Y) ||
+                !double.IsFinite(stroke.Radius) || stroke.X < 0 ||
+                stroke.X > 1 || stroke.Y < 0 || stroke.Y > 1 ||
+                stroke.Radius <= 0 || stroke.Radius > .2)
+                throw new InvalidDataException("Invalid sky correction stroke.");
+            var radius = Math.Max(1d, stroke.Radius * Math.Min(width, height));
+            var cx = stroke.X * (width - 1);
+            var cy = stroke.Y * (height - 1);
+            var left = Math.Max(0, (int)Math.Floor(cx - radius));
+            var right = Math.Min(width - 1, (int)Math.Ceiling(cx + radius));
+            var top = Math.Max(0, (int)Math.Floor(cy - radius));
+            var bottom = Math.Min(height - 1, (int)Math.Ceiling(cy + radius));
+            for (var y = top; y <= bottom; y++)
+            for (var x = left; x <= right; x++)
+            {
+                var distance = Math.Sqrt((x - cx) * (x - cx) +
+                    (y - cy) * (y - cy)) / radius;
+                if (distance >= 1) continue;
+                var value = (byte)Math.Round(255 *
+                    Math.Clamp((1 - distance) / .13, 0, 1));
+                var i = y * width + x;
+                mask[i] = stroke.Erase
+                    ? (byte)Math.Min(mask[i], 255 - value)
+                    : (byte)Math.Max(mask[i], value);
+            }
+        }
     }
 
     public static BitmapSource Preview(BitmapSource source, string mode,

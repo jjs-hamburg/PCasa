@@ -17,6 +17,9 @@ public partial class MainWindow
     private bool _editMaskEnabled;
     private long _maskImageId = -1;
     private readonly List<PhotoMaskStroke> _manualSubjectStrokes = [];
+    private readonly List<PhotoMaskStroke> _manualSkyStrokes = [];
+    private List<PhotoMaskStroke> CurrentMaskStrokes =>
+        _selectedEditMask == "sky" ? _manualSkyStrokes : _manualSubjectStrokes;
     private bool _maskPainting;
     private bool _maskDragging;
     private bool _maskErasing;
@@ -29,9 +32,9 @@ public partial class MainWindow
     // leaks into the durable edit recipe; each step owns an immutable copy.
     private string ActiveEditMask => _editMaskEnabled ? _selectedEditMask : "all";
     private PhotoMaskStroke[]? ActiveEditMaskStrokes =>
-        _editMaskEnabled && (_selectedEditMask is "subject" or "background") &&
-        _manualSubjectStrokes.Count > 0
-            ? _manualSubjectStrokes.ToArray() : null;
+        _editMaskEnabled && (_selectedEditMask is "subject" or "background" or "sky") &&
+        CurrentMaskStrokes.Count > 0
+            ? CurrentMaskStrokes.ToArray() : null;
 
     private void InitializeEditorPanels()
     {
@@ -82,6 +85,7 @@ public partial class MainWindow
         EndMaskPreview();
         _maskImageId = imageId;
         _manualSubjectStrokes.Clear();
+        _manualSkyStrokes.Clear();
         _editMaskEnabled = false;
         _selectedEditMask = "all";
         _maskErasing = false;
@@ -105,6 +109,7 @@ public partial class MainWindow
     private void SelectEditorMask(string mode)
     {
         if (_advancedToneActive || _brightnessActive) ApplyEditTool();
+        StopMaskPainting();
         _selectedEditMask = mode;
         _editMaskEnabled = mode != "all";
         EditorMaskEnabled.IsChecked = _editMaskEnabled;
@@ -113,7 +118,6 @@ public partial class MainWindow
             EditorMaskMaskShadows })
             option.IsChecked = string.Equals(option.Tag as string,
                 mode, StringComparison.Ordinal);
-        if (mode is not ("subject" or "background")) StopMaskPainting();
         RefreshEditorMaskStatusText();
         if (_maskPreviewOriginal is not null)
         {
@@ -146,30 +150,45 @@ public partial class MainWindow
         {
             var title = mode switch
             {
-                "sky" => "Himmel (einfach)",
-                "subject" => "Motiv (manuell)",
-                "background" => "Hintergrund (einfach)",
+                "sky" => "Himmel (Horizont/Konturen)",
+                "subject" => "Motiv (konturgeführt)",
+                "background" => "Hintergrund (Motiv schützen)",
                 "mask-highlights" => "Helle Bereiche",
                 "mask-shadows" => "Dunkle Bereiche",
                 _ => "Alle"
             };
-            EditorActiveMaskText.Text = mode == "subject" &&
-                _manualSubjectStrokes.Count == 0
-                    ? UiLanguage.T("Motiv: bitte markieren")
+            EditorActiveMaskText.Text = mode is "subject" or "background" &&
+                !_manualSubjectStrokes.Any(stroke => !stroke.Erase)
+                    ? UiLanguage.T("Motiv: bitte grob markieren")
                     : UiLanguage.T("Aktive Maske: ") + UiLanguage.T(title);
         }
         var paintable = _editMaskEnabled &&
-            (mode is "subject" or "background");
+            (mode is "subject" or "background" or "sky");
         EditorMaskPaintButton.IsEnabled = paintable;
+        EditorMaskPaintButton.Content = UiLanguage.T(
+            mode == "sky" ? "Himmel korrigieren" : "Motiv grob markieren");
         EditorMaskEraseButton.IsEnabled = paintable && _maskPainting;
-        EditorMaskClearButton.IsEnabled = _manualSubjectStrokes.Count > 0;
+        EditorMaskClearButton.IsEnabled = CurrentMaskStrokes.Count > 0;
         EditorMaskPreviewButton.IsEnabled = _editMaskEnabled && !_maskPainting;
     }
 
     private void EditorMaskPaint_Click(object sender, RoutedEventArgs e)
     {
-        if (_maskPainting) { StopMaskPainting(); return; }
-        if (_selectedEditMask is not ("subject" or "background"))
+        if (_maskPainting)
+        {
+            StopMaskPainting();
+            // Replace the raw stroke circles with the inferred contour,
+            // so users can inspect/correct it before applying an edit.
+            if (_viewerOpen && CurrentMaskStrokes.Count > 0 &&
+                ActiveViewerImage.Source is BitmapSource bitmap)
+            {
+                _maskPreviewOriginal = bitmap;
+                EditorMaskPreviewButton.IsChecked = true;
+                QueueMaskPreview();
+            }
+            return;
+        }
+        if (_selectedEditMask is not ("subject" or "background" or "sky"))
             SelectEditorMask("subject");
         if (_advancedToneActive || _brightnessActive) ApplyEditTool();
         _editMaskEnabled = true;
@@ -190,7 +209,7 @@ public partial class MainWindow
     private void EditorMaskClear_Click(object sender, RoutedEventArgs e)
     {
         if (_advancedToneActive || _brightnessActive) ApplyEditTool();
-        _manualSubjectStrokes.Clear();
+        CurrentMaskStrokes.Clear();
         DrawMaskPaintMarks();
         if (_maskPreviewOriginal is not null) QueueMaskPreview();
         RefreshEditorMaskStatusText();
@@ -239,7 +258,7 @@ public partial class MainWindow
         var width = ViewerMaskPaintOverlay.ActualWidth;
         var height = ViewerMaskPaintOverlay.ActualHeight;
         if (width < 1 || height < 1 || p.X < 0 || p.Y < 0 ||
-            p.X > width || p.Y > height || _manualSubjectStrokes.Count >= 1500)
+            p.X > width || p.Y > height || CurrentMaskStrokes.Count >= 1500)
             return;
         var radius = EditorMaskBrushSizeSlider.Value;
         var spacing = Math.Max(3, radius * Math.Min(width, height) * .28);
@@ -247,7 +266,7 @@ public partial class MainWindow
             (p - _lastMaskStamp).Length < spacing) return;
         var stroke = new PhotoMaskStroke(p.X / width, p.Y / height,
             radius, _maskErasing);
-        _manualSubjectStrokes.Add(stroke);
+        CurrentMaskStrokes.Add(stroke);
         _lastMaskStamp = p;
         AddMaskStampVisual(stroke);
         RefreshEditorMaskStatusText();
@@ -257,7 +276,7 @@ public partial class MainWindow
     {
         if (!_editorPanelsReady) return;
         ViewerMaskPaintOverlay.Children.Clear();
-        foreach (var stroke in _manualSubjectStrokes)
+        foreach (var stroke in CurrentMaskStrokes)
             AddMaskStampVisual(stroke);
     }
 
