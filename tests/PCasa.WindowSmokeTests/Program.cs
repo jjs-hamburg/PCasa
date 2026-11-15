@@ -257,8 +257,11 @@ internal static class Program
                 if (translatedAuto.Text != "Contrast (automatic)")
                     throw new Exception(
                         "Dynamic editor tool captions did not switch to English.");
-                if (!Equals(((Button)window.FindName("BrightnessResetButton")!).Content,
-                        "Reset") ||
+                var brightnessReset =
+                    (Button)window.FindName("BrightnessResetButton")!;
+                if (!Equals(brightnessReset.Content, "↺") ||
+                    !Equals(brightnessReset.ToolTip,
+                        "Reset brightness adjustment to zero") ||
                     !Equals(((CheckBox)window.FindName("StraightenWideRangeCheckBox")!).Content,
                         "Extended range ±45°") ||
                     !Equals(((Slider)window.FindName("StraightenAngleSlider")!).ToolTip,
