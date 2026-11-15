@@ -140,7 +140,7 @@ public partial class MainWindow
             var session = new ExternalEditSessionWindow(
                 editor?.Name ?? UiLanguage.T("Windows: Öffnen mit …"),
                 source, stage.Folder, stage.WorkingCopy,
-                async outputs => await TransferGalleryFilesAsync(
+                async outputs => await TransferGalleryFilesCoreAsync(
                     outputs, originalDirectory, move: false,
                     neverReplace: true, throwOnFailure: true))
             { Owner = this };
