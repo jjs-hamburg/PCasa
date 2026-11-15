@@ -235,8 +235,7 @@ public static class ExternalEditTransaction
         // for a regular NTFS/SMB file. Original backup stays local until
         // complete verification.
         var staging = Path.Combine(Path.GetDirectoryName(target)!,
-            ".pcasa-external-" + Guid.NewGuid().ToString("N") +
-            Path.GetExtension(target));
+            ".pcasa-external-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
             using (var input = File.Open(source, FileMode.Open,
@@ -276,6 +275,8 @@ public static class ExternalEditTransaction
             if (decision == ExternalEditDecision.Cancel)
             {
                 if (OriginalChanged(s)) Restore(s, token);
+                else if (File.GetLastWriteTimeUtc(s.OriginalPath) != s.OriginalWriteUtc)
+                    File.SetLastWriteTimeUtc(s.OriginalPath, s.OriginalWriteUtc);
                 if (result is not null && IsSessionExport(s, result))
                     File.Delete(result);
                 Directory.Delete(s.DirectoryPath, recursive: true);
@@ -299,6 +300,8 @@ public static class ExternalEditTransaction
                 try
                 {
                     if (OriginalChanged(s)) Restore(s, token);
+                    else if (File.GetLastWriteTimeUtc(s.OriginalPath) != s.OriginalWriteUtc)
+                        File.SetLastWriteTimeUtc(s.OriginalPath, s.OriginalWriteUtc);
                 }
                 catch
                 {
