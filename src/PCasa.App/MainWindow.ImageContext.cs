@@ -43,6 +43,12 @@ public partial class MainWindow
                 : "Vorschaubild aktualisieren",
                 () => _ = RefreshThumbnailsAsync(captured));
         }
+        var external = new MenuItem
+        {
+            Header = UiLanguage.T("Bearbeiten mit …")
+        };
+        PopulateExternalEditorMenu(external, id, CachedExternalEditorSource(id));
+        menu.Items.Add(external);
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };
         restore.Click += (_, _) => UndoRestoreImage(id);

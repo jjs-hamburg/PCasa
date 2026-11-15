@@ -175,54 +175,38 @@ internal static class Program
                 !Equals(sharpenAuto.Content, UiLanguage.T("Schärfen (automatisch)")))
                 throw new Exception(
                     "Auto-sharpen and radius/detail controls are missing from the tonal editor.");
-            // Alpha.28: no scrollable wall of sliders; one compact tab
-            // at a time, with masks available through a dedicated button.
+            // Alpha.31: four truly readable tabs; unfinished masks removed.
             var editPanel = (Grid)window.FindName("ViewerEditingPanel")!;
             static bool HasEditorScroll(DependencyObject node)
             {
                 foreach (var child in LogicalTreeHelper.GetChildren(node)
                              .OfType<DependencyObject>())
-                {
-                    if (child is ScrollViewer || HasEditorScroll(child))
-                        return true;
-                }
+                    if (child is ScrollViewer || HasEditorScroll(child)) return true;
                 return false;
             }
             if (HasEditorScroll(editPanel))
-                throw new Exception("Editor still contains a scrolling tool list.");
+                throw new Exception("Editor tools gained a scrollbar.");
+            if (window.FindName("EditorTabMasks") is not null ||
+                window.FindName("ViewerPanelMasks") is not null ||
+                window.FindName("ViewerMaskPaintOverlay") is not null ||
+                window.FindName("EditorMaskEnabled") is not null)
+                throw new Exception("Retired mask UI is still reachable.");
+            var tabs = (TabControl)window.FindName("EditorToolTabs")!;
+            if (tabs.Items.Count != 4)
+                throw new Exception("Expected Quick, Light, Color and Details only.");
             var quickTab = (TabItem)window.FindName("EditorTabQuick")!;
-            var maskTab = (TabItem)window.FindName("EditorTabMasks")!;
             var lightTab = (TabItem)window.FindName("EditorTabLight")!;
-            var masksPanel = (StackPanel)window.FindName("ViewerPanelMasks")!;
             var detailPanel = (StackPanel)window.FindName("ViewerPanelDetail")!;
-            maskTab.IsSelected = true;
-            if (masksPanel.Visibility != Visibility.Visible ||
-                detailPanel.Visibility != Visibility.Collapsed ||
-                !maskTab.IsSelected)
-                throw new Exception("Mask tab did not replace the editor tool group.");
-            var skyTab = (ToggleButton)window.FindName("EditorMaskSky")!;
-            skyTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            var maskLabel = (TextBlock)window.FindName("EditorActiveMaskText")!;
-            if (skyTab.IsChecked != true || !maskLabel.Text.Contains("Himmel"))
-                throw new Exception("Sky mask did not become the current selection.");
-            var maskEnabled = (CheckBox)window.FindName("EditorMaskEnabled")!;
-            if (maskEnabled.IsChecked != true)
-                throw new Exception("Selecting a mask did not enable it.");
-            maskEnabled.IsChecked = false;
-            maskEnabled.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
-            if (maskLabel.Text.Contains("Himmel"))
-                throw new Exception("Mask could not be disabled.");
-            var paint = (ToggleButton)window.FindName("EditorMaskPaintButton")!;
-            var maskBrushSlider = (Slider)window.FindName("EditorMaskBrushSizeSlider")!;
-            if (paint is null || maskBrushSlider.Minimum <= 0 || maskBrushSlider.Maximum < .07)
-                throw new Exception("Manual subject marking is missing.");
             lightTab.IsSelected = true;
+            if (lightTab.Foreground is not SolidColorBrush tabTextBrush ||
+                tabTextBrush.Color.R < 220 || tabTextBrush.Color.G < 220 ||
+                tabTextBrush.Color.B < 220)
+                throw new Exception("Tabs have unreadable dark text.");
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;
             if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
-                !double.IsNaN(highlights.Width) ||
-                highlights.SmallChange > .01)
-                throw new Exception("Light sliders are not sensitive and width-adaptive.");
+                !double.IsNaN(highlights.Width) || highlights.SmallChange > .01)
+                throw new Exception("Light sliders lack fine adjustments.");
             var leftCropTools = window.FindName("ViewerOnImageToolsBar") as Border;
             if (leftCropTools is null || !LogicalTreeHelper.GetChildren(editPanel)
                 .OfType<DependencyObject>().Any(child => Contains(child, leftCropTools)))
@@ -232,11 +216,28 @@ internal static class Program
                 LogicalTreeHelper.GetChildren(node).OfType<DependencyObject>()
                     .Any(child => Contains(child, target));
             quickTab.IsSelected = true;
-            if (masksPanel.Visibility != Visibility.Collapsed ||
-                !quickTab.IsSelected)
-                throw new Exception("Editor tabs failed to return to quick tools.");
+            if (detailPanel.Visibility != Visibility.Collapsed ||
+                !quickTab.IsSelected ||
+                window.FindName("ExternalEditQuickButton") is not Button)
+                throw new Exception("Quick tools or external-edit command are missing.");
+            var topazPhoto = new ExternalEditorProgram("Topaz Photo",
+                @"C:\Topaz\Photo.exe", "photo");
+            var topazVideo = new ExternalEditorProgram("Topaz Video",
+                @"C:\Topaz\Video.exe", "video");
+            var topazGigapixel = new ExternalEditorProgram("Topaz Gigapixel",
+                @"C:\Topaz\Gigapixel.exe", ".jpg;.png;.arw");
+            if (!topazPhoto.Matches("image.arw") ||
+                topazPhoto.Matches("clip.mp4") ||
+                !topazVideo.Matches("clip.mp4") ||
+                topazVideo.Matches("image.jpg") ||
+                !topazGigapixel.Matches("image.png") ||
+                topazGigapixel.Matches("clip.mov"))
+                throw new Exception("Configured external programs ignore their media formats.");
+            var emptyProgram = new ExternalEditorProgram("Unconfigured", "", "photo");
+            if (emptyProgram.Matches("image.jpg"))
+                throw new Exception("An unconfigured editor became executable.");
             Console.WriteLine(
-                "PASS: Alpha.29 true tabs, off switch, manual mask and left-side crop controls.");
+                "PASS: Alpha.31 readable four tabs, masks retired and external program filters.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
                 .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
             var toolButtons = toolCards.Select(card =>
