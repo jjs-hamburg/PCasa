@@ -294,6 +294,24 @@ public partial class MainWindow
         CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
         CropCancelButton.IsEnabled = !_cropSavePending &&
             (editingTool || _photoEditSession?.HasChanges == true);
+        if (_externalEditReview is { } external)
+        {
+            // The SAME three Crop footer buttons now own an external edit.
+            // Never permit another tool to start while the original is in
+            // an unresolved external-editor transaction.
+            var ready = external.Ready && !external.Busy;
+            CropSaveButton.IsEnabled = ready && external.ResultPath is not null;
+            CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
+            CropCancelButton.IsEnabled = ready;
+            CropApplyButton.IsEnabled = false;
+            ViewerToolCancelButton.IsEnabled = false;
+            CropUndoButton.IsEnabled = CropRedoButton.IsEnabled = false;
+        }
+        foreach (var tool in _editorToolLabels)
+            tool.Button.IsEnabled = _externalEditReview is null;
+        foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
+            foreach (var button in card.Children.OfType<Button>())
+                button.IsEnabled = _externalEditReview is null;
         ViewerCropFooter.Visibility = Visibility.Visible;
     }
 
@@ -357,6 +375,11 @@ public partial class MainWindow
 
     private void CancelEditSession()
     {
+        if (_externalEditReview is not null)
+        {
+            _ = CompleteExternalReviewAsync(ExternalEditDecision.Cancel);
+            return;
+        }
         // An already submitted immutable P0 recipe is independent of the
         // viewer. Leaving the editor never cancels that durable write.
         if (_cropActive) EndCrop();
@@ -375,6 +398,12 @@ public partial class MainWindow
 
     private async void SaveEdits(bool asCopy = false)
     {
+        if (_externalEditReview is not null)
+        {
+            await CompleteExternalReviewAsync(asCopy
+                ? ExternalEditDecision.SaveCopy : ExternalEditDecision.Save);
+            return;
+        }
         if (_cropSavePending || _viewerImageInfo is not { } info ||
             _pendingEditImageIds.Contains(info.Id)) return;
         if (_cropActive || _straightenActive || _brightnessActive ||

@@ -52,6 +52,7 @@ internal static class Program
         PCasa.App.MainWindow? window = null;
         try
         {
+            ExternalEditSmokeFlow.Run();
             LocalizationFlow.Run();
             var canDeletePermanently = typeof(PCasa.App.MainWindow).GetMethod(
                 "MayDeletePermanently",
