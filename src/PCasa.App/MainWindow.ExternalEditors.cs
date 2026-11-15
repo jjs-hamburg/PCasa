@@ -141,7 +141,8 @@ public partial class MainWindow
                 editor?.Name ?? UiLanguage.T("Windows: Öffnen mit …"),
                 source, stage.Folder, stage.WorkingCopy,
                 async outputs => await TransferGalleryFilesAsync(
-                    outputs, originalDirectory, move: false, neverReplace: true))
+                    outputs, originalDirectory, move: false,
+                    neverReplace: true, throwOnFailure: true))
             { Owner = this };
             session.Show();
             StatusText.Text = UiLanguage.T("Externes Programm gestartet.");

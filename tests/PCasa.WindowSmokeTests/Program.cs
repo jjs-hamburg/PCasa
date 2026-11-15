@@ -198,9 +198,9 @@ internal static class Program
             var lightTab = (TabItem)window.FindName("EditorTabLight")!;
             var detailPanel = (StackPanel)window.FindName("ViewerPanelDetail")!;
             lightTab.IsSelected = true;
-            if (lightTab.Foreground is not SolidColorBrush foreground ||
-                foreground.Color.R < 220 || foreground.Color.G < 220 ||
-                foreground.Color.B < 220)
+            if (lightTab.Foreground is not SolidColorBrush tabTextBrush ||
+                tabTextBrush.Color.R < 220 || tabTextBrush.Color.G < 220 ||
+                tabTextBrush.Color.B < 220)
                 throw new Exception("Tabs have unreadable dark text.");
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;

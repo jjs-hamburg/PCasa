@@ -656,7 +656,8 @@ public partial class MainWindow
     }
 
     private async Task TransferGalleryFilesAsync(IEnumerable<string> input,
-        string targetDirectory, bool move, bool neverReplace = false)
+        string targetDirectory, bool move, bool neverReplace = false,
+        bool throwOnFailure = false)
     {
         string[] requested;
         string target;
@@ -701,11 +702,14 @@ public partial class MainWindow
             if (!Dispatcher.HasShutdownStarted)
                 await RefreshBrowseGalleryAsync(forceIndexReload: true);
             StatusText.Text = UiLanguage.T("Dateiübertragung abgebrochen");
+            // External editing must report an unsuccessful import as such.
+            if (throwOnFailure) throw;
         }
         catch (Exception ex)
         {
             if (!Dispatcher.HasShutdownStarted)
                 await RefreshBrowseGalleryAsync(forceIndexReload: true);
+            if (throwOnFailure) throw;
             ShowFileActionError(ex);
         }
         finally
