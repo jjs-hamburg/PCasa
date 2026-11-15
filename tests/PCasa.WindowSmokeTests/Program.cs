@@ -213,8 +213,8 @@ internal static class Program
             if (maskLabel.Text.Contains("Himmel"))
                 throw new Exception("Mask could not be disabled.");
             var paint = (ToggleButton)window.FindName("EditorMaskPaintButton")!;
-            var brush = (Slider)window.FindName("EditorMaskBrushSizeSlider")!;
-            if (paint is null || brush.Minimum <= 0 || brush.Maximum < .07)
+            var maskBrushSlider = (Slider)window.FindName("EditorMaskBrushSizeSlider")!;
+            if (paint is null || maskBrushSlider.Minimum <= 0 || maskBrushSlider.Maximum < .07)
                 throw new Exception("Manual subject marking is missing.");
             lightTab.IsSelected = true;
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
