@@ -655,9 +655,19 @@ public partial class MainWindow
         ReleaseProgressPresenter(_manualProgressOwner);
     }
 
-    private async Task TransferGalleryFilesAsync(IEnumerable<string> input,
-        string targetDirectory, bool move, bool neverReplace = false,
-        bool throwOnFailure = false)
+    // Stable shared three-argument gallery transfer entry point.
+    // Existing gestures, tests and callers must not pick up external-editor
+    // options or change their established behavior.
+    private Task TransferGalleryFilesAsync(IEnumerable<string> input,
+        string targetDirectory, bool move)
+        => TransferGalleryFilesCoreAsync(input, targetDirectory, move,
+            neverReplace: false, throwOnFailure: false);
+
+    // Dedicated external-edit import options, still using the ONE durable
+    // gallery transfer path and its existing scheduler identity.
+    private async Task TransferGalleryFilesCoreAsync(IEnumerable<string> input,
+        string targetDirectory, bool move, bool neverReplace,
+        bool throwOnFailure)
     {
         string[] requested;
         string target;
