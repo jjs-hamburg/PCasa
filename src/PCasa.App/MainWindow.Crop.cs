@@ -302,6 +302,8 @@ public partial class MainWindow
             return;
         }
         if (!EnsureEditSession()) return;
+        StopMaskPainting();
+        EndMaskPreview();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) ApplyEditTool();
         if (_advancedToneActive) ApplyEditTool();

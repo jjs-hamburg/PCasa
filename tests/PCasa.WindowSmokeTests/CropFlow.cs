@@ -8,6 +8,19 @@ using PCasa.App.Services;
 
 internal static class CropFlow
 {
+    private static bool PixelsEqual(BitmapSource a, BitmapSource b)
+    {
+        if (a.PixelWidth != b.PixelWidth || a.PixelHeight != b.PixelHeight) return false;
+        var stride = a.PixelWidth * 4;
+        var aa = new byte[stride * a.PixelHeight];
+        var bb = new byte[aa.Length];
+        new FormatConvertedBitmap(a, PixelFormats.Bgra32, null, 0)
+            .CopyPixels(aa, stride, 0);
+        new FormatConvertedBitmap(b, PixelFormats.Bgra32, null, 0)
+            .CopyPixels(bb, stride, 0);
+        return aa.AsSpan().SequenceEqual(bb);
+    }
+
     internal static int Run()
     {
         var root = Path.Combine(Path.GetTempPath(), "PCasa-Crop-Smoke-" + Guid.NewGuid().ToString("N"));
@@ -76,7 +89,8 @@ internal static class CropFlow
                 throw new Exception("Sky mask did not affect selected pixels.");
             Console.WriteLine("PASS: Zoom geometry, automatic sky/luminance masks and selective edits.");
 
-            // Color-saliency foreground vs background must be complementary.
+            // Subject selection needs explicit painted marks; background
+            // still has a conservative local automatic suggestion.
             var subjectPixels = new byte[16 * 16 * 4];
             for (var y = 0; y < 16; y++)
             for (var x = 0; x < 16; x++)
@@ -93,9 +107,58 @@ internal static class CropFlow
             }
             var subject = PhotoEditMasks.Compute(subjectPixels, 16, 16, "subject");
             var background = PhotoEditMasks.Compute(subjectPixels, 16, 16, "background");
-            if (subject[8 * 16 + 8] < 140 || background[8 * 16 + 8] > 115 ||
-                subject[0] != 0 || background[0] != 255)
-                throw new Exception("Automatic foreground and background masks disagree.");
+            if (subject.Any(value => value != 0) ||
+                background[8 * 16 + 8] > 115 ||
+                background[0] != 255)
+                throw new Exception("Subject selection must require painter input.");
+
+            // Alpha.29: a user-painted subject is independent of preview
+            // resolution and persists in the same immutable P0 recipe.
+            var painted = new[] { new PhotoMaskStroke(.5, .5, .15) };
+            var selected = PhotoEditMasks.Compute(maskPixels, 16, 16,
+                "subject", strokes: painted);
+            var inverse = PhotoEditMasks.Compute(maskPixels, 16, 16,
+                "background", strokes: painted);
+            if (selected[8 * 16 + 8] != 255 || selected[0] != 0 ||
+                inverse[8 * 16 + 8] != 0 || inverse[0] != 255)
+                throw new Exception("Manual subject/background masks are not complementary.");
+            var paintedStep = new PhotoEditStep("saturation", Amount: .7,
+                Mask: "subject", MaskStrokes: painted);
+            var paintedResult = PhotoEditSession.Render(maskSource, [paintedStep]);
+            var paintedBytes = new byte[maskPixels.Length];
+            paintedResult.CopyPixels(paintedBytes, 16 * 4, 0);
+            var center = (8 * 16 + 8) * 4;
+            if (paintedBytes.AsSpan(center, 3).SequenceEqual(maskPixels.AsSpan(center, 3)) ||
+                !paintedBytes.AsSpan(0, 4).SequenceEqual(maskPixels.AsSpan(0, 4)))
+                throw new Exception("Manual subject adjustment was not selective.");
+            var selectedPreview = PhotoEditMasks.Preview(maskSource, "subject",
+                strokes: painted);
+            if (selectedPreview.PixelWidth != 16 || selectedPreview.PixelHeight != 16)
+                throw new Exception("Manual mask preview has wrong geometry.");
+            var manualUndo = new PhotoEditSession(456, maskSource);
+            manualUndo.Apply(paintedStep);
+            manualUndo.Undo();
+            if (!PixelsEqual(manualUndo.Render(), maskSource))
+                throw new Exception("Undo failed to restore a painted subject.");
+            manualUndo.Redo();
+            if (manualUndo.AppliedSteps.Single().MaskStrokes?.Length != 1)
+                throw new Exception("Redo lost the manual subject mask recipe.");
+            var once = new PhotoEditSession(457, maskSource);
+            once.Apply(new PhotoEditStep("auto-fix"));
+            var onceRendered = once.Render();
+            once.Apply(new PhotoEditStep("auto-fix"));
+            if (once.AppliedSteps.Count != 1 || !PixelsEqual(once.Render(), onceRendered))
+                throw new Exception("Automatic image correction compounded on a second click.");
+            // The highlights tool must actually affect a selected light pixel,
+            // unlike Alpha.28's accidentally persistent shadow-mask setting.
+            var fullHighlights = PhotoEditSession.Render(maskSource,
+                [new PhotoEditStep("highlights", Amount: .8, Mask: "all")]);
+            var highlightsBytes = new byte[maskPixels.Length];
+            fullHighlights.CopyPixels(highlightsBytes, 16 * 4, 0);
+            if (highlightsBytes.AsSpan(above, 3)
+                .SequenceEqual(maskPixels.AsSpan(above, 3)))
+                throw new Exception("Highlights adjustment had no effect.");
+            Console.WriteLine("PASS: Alpha.29 manual subject masks, Undo, auto idempotence and highlights.");
 
             var encoder = new JpegBitmapEncoder { QualityLevel = 91 };
             encoder.Frames.Add(BitmapFrame.Create(bitmap));

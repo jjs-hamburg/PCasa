@@ -173,6 +173,7 @@ public partial class MainWindow
         // ongoing original load must NOT cancel and restart that same read.
         // Finish it first; only then request any genuinely larger resolution.
         var wanted = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+        ResetEditorMaskForImage(wanted);
         if (keepCurrentAsPlaceholder &&
             _viewerPendingOriginalImageId == wanted &&
             _viewerDecodeCancellation is { IsCancellationRequested: false })
@@ -1149,7 +1150,8 @@ public partial class MainWindow
     {
         // While cropping, the crop overlay owns mouse capture; the ordinary
         // viewer pan must not intercept PreviewMouseLeftButtonDown.
-        if (_cropActive && ViewerCropOverlay.IsVisible) return;
+        if ((_cropActive && ViewerCropOverlay.IsVisible) ||
+            (_maskPainting && ViewerMaskPaintOverlay.IsVisible)) return;
         if (_comparisonActive) { e.Handled = true; return; }
         if (!_viewerOpen || Environment.TickCount64 < _viewerSuppressMouseUntil ||
             ViewerMouseIsChrome(e.OriginalSource as DependencyObject, sender))

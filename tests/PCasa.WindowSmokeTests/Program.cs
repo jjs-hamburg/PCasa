@@ -174,26 +174,53 @@ internal static class Program
             }
             if (HasEditorScroll(editPanel))
                 throw new Exception("Editor still contains a scrolling tool list.");
-            var quickTab = (ToggleButton)window.FindName("EditorTabQuick")!;
-            var maskTab = (ToggleButton)window.FindName("EditorTabMasks")!;
+            var quickTab = (TabItem)window.FindName("EditorTabQuick")!;
+            var maskTab = (TabItem)window.FindName("EditorTabMasks")!;
+            var lightTab = (TabItem)window.FindName("EditorTabLight")!;
             var masksPanel = (StackPanel)window.FindName("ViewerPanelMasks")!;
             var detailPanel = (StackPanel)window.FindName("ViewerPanelDetail")!;
-            maskTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            maskTab.IsSelected = true;
             if (masksPanel.Visibility != Visibility.Visible ||
                 detailPanel.Visibility != Visibility.Collapsed ||
-                maskTab.IsChecked != true)
-                throw new Exception("Mask button did not replace the editor tool group.");
+                !maskTab.IsSelected)
+                throw new Exception("Mask tab did not replace the editor tool group.");
             var skyTab = (ToggleButton)window.FindName("EditorMaskSky")!;
             skyTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
             var maskLabel = (TextBlock)window.FindName("EditorActiveMaskText")!;
             if (skyTab.IsChecked != true || !maskLabel.Text.Contains("Himmel"))
                 throw new Exception("Sky mask did not become the current selection.");
-            quickTab.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            var maskEnabled = (CheckBox)window.FindName("EditorMaskEnabled")!;
+            if (maskEnabled.IsChecked != true)
+                throw new Exception("Selecting a mask did not enable it.");
+            maskEnabled.IsChecked = false;
+            maskEnabled.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            if (maskLabel.Text.Contains("Himmel"))
+                throw new Exception("Mask could not be disabled.");
+            var paint = (ToggleButton)window.FindName("EditorMaskPaintButton")!;
+            var brush = (Slider)window.FindName("EditorMaskBrushSizeSlider")!;
+            if (paint is null || brush.Minimum <= 0 || brush.Maximum < .07)
+                throw new Exception("Manual subject marking is missing.");
+            lightTab.IsSelected = true;
+            var brightness = (Slider)window.FindName("BrightnessSlider")!;
+            var highlights = (Slider)window.FindName("HighlightsSlider")!;
+            if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
+                !double.IsNaN(highlights.Width) ||
+                highlights.SmallChange > .01)
+                throw new Exception("Light sliders are not sensitive and width-adaptive.");
+            var leftCropTools = window.FindName("ViewerOnImageToolsBar") as Border;
+            if (leftCropTools is null || !LogicalTreeHelper.GetChildren(editPanel)
+                .OfType<DependencyObject>().Any(child => Contains(child, leftCropTools)))
+                throw new Exception("Crop controls are not located in the left editor pane.");
+            static bool Contains(DependencyObject node, DependencyObject target) =>
+                ReferenceEquals(node, target) ||
+                LogicalTreeHelper.GetChildren(node).OfType<DependencyObject>()
+                    .Any(child => Contains(child, target));
+            quickTab.IsSelected = true;
             if (masksPanel.Visibility != Visibility.Collapsed ||
-                quickTab.IsChecked != true)
-                throw new Exception("Editor group failed to return to quick tools.");
+                !quickTab.IsSelected)
+                throw new Exception("Editor tabs failed to return to quick tools.");
             Console.WriteLine(
-                "PASS: Alpha.28 compact, non-scrolling tool groups and selected mask state.");
+                "PASS: Alpha.29 true tabs, off switch, manual mask and left-side crop controls.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
                 .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
             var toolButtons = toolCards.Select(card =>

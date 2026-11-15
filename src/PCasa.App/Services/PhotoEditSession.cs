@@ -14,7 +14,7 @@ public sealed record PhotoEditStep(
     string Kind, double X = 0, double Y = 0,
     double Width = 1, double Height = 1, double Degrees = 0,
     double Amount = 0, double Radius = 1, double Detail = .5,
-    string Mask = "all");
+    string Mask = "all", PhotoMaskStroke[]? MaskStrokes = null);
 
 public sealed class PhotoEditSession
 {
@@ -53,6 +53,13 @@ public sealed class PhotoEditSession
 
     public void Apply(PhotoEditStep step)
     {
+        // Auto operations are calculated once per source/mask, not layered
+        // cumulatively on every click. Undo permits re-applying from scratch.
+        if (step.Kind is "auto-fix" or "auto-contrast" or
+            "auto-color" or "auto-sharpen")
+            if (_steps.Take(_cursor).Any(s =>
+                s.Kind == step.Kind && s.Mask == step.Mask))
+                return;
         if (_cursor < _steps.Count)
             _steps.RemoveRange(_cursor, _steps.Count - _cursor);
         _steps.Add(step);
@@ -123,7 +130,7 @@ public sealed class PhotoEditSession
                     throw new InvalidDataException(
                         "Ungültige Helligkeitskorrektur.");
                 bitmap = RenderTone(bitmap, step.Kind, step.Amount, token,
-                    step.Radius, step.Detail, step.Mask);
+                    step.Radius, step.Detail, step.Mask, step.MaskStrokes);
             }
             else throw new InvalidDataException(
                 "Unbekannte Bildbearbeitung: " + step.Kind);
@@ -139,7 +146,8 @@ public sealed class PhotoEditSession
     // no temporary JPEG, sidecar or independent write path is introduced.
     private static BitmapSource RenderTone(BitmapSource source,
         string kind, double amount, CancellationToken token,
-        double radius, double detail, string maskMode)
+        double radius, double detail, string maskMode,
+        PhotoMaskStroke[]? maskStrokes)
     {
         if (kind == "auto-sharpen")
         {
@@ -190,7 +198,7 @@ public sealed class PhotoEditSession
         if (beforeMask is not null)
         {
             var weights = PhotoEditMasks.Compute(beforeMask,
-                width, height, maskMode, token);
+                width, height, maskMode, token, maskStrokes);
             for (var i = 0; i < weights.Length; i++)
             {
                 if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();
@@ -227,6 +235,8 @@ public sealed class PhotoEditSession
     {
         if (Math.Abs(amount) < .00001) return;
         amount = Math.Clamp(amount, -1, 1);
+        // Fine response around neutral, full effect only near the extremes.
+        amount = Math.Sign(amount) * Math.Pow(Math.Abs(amount), 1.3);
         static double Smooth(double value)
         {
             value = Math.Clamp(value, 0, 1);
