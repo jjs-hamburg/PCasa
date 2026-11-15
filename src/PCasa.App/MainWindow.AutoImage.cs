@@ -59,7 +59,6 @@ public partial class MainWindow
             button.ToolTip = UiLanguage.T(tooltip);
         }
         UpdateEditHistoryTooltips();
-        if (_editorPanelsReady) RefreshEditorMaskStatusText();
     }
 
     private void InitializeAutoImageTools()
@@ -103,15 +102,13 @@ public partial class MainWindow
 
     private void ApplyAutomaticImageEdit(string kind)
     {
-        EndMaskPreview();
         if (!EnsureEditSession() || _cropSavePending) return;
         if (_cropActive) EndCrop();
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) ApplyEditTool();
         if (_advancedToneActive) ApplyEditTool();
         if (_photoEditSession is null) return;
-        _photoEditSession.Apply(new PhotoEditStep(kind, Mask: ActiveEditMask,
-            MaskStrokes: ActiveEditMaskStrokes));
+        _photoEditSession.Apply(new PhotoEditStep(kind));
         SetViewerBitmap(_photoEditSession.Render());
         ApplyViewerImageLayout();
         UpdateEditControls();
@@ -145,8 +142,6 @@ public partial class MainWindow
         var token = cancellation.Token;
         var revision = ++_brightnessPreviewRevision;
         var amount = _brightnessAmount;
-        var mask = ActiveEditMask;
-        var maskStrokes = ActiveEditMaskStrokes;
         var source = _brightnessPreviewBase;
         try
         {
@@ -155,8 +150,7 @@ public partial class MainWindow
             token.ThrowIfCancellationRequested();
             var rendered = await Task.Run(() =>
                 PhotoEditSession.Render(source,
-                    [new PhotoEditStep("brightness", Amount: amount,
-                        Mask: mask, MaskStrokes: maskStrokes)], token), token);
+                    [new PhotoEditStep("brightness", Amount: amount)], token), token);
             if (token.IsCancellationRequested || !_brightnessActive ||
                 revision != _brightnessPreviewRevision ||
                 Dispatcher.HasShutdownStarted)

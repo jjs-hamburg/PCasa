@@ -121,18 +121,15 @@ public partial class MainWindow
         var kind = _advancedToneKind;
         var amount = _advancedToneAmount;
         var source = _advancedTonePreviewBase;
-        var mask = ActiveEditMask;
-        var maskStrokes = ActiveEditMaskStrokes;
         var radius = kind == "sharpen" ? SharpenRadiusSlider.Value : 1;
         var detail = kind == "sharpen" ? SharpenDetailSlider.Value : .5;
         _ = RenderAdvancedTonePreviewAsync(source, kind, amount,
-            radius, detail, mask, maskStrokes, revision, token);
+            radius, detail, revision, token);
     }
 
     private async Task RenderAdvancedTonePreviewAsync(
         BitmapSource source, string kind, double amount,
-        double radius, double detail, string mask,
-        PhotoMaskStroke[]? maskStrokes, int revision, CancellationToken token)
+        double radius, double detail, int revision, CancellationToken token)
     {
         try
         {
@@ -141,8 +138,7 @@ public partial class MainWindow
             var bitmap = Math.Abs(amount) < .00001 ? source : await Task.Run(
                 () => PhotoEditSession.Render(source,
                     [new PhotoEditStep(kind, Amount: amount,
-                        Radius: radius, Detail: detail,
-                        Mask: mask, MaskStrokes: maskStrokes)], token), token);
+                        Radius: radius, Detail: detail)], token), token);
             if (token.IsCancellationRequested || !_advancedToneActive ||
                 revision != _advancedTonePreviewRevision ||
                 Dispatcher.HasShutdownStarted) return;

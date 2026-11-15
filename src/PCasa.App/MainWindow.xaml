@@ -85,6 +85,7 @@
             <Setter Property="Foreground" Value="#D1D3D5"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                        <Setter Property="Foreground" Value="#FFFFFF"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="{x:Type ListBoxItem}">
@@ -930,7 +931,7 @@
                         <TextBlock Text="{loc:Tr Key='Bearbeiten'}" FontSize="15" FontWeight="SemiBold"
                                    VerticalAlignment="Center"/>
                     </DockPanel>
-                    <!-- Five non-scrolling tool groups. Only the selected
+                    <!-- Four non-scrolling tool groups. Only the selected
                          panel exists in the layout: no vertical scrollbar. -->
                     <Grid Grid.Row="1" Margin="7,4,7,4" ClipToBounds="True">
                         <StackPanel x:Name="ViewerToolsOverview">
@@ -953,6 +954,7 @@
                                                             BorderBrush="#565A60" BorderThickness="1,1,1,1"
                                                             Margin="1,0,1,0" Padding="11,7,11,8">
                                                         <ContentPresenter ContentSource="Header"
+                                                                          TextElement.Foreground="{TemplateBinding Foreground}"
                                                                           HorizontalAlignment="Center"
                                                                           VerticalAlignment="Center"/>
                                                     </Border>
@@ -964,7 +966,8 @@
                                                                     Value="#C4C7CA"/>
                                                             <Setter TargetName="TabChrome" Property="BorderThickness"
                                                                     Value="2,2,2,0"/>
-                                                            <Setter Property="FontWeight" Value="SemiBold"/>
+                                                            <Setter Property="FontWeight" Value="Bold"/>
+                                                            <Setter Property="Foreground" Value="#FFFFFF"/>
                                                         </Trigger>
                                                         <Trigger Property="IsMouseOver" Value="True">
                                                             <Setter TargetName="TabChrome" Property="Background"
@@ -980,25 +983,21 @@
                                 <TabItem x:Name="EditorTabLight" Header="{loc:Tr Key='Licht'}" Tag="Light"/>
                                 <TabItem x:Name="EditorTabColor" Header="{loc:Tr Key='Farbe'}" Tag="Color"/>
                                 <TabItem x:Name="EditorTabDetail" Header="{loc:Tr Key='Details'}" Tag="Detail"/>
-                                <TabItem x:Name="EditorTabMasks" Header="{loc:Tr Key='Masken'}" Tag="Masks"/>
                             </TabControl>
                             <Border BorderBrush="#74777C" BorderThickness="1,0,1,1"
                                     CornerRadius="0,0,5,5" Background="#292B2F"
                                     Padding="5,2,5,7">
                                 <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="4,3,2,5">
-                                <CheckBox x:Name="EditorMaskEnabled"
-                                          Content="{loc:Tr Key='Maske aktiv'}"
-                                          IsChecked="False" Margin="0,0,7,0"
-                                          Click="EditorMaskEnabled_Click"/>
-                                <TextBlock x:Name="EditorActiveMaskText"
-                                           VerticalAlignment="Center" TextWrapping="Wrap"
-                                           FontSize="11" Text="{loc:Tr Key='Maske: aus'}"/>
-                            </StackPanel>
                             <StackPanel x:Name="ViewerPanelQuick" Margin="0,4,0,0">
                                 <WrapPanel x:Name="ViewerToolsList" HorizontalAlignment="Left"/>
                                 <StackPanel x:Name="ViewerAutoToolsList"
                                             Orientation="Horizontal" HorizontalAlignment="Left"/>
+                                <Button x:Name="ExternalEditQuickButton"
+                                        Content="{loc:Tr Key='Bearbeiten mit …'}"
+                                        Margin="2,12,2,2" Padding="10,6"
+                                        HorizontalAlignment="Stretch"
+                                        Click="ExternalEditQuick_Click"
+                                        ToolTip="{loc:Tr Key='Foto mit einem externen Programm bearbeiten'}"/>
                             </StackPanel>
                             <StackPanel x:Name="ViewerPanelLight" Visibility="Collapsed" Margin="1,6,0,0">
 <Grid x:Name="ViewerBrightnessOptions" Margin="0,5,0,6">
@@ -1179,65 +1178,6 @@
                                                 IsMoveToPointEnabled="True"
                                                 ToolTip="{loc:Tr Key='Detailerhalt'}"/>
                                     </StackPanel>
-                            </StackPanel>
-                            <StackPanel x:Name="ViewerPanelMasks" Visibility="Collapsed" Margin="1,5,1,0">
-                                <TextBlock Text="{loc:Tr Key='Motiv: konturgeführte Auswahl nach grober Markierung. Himmel: Horizonterkennung, manuell korrigierbar.'}"
-                                           FontSize="11" TextWrapping="Wrap" Margin="2,0,2,6"/>
-                                <UniformGrid Columns="2" Rows="3">
-                                    <ToggleButton x:Name="EditorMaskAll"
-                                                  Tag="all" Content="{loc:Tr Key='Ohne Maske'}"
-                                                  Margin="2" Padding="4,1" Height="30"
-                                                  Click="EditorMask_Click"/>
-                                    <ToggleButton x:Name="EditorMaskSky"
-                                                  Tag="sky" Content="{loc:Tr Key='Himmel (einfach)'}"
-                                                  Margin="2" Padding="4,1" Height="30"
-                                                  Click="EditorMask_Click"/>
-                                    <ToggleButton x:Name="EditorMaskSubject"
-                                                  Tag="subject" Content="{loc:Tr Key='Motiv (manuell)'}"
-                                                  Margin="2" Padding="4,1" Height="30"
-                                                  Click="EditorMask_Click"/>
-                                    <ToggleButton x:Name="EditorMaskBackground"
-                                                  Tag="background" Content="{loc:Tr Key='Hintergrund (einfach)'}"
-                                                  Margin="2" Padding="4,1" Height="30"
-                                                  Click="EditorMask_Click"/>
-                                    <ToggleButton x:Name="EditorMaskMaskHighlights"
-                                                  Tag="mask-highlights" Content="{loc:Tr Key='Helle Bereiche'}"
-                                                  Margin="2" Padding="4,1" Height="30"
-                                                  Click="EditorMask_Click"/>
-                                    <ToggleButton x:Name="EditorMaskMaskShadows"
-                                                  Tag="mask-shadows" Content="{loc:Tr Key='Dunkle Bereiche'}"
-                                                  Margin="2" Padding="4,1" Height="30"
-                                                  Click="EditorMask_Click"/>
-                                </UniformGrid>
-                                <ToggleButton x:Name="EditorMaskPaintButton"
-                                              Content="{loc:Tr Key='Motiv grob markieren'}"
-                                              HorizontalAlignment="Stretch" Margin="2,8,2,3"
-                                              Height="29" Click="EditorMaskPaint_Click"/>
-                                <StackPanel Orientation="Horizontal" Margin="2,2,2,2">
-                                    <ToggleButton x:Name="EditorMaskEraseButton"
-                                                  Content="{loc:Tr Key='Bereich ausschließen'}"
-                                                  Height="27" Padding="4,1" Margin="0,0,5,0"
-                                                  Click="EditorMaskErase_Click"/>
-                                    <Button x:Name="EditorMaskClearButton"
-                                            Content="{loc:Tr Key='Auswahl löschen'}"
-                                            Height="27" Padding="4,1"
-                                            Click="EditorMaskClear_Click"/>
-                                </StackPanel>
-                                <TextBlock Text="{loc:Tr Key='Pinselgröße'}"
-                                           FontSize="11" Margin="2,5,0,1"/>
-                                <Slider x:Name="EditorMaskBrushSizeSlider" Minimum=".005" Maximum=".08"
-                                        Value=".025" TickFrequency=".005" SmallChange=".005"
-                                        LargeChange=".01" Margin="4,0,4,2"/>
-                                <TextBlock Text="{loc:Tr Key='Motiv innen grob markieren; Konturen werden automatisch ermittelt. Mit Bereich ausschließen den Hintergrund korrigieren.'}"
-                                           FontSize="11" TextWrapping="Wrap" Margin="2,2,2,5"/>
-                                <ToggleButton x:Name="EditorMaskPreviewButton"
-                                              Content="{loc:Tr Key='Maske anzeigen'}"
-                                              HorizontalAlignment="Left" Margin="2,7,2,3"
-                                              Padding="8,3" Height="30"
-                                              Click="EditorMaskPreview_Click"/>
-                                <TextBlock Text="{loc:Tr Key='Auswahl gilt für die folgenden Farb- und Detailänderungen.'}"
-                                           FontSize="11" TextWrapping="Wrap"
-                                           Margin="2,6,2,2"/>
                             </StackPanel>
                                 </StackPanel>
                             </Border>
@@ -1563,16 +1503,6 @@
                                     <Line x:Name="ViewerCropThirdH1" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                     <Line x:Name="ViewerCropThirdH2" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                 </Canvas>
-                                <!-- The manual brush is the only image-space mask control.
-                                     Crop/straighten OPTIONS stay in the left sidebar. -->
-                                <Canvas x:Name="ViewerMaskPaintOverlay" Visibility="Collapsed"
-                                        Width="{Binding ActualWidth, ElementName=PhotoViewerImage}"
-                                        Height="{Binding ActualHeight, ElementName=PhotoViewerImage}"
-                                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                                        Panel.ZIndex="4" Background="Transparent"
-                                        MouseLeftButtonDown="MaskPaint_MouseDown"
-                                        MouseMove="MaskPaint_MouseMove"
-                                        MouseLeftButtonUp="MaskPaint_MouseUp"/>
                                 <Canvas x:Name="ViewerStraightenGrid" Visibility="Collapsed"
                                         Width="{Binding ActualWidth, ElementName=PhotoViewerImage}"
                                         Height="{Binding ActualHeight, ElementName=PhotoViewerImage}"

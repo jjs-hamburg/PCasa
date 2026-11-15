@@ -12,7 +12,7 @@ public partial class MainWindow
     private readonly DurableGalleryTransferJournal _durableGalleryTransfers;
 
     private sealed record DurableGalleryTransferRecipe(
-        string[] Sources, string Destination, bool Move);
+        string[] Sources, string Destination, bool Move, bool NeverReplace = false);
 
     // This factory is called both for new manual drops and, with exactly the
     // same fixed step layout, by the scheduler after an application restart.
@@ -101,8 +101,12 @@ public partial class MainWindow
                         destination = UniqueCopyPath(destination, reserved);
                     else if (samePath || File.Exists(destination))
                     {
-                        var choice = samePath ? NameConflict.KeepBoth :
-                            await Dispatcher.InvokeAsync(
+                        // External editor results are always new files.
+                        // Even after durable retry, a saved RAW/JPG original
+                        // must never be a replaceable conflict candidate.
+                        var choice = recipe.NeverReplace || samePath
+                            ? NameConflict.KeepBoth
+                            : await Dispatcher.InvokeAsync(
                                 () => ResolveFileConflict(proposedDestination));
                         token.ThrowIfCancellationRequested();
                         if (choice == NameConflict.Cancel)

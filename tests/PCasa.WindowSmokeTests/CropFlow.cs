@@ -67,140 +67,37 @@ internal static class CropFlow
             if (originalAspect != (6000d, 4000d))
                 throw new Exception("Original uncropped zoom geometry changed.");
 
-            // The exact SAME masked step is used in real-time preview and
-            // the durable full-resolution write; no mask sidecar is saved.
-            var maskPixels = new byte[16 * 16 * 4];
+            // Removed mask UI must not affect ordinary full-frame editing.
+            // Automatic correction is still idempotent, and highlights still
+            // apply at their documented full-image default.
+            var tonePixels = new byte[16 * 16 * 4];
             for (var y = 0; y < 16; y++)
             for (var x = 0; x < 16; x++)
             {
-                var index = (y * 16 + x) * 4;
-                maskPixels[index] = y < 8 ? (byte)245 : (byte)48;
-                maskPixels[index + 1] = y < 8 ? (byte)175 : (byte)95;
-                maskPixels[index + 2] = y < 8 ? (byte)100 : (byte)155;
-                maskPixels[index + 3] = 255;
+                var i = (y * 16 + x) * 4;
+                tonePixels[i] = y < 8 ? (byte)210 : (byte)50;
+                tonePixels[i + 1] = y < 8 ? (byte)180 : (byte)75;
+                tonePixels[i + 2] = y < 8 ? (byte)160 : (byte)90;
+                tonePixels[i + 3] = 255;
             }
-            var skyMask = PhotoEditMasks.Compute(maskPixels, 16, 16, "sky");
-            if (skyMask[2 * 16 + 8] < 200 || skyMask[14 * 16 + 8] != 0)
-                throw new Exception("Automatic sky mask leaked into the foreground.");
-            var highlights = PhotoEditMasks.Compute(maskPixels, 16, 16, "mask-highlights");
-            var shadows = PhotoEditMasks.Compute(maskPixels, 16, 16, "mask-shadows");
-            if (highlights.Length != 256 || shadows.Length != 256)
-                throw new Exception("Mask dimension is not image dimension.");
-            var maskSource = BitmapSource.Create(16, 16, 96, 96,
-                PixelFormats.Bgra32, null, maskPixels, 16 * 4);
-            var maskedTone = PhotoEditSession.Render(maskSource,
-                [new PhotoEditStep("saturation", Amount: 1, Mask: "sky")]);
-            var maskedOutput = new byte[maskPixels.Length];
-            maskedTone.CopyPixels(maskedOutput, 16 * 4, 0);
-            var below = (14 * 16 + 8) * 4;
-            var above = (2 * 16 + 8) * 4;
-            if (!maskedOutput.AsSpan(below, 4)
-                    .SequenceEqual(maskPixels.AsSpan(below, 4)))
-                throw new Exception("Sky-only adjustment modified unselected foreground.");
-            if (maskedOutput.AsSpan(above, 3)
-                    .SequenceEqual(maskPixels.AsSpan(above, 3)))
-                throw new Exception("Sky mask did not affect selected pixels.");
-            Console.WriteLine("PASS: Zoom geometry, automatic sky/luminance masks and selective edits.");
-
-            // Subject selection needs explicit painted marks; background
-            // still has a conservative local automatic suggestion.
-            var subjectPixels = new byte[16 * 16 * 4];
-            for (var y = 0; y < 16; y++)
-            for (var x = 0; x < 16; x++)
-            {
-                var p = (y * 16 + x) * 4;
-                subjectPixels[p] = 95; subjectPixels[p + 1] = 95;
-                subjectPixels[p + 2] = 95; subjectPixels[p + 3] = 255;
-                if (x >= 4 && x <= 11 && y >= 4 && y <= 11)
-                {
-                    subjectPixels[p] = 35;
-                    subjectPixels[p + 1] = 55;
-                    subjectPixels[p + 2] = 240;
-                }
-            }
-            var subject = PhotoEditMasks.Compute(subjectPixels, 16, 16, "subject");
-            var background = PhotoEditMasks.Compute(subjectPixels, 16, 16, "background");
-            if (subject.Any(value => value != 0) ||
-                background.Any(value => value != 0))
-                throw new Exception("Automatic foreground/background cannot guess a person without hints.");
-            // One loose stroke inside a flat-color person should grow to its
-            // actual boundaries rather than remain a round paint stamp.
-            var coarse = new[] { new PhotoMaskStroke(.5, .5, .16) };
-            var inferred = PhotoEditMasks.Compute(subjectPixels, 16, 16,
-                "subject", strokes: coarse);
-            var protectedBackground = PhotoEditMasks.Compute(subjectPixels,
-                16, 16, "background", strokes: coarse);
-            if (inferred[6 * 16 + 6] < 160 ||
-                inferred[1 * 16 + 1] > 30 ||
-                protectedBackground[6 * 16 + 6] > 95 ||
-                protectedBackground[1 * 16 + 1] < 200)
-                throw new Exception("Seeded subject segmentation did not follow the color contour.");
-            // A sea can have almost the same blue as the sky. The
-            // continuous horizontal horizon must stop a top-edge flood.
-            const int sceneWidth = 40, sceneHeight = 30;
-            var coast = new byte[sceneWidth * sceneHeight * 4];
-            for (var y = 0; y < sceneHeight; y++)
-            for (var x = 0; x < sceneWidth; x++)
-            {
-                var p = (y * sceneWidth + x) * 4;
-                coast[p] = y < 14 ? (byte)225 : (byte)174;
-                coast[p + 1] = y < 14 ? (byte)174 : (byte)135;
-                coast[p + 2] = y < 14 ? (byte)110 : (byte)91;
-                coast[p + 3] = 255;
-            }
-            var coastSky = PhotoEditMasks.Compute(coast, sceneWidth,
-                sceneHeight, "sky");
-            if (coastSky[5 * sceneWidth + 20] < 200 ||
-                coastSky[24 * sceneWidth + 20] > 15)
-                throw new Exception("Horizon detection included the sea in the sky mask.");
-
-            // Alpha.29: a user-painted subject is independent of preview
-            // resolution and persists in the same immutable P0 recipe.
-            var painted = new[] { new PhotoMaskStroke(.5, .5, .15) };
-            var selected = PhotoEditMasks.Compute(maskPixels, 16, 16,
-                "subject", strokes: painted);
-            var inverse = PhotoEditMasks.Compute(maskPixels, 16, 16,
-                "background", strokes: painted);
-            if (selected[8 * 16 + 8] != 255 || selected[0] != 0 ||
-                inverse[8 * 16 + 8] != 0 || inverse[0] != 255)
-                throw new Exception("Manual subject/background masks are not complementary.");
-            var paintedStep = new PhotoEditStep("saturation", Amount: .7,
-                Mask: "subject", MaskStrokes: painted);
-            var paintedResult = PhotoEditSession.Render(maskSource, [paintedStep]);
-            var paintedBytes = new byte[maskPixels.Length];
-            paintedResult.CopyPixels(paintedBytes, 16 * 4, 0);
-            var center = (8 * 16 + 8) * 4;
-            if (paintedBytes.AsSpan(center, 3).SequenceEqual(maskPixels.AsSpan(center, 3)) ||
-                !paintedBytes.AsSpan(0, 4).SequenceEqual(maskPixels.AsSpan(0, 4)))
-                throw new Exception("Manual subject adjustment was not selective.");
-            var selectedPreview = PhotoEditMasks.Preview(maskSource, "subject",
-                strokes: painted);
-            if (selectedPreview.PixelWidth != 16 || selectedPreview.PixelHeight != 16)
-                throw new Exception("Manual mask preview has wrong geometry.");
-            var manualUndo = new PhotoEditSession(456, maskSource);
-            manualUndo.Apply(paintedStep);
-            manualUndo.Undo();
-            if (!PixelsEqual(manualUndo.Render(), maskSource))
-                throw new Exception("Undo failed to restore a painted subject.");
-            manualUndo.Redo();
-            if (manualUndo.AppliedSteps.Single().MaskStrokes?.Length != 1)
-                throw new Exception("Redo lost the manual subject mask recipe.");
-            var once = new PhotoEditSession(457, maskSource);
+            var toneSource = BitmapSource.Create(16, 16, 96, 96,
+                PixelFormats.Bgra32, null, tonePixels, 16 * 4);
+            var once = new PhotoEditSession(457, toneSource);
             once.Apply(new PhotoEditStep("auto-fix"));
             var onceRendered = once.Render();
             once.Apply(new PhotoEditStep("auto-fix"));
-            if (once.AppliedSteps.Count != 1 || !PixelsEqual(once.Render(), onceRendered))
-                throw new Exception("Automatic image correction compounded on a second click.");
-            // The highlights tool must actually affect a selected light pixel,
-            // unlike Alpha.28's accidentally persistent shadow-mask setting.
-            var fullHighlights = PhotoEditSession.Render(maskSource,
-                [new PhotoEditStep("highlights", Amount: .8, Mask: "all")]);
-            var highlightsBytes = new byte[maskPixels.Length];
-            fullHighlights.CopyPixels(highlightsBytes, 16 * 4, 0);
-            if (highlightsBytes.AsSpan(above, 3)
-                .SequenceEqual(maskPixels.AsSpan(above, 3)))
-                throw new Exception("Highlights adjustment had no effect.");
-            Console.WriteLine("PASS: Alpha.29 manual subject masks, Undo, auto idempotence and highlights.");
+            if (once.AppliedSteps.Count != 1 ||
+                !PixelsEqual(once.Render(), onceRendered))
+                throw new Exception("Automatic correction compounded on repeat.");
+            var highlightsResult = PhotoEditSession.Render(toneSource,
+                [new PhotoEditStep("highlights", Amount: .8)]);
+            var highlightsBytes = new byte[tonePixels.Length];
+            highlightsResult.CopyPixels(highlightsBytes, 16 * 4, 0);
+            var top = (2 * 16 + 8) * 4;
+            if (highlightsBytes.AsSpan(top, 3)
+                .SequenceEqual(tonePixels.AsSpan(top, 3)))
+                throw new Exception("Full-image highlights adjustment failed.");
+            Console.WriteLine("PASS: Alpha.31 full-frame tone, auto idempotence and no masks.");
 
             var encoder = new JpegBitmapEncoder { QualityLevel = 91 };
             encoder.Frames.Add(BitmapFrame.Create(bitmap));

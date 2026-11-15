@@ -656,7 +656,7 @@ public partial class MainWindow
     }
 
     private async Task TransferGalleryFilesAsync(IEnumerable<string> input,
-        string targetDirectory, bool move)
+        string targetDirectory, bool move, bool neverReplace = false)
     {
         string[] requested;
         string target;
@@ -681,7 +681,7 @@ public partial class MainWindow
 
         var key = "gallery:file-transfer:" + Guid.NewGuid().ToString("N");
         var payload = System.Text.Json.JsonSerializer.Serialize(
-            new DurableGalleryTransferRecipe(requested, target, move));
+            new DurableGalleryTransferRecipe(requested, target, move, neverReplace));
         _outstandingGalleryMutations++;
         _outstandingFileTransfers++;
         _backgroundDebounceTimer?.Stop();
