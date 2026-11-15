@@ -848,5 +848,7 @@
   "{0} Datei(en) als neue Bilder/Videos in den PCasa-Ordner übernehmen? Das Original bleibt unverändert.": "Import {0} file(s) as new photos/videos into the PCasa folder? The original will remain unchanged.",
   "Ausgabe übernehmen": "Import output",
   "Ungültiger externer Bildeditor.": "Invalid external editing application.",
-  "Das externe Programm konnte nicht gestartet werden.": "Could not start the external application."
+  "Das externe Programm konnte nicht gestartet werden.": "Could not start the external application.",
+  "Beispiele: photo, video, *, .jpg;.png": "Examples: photo, video, *, .jpg;.png",
+  "RAW-Dateien können nicht extern bearbeitet werden.": "RAW files cannot be edited with external applications."
 }

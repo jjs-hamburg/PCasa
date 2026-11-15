@@ -127,6 +127,8 @@ public partial class MainWindow
     private void PopulateExternalEditorMenu(ItemsControl menu, long id,
         string? sourceName)
     {
+        // Do not offer external editors OR Windows Open With for RAW.
+        if (sourceName is null || RawImageSource.IsRawPath(sourceName)) return;
         IReadOnlyList<ExternalEditorProgram> programs = sourceName is null
             ? [] : _externalEditors.ForFile(sourceName);
         foreach (var program in programs)
@@ -173,6 +175,10 @@ public partial class MainWindow
             // whole 500k-image index. Catalog lookup stays off WPF.
             var source = (await SelectedGalleryPathsAsync([id])).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(source)) return;
+            // Block launch even if a stale UI entry was clicked.
+            if (RawImageSource.IsRawPath(source))
+                throw new NotSupportedException(UiLanguage.T(
+                    "RAW-Dateien können nicht extern bearbeitet werden."));
             if (editor is not null && !editor.Matches(source))
                 throw new InvalidOperationException(
                     UiLanguage.T("Dieses Programm ist für das Dateiformat nicht konfiguriert."));

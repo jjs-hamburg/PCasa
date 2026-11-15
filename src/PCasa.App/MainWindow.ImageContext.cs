@@ -43,12 +43,17 @@ public partial class MainWindow
                 : "Vorschaubild aktualisieren",
                 () => _ = RefreshThumbnailsAsync(captured));
         }
-        var external = new MenuItem
+        var editorSource = CachedExternalEditorSource(id);
+        // RAW is for viewing/cataloguing, not editing. Hide the entire menu.
+        if (editorSource is not null && !RawImageSource.IsRawPath(editorSource))
         {
-            Header = UiLanguage.T("Bearbeiten mit …")
-        };
-        PopulateExternalEditorMenu(external, id, CachedExternalEditorSource(id));
-        menu.Items.Add(external);
+            var external = new MenuItem
+            {
+                Header = UiLanguage.T("Bearbeiten mit …")
+            };
+            PopulateExternalEditorMenu(external, id, editorSource);
+            menu.Items.Add(external);
+        }
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };
         restore.Click += (_, _) => UndoRestoreImage(id);

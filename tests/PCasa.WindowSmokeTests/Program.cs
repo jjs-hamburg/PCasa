@@ -257,7 +257,7 @@ internal static class Program
                 @"C:\Topaz\Video.exe", "video");
             var topazGigapixel = new ExternalEditorProgram("Topaz Gigapixel",
                 @"C:\Topaz\Gigapixel.exe", ".jpg;.png;.arw");
-            if (!topazPhoto.Matches("image.arw") ||
+            if (!topazPhoto.Matches("image.jpg") ||
                 topazPhoto.Matches("clip.mp4") ||
                 !topazVideo.Matches("clip.mp4") ||
                 topazVideo.Matches("image.jpg") ||
@@ -267,6 +267,24 @@ internal static class Program
             var emptyProgram = new ExternalEditorProgram("Unconfigured", "", "photo");
             if (emptyProgram.Matches("image.jpg"))
                 throw new Exception("An unconfigured editor became executable.");
+            // No RAW file can be sent to any external editor, not even by a
+            // wildcard, a configured RAW extension, or the photo category.
+            foreach (var rawExtension in new[] { ".arw", ".nef", ".nrw",
+                ".cr2", ".cr3", ".dng", ".raf", ".rw2", ".orf", ".pef",
+                ".srw", ".crw" })
+            {
+                var rawFile = "photo" + rawExtension;
+                if (topazPhoto.Matches(rawFile) ||
+                    new ExternalEditorProgram("Any", "editor.exe", "*").Matches(rawFile) ||
+                    new ExternalEditorProgram("Explicit", "editor.exe",
+                        rawExtension).Matches(rawFile))
+                    throw new Exception("RAW was offered for external editing.");
+            }
+            if (new ExternalEditorSettings
+                {
+                    Programs = [new ExternalEditorProgram("Any", "editor.exe", "*")]
+                }.ForFile("image.nef").Count != 0)
+                throw new Exception("RAW editor slipped through the settings filter.");
             // Icons are generated from the real executable path.
             // The menu order and 74x49 button geometry must match Crop.
             var configuredField = typeof(PCasa.App.MainWindow).GetField(
