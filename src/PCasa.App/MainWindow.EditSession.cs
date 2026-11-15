@@ -323,7 +323,8 @@ public partial class MainWindow
             LeaveBrightness();
             if (Math.Abs(exposure) > .00001)
                 _photoEditSession.Apply(new PhotoEditStep(
-                    "brightness", Amount: exposure, Mask: _selectedEditMask));
+                    "brightness", Amount: exposure, Mask: ActiveEditMask,
+                    MaskStrokes: ActiveEditMaskStrokes));
         }
         else if (_advancedToneActive)
         {
@@ -334,7 +335,8 @@ public partial class MainWindow
                 _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount,
                     Radius: kind == "sharpen" ? SharpenRadiusSlider.Value : 1,
                     Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5,
-                    Mask: _selectedEditMask));
+                    Mask: ActiveEditMask,
+                    MaskStrokes: ActiveEditMaskStrokes));
         }
         else return false;
         SetViewerBitmap(_photoEditSession.Render());
@@ -366,6 +368,7 @@ public partial class MainWindow
         if (_straightenActive) LeaveStraighten();
         if (_brightnessActive) LeaveBrightness();
         if (_advancedToneActive) LeaveAdvancedTone();
+        StopMaskPainting();
         EndMaskPreview();
         var original = _photoEditSession?.Original;
         _photoEditSession = null;
@@ -379,6 +382,7 @@ public partial class MainWindow
 
     private async void SaveEdits(bool asCopy = false)
     {
+        StopMaskPainting();
         EndMaskPreview();
         if (_cropSavePending || _viewerImageInfo is not { } info ||
             _pendingEditImageIds.Contains(info.Id)) return;

@@ -110,7 +110,8 @@ public partial class MainWindow
         if (_brightnessActive) ApplyEditTool();
         if (_advancedToneActive) ApplyEditTool();
         if (_photoEditSession is null) return;
-        _photoEditSession.Apply(new PhotoEditStep(kind, Mask: _selectedEditMask));
+        _photoEditSession.Apply(new PhotoEditStep(kind, Mask: ActiveEditMask,
+            MaskStrokes: ActiveEditMaskStrokes));
         SetViewerBitmap(_photoEditSession.Render());
         ApplyViewerImageLayout();
         UpdateEditControls();
@@ -144,7 +145,8 @@ public partial class MainWindow
         var token = cancellation.Token;
         var revision = ++_brightnessPreviewRevision;
         var amount = _brightnessAmount;
-        var mask = _selectedEditMask;
+        var mask = ActiveEditMask;
+        var maskStrokes = ActiveEditMaskStrokes;
         var source = _brightnessPreviewBase;
         try
         {
@@ -154,7 +156,7 @@ public partial class MainWindow
             var rendered = await Task.Run(() =>
                 PhotoEditSession.Render(source,
                     [new PhotoEditStep("brightness", Amount: amount,
-                        Mask: mask)], token), token);
+                        Mask: mask, MaskStrokes: maskStrokes)], token), token);
             if (token.IsCancellationRequested || !_brightnessActive ||
                 revision != _brightnessPreviewRevision ||
                 Dispatcher.HasShutdownStarted)

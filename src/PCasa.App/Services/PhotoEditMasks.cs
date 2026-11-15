@@ -10,13 +10,17 @@ namespace PCasa.App.Services;
 /// experimental color/edge heuristics, NOT semantic neural segmentation.
 /// The same implementation blends preview and full-resolution durable writes.
 /// </summary>
+/// <summary>A normalized manual paint sample, independent of preview resolution.</summary>
+public sealed record PhotoMaskStroke(double X, double Y, double Radius, bool Erase = false);
+
 public static class PhotoEditMasks
 {
     public static readonly string[] Modes =
         ["all", "sky", "subject", "background", "mask-highlights", "mask-shadows"];
 
     public static byte[] Compute(byte[] pixels, int width, int height,
-        string mode, CancellationToken token = default)
+        string mode, CancellationToken token = default,
+        IReadOnlyList<PhotoMaskStroke>? strokes = null)
     {
         if (!Modes.Contains(mode, StringComparer.Ordinal))
             throw new InvalidDataException("Unknown edit mask: " + mode);
@@ -43,6 +47,55 @@ public static class PhotoEditMasks
                     : Math.Clamp((155.0 - light) / 135.0, 0, 1);
                 mask[i] = (byte)Math.Round(255 * t * t * (3 - 2 * t));
             }
+            return mask;
+        }
+
+        // A subject is defined by the photographer. Never silently guess a
+        // person or object merely from central color differences.
+        if (mode == "subject" && strokes is not { Count: > 0 })
+            return mask;
+
+        if (mode is "subject" or "background" &&
+            strokes is { Count: > 0 })
+        {
+            // Paint the selected subject in normalized source coordinates. The
+            // same strokes replay at original resolution in the P0 writer.
+            // Brush work is bounded to each stamp's box, not pixels*strokes.
+            foreach (var stroke in strokes)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!double.IsFinite(stroke.X) || !double.IsFinite(stroke.Y) ||
+                    !double.IsFinite(stroke.Radius) || stroke.Radius <= 0 ||
+                    stroke.Radius > .2 || stroke.X < 0 || stroke.X > 1 ||
+                    stroke.Y < 0 || stroke.Y > 1)
+                    throw new InvalidDataException("Invalid manual subject mask stroke.");
+                var radius = Math.Max(1, stroke.Radius * Math.Min(width, height));
+                var cx = stroke.X * (width - 1);
+                var cy = stroke.Y * (height - 1);
+                var x0 = Math.Max(0, (int)Math.Floor(cx - radius));
+                var x1 = Math.Min(width - 1, (int)Math.Ceiling(cx + radius));
+                var y0 = Math.Max(0, (int)Math.Floor(cy - radius));
+                var y1 = Math.Min(height - 1, (int)Math.Ceiling(cy + radius));
+                for (var y = y0; y <= y1; y++)
+                for (var x = x0; x <= x1; x++)
+                {
+                    var distance = Math.Sqrt((x - cx) * (x - cx) +
+                        (y - cy) * (y - cy)) / radius;
+                    if (distance > 1) continue;
+                    // Soft 12% falloff, without blurring across the whole photo.
+                    var coverage = (byte)Math.Round(255 *
+                        Math.Clamp((1 - distance) / .12, 0, 1));
+                    var i = y * width + x;
+                    mask[i] = stroke.Erase
+                        ? (byte)Math.Min(mask[i], 255 - coverage)
+                        : (byte)Math.Max(mask[i], coverage);
+                }
+            }
+            if (mode == "background")
+                for (var i = 0; i < length; i++)
+                    mask[i] = (byte)(255 - mask[i]);
+            for (var i = 0; i < length; i++)
+                if (pixels[i * 4 + 3] == 0) mask[i] = 0;
             return mask;
         }
 
@@ -166,10 +219,11 @@ public static class PhotoEditMasks
     }
 
     public static BitmapSource Preview(BitmapSource source, string mode,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        IReadOnlyList<PhotoMaskStroke>? strokes = null)
     {
         var pixels = ToBgra(source);
-        var mask = Compute(pixels, source.PixelWidth, source.PixelHeight, mode, token);
+        var mask = Compute(pixels, source.PixelWidth, source.PixelHeight, mode, token, strokes);
         for (var i = 0; i < mask.Length; i++)
         {
             if ((i & 0xffff) == 0) token.ThrowIfCancellationRequested();

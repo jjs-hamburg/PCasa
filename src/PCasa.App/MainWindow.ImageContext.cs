@@ -30,18 +30,18 @@ public partial class MainWindow
         AddContextAction(menu, "Dateipfad kopieren",
             () => _ = CopyImagePathToClipboardAsync(id));
         AddContextAction(menu, "Eigenschaften", () => ShowFileProperties(id));
-        if (_displayedBrowseIndex.Any(item => item.ImageId == id &&
-            VideoFormats.IsVideo(item.FileName)))
+        // Available for EVERY photograph and video, regardless of whether
+        // the cached thumbnail is already present. The selection is captured
+        // once on right-click; no new gallery scan or additional selection.
+        var thumbnailIds = SelectThumbnailIds(id, _selectedImageIds,
+            _displayedBrowseIndex);
+        if (thumbnailIds.Length > 0)
         {
-            // One O(N) index projection and one immutable selection.
-            // Do not scan the 500k photo index once PER selected video.
-            var videoIds = SelectVideoThumbnailIds(id, _selectedImageIds,
-                _displayedBrowseIndex);
-            var captured = videoIds;
+            var captured = thumbnailIds;
             AddContextAction(menu, captured.Length > 1
                 ? "Vorschaubilder aktualisieren"
                 : "Vorschaubild aktualisieren",
-                () => _ = RefreshVideoThumbnailsAsync(captured));
+                () => _ = RefreshThumbnailsAsync(captured));
         }
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };
@@ -54,34 +54,34 @@ public partial class MainWindow
         menu.IsOpen = true;
     }
 
-    internal static long[] SelectVideoThumbnailIds(long clickedId,
+    internal static long[] SelectThumbnailIds(long clickedId,
         IReadOnlyCollection<long> selectedIds,
         IReadOnlyList<BrowseThumbnailIndexEntry> index)
     {
-        var videoIds = index.Where(item => VideoFormats.IsVideo(item.FileName))
-            .Select(item => item.ImageId).ToHashSet();
-        // The right click preserves an existing multi-selection. If that
-        // thumbnail was not selected it becomes a one-item selection.
+        var galleryIds = index.Select(image => image.ImageId).ToHashSet();
+        // Right-click preserves a multi-selection only if the clicked image
+        // belongs to it. Otherwise the single clicked image is authoritative.
         IEnumerable<long> candidates = selectedIds.Contains(clickedId)
             ? selectedIds : new[] { clickedId };
-        return candidates.Where(videoIds.Contains).Distinct().ToArray();
+        return candidates.Where(galleryIds.Contains).Distinct().ToArray();
     }
 
-    private async Task RefreshVideoThumbnailsAsync(long[] imageIds)
+    private async Task RefreshThumbnailsAsync(long[] imageIds)
     {
-        if (imageIds.Length == 0) return;
-        const string label = "Video-Vorschaubilder aktualisieren";
+        if (imageIds.Length == 0 || _activeBrowseTier is not int tier) return;
+        const string label = "Vorschaubilder aktualisieren";
         string? key = null;
         try
         {
-            // One snapshot, one catalog lookup and one P0 manual operation.
-            // The selected set cannot change under this running action.
-            var selected = await SelectedGalleryImagePathsAsync(imageIds);
-            var videos = selected.Where(item => VideoFormats.IsVideo(item.Path))
+            // A single immutable snapshot, one scheduler P0 package, and one
+            // targeted publication. Nothing touches the other gallery images.
+            var selected = (await SelectedGalleryImagePathsAsync(imageIds))
                 .DistinctBy(item => item.Id).ToArray();
-            if (videos.Length == 0 || Dispatcher.HasShutdownStarted) return;
-            key = "thumbnail:video-refresh:" + Guid.NewGuid().ToString("N");
-            BeginVisibleManualOperation(key, UiLanguage.T(label), videos.Length);
+            if (selected.Length == 0 || Dispatcher.HasShutdownStarted) return;
+            key = "thumbnail:refresh:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, UiLanguage.T(label), selected.Length);
+            var refreshed = new Dictionary<long, BrowseThumbnailIndexEntry>();
+            var decoded = new Dictionary<long, System.Windows.Media.Imaging.BitmapSource>();
             var failures = new List<(string Name, string Error)>();
             await _scheduler.EnqueueAsync(key, SchedulerPriority.ManualAction,
                 token =>
@@ -89,47 +89,76 @@ public partial class MainWindow
                     var repository = new BrowseCacheRepository(_database);
                     var builder = _browseCacheBuilder ?? new BrowseCacheBuilder(
                         repository, new BrowseThumbnailProfileRepository(_database));
-                    for (var index = 0; index < videos.Length; index++)
+                    using var reader = new PackedThumbnailReader();
+                    for (var index = 0; index < selected.Length; index++)
                     {
                         token.ThrowIfCancellationRequested();
-                        var item = videos[index];
+                        var item = selected[index];
                         try
                         {
-                            // Regenerate the local Windows frame first.
-                            // Only when that succeeded invalidate/rebuild the
-                            // packed tiers for the SAME catalog image ID.
-                            VideoThumbnailSource.Resolve(item.Path, token,
-                                forceRefresh: true);
-                            repository.InvalidateImage(item.Id);
+                            if (VideoFormats.IsVideo(item.Path))
+                                VideoThumbnailSource.Resolve(item.Path, token,
+                                    forceRefresh: true);
+                            // Unlike "build missing", a refresh re-encodes
+                            // every configured tier from the ORIGINAL. Keep
+                            // the last good DB row if the source is offline.
                             builder.RebuildSingleImage(item.Id, token);
+                            var entry = repository.GetIndexEntry(tier, item.Id)
+                                ?? throw new InvalidDataException(
+                                    "Kein neues Vorschaubild im Cache.");
+                            var bitmap = reader.Load(entry, token)
+                                ?? throw new InvalidDataException(
+                                    "Neu erzeugtes Vorschaubild nicht lesbar.");
+                            refreshed[item.Id] = entry;
+                            decoded[item.Id] = bitmap;
                         }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception ex)
                         {
                             failures.Add((Path.GetFileName(item.Path), ex.Message));
-                            PCasaDiagnostics.Write("Video.ThumbnailRefresh", ex);
+                            PCasaDiagnostics.Write("Gallery.ThumbnailRefresh", ex);
                         }
                         _scheduler.ReportProgress(key, UiLanguage.T(label),
-                            index + 1, videos.Length);
+                            index + 1, selected.Length);
                     }
                     return Task.CompletedTask;
                 }, workKind: SchedulerWorkKind.Catalog);
 
             if (Dispatcher.HasShutdownStarted) return;
-            foreach (var item in videos)
-                _browsePageCache?.InvalidateImage(item.Id);
-            // Exactly one gallery refresh after the entire marked batch.
-            await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                warmViewport: false);
+            if (refreshed.Count > 0 && _activeBrowseTier == tier &&
+                _browsePageCache is not null)
+            {
+                // A different image orientation can alter row height. Keep
+                // the user's exact gallery anchor; ordinary refreshes do
+                // not reflow or reindex the entire gallery.
+                var changesGeometry = ThumbnailRefreshProjection.ChangesLayout(
+                    _displayedBrowseIndex, refreshed);
+                if (changesGeometry) QueueGalleryAnchorRestore();
+
+                _browseIndex = ThumbnailRefreshProjection.Replace(
+                    _browseIndex, refreshed);
+                _displayedBrowseIndex = ThumbnailRefreshProjection.Replace(
+                    _displayedBrowseIndex, refreshed);
+                foreach (var entry in refreshed.Values)
+                    _dragPublishedImages[entry.ImageId] = entry;
+                _browsePageCache.ReplaceThumbnailEntries(refreshed, decoded);
+                BrowseSurface.ReplaceThumbnailEntries(refreshed);
+                if (changesGeometry)
+                {
+                    BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                        Math.Max(1, BrowseScrollViewer.ViewportHeight));
+                    RestorePendingGalleryAnchor();
+                }
+            }
             StatusText.Text = UiLanguage.Format(
-                "{0:N0} Videos geprüft, {1:N0} Fehler.",
-                videos.Length, failures.Count);
+                "{0:N0} Vorschaubilder aktualisiert, {1:N0} Fehler.",
+                refreshed.Count, failures.Count);
             if (failures.Count > 0)
                 PcasaDialog.Show(this,
                     string.Join("\n", failures.Take(12).Select(item =>
                         item.Name + ": " + item.Error)),
-                    UiLanguage.T(label),
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                    UiLanguage.T(label), MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { ShowFileActionError(ex); }
