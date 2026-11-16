@@ -40,12 +40,6 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         TaskScheduler.UnobservedTaskException += TaskScheduler_UnobservedTaskException;
 
-        // NetVips/libvips caches loaded source file handles on Windows.
-        // A gallery/viewer cache reference must never hold the original open
-        // while the manual editor atomically replaces it. Keep decoded and
-        // packed-thumbnail caches; disable only native cached file handles.
-        NetVips.Cache.MaxFiles = 0;
-
         // Always log the ACTUAL loaded executable and assembly before any
         // window, network or scheduler work. A copied/deleted installation
         // folder is NOT sufficient evidence of which process is running.
