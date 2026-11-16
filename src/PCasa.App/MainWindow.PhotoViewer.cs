@@ -203,6 +203,7 @@ public partial class MainWindow
         // viewer image, including keyboard/filmstrip navigation. No catalog
         // read or remote filesystem access is needed to choose applications.
         RefreshExternalEditorToolButtons(entry.ImageId, entry.FileName);
+        if (_cropToolsReady) UpdateEditControls();
         _viewerImageInfo = null;
         _viewerCachedCameraDetails = null;
         // Reserve this image identity before slow catalog metadata can
