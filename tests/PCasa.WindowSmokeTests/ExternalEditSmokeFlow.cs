@@ -89,10 +89,15 @@ internal static class ExternalEditSmokeFlow
             Directory.CreateDirectory(orphan);
             File.WriteAllText(Path.Combine(orphan, "stale.txt"), "stale");
             var newSession = ExternalEditTransaction.Begin(photo);
-            if (File.Exists(Path.Combine(orphan, "stale.txt")))
-                throw new Exception("Completed session trash was not cleared before reuse.");
+            // An unrelated abandoned export must not delay the P0 Begin.
+            // It is collected by the lower-priority cleanup path instead.
+            if (!File.Exists(Path.Combine(orphan, "stale.txt")))
+                throw new Exception("P0 editor launch performed background cleanup.");
             ExternalEditTransaction.Commit(newSession, null,
                 ExternalEditDecision.Cancel);
+            ExternalEditTransaction.CleanupCompletedWorkspaces();
+            if (File.Exists(Path.Combine(orphan, "stale.txt")))
+                throw new Exception("Orphan cleanup did not remove stale work.");
 
             // Real editor behavior: Topaz/PhotoCraft may keep photo.jpg
             // open even when PCasa's Cancel/Save button is pressed. A locked
