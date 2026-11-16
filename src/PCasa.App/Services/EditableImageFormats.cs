@@ -31,9 +31,15 @@ public static class EditableImageFormats
     {
         if (RawImageSource.IsPsdPath(path))
         {
-            // PSD must never be decoded/re-encoded through the flat pixel editor.
-            // A preview may be extracted, but the layered original stays intact.
-            _ = RawImageSource.Resolve(path);
+            // Verify the PSD header, never flatten or re-encode the layers.
+            // Thumbnail extraction is independent and may have to fall back.
+            using var psd = File.Open(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            Span<byte> signature = stackalloc byte[4];
+            if (psd.Read(signature) != signature.Length ||
+                signature[0] != (byte)'8' || signature[1] != (byte)'B' ||
+                signature[2] != (byte)'P' || signature[3] != (byte)'S')
+                throw new InvalidDataException("Ungültiger PSD-Dateikopf.");
             return;
         }
         if (!Supports(path))
