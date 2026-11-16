@@ -154,7 +154,8 @@ public partial class MainWindow
                 $"Priority={unresolved.Priority}; Step={unresolved.CompletedSteps}; " +
                 $"Error={unresolved.Error ?? "(no error recorded)"}");
         }
-        StartPendingTagDrain();
+        // Pending tag intents remain visible for manual reconciliation.
+        // Starting file writers automatically after restart is forbidden.
         // Unresolved legacy file-transfer intents remain stored, but must
         // not preempt imports with fresh P0 reconciliation packages. No
         // filesystem probe or transfer is performed merely by app startup.
