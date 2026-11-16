@@ -48,7 +48,7 @@ internal static class ExternalEditSmokeFlow
             if (ExternalEditTransaction.Commit(cancel, cancel.BackupPath,
                     ExternalEditDecision.Cancel) is not null ||
                 !File.ReadAllBytes(photo).SequenceEqual(original) ||
-                Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                Directory.Exists(cancel.DirectoryPath))
                 throw new Exception("Cancel failed to preserve original or clear the workspace.");
 
             // A named export as used by Topaz is equally valid.
@@ -61,7 +61,7 @@ internal static class ExternalEditSmokeFlow
                 !copy.EndsWith("-Kopie.jpg", StringComparison.OrdinalIgnoreCase) ||
                 File.ReadAllBytes(copy).SequenceEqual(original) ||
                 !File.ReadAllBytes(photo).SequenceEqual(original) ||
-                Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                Directory.Exists(copied.DirectoryPath))
                 throw new Exception("Save as Copy did not import a unique output and preserve original.");
 
             var save = ExternalEditTransaction.Begin(photo);
@@ -70,7 +70,7 @@ internal static class ExternalEditSmokeFlow
             var saved = ExternalEditTransaction.Commit(save, save.BackupPath,
                 ExternalEditDecision.Save, undoOptions: undoOptions);
             if (saved != photo || !File.ReadAllBytes(photo).SequenceEqual(edited) ||
-                Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                Directory.Exists(save.DirectoryPath))
                 throw new Exception("Save failed to commit working pixels or clear the workspace.");
             var history = new UndoHistoryService(undoOptions).GetVersions(photo);
             if (!history.Any(v => v.Sha256 == save.OriginalSha256 &&
@@ -82,7 +82,7 @@ internal static class ExternalEditSmokeFlow
                 throw new Exception("Unchanged workspace was incorrectly accepted as edited.");
             ExternalEditTransaction.Commit(unchanged, null,
                 ExternalEditDecision.Cancel);
-            if (Directory.Exists(ExternalEditTransaction.DirectoryPath))
+            if (Directory.Exists(unchanged.DirectoryPath))
                 throw new Exception("Unchanged workspace was not cleaned.");
 
             var orphan = ExternalEditTransaction.DirectoryPath;
@@ -93,6 +93,54 @@ internal static class ExternalEditSmokeFlow
                 throw new Exception("Completed session trash was not cleared before reuse.");
             ExternalEditTransaction.Commit(newSession, null,
                 ExternalEditDecision.Cancel);
+
+            // Real editor behavior: Topaz/PhotoCraft may keep photo.jpg
+            // open even when PCasa's Cancel/Save button is pressed. A locked
+            // work image must not roll back a COMMITTED decision, remove the
+            // manifest in an ambiguous way, crash focus activation, or block
+            // creation of a completely new session.
+            var lockedCancel = ExternalEditTransaction.Begin(photo);
+            using (var held = new FileStream(lockedCancel.BackupPath,
+                       FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                if (ExternalEditTransaction.Commit(lockedCancel, null,
+                    ExternalEditDecision.Cancel) is not null)
+                    throw new Exception("Locked Cancel unexpectedly returned a saved path.");
+                if (ExternalEditTransaction.FindPending() is not null)
+                    throw new Exception("Locked Cancel left an active manifest.");
+                if (!Directory.Exists(lockedCancel.DirectoryPath))
+                    throw new Exception("Locked image was unexpectedly deleted.");
+                var overlapping = ExternalEditTransaction.Begin(other);
+                if (overlapping.DirectoryPath == lockedCancel.DirectoryPath)
+                    throw new Exception("Two editor launches used the same working folder.");
+                ExternalEditTransaction.Commit(overlapping, null,
+                    ExternalEditDecision.Cancel);
+            }
+            ExternalEditTransaction.CleanupCompletedWorkspaces();
+            if (Directory.Exists(lockedCancel.DirectoryPath))
+                throw new Exception("Released editor file could not be cleaned later.");
+
+            // Saving may succeed while the editor still holds an ordinary
+            // read handle without FILE_SHARE_DELETE. This is NOT a Save error.
+            var lockedSave = ExternalEditTransaction.Begin(photo);
+            WriteJpeg(lockedSave.BackupPath, 77);
+            var expectedSaved = File.ReadAllBytes(lockedSave.BackupPath);
+            using (var held = new FileStream(lockedSave.BackupPath,
+                       FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                var target = ExternalEditTransaction.Commit(lockedSave,
+                    lockedSave.BackupPath, ExternalEditDecision.Save,
+                    undoOptions: undoOptions);
+                if (target != photo ||
+                    !File.ReadAllBytes(photo).SequenceEqual(expectedSaved) ||
+                    ExternalEditTransaction.FindPending() is not null)
+                    throw new Exception("Locked cleanup incorrectly failed a completed Save.");
+                var fresh = ExternalEditTransaction.Begin(other);
+                ExternalEditTransaction.Commit(fresh, null, ExternalEditDecision.Cancel);
+            }
+            ExternalEditTransaction.CleanupCompletedWorkspaces();
+            if (Directory.Exists(lockedSave.DirectoryPath))
+                throw new Exception("Deferred locked Save workspace not cleaned.");
 
             foreach (var extension in new[] { ".arw", ".nef", ".nrw", ".cr2",
                 ".cr3", ".dng", ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw" })
@@ -105,7 +153,7 @@ internal static class ExternalEditSmokeFlow
                 catch (NotSupportedException) { }
             }
             Console.WriteLine(
-                "PASS: Alpha.33 exclusive external session, working copy, recovery, Cancel/Copy/Save, Undo, cleanup, RAW.");
+                "PASS: Alpha.34 isolated external sessions, locked Cancel/Save, deferred cleanup, crash-safe commit, Copy, Undo, RAW.");
         }
         finally
         {
