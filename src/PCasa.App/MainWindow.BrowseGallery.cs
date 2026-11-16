@@ -120,6 +120,10 @@ public partial class MainWindow
         // and could starve reachable C: photos indefinitely. This migration
         // retains the journal identity/order and does not touch pending tags.
         var packageJournal = new DurablePackageJournal(_database);
+        var retiredFileJobs = packageJournal.RetireUnfinishedFileJobs();
+        if (retiredFileJobs > 0)
+            PCasaDiagnostics.WriteMessage("Scheduler.RestartFileWork",
+                retiredFileJobs + " alte Dateioperationen ohne Wiederaufnahme beendet.");
         packageJournal.UpgradeLegacyTagRecovery();
         // Legacy one-intent checks are not transfers. An unresolved attempt
         // is NOT a reason to create two new P0 jobs on every application
