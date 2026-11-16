@@ -887,5 +887,6 @@
   "Kopie konnte nicht katalogisiert werden.": "Could not index the copy.",
   "Externe Bearbeitung abschließen": "Complete external edit",
   "Externe Bearbeitung beendet: ": "External edit finished: ",
-  "Externe Bearbeitung bitte mit Abbrechen, Als Kopie speichern oder Speichern abschließen.": "Finish the external edit with Cancel, Save as Copy, or Save."
+  "Externe Bearbeitung bitte mit Abbrechen, Als Kopie speichern oder Speichern abschließen.": "Finish the external edit with Cancel, Save as Copy, or Save.",
+  "Externe Bearbeitung": "External editing"
 }
