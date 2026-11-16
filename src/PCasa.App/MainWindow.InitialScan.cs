@@ -20,6 +20,7 @@ public partial class MainWindow
     private int _initialScanTaskChecked;
     private bool _initialScanWorkerStarted;
     private bool _initialScanStopRequested;
+    private bool _initialScanResumeAfterExternalEdit;
     private CancellationTokenSource? _initialScanCancellation;
 
     private void QueuePendingInitialScans()
@@ -88,6 +89,14 @@ public partial class MainWindow
         finally
         {
             _initialScanPumpRunning = false;
+            // If external editing ended while this pump was still unwinding,
+            // a resume request must not be lost behind its running flag.
+            if (_initialScanResumeAfterExternalEdit &&
+                !_externalEditPauseActive && !Dispatcher.HasShutdownStarted)
+            {
+                _initialScanResumeAfterExternalEdit = false;
+                QueuePendingInitialScans();
+            }
             // Re-evaluate the ordinary monitor once after an import batch.
             // Failure or temporary unreachability must not strand other,
             // already-imported folders until a restart or watcher event.
