@@ -9,6 +9,7 @@ using System.Windows.Interop;
 using System.Windows.Threading;
 using System.ComponentModel;
 
+using PCasa.App.Data;
 using PCasa.App.Models;
 using PCasa.App.Services;
 
