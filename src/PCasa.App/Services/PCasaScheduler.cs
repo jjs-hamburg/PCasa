@@ -977,12 +977,21 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            // A durable step failing is not proof that the user's operation
-            // should be abandoned. Filesystem/network faults and old recipe
-            // limitations must remain recoverable, without holding all lower
-            // priority jobs hostage between bounded retries.
-            PCasaDiagnostics.Write("Scheduler.PackageDeferred:" + record.Key, ex);
-            journal.Defer(record.Key, package.CompletedSteps, ex.Message);
+            // An image edit is a session-bound original write, NOT a background
+            // replay recipe. On a sharing violation (or any failed edit), a
+            // fresh user Save must be possible after the error. Keep the
+            // failure and cursor for diagnostics, but never leave a deferred
+            // image-edit task that blocks the same image indefinitely.
+            if (record.Type == "image-edit-v1")
+            {
+                PCasaDiagnostics.Write("Scheduler.ImageEditFailed:" + record.Key, ex);
+                journal.SetState(record.Key, "failed", package.CompletedSteps, ex.Message);
+            }
+            else
+            {
+                PCasaDiagnostics.Write("Scheduler.PackageDeferred:" + record.Key, ex);
+                journal.Defer(record.Key, package.CompletedSteps, ex.Message);
+            }
             throw;
         }
         finally
