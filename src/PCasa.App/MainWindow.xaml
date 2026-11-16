@@ -2088,13 +2088,6 @@
                            Foreground="{DynamicResource PcasaMutedTextBrush}"
                            Text="{loc:Tr Key='0 Bilder'}" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock x:Name="TaskActivityText" Margin="0,0,18,0"
-                               VerticalAlignment="Center" MaxWidth="450"
-                               TextTrimming="CharacterEllipsis"
-                               Cursor="Hand" MouseLeftButtonUp="TaskActivityText_Click"
-                               Foreground="{DynamicResource PcasaTextBrush}"
-                               Text="{loc:Tr Key='Aufträge: Status wird geladen'}"
-                               ToolTip="{loc:Tr Key='Taskmanager öffnen'}"/>
                     <StackPanel x:Name="ThumbnailSizeToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,11,0">
                         <Viewbox Width="23" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailgröße'}">
                             <Canvas Width="24" Height="24">
