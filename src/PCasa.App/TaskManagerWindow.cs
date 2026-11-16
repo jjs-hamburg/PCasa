@@ -450,7 +450,8 @@ public sealed class TaskManagerWindow : Window
         var targetKey = target.Key;
         if (_moveGlobalTask is not null)
         {
-            var ordered = _all.Where(row => row.Status != "Abgeschlossen")
+            var ordered = _all.Where(row => row.Status != "Abgeschlossen" &&
+                !InformationalExternal(row))
                 .Select(row => new SchedulerTaskOrderItem(
                     row.Key, (SchedulerPriority)row.Priority)).ToArray();
             _ = PerformAsync(key, () => _moveGlobalTask(key, targetKey, ordered));
@@ -533,7 +534,8 @@ public sealed class TaskManagerWindow : Window
             // hidden task rows. The scheduler still receives the complete
             // unfiltered accepted order so invisible tasks keep their rank.
             var visible = _visible.Where(item =>
-                item.Status != "Abgeschlossen").ToArray();
+                item.Status != "Abgeschlossen" &&
+                !InformationalExternal(item)).ToArray();
             var globalIndex = Array.FindIndex(
                 visible, item => item.Key == row.Key);
             return globalIndex >= 0 && globalIndex + direction >= 0 &&
@@ -712,10 +714,12 @@ public sealed class TaskManagerWindow : Window
         if (_moveGlobalTask is not null)
         {
             var visible = _visible.Where(item =>
-                item.Status != "Abgeschlossen").ToArray();
+                item.Status != "Abgeschlossen" &&
+                !InformationalExternal(item)).ToArray();
             var index = Array.FindIndex(visible, item => item.Key == row.Key);
             var neighbor = visible[index + direction];
-            var accepted = _all.Where(item => item.Status != "Abgeschlossen")
+            var accepted = _all.Where(item => item.Status != "Abgeschlossen" &&
+                    !InformationalExternal(item))
                 .Select(item => new SchedulerTaskOrderItem(
                     item.Key, (SchedulerPriority)item.Priority)).ToArray();
             _ = PerformAsync(row.Key, () =>
