@@ -15,6 +15,7 @@ internal static class DurablePauseFlow
         {
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
+            ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -27,6 +28,63 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseImageEditFailureLifecycle(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "failed-image-save.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var successfulSteps = 0;
+        SchedulerTaskPackage BuildImageEdit(string key, string payload)
+        {
+            var package = new SchedulerTaskPackage(key);
+            package.AddStep(_ =>
+            {
+                if (payload == "locked")
+                    throw new IOException("Simulated Windows file sharing violation.");
+                successfulSteps++;
+                return Task.CompletedTask;
+            });
+            return package;
+        }
+
+        await using var scheduler = new PCasaScheduler();
+        scheduler.RegisterDurablePackageType("image-edit-v1", BuildImageEdit);
+        scheduler.EnableDurablePackages(database);
+
+        try
+        {
+            await scheduler.EnqueueDurableRecipeAsync(
+                "image:edit:first-locked", "image-edit-v1", "locked",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            throw new Exception("Test image edit unexpectedly succeeded.");
+        }
+        catch (IOException) { }
+
+        // Never leave a deferred first save which claims the image forever.
+        if (journal.Pending().Any(record => record.Key == "image:edit:first-locked"))
+            throw new Exception("Failed image save remained an active durable task.");
+        using (var db = database.OpenConnection())
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText =
+                "SELECT state FROM scheduler_packages WHERE package_key=$key;";
+            command.Parameters.AddWithValue("$key", "image:edit:first-locked");
+            if (!string.Equals(command.ExecuteScalar()?.ToString(),
+                    "failed", StringComparison.Ordinal))
+                throw new Exception("Failed image save lost its terminal audit record.");
+        }
+
+        // An explicit second Save is a NEW recipe. It must not be rejected
+        // by the previous failed identity or replay that original recipe.
+        await scheduler.EnqueueDurableRecipeAsync(
+            "image:edit:manual-retry", "image-edit-v1", "success",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        if (successfulSteps != 1 ||
+            journal.Pending().Any(record => record.Type == "image-edit-v1"))
+            throw new Exception("Fresh manual save did not recover after first lock.");
+        Console.WriteLine("PASS: Failed image save is terminal; next manual Save runs once.");
     }
 
     private static async Task ExerciseAutomaticControlPersistence(string dir)
