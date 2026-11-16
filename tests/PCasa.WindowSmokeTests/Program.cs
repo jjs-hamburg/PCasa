@@ -79,6 +79,14 @@ internal static class Program
             window.Width = 1500;
             Flush(window);
 
+            // Folder tree uses pixel rather than item-step scrolling, allowing
+            // precision touchpads to move in smaller increments. This must
+            // not alter the gallery's independent scrolling behavior.
+            var folderTree = (TreeView?)window.FindName("FoldersTree");
+            if (folderTree is null || ScrollViewer.GetCanContentScroll(folderTree))
+                throw new Exception("Folder tree did not enable fine pixel scrolling.");
+            Console.WriteLine("PASS: Folder tree uses pixel-based scrolling.");
+
             var menu = Descendants<Menu>(window).FirstOrDefault()
                 ?? throw new Exception("Main menu was not constructed.");
             var items = menu.Items.OfType<MenuItem>().ToArray();
