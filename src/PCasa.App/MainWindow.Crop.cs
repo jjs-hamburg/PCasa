@@ -382,6 +382,16 @@ public partial class MainWindow
 
     private bool ConfirmCropExit()
     {
+        // External original may already be modified on disk. A normal
+        // viewer close/navigate must not discard its recoverable snapshot.
+        if (_externalEditReview is not null)
+        {
+            PcasaDialog.Show(this, UiLanguage.T(
+                "Externe Bearbeitung bitte mit Abbrechen, Als Kopie speichern oder Speichern abschließen."),
+                UiLanguage.T("Externe Bearbeitung"),
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return false;
+        }
         // Saving is a durable manual job, not an editor modal state. The
         // already submitted recipe owns its pixels and continues after
         // closing the viewer; do not ask to discard those saved changes.

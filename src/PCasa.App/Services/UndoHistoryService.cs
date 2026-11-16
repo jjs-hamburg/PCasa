@@ -208,6 +208,75 @@ public sealed class UndoHistoryService
         }
     }
 
+    // External editors may have replaced the original BEFORE PCasa receives
+    // the Save decision. Register the verified pre-launch snapshot in the same
+    // Undo archive as normal JPEG edits; CaptureBeforeSave(original) would be
+    // incorrect because it would capture the already edited pixels.
+    public UndoVersion CaptureExternalOriginal(ExternalEditSnapshot snapshot,
+        CancellationToken token)
+    {
+        if (!IsEditableImage(snapshot.OriginalPath))
+            throw new NotSupportedException("Undo import is currently JPEG-only.");
+        lock (Gate)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!File.Exists(snapshot.BackupPath) ||
+                new FileInfo(snapshot.BackupPath).Length != snapshot.OriginalLength)
+                throw new IOException(UiLanguage.T("Externe Original-Sicherung fehlt."));
+            using (var input = File.OpenRead(snapshot.BackupPath))
+                if (!Convert.ToHexString(SHA256.HashData(input)).Equals(
+                        snapshot.OriginalSha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException(
+                        UiLanguage.T("Externe Original-Sicherung hat eine ungültige Prüfsumme."));
+            if (snapshot.OriginalLength > _options.MaximumBytes)
+                throw new IOException(UiLanguage.T("Die Undo-Kapazität ist kleiner als das Original."));
+
+            Directory.CreateDirectory(ArchiveRoot);
+            var id = snapshot.Id;
+            var data = Path.Combine(ArchiveRoot, id.ToString("N") + ".bin");
+            var meta = Path.Combine(ArchiveRoot, id.ToString("N") + ".json");
+            if (File.Exists(meta) && File.Exists(data))
+            {
+                var existing = JsonSerializer.Deserialize<UndoVersion>(
+                    File.ReadAllText(meta));
+                if (existing is not null && existing.Sha256 == snapshot.OriginalSha256 &&
+                    existing.SourcePath.Equals(snapshot.OriginalPath,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    IsVerifiedVersion(existing, token))
+                    return existing;
+                throw new IOException(UiLanguage.T("Undo-Eintrag der externen Bearbeitung ist beschädigt."));
+            }
+            var temp = data + ".tmp";
+            try
+            {
+                using (var input = File.OpenRead(snapshot.BackupPath))
+                using (var output = new FileStream(temp, FileMode.CreateNew,
+                           FileAccess.Write, FileShare.None))
+                {
+                    input.CopyTo(output);
+                    output.Flush(true);
+                }
+                token.ThrowIfCancellationRequested();
+                File.Move(temp, data);
+                var saved = new UndoVersion(id, snapshot.OriginalPath, data,
+                    DateTimeOffset.UtcNow, snapshot.OriginalLength,
+                    snapshot.OriginalSha256);
+                if (!IsVerifiedVersion(saved, token))
+                    throw new IOException(UiLanguage.T("Undo-Kopie der externen Bearbeitung ist ungültig."));
+                File.WriteAllText(meta, JsonSerializer.Serialize(saved));
+                Prune(protectedId: id);
+                return saved;
+            }
+            catch
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+                if (File.Exists(meta)) File.Delete(meta);
+                if (File.Exists(data)) File.Delete(data);
+                throw;
+            }
+        }
+    }
+
     private void Prune(Guid protectedId)
     {
         var versions = EnumerateVersions()

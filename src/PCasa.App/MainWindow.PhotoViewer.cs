@@ -195,6 +195,10 @@ public partial class MainWindow
                 new VideoPlayerWindow(video.LocalPath) { Owner = this }.Show();
             return;
         }
+        // Keep the external editor tool cards in sync with the actual
+        // viewer image, including keyboard/filmstrip navigation. No catalog
+        // read or remote filesystem access is needed to choose applications.
+        RefreshExternalEditorToolButtons(entry.ImageId, entry.FileName);
         _viewerImageInfo = null;
         _viewerCachedCameraDetails = null;
         // Reserve this image identity before slow catalog metadata can

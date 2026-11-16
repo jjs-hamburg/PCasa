@@ -6,13 +6,17 @@ namespace PCasa.App.Services;
 /// <summary>
 /// Configured independent applications, not PCasa plug-ins. No executable is
 /// installed or launched implicitly. Paths belong in the user's profile.
-/// A format selector accepts photo, video, *, or extensions (.jpg;.arw).
+/// A format selector accepts photo, video, *, or extensions (.jpg;.png).
+/// RAW is excluded even if a wildcard or explicit RAW extension is configured.
 /// </summary>
 public sealed record ExternalEditorProgram(
     string Name, string ExecutablePath, string Formats = "photo")
 {
     public bool Matches(string sourcePath)
     {
+        // RAW is viewable/catalogued but cannot be edited in this release.
+        // Reject BEFORE matching photo, wildcard or explicit extensions.
+        if (RawImageSource.IsRawPath(sourcePath)) return false;
         if (string.IsNullOrWhiteSpace(Name) ||
             string.IsNullOrWhiteSpace(ExecutablePath)) return false;
         var extension = Path.GetExtension(sourcePath);
@@ -81,59 +85,4 @@ public sealed class ExternalEditorSettings
 
     public IReadOnlyList<ExternalEditorProgram> ForFile(string path) =>
         Programs.Where(p => p.Matches(path)).ToArray();
-}
-
-/// <summary>
-/// A unique local working directory prevents any external application from
-/// changing PCasa's original (especially RAW/NAS files). Exports are imported
-/// only through the existing durable copy/package after explicit confirmation.
-/// </summary>
-public static class ExternalEditorWorkspace
-{
-    public static string Root => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PCasa", "ExternalEdits");
-
-    public static async Task<(string Folder, string WorkingCopy)> StageAsync(
-        string original,
-        IProgress<(long Done, long Total)>? progress = null,
-        CancellationToken cancellationToken = default)
-    {
-        var fullOriginal = Path.GetFullPath(original);
-        var folder = Path.Combine(Root, Guid.NewGuid().ToString("N"));
-        var workCopy = Path.Combine(folder, Path.GetFileName(fullOriginal));
-        await Task.Run(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Directory.CreateDirectory(folder);
-            try
-            {
-                using var input = new FileStream(fullOriginal, FileMode.Open,
-                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var output = new FileStream(workCopy, FileMode.CreateNew,
-                    FileAccess.Write, FileShare.None);
-                var total = input.Length;
-                long copied = 0;
-                var buffer = new byte[1024 * 1024];
-                while (true)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var n = input.Read(buffer, 0, buffer.Length);
-                    if (n == 0) break;
-                    output.Write(buffer, 0, n);
-                    copied += n;
-                    if ((copied & 0x3fffff) < n || copied == total)
-                        progress?.Report((copied, total));
-                }
-                output.Flush(true);
-            }
-            catch
-            {
-                try { Directory.Delete(folder, recursive: true); }
-                catch (IOException) { }
-                throw;
-            }
-        }, cancellationToken);
-        return (folder, workCopy);
-    }
 }

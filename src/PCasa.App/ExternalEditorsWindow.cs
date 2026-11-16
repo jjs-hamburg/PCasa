@@ -82,7 +82,7 @@ public sealed class ExternalEditorsWindow : Window
         AddField(right, UiLanguage.T("Dateiformate"), _formats);
         right.Children.Add(new TextBlock
         {
-            Text = UiLanguage.T("Beispiele: photo, video, *, .jpg;.png;.arw"),
+            Text = UiLanguage.T("Beispiele: photo, video, *, .jpg;.png"),
             TextWrapping = TextWrapping.Wrap,
             Foreground = Brushes.LightGray,
             Margin = new Thickness(0, 3, 0, 14)

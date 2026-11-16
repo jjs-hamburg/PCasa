@@ -521,6 +521,9 @@
                         <MenuItem x:Name="EditRestoreMenuItem"
                                   Header="{loc:Tr Key='Bild wiederherstellen'}"
                                   IsEnabled="False" Click="UndoRestore_Click"/>
+                        <MenuItem x:Name="EditUndoOptionsMenuItem"
+                                  Header="{loc:Tr Key='Undo-Einstellungen'}"
+                                  Click="UndoOptions_Click"/>
                     </MenuItem>
                     <MenuItem x:Name="AppearanceSettingsMenuItem" Header="{loc:Tr Key='Darstellung'}"
                               Margin="0,0,12,0" HorizontalAlignment="Left"
@@ -533,9 +536,9 @@
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
                         <MenuItem Header="{loc:Tr Key='GPX-Optionen'}" Click="GpxOptions_Click"/>
-                        <MenuItem Header="{loc:Tr Key='Bildbearbeitung'}">
-                            <MenuItem Header="{loc:Tr Key='Undo-Einstellungen'}" Click="UndoOptions_Click"/>
-                        </MenuItem>
+                        <MenuItem x:Name="ExternalEditorsOptionsMenuItem"
+                                  Header="{loc:Tr Key='Externe Programme verwalten'}"
+                                  Click="ExternalEditorsOptions_Click"/>
                         <MenuItem x:Name="TaskManagerMenuItem"
                                   Header="{loc:Tr Key='Taskmanager...'}"
                                   Click="TaskManagerMenu_Click"/>
@@ -953,10 +956,15 @@
                                                             CornerRadius="5,5,0,0"
                                                             BorderBrush="#565A60" BorderThickness="1,1,1,1"
                                                             Margin="1,0,1,0" Padding="11,7,11,8">
-                                                        <ContentPresenter ContentSource="Header"
-                                                                          TextElement.Foreground="{TemplateBinding Foreground}"
-                                                                          HorizontalAlignment="Center"
-                                                                          VerticalAlignment="Center"/>
+                                                        <!-- The TabControl theme overrides the implicit
+                                                             header foreground. Make the REAL glyphs
+                                                             explicitly light in every selection state. -->
+                                                        <TextBlock x:Name="TabCaption"
+                                                                   Text="{TemplateBinding Header}"
+                                                                   Foreground="#F3F3F3"
+                                                                   FontWeight="SemiBold"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"/>
                                                     </Border>
                                                     <ControlTemplate.Triggers>
                                                         <Trigger Property="IsSelected" Value="True">
@@ -966,6 +974,8 @@
                                                                     Value="#C4C7CA"/>
                                                             <Setter TargetName="TabChrome" Property="BorderThickness"
                                                                     Value="2,2,2,0"/>
+                                                            <Setter TargetName="TabCaption" Property="FontWeight" Value="Bold"/>
+                                                            <Setter TargetName="TabCaption" Property="Foreground" Value="#FFFFFF"/>
                                                             <Setter Property="FontWeight" Value="Bold"/>
                                                             <Setter Property="Foreground" Value="#FFFFFF"/>
                                                         </Trigger>
@@ -992,12 +1002,10 @@
                                 <WrapPanel x:Name="ViewerToolsList" HorizontalAlignment="Left"/>
                                 <StackPanel x:Name="ViewerAutoToolsList"
                                             Orientation="Horizontal" HorizontalAlignment="Left"/>
-                                <Button x:Name="ExternalEditQuickButton"
-                                        Content="{loc:Tr Key='Bearbeiten mit …'}"
-                                        Margin="2,12,2,2" Padding="10,6"
-                                        HorizontalAlignment="Stretch"
-                                        Click="ExternalEditQuick_Click"
-                                        ToolTip="{loc:Tr Key='Foto mit einem externen Programm bearbeiten'}"/>
+                                <!-- The configured editors use the same icon/card geometry
+                                     as Crop and Straighten. No generic launch dropdown. -->
+                                <WrapPanel x:Name="ExternalEditorToolsList"
+                                           HorizontalAlignment="Left" Margin="0,9,0,0"/>
                             </StackPanel>
                             <StackPanel x:Name="ViewerPanelLight" Visibility="Collapsed" Margin="1,6,0,0">
 <Grid x:Name="ViewerBrightnessOptions" Margin="0,5,0,6">
