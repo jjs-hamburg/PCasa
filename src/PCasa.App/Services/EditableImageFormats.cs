@@ -19,12 +19,23 @@ public static class EditableImageFormats
         };
 
     public static bool Supports(string path)
-        => Extensions.Contains(Path.GetExtension(path)) &&
+        => !RawImageSource.IsPsdPath(path) &&
+           Extensions.Contains(Path.GetExtension(path)) &&
            !RawImageSource.IsRawPath(path) &&
            !VideoFormats.IsVideo(path);
 
+    public static bool SupportsExternalResult(string path) =>
+        Supports(path) || RawImageSource.IsPsdPath(path);
+
     public static void ValidateStillImage(string path)
     {
+        if (RawImageSource.IsPsdPath(path))
+        {
+            // PSD must never be decoded/re-encoded through the flat pixel editor.
+            // A preview may be extracted, but the layered original stays intact.
+            _ = RawImageSource.Resolve(path);
+            return;
+        }
         if (!Supports(path))
             throw new NotSupportedException(
                 UiLanguage.T("Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
