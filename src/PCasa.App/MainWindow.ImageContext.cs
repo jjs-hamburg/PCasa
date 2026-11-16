@@ -43,6 +43,18 @@ public partial class MainWindow
                 : "Vorschaubild aktualisieren",
                 () => _ = RefreshThumbnailsAsync(captured));
         }
+        // Panorama is a multi-selection action only. The menu item does not
+        // exist when no panorama-capable program was configured.
+        if (thumbnailIds.Length >= 2 && _externalEditors.ForPanorama().Count > 0)
+        {
+            var selected = thumbnailIds.ToHashSet();
+            var ordered = _displayedBrowseIndex
+                .Where(item => selected.Contains(item.ImageId))
+                .Select(item => item.ImageId).ToArray();
+            if (ordered.Length >= 2)
+                AddContextAction(menu, "Panorama erstellen",
+                    () => _ = StartPanoramaSelectionAsync(ordered));
+        }
         var editorSource = CachedExternalEditorSource(id);
         // RAW is for viewing/cataloguing, not editing. Hide the entire menu.
         if (editorSource is not null && !RawImageSource.IsRawPath(editorSource))
