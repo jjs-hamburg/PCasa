@@ -110,6 +110,16 @@ internal static class CropFlow
                 "-GPSLongitudeRef=E", "-Keywords=PCasaCropSmoke", path);
             var original = File.ReadAllBytes(path);
 
+            // Alpha.35: verifying an ordinary JPEG's still-image format must
+            // NOT leave a native libvips loader holding the source open before
+            // Windows File.Replace. A fresh exclusive handle is a direct
+            // regression check for that particular failure path.
+            EditableImageFormats.ValidateStillImage(path);
+            using (var exclusive = new FileStream(path, FileMode.Open,
+                       FileAccess.ReadWrite, FileShare.None))
+                if (exclusive.Length != original.Length)
+                    throw new Exception("Still-image format verification changed source size.");
+
             // Alpha.35: the forensic probe MUST detect a held source handle
             // and must never alter or close that handle. Windows Restart
             // Manager may or may not identify its owner (especially on SMB).
