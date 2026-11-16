@@ -697,6 +697,14 @@ public partial class MainWindow
         {
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
+            // If a Save appears to "remove" the photo, record whether it
+            // disappeared from the catalog index or only from the viewer.
+            // This is a read-only check of the index already in memory.
+            if (!_browseIndex.Any(entry => entry.ImageId == review.ImageId))
+                PCasaDiagnostics.WriteMessage("ExternalEdit.GalleryVisibility",
+                    $"Saved={original}; ImageId={review.ImageId}; " +
+                    $"InPublishedIndex=false; ViewerOpen={_viewerOpen}; " +
+                    $"CurrentViewerId={_viewerImageInfo?.Id}");
             if (_viewerOpen && _viewerImageInfo?.Id == review.ImageId)
             {
                 // The result has already been decoded for the review. Do not
