@@ -85,7 +85,16 @@ public partial class MainWindow
             _backgroundDebounceTimer?.Start();
         // A yielded first import must be re-admitted only AFTER the lease
         // has been released. Do not silently strand its saved file cursor.
-        if (!Dispatcher.HasShutdownStarted) QueuePendingInitialScans();
+        if (!Dispatcher.HasShutdownStarted)
+        {
+            if (_initialScanPumpRunning)
+                _initialScanResumeAfterExternalEdit = true;
+            else
+            {
+                _initialScanResumeAfterExternalEdit = false;
+                QueuePendingInitialScans();
+            }
+        }
         _scheduler.NotifyTaskViewChanged();
     }
     // Human-readable reason when Taskmanager has no actionable work.
