@@ -11,6 +11,7 @@ public partial class MainWindow
     private bool _panoramaImportRunning;
     private bool _panoramaLaunchPending;
     private bool _panoramaActivationHooked;
+    private DateTime _panoramaLastResultDialogUtc = DateTime.MinValue;
 
     private async Task StartPanoramaSelectionAsync(long[] imageIds)
     {
@@ -169,8 +170,30 @@ public partial class MainWindow
         try
         {
             var resultPath = await Task.Run(() => PanoramaTransaction.FindResult(session));
-            if (resultPath is null || !ReferenceEquals(_panoramaSession, session))
-                return;
+            if (!ReferenceEquals(_panoramaSession, session)) return;
+            if (resultPath is null)
+            {
+                // Autopano's output directory is user-controlled. Do not
+                // search arbitrary folders or invent a destination. On
+                // returning to PCasa, choose the actual rendered result.
+                // A canceled chooser leaves the session intact for the next
+                // user return, but must not immediately reopen on activation.
+                if (DateTime.UtcNow - _panoramaLastResultDialogUtc <
+                    TimeSpan.FromSeconds(2)) return;
+                var picker = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = UiLanguage.T("Panoramaergebnis auswählen"),
+                    Filter = "Bilder|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd|Alle Dateien|*.*",
+                    CheckFileExists = true,
+                    Multiselect = false
+                };
+                try
+                {
+                    if (picker.ShowDialog(this) != true) return;
+                    resultPath = picker.FileName;
+                }
+                finally { _panoramaLastResultDialogUtc = DateTime.UtcNow; }
+            }
             var key = "panorama:import:" + Guid.NewGuid().ToString("N");
             BeginVisibleManualOperation(key, UiLanguage.T("Panorama erstellen"), 100);
             string target;
@@ -179,11 +202,16 @@ public partial class MainWindow
                 target = await _scheduler.RunAsync(key,
                     SchedulerPriority.ManualAction, token =>
                     {
-                        var file = PanoramaTransaction.Import(session, resultPath, token,
+                        var actualResult = Path.GetDirectoryName(resultPath)!.Equals(
+                                session.Directory, StringComparison.OrdinalIgnoreCase)
+                            ? resultPath
+                            : PanoramaTransaction.StageExternalResult(
+                                session, resultPath, token);
+                        var file = PanoramaTransaction.Import(session, actualResult, token,
                             (completed, total) => _scheduler.ReportProgress(key,
                                 UiLanguage.T("Panorama erstellen"),
                                 total > 0 ? (int)(100.0 * completed / total) : 100,
-                                100, resultPath));
+                                100, actualResult));
                         var monitored = _folderRepository.GetAll().FirstOrDefault(root =>
                             session.Sources[0].StartsWith(
                                 Path.TrimEndingDirectorySeparator(root.LocalPath) +
