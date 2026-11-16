@@ -115,10 +115,13 @@ internal static class CropFlow
             // Windows File.Replace. A fresh exclusive handle is a direct
             // regression check for that particular failure path.
             EditableImageFormats.ValidateStillImage(path);
+            var testedDimensions = EditableImageFormats.Dimensions(path);
+            if (testedDimensions != (480, 320))
+                throw new Exception("JPEG dimensions verification lost physical pixel dimensions.");
             using (var exclusive = new FileStream(path, FileMode.Open,
                        FileAccess.ReadWrite, FileShare.None))
                 if (exclusive.Length != original.Length)
-                    throw new Exception("Still-image format verification changed source size.");
+                    throw new Exception("Still-image format/dimensions probe kept the JPEG locked.");
 
             // Alpha.35: the forensic probe MUST detect a held source handle
             // and must never alter or close that handle. Windows Restart
