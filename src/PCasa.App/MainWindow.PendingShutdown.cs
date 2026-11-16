@@ -17,8 +17,9 @@ public partial class MainWindow
             var tagDrafts = _tagDraft.Snapshot();
             var editId = _photoEditSession is { HasChanges: true } edit
                 ? (long?)edit.ImageId : null;
-            var pending = await Task.Run(() =>
-                SnapshotShutdownOperations(tagDrafts, editId));
+            // Query only the local SQLite journal/catalog. No network image
+            // reads are performed. The idle Close() path remains synchronous.
+            var pending = SnapshotShutdownOperations(tagDrafts, editId);
             if (_panoramaSession is { } panorama)
                 pending.Add(new ShutdownPendingOperation("panorama:active",
                     UiLanguage.T("Panorama erstellen"), UiLanguage.T("Läuft"),
