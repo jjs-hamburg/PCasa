@@ -26,6 +26,7 @@ public partial class MainWindow
     {
         _scheduler.NotifyTaskViewChanged();
         if (!_updateDownloadActive && !_folderManagerOpen && !_initialScanPumpRunning &&
+            !_externalEditPauseActive &&
             !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
     }
@@ -38,7 +39,7 @@ public partial class MainWindow
         try
         {
             while (!_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
-                   !_folderManagerOpen && !_manualFileTransferActive)
+                   !_externalEditPauseActive && !_folderManagerOpen && !_manualFileTransferActive)
             {
                 // A manual scan already in progress owns the foreground job.
                 // Its finally block will resume pending initial imports.
@@ -265,7 +266,8 @@ public partial class MainWindow
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
             UpdateManualScanControls();
             RefreshFolderStatusVisuals();
-            if (_backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
+            if (!_externalEditPauseActive && _backgroundPending.Count > 0 &&
+                _backgroundScanSettings?.Enabled == true)
                 _backgroundDebounceTimer?.Start();
         }
     }
