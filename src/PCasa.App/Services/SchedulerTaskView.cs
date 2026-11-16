@@ -274,8 +274,7 @@ public sealed class SchedulerTaskView
                             ExternalEditTransaction.DirectoryPath,
                             UiLanguage.Format("{0:N0} Ordner/Dateien", orphanCount),
                             "Wartet",
-                            UiLanguage.T("Dateien eines abgeschlossenen Editors sind noch gesperrt. " +
-                                "Die Speicherung ist davon nicht betroffen; beim nächsten Start erneut prüfen."),
+                            UiLanguage.T("Dateien eines abgeschlossenen Editors sind noch gesperrt. Die Speicherung ist davon nicht betroffen; beim nächsten Start erneut prüfen."),
                             4, long.MaxValue - 1,
                             false, false, false, false));
                 }
@@ -291,9 +290,8 @@ public sealed class SchedulerTaskView
                     job.Key.StartsWith("external:", StringComparison.Ordinal) &&
                     !job.Key.StartsWith("external:session:", StringComparison.Ordinal) &&
                     (job.State is SchedulerJobState.Queued or SchedulerJobState.Running
-                        or SchedulerJobState.YieldRequested ||
-                     (showCompleted && job.State is SchedulerJobState.Completed or
-                         SchedulerJobState.Failed))))
+                        or SchedulerJobState.YieldRequested or SchedulerJobState.Failed ||
+                     (showCompleted && job.State == SchedulerJobState.Completed))))
                 {
                     var label = job.Key.StartsWith("external:stage:", StringComparison.Ordinal)
                         ? "Arbeitskopie erstellen"
