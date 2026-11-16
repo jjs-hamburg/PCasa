@@ -314,18 +314,32 @@ public partial class MainWindow
                         "Programmdatei nicht gefunden: ") + editor.ExecutablePath);
                 // The EXE receives ONLY the local fixed working image.
                 // Never use the gallery folder as a process work directory.
-                var launch = new ProcessStartInfo
-                {
-                    FileName = editor.ExecutablePath,
-                    WorkingDirectory = snapshot.DirectoryPath,
-                    UseShellExecute = false
-                };
-                launch.ArgumentList.Add(snapshot.BackupPath);
                 await Task.Run(() =>
                 {
-                    using var launched = Process.Start(launch)
-                        ?? throw new IOException(UiLanguage.T(
-                            "Das externe Programm konnte nicht gestartet werden."));
+                    var launch = BuildExternalEditorStartInfo(
+                        editor.ExecutablePath, snapshot.DirectoryPath,
+                        snapshot.BackupPath, elevated: false);
+                    try
+                    {
+                        using var launched = Process.Start(launch)
+                            ?? throw new IOException(UiLanguage.T(
+                                "Das externe Programm konnte nicht gestartet werden."));
+                    }
+                    catch (Win32Exception ex) when (ex.NativeErrorCode == 740)
+                    {
+                        // ERROR_ELEVATION_REQUIRED: the external program's
+                        // manifest/compatibility settings require admin rights.
+                        // Only the Windows shell can present the genuine UAC
+                        // dialog; do not elevate PCasa or disable UAC.
+                        // A declined UAC prompt propagates as Win32 error 1223
+                        // and the existing caller cancels this staging session.
+                        using var launched = Process.Start(
+                            BuildExternalEditorStartInfo(
+                                editor.ExecutablePath, snapshot.DirectoryPath,
+                                snapshot.BackupPath, elevated: true))
+                            ?? throw new IOException(UiLanguage.T(
+                                "Das externe Programm konnte nicht gestartet werden."));
+                    }
                     // Deliberately NO WaitForExit: Topaz may use a launcher,
                     // a secondary process or a pre-existing instance.
                 });
@@ -369,6 +383,24 @@ public partial class MainWindow
             ShowFileActionError(ex);
         }
         finally { _externalEditLaunchPending = false; }
+    }
+
+    // The same fixed local work copy is passed to both launch modes.
+    // Ordinary editors keep using CreateProcess without any UAC prompt.
+    // The elevated fallback uses ShellExecute/runas only on Win32 error 740.
+    private static ProcessStartInfo BuildExternalEditorStartInfo(
+        string executablePath, string workDirectory, string imagePath,
+        bool elevated)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = executablePath,
+            WorkingDirectory = workDirectory,
+            UseShellExecute = elevated,
+            Verb = elevated ? "runas" : string.Empty
+        };
+        info.ArgumentList.Add(imagePath);
+        return info;
     }
 
     private async Task PresentExternalResultAsync(ExternalEditReview review)
