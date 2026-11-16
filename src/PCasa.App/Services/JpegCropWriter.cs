@@ -141,7 +141,7 @@ public static class JpegCropWriter
                     throw;
                 }
                 token.ThrowIfCancellationRequested();
-                try { File.Replace(staged, fullPath, null); }
+                try { ReplaceWithSharingRetry(staged, fullPath, token); }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     FileLockDiagnostics.ReportFailure("Image.Edit.Replace:" +
@@ -161,6 +161,37 @@ public static class JpegCropWriter
             try { if (File.Exists(staged)) File.Delete(staged); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    // A foreground save must tolerate a short-lived Windows sharing lock
+    // left by an overlapping reader (native codec, antivirus, thumbnailer).
+    // Reuse the SAME fully validated staged image and the SAME Undo snapshot;
+    // NEVER re-run edits or create a second durable file write. An actual
+    // persistent foreign lock still fails after a bounded, cancelable wait.
+    private static void ReplaceWithSharingRetry(string staged, string original,
+        CancellationToken token)
+    {
+        const int maxRetries = 16;
+        for (var retry = 0; ; retry++)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                File.Replace(staged, original, null);
+                if (retry > 0)
+                    PCasaDiagnostics.WriteMessage("Image.Edit.SharingRetry",
+                        $"File.Replace succeeded after {retry} retry(s): {original}");
+                return;
+            }
+            catch (IOException ex) when (
+                (ex.HResult & 0xFFFF) is 32 or 33 && retry < maxRetries)
+            {
+                var delay = TimeSpan.FromMilliseconds(Math.Min(400, 100 + retry * 35));
+                // The scheduler owns this worker; never delay the WPF UI.
+                if (token.WaitHandle.WaitOne(delay))
+                    token.ThrowIfCancellationRequested();
+            }
         }
     }
 
