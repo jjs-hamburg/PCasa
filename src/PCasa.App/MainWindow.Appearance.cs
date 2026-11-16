@@ -167,7 +167,7 @@ public partial class MainWindow
     private bool _shutdownFinished;
     private ShutdownProgressWindow? _shutdownProgressWindow;
 
-    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
         if (_shutdownFinished)
         {
