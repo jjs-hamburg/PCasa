@@ -377,7 +377,7 @@ public sealed class TaskManagerWindow : Window
     private void TaskMouseDown(object sender, MouseButtonEventArgs e)
     {
         var row = TaskAt(e.OriginalSource as DependencyObject);
-        _dragOrigin = row is not null &&
+        _dragOrigin = row is not null && !InformationalExternal(row) &&
             row.Status != "Abgeschlossen" &&
             ( _moveGlobalTask is not null ||
               (row.Movable && HasReorderPeer(row) &&
@@ -424,6 +424,7 @@ public sealed class TaskManagerWindow : Window
         var target = TaskAt(e.OriginalSource as DependencyObject);
         var source = _all.FirstOrDefault(row => row.Key == key);
         e.Effects = !_acting && source is not null &&
+            !InformationalExternal(source) && !InformationalExternal(target) &&
             target is not null && source.Key != target.Key &&
             source.Status != "Abgeschlossen" &&
             target.Status != "Abgeschlossen" &&
@@ -449,7 +450,8 @@ public sealed class TaskManagerWindow : Window
         var targetKey = target.Key;
         if (_moveGlobalTask is not null)
         {
-            var ordered = _all.Where(row => row.Status != "Abgeschlossen")
+            var ordered = _all.Where(row => row.Status != "Abgeschlossen" &&
+                !InformationalExternal(row))
                 .Select(row => new SchedulerTaskOrderItem(
                     row.Key, (SchedulerPriority)row.Priority)).ToArray();
             _ = PerformAsync(key, () => _moveGlobalTask(key, targetKey, ordered));
@@ -468,6 +470,12 @@ public sealed class TaskManagerWindow : Window
                 return true;
             }));
     }
+
+    private static bool InformationalExternal(TaskRow? row)
+        => row is not null &&
+           (row.Key.StartsWith("external:session:", StringComparison.Ordinal) ||
+            row.Key == "external:cleanup:pending" ||
+            row.Key.StartsWith("external:cleanup:", StringComparison.Ordinal));
 
     private static bool IsInitialImport(string key)
         => key.StartsWith("initial:", StringComparison.Ordinal);
@@ -518,6 +526,7 @@ public sealed class TaskManagerWindow : Window
 
     private bool CanMove(TaskRow row, int direction)
     {
+        if (InformationalExternal(row)) return false;
         if (_moveGlobalTask is not null)
         {
             if (row.Status == "Abgeschlossen") return false;
@@ -525,7 +534,8 @@ public sealed class TaskManagerWindow : Window
             // hidden task rows. The scheduler still receives the complete
             // unfiltered accepted order so invisible tasks keep their rank.
             var visible = _visible.Where(item =>
-                item.Status != "Abgeschlossen").ToArray();
+                item.Status != "Abgeschlossen" &&
+                !InformationalExternal(item)).ToArray();
             var globalIndex = Array.FindIndex(
                 visible, item => item.Key == row.Key);
             return globalIndex >= 0 && globalIndex + direction >= 0 &&
@@ -592,11 +602,13 @@ public sealed class TaskManagerWindow : Window
         var row = Selection;
         _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
         _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
-        _startNow.IsEnabled = !_acting && row is { Status: "Wartet" } &&
+        _startNow.IsEnabled = !_acting && !InformationalExternal(row) &&
+            row is { Status: "Wartet" } &&
             (_startAutomaticNow is not null || row.Durable);
         // Resume is no longer disguised as "Neu starten"; that button
         // means retry after an actual failure, never resume a paused scan.
-        _restart.IsEnabled = !_acting && row is { Status: "Fehler", Retryable: true };
+        _restart.IsEnabled = !_acting && !InformationalExternal(row) &&
+            row is { Status: "Fehler", Retryable: true };
         var canResume = row is { Status: "Angehalten" } &&
             (row.Durable || _resumePausedTask is not null ||
              IsInitialImport(row.Key) && _resumeAutomaticScan is not null);
@@ -605,12 +617,14 @@ public sealed class TaskManagerWindow : Window
              (IsInitialImport(row.Key) ||
               row.Key.StartsWith("automatic:", StringComparison.Ordinal)));
         _pauseResume.Content = UiLanguage.T(canResume ? "Fortsetzen" : "Pausieren");
-        _pauseResume.IsEnabled = !_acting && (canResume || canPause);
+        _pauseResume.IsEnabled = !_acting && !InformationalExternal(row) &&
+            (canResume || canPause);
         _pauseResume.ToolTip = UiLanguage.T(
             canResume ? "Erstimport mit gespeichertem Fortschritt fortsetzen" :
             canPause ? "Erstimport am nächsten sicheren Punkt pausieren" :
             "Für diese Auftragsart ist sicheres Pausieren noch nicht verfügbar");
-        _delete.IsEnabled = !_acting && row is { Deletable: true };
+        _delete.IsEnabled = !_acting && !InformationalExternal(row) &&
+            row is { Deletable: true };
         const string moveInfo =
             "Aufträge frei verschieben. Die neue Reihenfolge wird im Scheduler gespeichert; " +
             "laufende Dateischreibvorgänge geben ihren Platz am nächsten sicheren Schritt frei.";
@@ -700,10 +714,12 @@ public sealed class TaskManagerWindow : Window
         if (_moveGlobalTask is not null)
         {
             var visible = _visible.Where(item =>
-                item.Status != "Abgeschlossen").ToArray();
+                item.Status != "Abgeschlossen" &&
+                !InformationalExternal(item)).ToArray();
             var index = Array.FindIndex(visible, item => item.Key == row.Key);
             var neighbor = visible[index + direction];
-            var accepted = _all.Where(item => item.Status != "Abgeschlossen")
+            var accepted = _all.Where(item => item.Status != "Abgeschlossen" &&
+                    !InformationalExternal(item))
                 .Select(item => new SchedulerTaskOrderItem(
                     item.Key, (SchedulerPriority)item.Priority)).ToArray();
             _ = PerformAsync(row.Key, () =>

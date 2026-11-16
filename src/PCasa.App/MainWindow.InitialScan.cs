@@ -20,12 +20,14 @@ public partial class MainWindow
     private int _initialScanTaskChecked;
     private bool _initialScanWorkerStarted;
     private bool _initialScanStopRequested;
+    private bool _initialScanResumeAfterExternalEdit;
     private CancellationTokenSource? _initialScanCancellation;
 
     private void QueuePendingInitialScans()
     {
         _scheduler.NotifyTaskViewChanged();
         if (!_updateDownloadActive && !_folderManagerOpen && !_initialScanPumpRunning &&
+            !_externalEditPauseActive &&
             !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
     }
@@ -38,7 +40,7 @@ public partial class MainWindow
         try
         {
             while (!_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
-                   !_folderManagerOpen && !_manualFileTransferActive)
+                   !_externalEditPauseActive && !_folderManagerOpen && !_manualFileTransferActive)
             {
                 // A manual scan already in progress owns the foreground job.
                 // Its finally block will resume pending initial imports.
@@ -87,6 +89,14 @@ public partial class MainWindow
         finally
         {
             _initialScanPumpRunning = false;
+            // If external editing ended while this pump was still unwinding,
+            // a resume request must not be lost behind its running flag.
+            if (_initialScanResumeAfterExternalEdit &&
+                !_externalEditPauseActive && !Dispatcher.HasShutdownStarted)
+            {
+                _initialScanResumeAfterExternalEdit = false;
+                QueuePendingInitialScans();
+            }
             // Re-evaluate the ordinary monitor once after an import batch.
             // Failure or temporary unreachability must not strand other,
             // already-imported folders until a restart or watcher event.
@@ -163,7 +173,8 @@ public partial class MainWindow
                 }
                 shownWindow.UpdateScan(scan,
                     showWhileManualWaiting: ScanMayReplaceWaitingManualPresentation(),
-                    scanOwner: scanOwner);
+                    scanOwner: scanOwner,
+                    phaseOverride: "Erstimport – Dateien einlesen");
                 ShowScannedPhotoFolder(scan);
                 // While a queued Tag series shares this presenter, the
                 // dialog itself owns the status-bar text as well.
@@ -265,7 +276,8 @@ public partial class MainWindow
             _isScanning = _backgroundWorkerRunning || _manualScanRunning;
             UpdateManualScanControls();
             RefreshFolderStatusVisuals();
-            if (_backgroundPending.Count > 0 && _backgroundScanSettings?.Enabled == true)
+            if (!_externalEditPauseActive && _backgroundPending.Count > 0 &&
+                _backgroundScanSettings?.Enabled == true)
                 _backgroundDebounceTimer?.Start();
         }
     }

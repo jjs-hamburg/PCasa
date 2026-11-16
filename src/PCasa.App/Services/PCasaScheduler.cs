@@ -144,6 +144,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // source/scanning work suspended only for its synchronous drag lifetime.
     // This lease belongs to the ONE scheduler; no second job/queue is built.
     private int _nativeDragInteractionCount;
+    private int _externalEditInteractionCount;
 
     private sealed class NativeDragLease(PCasaScheduler owner) : IDisposable
     {
@@ -156,8 +157,33 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // Reuse the same scheduler admission/yield gate as native drag: suspend
     // P2-P4 source/import lanes while leaving viewer/gallery read lanes alive.
     // The lease lives until PCasa commits Cancel, Save Copy or Save.
+    private sealed class ExternalEditLease(PCasaScheduler owner) : IDisposable
+    {
+        private PCasaScheduler? _owner = owner;
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.EndExternalEditInteraction();
+    }
+
     public IDisposable BeginExternalEditInteraction()
-        => BeginNativeDragInteraction();
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _externalEditInteractionCount++;
+            SignalController();
+        }
+        return new ExternalEditLease(this);
+    }
+
+    private void EndExternalEditInteraction()
+    {
+        lock (_gate)
+        {
+            if (_externalEditInteractionCount == 0) return;
+            if (--_externalEditInteractionCount != 0) return;
+            SignalController();
+        }
+    }
 
     public IDisposable BeginNativeDragInteraction()
     {
@@ -654,9 +680,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         if (!((RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
-                              (_nativeDragInteractionCount > 0 &&
-                               lane is LaneBackground or LaneInitialImport or
-                                   LaneUserAction or LaneSourceProbe) ||
+                              ((_nativeDragInteractionCount > 0 &&
+                                lane is LaneBackground or LaneInitialImport or
+                                    LaneUserAction or LaneSourceProbe) ||
+                               (_externalEditInteractionCount > 0 &&
+                                lane is LaneBackground or LaneInitialImport or
+                                    LaneManualScan or LaneUserAction or LaneSourceProbe)) ||
                               (highest is not null && Precedes(highest, running))))
                             continue;
                         running.YieldRequested = true;
@@ -1519,8 +1548,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (_restoringDurablePackages &&
             lane is LaneManual or LaneManualScan or LaneManualBackup or LaneManualSourceProbe)
             return null;
-        if (_nativeDragInteractionCount > 0 &&
-            lane is LaneBackground or LaneInitialImport or LaneUserAction or LaneSourceProbe)
+        if ((_nativeDragInteractionCount > 0 &&
+                                lane is LaneBackground or LaneInitialImport or
+                                    LaneUserAction or LaneSourceProbe) ||
+                               (_externalEditInteractionCount > 0 &&
+                                lane is LaneBackground or LaneInitialImport or
+                                    LaneManualScan or LaneUserAction or LaneSourceProbe))
             return null;
 
         // P4 is pure idle work. All waiting/running P0-P3 requests exclude

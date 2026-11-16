@@ -396,6 +396,16 @@ public partial class MainWindow
         UpdateEditControls();
     }
 
+
+    // Include queued, parked and restored durable writes, not merely the
+    // current viewer's in-memory pending IDs. Two edits of the same original
+    // must never compete in File.Replace while either receipt is unresolved.
+    private Task<bool> HasUnfinishedImageEditAsync(long imageId)
+        => Task.Run(() => new DurablePackageJournal(_database).Pending()
+            .Where(item => item.Type == "image-edit-v1")
+            .Any(item => JsonSerializer.Deserialize<EditWriteRecipe>(
+                item.Payload)?.ImageId == imageId));
+
     private async void SaveEdits(bool asCopy = false)
     {
         if (_externalEditReview is not null)
@@ -430,6 +440,9 @@ public partial class MainWindow
             asCopy ? 2 : 1);
         try
         {
+            if (await HasUnfinishedImageEditAsync(info.Id))
+                throw new InvalidOperationException(UiLanguage.T(
+                    "Für dieses Bild ist bereits ein Speicherauftrag vorgemerkt. Bitte dessen Status im Taskmanager prüfen; keinen zweiten Auftrag starten."));
             if (asCopy)
             {
                 // A NAS File.Exists must never block the WPF dispatcher.

@@ -234,7 +234,15 @@ public partial class MainWindow
         Activated += async (_, _) =>
         {
             if (_externalEditReview is { Ready: true, Busy: false } review)
-                await PresentExternalResultAsync(review);
+            {
+                try { await PresentExternalResultAsync(review); }
+                catch (Exception ex)
+                {
+                    // Never let an async-void focus callback crash PCasa.
+                    PCasaDiagnostics.Write("ExternalEdit.Activation", ex);
+                    StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
+                }
+            }
         };
     }
 
@@ -254,12 +262,15 @@ public partial class MainWindow
             if (editor is null || !editor.Matches(source))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Dieses Programm ist für das Dateiformat nicht konfiguriert."));
-            if (_cropSavePending || _pendingEditImageIds.Contains(id))
+            if (_cropSavePending || _pendingEditImageIds.Contains(id) ||
+                await HasUnfinishedImageEditAsync(id))
                 throw new InvalidOperationException(UiLanguage.T(
-                    "Für dieses Bild wird noch ein Speicherauftrag ausgeführt."));
+                    "Für dieses Bild ist ein Speicherauftrag noch nicht abgeschlossen. Bitte im Taskmanager prüfen."));
             if (_viewerOpen && !ConfirmCropExit()) return;
 
             EnsureExternalReviewActivationHook();
+            StatusText.Text = UiLanguage.T(
+                "Externe Bearbeitung: automatische Einlesevorgänge anhalten …");
             SuspendSchedulerForExternalEdit();
             // Reopening the same image after a crash restores the durable
             // review. A different image is blocked by Begin's manifest gate.
@@ -306,7 +317,7 @@ public partial class MainWindow
                 var launch = new ProcessStartInfo
                 {
                     FileName = editor.ExecutablePath,
-                    WorkingDirectory = ExternalEditTransaction.DirectoryPath,
+                    WorkingDirectory = snapshot.DirectoryPath,
                     UseShellExecute = false
                 };
                 launch.ArgumentList.Add(snapshot.BackupPath);
@@ -319,7 +330,8 @@ public partial class MainWindow
                     // a secondary process or a pre-existing instance.
                 });
                 if (Dispatcher.HasShutdownStarted) return;
-                StatusText.Text = UiLanguage.T("Externe Bearbeitung");
+                StatusText.Text = UiLanguage.T("Externe Bearbeitung: warte auf Ergebnis oder Entscheidung · ") +
+                    Path.GetFileName(source);
                 // The application's main process may keep running or be a
                 // launcher. PCasa makes NO exit-time assumption. Returning
                 // focus to PCasa will refresh the locally exported result.
@@ -375,9 +387,10 @@ public partial class MainWindow
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                 or InvalidDataException)
             {
-                // An in-progress export may be locked. Leave Cancel available
-                // and allow an automatic recheck when PCasa gets focus again.
+                // The editor may still have its output open. Cancel remains
+                // available and the next activation will recheck.
                 PCasaDiagnostics.Write("ExternalEdit.Output", ex);
+                result = review.ResultPath;
             }
             if (!ReferenceEquals(_externalEditReview, review)) return;
             var metadata = result is not null ? await Task.Run(() =>
@@ -454,8 +467,32 @@ public partial class MainWindow
                     }
                 }
             }
-            StatusText.Text = UiLanguage.T("Externe Bearbeitung");
+            StatusText.Text = result is null
+                ? UiLanguage.T("Externe Bearbeitung: warte auf Ergebnis oder Abbrechen · ") +
+                    Path.GetFileName(review.Snapshot.OriginalPath)
+                : UiLanguage.T("Externes Ergebnis erkannt: Speichern, Kopie oder Abbrechen · ") +
+                    Path.GetFileName(result);
             UpdateEditControls();
+        }
+        catch (Exception ex)
+        {
+            // Alpha.33 could remove session.json before a locked photo.jpg.
+            // The completed decision must not trap the viewer or crash WPF.
+            PCasaDiagnostics.Write("ExternalEdit.Review", ex);
+            bool missing = false;
+            try { missing = ExternalEditTransaction.FindPending() is null; }
+            catch (Exception pendingError)
+            { PCasaDiagnostics.Write("ExternalEdit.PendingState", pendingError); }
+            if (missing && ReferenceEquals(_externalEditReview, review))
+            {
+                _externalEditReview = null;
+                ResumeSchedulerAfterExternalEdit();
+                UpdateEditControls();
+                StatusText.Text = UiLanguage.T(
+                    "Externe Sitzung bereits abgeschlossen; Galerie wieder verfügbar.");
+            }
+            else
+                StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
         }
         finally { _externalReviewRefreshing = false; }
     }
@@ -523,13 +560,17 @@ public partial class MainWindow
             // The source mutation/copy and its required catalog re-index
             // have completed; the suspended scanner may now resume.
             ResumeSchedulerAfterExternalEdit();
-            StatusText.Text = decision switch
+            var cleanupPending = ExternalEditTransaction.PendingCleanupCount();
+            StatusText.Text = (decision switch
             {
-                ExternalEditDecision.Cancel => UiLanguage.T("Externe Bearbeitung"),
+                ExternalEditDecision.Cancel => UiLanguage.T("Externe Bearbeitung abgebrochen."),
                 ExternalEditDecision.SaveCopy => UiLanguage.T("Kopie gespeichert: ") +
                     Path.GetFileName(committed),
                 _ => UiLanguage.T("Externe Bearbeitung gespeichert.")
-            };
+            }) + (cleanupPending == 0 ? string.Empty :
+                UiLanguage.T(" · Temporäre Bereinigung ausstehend: ") + cleanupPending);
+            _scheduler.NotifyTaskViewChanged();
+            ScheduleExternalCleanup();
             return true;
         }
         catch (Exception ex)
@@ -545,6 +586,42 @@ public partial class MainWindow
             review.Busy = false;
             if (!Dispatcher.HasShutdownStarted) UpdateEditControls();
         }
+    }
+
+    // P4 cleanup uses the SAME scheduler. A locked old editor file remains
+    // visible as pending but cannot block the next isolated workspace.
+    private void ScheduleExternalCleanup()
+    {
+        if (Dispatcher.HasShutdownStarted) return;
+        _ = ObserveExternalCleanupAsync("external:cleanup:" + Guid.NewGuid().ToString("N"));
+    }
+
+    private async Task ObserveExternalCleanupAsync(string key)
+    {
+        try
+        {
+            var remaining = await _scheduler.RunAsync(key,
+                SchedulerPriority.Idle,
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    _scheduler.ReportProgress(key,
+                        UiLanguage.T("Temporäre Arbeitsdateien bereinigen"), 0, 0,
+                        ExternalEditTransaction.DirectoryPath);
+                    return ExternalEditTransaction.CleanupCompletedWorkspaces();
+                }, workKind: SchedulerWorkKind.Catalog);
+            if (!Dispatcher.HasShutdownStarted)
+            {
+                _scheduler.NotifyTaskViewChanged();
+                _taskManagerWindow?.RequestRefresh();
+                if (remaining > 0)
+                    StatusText.Text = UiLanguage.T(
+                        "Externe Bearbeitung: temporäre Bereinigung ausstehend · ") +
+                        remaining + UiLanguage.T(" Ordner/Dateien (Editor noch geöffnet?)");
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.Cleanup", ex); }
     }
 
     private async Task RefreshExternalEditCatalogAsync(

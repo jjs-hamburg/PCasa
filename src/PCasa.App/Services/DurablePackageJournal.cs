@@ -83,6 +83,18 @@ public sealed class DurablePackageJournal
                 """;
             migrate.ExecuteNonQuery();
         }
+        // Upgrade in-flight Alpha.33 databases: old image edits already parked
+        // with a retry timestamp must NOT keep retrying after this version
+        // starts. The durable recipe, cursor and last error remain intact.
+        using (var park = db.CreateCommand())
+        {
+            park.CommandText = """
+                UPDATE scheduler_packages
+                   SET retry_after_utc=NULL
+                 WHERE package_type='image-edit-v1' AND state='deferred';
+                """;
+            park.ExecuteNonQuery();
+        }
     }
 
     public DurablePackageRecord Put(string key, string type, string payload,
@@ -520,20 +532,25 @@ public sealed class DurablePackageJournal
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
         long attempts;
+        string type;
         using (var lookup = db.CreateCommand())
         {
             lookup.Transaction = tx;
             lookup.CommandText =
-                "SELECT retry_attempts FROM scheduler_packages WHERE package_key=$key;";
+                "SELECT retry_attempts,package_type FROM scheduler_packages WHERE package_key=$key;";
             lookup.Parameters.AddWithValue("$key", key);
-            var previous = lookup.ExecuteScalar();
-            if (previous is null) throw new InvalidOperationException(
+            using var reader = lookup.ExecuteReader();
+            if (!reader.Read()) throw new InvalidOperationException(
                 "Unbekannter persistenter Auftrag: " + key);
-            attempts = Convert.ToInt64(previous);
+            attempts = reader.GetInt64(0);
+            type = reader.GetString(1);
         }
         var seconds = Math.Min(120, 5 * (1L << (int)Math.Min(attempts, 5)));
-        var retryAfter = DateTimeOffset.UtcNow +
-            (firstAttemptDelay ?? TimeSpan.FromSeconds(seconds));
+        // An image file locked by an editor or OneDrive cannot be written
+        // again automatically. Park the durable recipe for an EXPLICIT
+        // Taskmanager Retry after the user has released the lock.
+        DateTimeOffset? retryAfter = type == "image-edit-v1" ? null :
+            DateTimeOffset.UtcNow + (firstAttemptDelay ?? TimeSpan.FromSeconds(seconds));
         using (var command = db.CreateCommand())
         {
             command.Transaction = tx;
@@ -550,7 +567,8 @@ public sealed class DurablePackageJournal
             command.Parameters.AddWithValue("$key", key);
             command.Parameters.AddWithValue("$step", completed);
             command.Parameters.AddWithValue("$error", error);
-            command.Parameters.AddWithValue("$retry", retryAfter.UtcDateTime.ToString("O"));
+            command.Parameters.AddWithValue("$retry",
+                retryAfter is { } next ? next.UtcDateTime.ToString("O") : DBNull.Value);
             command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             command.ExecuteNonQuery();
         }
@@ -565,6 +583,7 @@ public sealed class DurablePackageJournal
             SELECT package_key
               FROM scheduler_packages
              WHERE state='deferred'
+               AND (package_type <> 'image-edit-v1' OR retry_after_utc IS NOT NULL)
                AND (retry_after_utc IS NULL OR retry_after_utc <= $now)
              ORDER BY priority ASC, sequence ASC;
             """;
@@ -585,6 +604,7 @@ public sealed class DurablePackageJournal
             UPDATE scheduler_packages
                SET state='queued',retry_after_utc=NULL,updated_utc=$now
              WHERE package_key=$key AND state='deferred'
+               AND (package_type <> 'image-edit-v1' OR retry_after_utc IS NOT NULL)
                AND (retry_after_utc IS NULL OR retry_after_utc <= $now);
             """;
         command.Parameters.AddWithValue("$key", key);

@@ -237,6 +237,90 @@ public sealed class SchedulerTaskView
                         false, false, _canRetryFailed,
                         _canDiscardFailed));
                 }
+                // External processes are user interactions, not scheduler workers.
+                // Project the persisted single session read-only so waiting for
+                // Topaz never looks like an idle PCasa; no shadow task is queued.
+                try
+                {
+                    var external = ExternalEditTransaction.FindPending();
+                    if (external is not null)
+                        rows.Add(new SchedulerTaskViewItem(
+                            "external:session:" + external.Id.ToString("N"),
+                            UiLanguage.T("Externe Bearbeitung"),
+                            external.OriginalPath,
+                            UiLanguage.T(external.Finalizing is null
+                                ? "Warte auf Ergebnis oder Entscheidung"
+                                : "Speicherentscheidung wird abgeschlossen"),
+                            "Wartet", null, 0, long.MinValue,
+                            false, false, false, false));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                    or InvalidDataException)
+                {
+                    rows.Add(new SchedulerTaskViewItem(
+                        "external:session:invalid",
+                        UiLanguage.T("Externe Sitzung prüfen"),
+                        ExternalEditTransaction.DirectoryPath, "–",
+                        "Fehler", ex.Message, 0, long.MinValue,
+                        false, false, false, false));
+                }
+                try
+                {
+                    var orphanCount = ExternalEditTransaction.PendingCleanupCount();
+                    if (orphanCount > 0 && !latest.Values.Any(job =>
+                        job.Key.StartsWith("external:cleanup:", StringComparison.Ordinal) &&
+                        job.State is SchedulerJobState.Queued or SchedulerJobState.Running
+                            or SchedulerJobState.YieldRequested))
+                        rows.Add(new SchedulerTaskViewItem(
+                            "external:cleanup:pending",
+                            UiLanguage.T("Temporäre Bereinigung ausstehend"),
+                            ExternalEditTransaction.DirectoryPath,
+                            UiLanguage.Format("{0:N0} Ordner/Dateien", orphanCount),
+                            "Wartet",
+                            UiLanguage.T("Dateien eines abgeschlossenen Editors sind noch gesperrt. Die Speicherung ist davon nicht betroffen; beim nächsten Start erneut prüfen."),
+                            4, long.MaxValue - 1,
+                            false, false, false, false));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                    or InvalidDataException)
+                { PCasaDiagnostics.Write("ExternalEdit.CleanupView", ex); }
+
+                // Non-durable external stage/commit/refresh/cleanup work is
+                // already owned by the ONE scheduler. Previously the Taskmanager
+                // only displayed durable packages and a few special jobs,
+                // leaving the external edit invisible while bytes were copied.
+                foreach (var job in latest.Values.Where(job =>
+                    job.Key.StartsWith("external:", StringComparison.Ordinal) &&
+                    !job.Key.StartsWith("external:session:", StringComparison.Ordinal) &&
+                    (job.State is SchedulerJobState.Queued or SchedulerJobState.Running
+                        or SchedulerJobState.YieldRequested or SchedulerJobState.Failed ||
+                     (showCompleted && job.State == SchedulerJobState.Completed))))
+                {
+                    var label = job.Key.StartsWith("external:stage:", StringComparison.Ordinal)
+                        ? "Arbeitskopie erstellen"
+                        : job.Key.StartsWith("external:commit:", StringComparison.Ordinal)
+                            ? "Externes Ergebnis übernehmen"
+                            : job.Key.StartsWith("external:catalog:", StringComparison.Ordinal)
+                                ? "Externes Ergebnis katalogisieren"
+                                : "Temporäre Arbeitsdateien bereinigen";
+                    var status = job.State switch
+                    {
+                        SchedulerJobState.Running => "Läuft",
+                        SchedulerJobState.Failed => "Fehler",
+                        SchedulerJobState.Completed => "Abgeschlossen",
+                        _ => "Wartet"
+                    };
+                    rows.Add(new SchedulerTaskViewItem(job.Key,
+                        UiLanguage.T(label),
+                        job.CurrentPath ?? ExternalEditTransaction.DirectoryPath,
+                        job.Phase is { Length: > 0 } phase
+                            ? UiLanguage.T(phase) +
+                              (job.Total > 0 ? $" · {job.Processed:N0}/{job.Total:N0}" : "")
+                            : job.Total > 0 ? $"{job.Processed:N0}/{job.Total:N0}" : "–",
+                        status, job.Error, (int)job.Priority, job.Id,
+                        false, false, false, false, job.WorkKind));
+                }
+
                 // Actual running work first, then the scheduler's effective
                 // pending priority/order. This is a single scheduler-owned
                 // projection, not a second dispatch queue. Reordering still
