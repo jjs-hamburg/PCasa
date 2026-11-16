@@ -116,15 +116,39 @@ public static class JpegCropWriter
             {
                 // File.Move never replaces an existing file. A racing
                 // process or durable retry therefore cannot destroy a copy.
-                File.Move(staged, destination);
+                try { File.Move(staged, destination); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    FileLockDiagnostics.ReportFailure("Image.Edit.SaveCopy.Move:" +
+                        string.Join(",", operations.Select(step => step.Kind)),
+                        ex, fullPath, staged, destination);
+                    throw;
+                }
             }
             else
             {
                 // Only in-place writes need a pre-save Undo snapshot.
-                new UndoHistoryService(UndoOptions.Load())
-                    .CaptureBeforeSave(fullPath, token);
+                try
+                {
+                    new UndoHistoryService(UndoOptions.Load())
+                        .CaptureBeforeSave(fullPath, token);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    FileLockDiagnostics.ReportFailure("Image.Edit.UndoSnapshot:" +
+                        string.Join(",", operations.Select(step => step.Kind)),
+                        ex, fullPath, staged);
+                    throw;
+                }
                 token.ThrowIfCancellationRequested();
-                File.Replace(staged, fullPath, null);
+                try { File.Replace(staged, fullPath, null); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    FileLockDiagnostics.ReportFailure("Image.Edit.Replace:" +
+                        string.Join(",", operations.Select(step => step.Kind)),
+                        ex, fullPath, staged);
+                    throw;
+                }
                 try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
                 catch (IOException ex)
                 { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
