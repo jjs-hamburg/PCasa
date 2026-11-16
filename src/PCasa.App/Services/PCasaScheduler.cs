@@ -655,7 +655,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                (nonIdleWaiting || _pending.Any(p =>
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               (_nativeDragInteractionCount > 0 &&
-                               lane is LaneBackground or LaneInitialImport or LaneUserAction) ||
+                               lane is LaneBackground or LaneInitialImport or
+                                   LaneUserAction or LaneSourceProbe) ||
                               (highest is not null && Precedes(highest, running))))
                             continue;
                         running.YieldRequested = true;
