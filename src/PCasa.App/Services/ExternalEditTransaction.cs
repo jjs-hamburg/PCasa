@@ -9,334 +9,365 @@ public enum ExternalEditDecision { Cancel, SaveCopy, Save }
 public sealed record ExternalEditOutputStamp(
     string Path, long Length, DateTime LastWriteUtc);
 
+// One durable transaction for the entire PCasa process, not a folder per edit.
+// BackupPath is the single working IMAGE ("photo.jpg", "video.mp4", etc.).
+// It is NEVER a copy of a modified PCasa original. The source stays untouched
+// until an explicit Save, which uses the existing central Undo archive.
 public sealed record ExternalEditSnapshot(
     Guid Id, string OriginalPath, string BackupPath,
-    string OriginalSha256, long OriginalLength, DateTime OriginalWriteUtc,
-    DateTime StartedUtc, ExternalEditOutputStamp[] ExistingOutputs)
+    string OriginalSha256, long OriginalLength,
+    DateTime OriginalWriteUtc, DateTime StartedUtc,
+    ExternalEditOutputStamp[] ExistingOutputs,
+    ExternalEditDecision? Finalizing = null, string? FinalTarget = null)
 {
     public string DirectoryPath => Path.GetDirectoryName(BackupPath)!;
 }
 
-/// <summary>
-/// Transaction boundary for independent editors. Only the original filename
-/// reaches the editor; a verified rollback copy is kept privately under PCasa.
-/// No sidecar and no working image is placed near the original.
-/// A session remains recoverable after a crash until PCasa commits one of the
-/// three explicit user decisions.
-/// </summary>
 public static class ExternalEditTransaction
 {
-    private static string Root => Path.Combine(
+    private static readonly object Gate = new();
+    private static string? _testDirectory;
+    public static string DirectoryPath => _testDirectory ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PCasa", "ExternalEditBackups");
+        "PCasa", "ExternalEdit");
 
-    private static string Sha256(string file)
+    // Test isolation: never erase or create sessions in the user's real
+    // %LocalAppData% when running the Windows smoke regression executable.
+    public static IDisposable UseTestDirectory(string directory)
     {
-        using var stream = File.Open(file, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        return Convert.ToHexString(SHA256.HashData(stream));
-    }
-
-    public static ExternalEditSnapshot? FindPending(string source)
-    {
-        if (!Directory.Exists(Root)) return null;
-        var target = Path.GetFullPath(source);
-        foreach (var folder in Directory.EnumerateDirectories(Root))
+        lock (Gate)
         {
-            try
-            {
-                var metadata = Path.Combine(folder, "session.json");
-                if (!File.Exists(metadata)) continue;
-                var s = JsonSerializer.Deserialize<ExternalEditSnapshot>(
-                    File.ReadAllText(metadata));
-                if (s is not null &&
-                    s.OriginalPath.Equals(target, StringComparison.OrdinalIgnoreCase))
-                    return s;
-            }
-            catch (Exception ex) when (ex is IOException or
-                UnauthorizedAccessException or JsonException or ArgumentException)
-            {
-                // Leave other transactions untouched. No destructive cleanup.
-            }
+            if (_testDirectory is not null)
+                throw new InvalidOperationException("A test directory is already active.");
+            _testDirectory = Path.GetFullPath(directory);
+            return new TestDirectoryLease();
         }
-        return null;
     }
 
-    public static ExternalEditSnapshot Begin(string original,
-        CancellationToken token = default)
+    private sealed class TestDirectoryLease : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (Gate) _testDirectory = null;
+        }
+    }
+    private static string SessionFile => Path.Combine(DirectoryPath, "session.json");
+
+    private static string Hash(string path)
+    {
+        using var input = File.Open(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        return Convert.ToHexString(SHA256.HashData(input));
+    }
+
+    private static ExternalEditSnapshot? ReadPending()
+    {
+        if (!File.Exists(SessionFile)) return null;
+        var pending = JsonSerializer.Deserialize<ExternalEditSnapshot>(
+            File.ReadAllText(SessionFile))
+            ?? throw new InvalidDataException("ExternalEdit: session.json ist ungültig.");
+        if (pending.Id == Guid.Empty ||
+            !Path.GetFullPath(pending.DirectoryPath).Equals(
+                Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(pending.BackupPath).StartsWith(
+                VideoFormats.IsVideo(pending.OriginalPath) ? "video." : "photo.",
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("ExternalEdit: ungültiger Sitzungsstatus.");
+        return pending;
+    }
+
+    public static ExternalEditSnapshot? FindPending(string? original = null)
+    {
+        lock (Gate)
+        {
+            var session = ReadPending();
+            return session is not null &&
+                (original is null || Path.GetFullPath(original).Equals(
+                    session.OriginalPath, StringComparison.OrdinalIgnoreCase))
+                ? session : null;
+        }
+    }
+
+    private static void WritePending(ExternalEditSnapshot session)
+    {
+        Directory.CreateDirectory(DirectoryPath);
+        var temporary = SessionFile + ".tmp";
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(session));
+            File.Move(temporary, SessionFile, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    public static ExternalEditSnapshot Begin(string original, CancellationToken token = default,
+        Action<long, long>? progress = null)
     {
         var path = Path.GetFullPath(original);
         if (RawImageSource.IsRawPath(path))
             throw new NotSupportedException(
-                "RAW-Dateien können nicht extern bearbeitet werden.");
-        if (FindPending(path) is not null)
-            throw new InvalidOperationException(
-                UiLanguage.T("Für diese Datei existiert noch eine nicht abgeschlossene externe Bearbeitung."));
-
-        var id = Guid.NewGuid();
-        var directory = Path.Combine(Root, id.ToString("N"));
-        var backup = Path.Combine(directory, "original.bin");
-        using (SourceFileLocks.Enter(path, token))
+                UiLanguage.T("RAW-Dateien können nicht extern bearbeitet werden."));
+        lock (Gate)
         {
-            var file = new FileInfo(path);
-            if (!file.Exists) throw new FileNotFoundException(
-                UiLanguage.T("Originalbild nicht gefunden."), path);
-            Directory.CreateDirectory(directory);
+            token.ThrowIfCancellationRequested();
+            if (File.Exists(SessionFile))
+                throw new InvalidOperationException(
+                    UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
+            // Nothing can be removed while a persisted session exists.
+            // A leftover directory without a manifest is a previously
+            // completed/incomplete staging attempt, not an active edit.
+            if (Directory.Exists(DirectoryPath))
+                Directory.Delete(DirectoryPath, recursive: true);
+            Directory.CreateDirectory(DirectoryPath);
+
+            var inputName = (VideoFormats.IsVideo(path) ? "video" : "photo") +
+                Path.GetExtension(path).ToLowerInvariant();
+            var work = Path.Combine(DirectoryPath, inputName);
             try
             {
-                using (var input = new FileStream(path, FileMode.Open,
-                           FileAccess.Read, FileShare.Read, 1024 * 1024))
-                using (var output = new FileStream(backup, FileMode.CreateNew,
-                           FileAccess.Write, FileShare.None, 1024 * 1024,
-                           FileOptions.WriteThrough))
+                using (SourceFileLocks.Enter(path, token))
                 {
-                    input.CopyTo(output, 1024 * 1024);
-                    output.Flush(flushToDisk: true);
+                    var before = new FileInfo(path);
+                    if (!before.Exists)
+                        throw new FileNotFoundException(
+                            UiLanguage.T("Originalbild nicht gefunden."), path);
+                    var originalLength = before.Length;
+                    var originalWrite = before.LastWriteTimeUtc;
+                    string checksum;
+                    using (var reader = new FileStream(path, FileMode.Open,
+                               FileAccess.Read, FileShare.Read, 1024 * 1024))
+                    using (var output = new FileStream(work, FileMode.CreateNew,
+                               FileAccess.Write, FileShare.None, 1024 * 1024,
+                               FileOptions.WriteThrough))
+                    using (var hasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+                    {
+                        var buffer = new byte[1024 * 1024];
+                        long copied = 0;
+                        while (true)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var count = reader.Read(buffer);
+                            if (count == 0) break;
+                            output.Write(buffer, 0, count);
+                            hasher.AppendData(buffer, 0, count);
+                            copied += count;
+                            if (copied == originalLength || copied % (4 * 1024 * 1024) < count)
+                                progress?.Invoke(copied, originalLength);
+                        }
+                        output.Flush(true);
+                        if (copied != originalLength)
+                            throw new IOException(UiLanguage.T(
+                                "Das Original wurde während der Sicherung verändert."));
+                        checksum = Convert.ToHexString(hasher.GetHashAndReset());
+                    }
+                    if (new FileInfo(path).LastWriteTimeUtc != originalWrite ||
+                        new FileInfo(path).Length != originalLength)
+                        throw new IOException(UiLanguage.T(
+                            "Das Original wurde während der Sicherung verändert."));
+                    // A broken source is rejected before launching an editor.
+                    if (!VideoFormats.IsVideo(work))
+                        EditableImageFormats.ValidateStillImage(work);
+                    var session = new ExternalEditSnapshot(Guid.NewGuid(), path,
+                        work, checksum, originalLength, originalWrite,
+                        DateTime.UtcNow, []);
+                    WritePending(session);
+                    return session;
                 }
-                if (new FileInfo(backup).Length != file.Length)
-                    throw new IOException(
-                        UiLanguage.T("Das Original wurde während der Sicherung verändert."));
-                var checksum = Sha256(backup);
-                if (Sha256(path) != checksum)
-                    throw new IOException(
-                        UiLanguage.T("Original und Sicherheitskopie stimmen nicht überein."));
-                // Snapshot the *existing* same-name exports. A timestamp
-                // alone is unsafe when two edits occur within a second and
-                // could cause Cancel to delete a previous output.
-                var existing = ExistingExports(path);
-                var snapshot = new ExternalEditSnapshot(
-                    id, path, backup, checksum, file.Length,
-                    file.LastWriteTimeUtc, DateTime.UtcNow, existing);
-                var meta = Path.Combine(directory, "session.json");
-                File.WriteAllText(meta, JsonSerializer.Serialize(snapshot));
-                return snapshot;
             }
             catch
             {
-                try { Directory.Delete(directory, recursive: true); }
-                catch (IOException) { }
+                // A published manifest means recovery must be possible.
+                if (!File.Exists(SessionFile))
+                    try { Directory.Delete(DirectoryPath, recursive: true); }
+                    catch (IOException) { }
                 throw;
             }
         }
     }
 
-    private static void VerifySnapshot(ExternalEditSnapshot s)
+    public static bool OriginalChanged(ExternalEditSnapshot session)
+        => !File.Exists(session.OriginalPath) ||
+           new FileInfo(session.OriginalPath).Length != session.OriginalLength ||
+           Hash(session.OriginalPath) != session.OriginalSha256;
+
+    public static string? DetectResult(ExternalEditSnapshot session)
     {
-        if (!File.Exists(s.BackupPath) ||
-            new FileInfo(s.BackupPath).Length != s.OriginalLength ||
-            Sha256(s.BackupPath) != s.OriginalSha256)
-            throw new IOException(UiLanguage.T("Sicherheitskopie ist nicht mehr gültig."));
+        lock (Gate)
+        {
+            CheckIdentity(session);
+            var candidates = Directory.EnumerateFiles(DirectoryPath)
+                .Where(path => !path.Equals(SessionFile,
+                    StringComparison.OrdinalIgnoreCase) &&
+                    !path.Equals(session.BackupPath,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    (VideoFormats.IsVideo(session.OriginalPath)
+                        ? VideoFormats.IsVideo(path)
+                        : EditableImageFormats.Supports(path)))
+                .Where(path => new FileInfo(path).Length > 0)
+                .ToArray();
+            if (candidates.Length > 1)
+                throw new InvalidDataException(UiLanguage.T(
+                    "Mehrere externe Ergebnisse gefunden; keine automatische Zuordnung möglich."));
+            if (candidates.Length == 1) return candidates[0];
+            if (!File.Exists(session.BackupPath))
+                throw new FileNotFoundException("ExternalEdit: Arbeitsdatei fehlt.",
+                    session.BackupPath);
+            return Hash(session.BackupPath) == session.OriginalSha256
+                ? null : session.BackupPath;
+        }
     }
 
-    public static bool OriginalChanged(ExternalEditSnapshot s)
-        => !File.Exists(s.OriginalPath) ||
-           new FileInfo(s.OriginalPath).Length != s.OriginalLength ||
-           Sha256(s.OriginalPath) != s.OriginalSha256;
-
-    private static ExternalEditOutputStamp[] ExistingExports(string original)
+    private static void CheckIdentity(ExternalEditSnapshot session)
     {
-        var parent = Path.GetDirectoryName(original)!;
-        var prefix = Path.GetFileNameWithoutExtension(original);
-        return Directory.EnumerateFiles(parent, prefix + "*",
-                SearchOption.TopDirectoryOnly)
-            .Where(p => !p.Equals(original, StringComparison.OrdinalIgnoreCase) &&
-                FolderScanner.IsSupportedImagePath(p))
-            .Select(p => new FileInfo(p))
-            .Where(f => f.Exists)
-            .Select(f => new ExternalEditOutputStamp(
-                f.FullName, f.Length, f.LastWriteTimeUtc))
-            .ToArray();
+        var active = ReadPending();
+        if (active is null || active.Id != session.Id ||
+            !active.OriginalPath.Equals(session.OriginalPath,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Die externe Sitzung stimmt nicht mit dem gespeicherten Status überein.");
     }
 
-    private static bool IsNewOrModified(ExternalEditSnapshot s,
-        ExternalEditOutputStamp stamp)
-        => !s.ExistingOutputs.Any(old =>
-            old.Path.Equals(stamp.Path, StringComparison.OrdinalIgnoreCase) &&
-            old.Length == stamp.Length &&
-            old.LastWriteUtc == stamp.LastWriteUtc);
-
-    public static string? DetectResult(ExternalEditSnapshot s)
+    private static string UniqueCopyDestination(string source, string original)
     {
-        if (OriginalChanged(s)) return s.OriginalPath;
-        var exports = ExistingExports(s.OriginalPath)
-            .Where(stamp => stamp.Length > 0 && IsNewOrModified(s, stamp))
-            .OrderByDescending(stamp => stamp.LastWriteUtc)
-            .ToArray();
-        if (exports.Length > 1)
-            throw new InvalidDataException(
-                UiLanguage.T("Mehrere externe Ergebnisse gefunden; keine automatische Zuordnung möglich."));
-        return exports.Length == 1 ? exports[0].Path : null;
-    }
-
-    private static bool IsSessionExport(ExternalEditSnapshot s, string file)
-    {
-        var full = Path.GetFullPath(file);
-        if (full.Equals(s.OriginalPath, StringComparison.OrdinalIgnoreCase))
-            return false;
-        return Path.GetDirectoryName(full)!.Equals(
-                   Path.GetDirectoryName(s.OriginalPath),
-                   StringComparison.OrdinalIgnoreCase) &&
-               Path.GetFileName(full).StartsWith(
-                   Path.GetFileNameWithoutExtension(s.OriginalPath),
-                   StringComparison.OrdinalIgnoreCase) &&
-               File.Exists(full) &&
-               // Never delete a file that predated this edit even if Topaz
-               // overwrote it; PCasa has no snapshot of that other file.
-               !s.ExistingOutputs.Any(previous =>
-                   previous.Path.Equals(full, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string MakeCopy(string source, string original,
-        CancellationToken token)
-    {
-        var parent = Path.GetDirectoryName(original)!;
+        var folder = Path.GetDirectoryName(original)!;
         var basename = Path.GetFileNameWithoutExtension(original);
         var extension = Path.GetExtension(source);
-        for (var n = 1; n < 10000; n++)
+        for (var i = 1; i < 100000; i++)
         {
-            token.ThrowIfCancellationRequested();
-            var target = Path.Combine(parent,
-                basename + (n == 1 ? "-Kopie" : "-Kopie-" + n) + extension);
-            if (File.Exists(target)) continue;
-            try
-            {
-                using var input = File.Open(source, FileMode.Open,
-                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var output = File.Open(target, FileMode.CreateNew,
-                    FileAccess.Write, FileShare.None);
-                try
-                {
-                    input.CopyTo(output);
-                    output.Flush(true);
-                    if (output.Length != input.Length)
-                        throw new IOException(UiLanguage.T("Kopie ist unvollständig."));
-                }
-                catch
-                {
-                    output.Dispose();
-                    File.Delete(target);
-                    throw;
-                }
-                return target;
-            }
-            catch (IOException) when (File.Exists(target))
-            {
-                // A different operation reserved this filename first.
-                continue;
-            }
+            var suffix = i == 1 ? "-Kopie" : "-Kopie-" + i;
+            var destination = Path.Combine(folder, basename + suffix + extension);
+            if (!File.Exists(destination)) return destination;
         }
         throw new IOException(UiLanguage.T("Kein freier Dateiname für die Kopie."));
     }
 
-    private static void ReplaceSafely(string source, string target,
-        CancellationToken token)
+    private static void CopyAtomic(string source, string target,
+        bool replace, CancellationToken token,
+        Action<long, long>? progress = null)
     {
-        // Temp sits on the target volume, making the last rename atomic
-        // for a regular NTFS/SMB file. Original backup stays local until
-        // complete verification.
-        var staging = Path.Combine(Path.GetDirectoryName(target)!,
+        // Stage on the TARGET volume, then rename. A crashed copy never
+        // writes half an image directly over a photo (also over SMB).
+        var temp = Path.Combine(Path.GetDirectoryName(target)!,
             ".pcasa-external-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
             using (var input = File.Open(source, FileMode.Open,
                        FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var output = File.Open(staging, FileMode.CreateNew,
+            using (var output = new FileStream(temp, FileMode.CreateNew,
                        FileAccess.Write, FileShare.None))
             {
-                token.ThrowIfCancellationRequested();
-                input.CopyTo(output);
+                var size = input.Length;
+                var bytes = new byte[1024 * 1024];
+                long copied = 0;
+                while (true)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var count = input.Read(bytes, 0, bytes.Length);
+                    if (count == 0) break;
+                    output.Write(bytes, 0, count);
+                    copied += count;
+                    if (copied == size || copied % (4 * 1024 * 1024) < count)
+                        progress?.Invoke(copied, size);
+                }
                 output.Flush(true);
                 if (output.Length != input.Length)
-                    throw new IOException(UiLanguage.T("Dateiübernahme unvollständig."));
+                    throw new IOException(UiLanguage.T("Kopie ist unvollständig."));
             }
             token.ThrowIfCancellationRequested();
-            File.Move(staging, target, overwrite: true);
+            File.Move(temp, target, overwrite: replace);
         }
-        finally { if (File.Exists(staging)) File.Delete(staging); }
+        finally { if (File.Exists(temp)) File.Delete(temp); }
     }
 
-    private static void Restore(ExternalEditSnapshot s, CancellationToken token)
+    public static string? Commit(ExternalEditSnapshot requested, string? result,
+        ExternalEditDecision decision, CancellationToken token = default,
+        Action<long, long>? progress = null, UndoOptions? undoOptions = null)
     {
-        ReplaceSafely(s.BackupPath, s.OriginalPath, token);
-        File.SetLastWriteTimeUtc(s.OriginalPath, s.OriginalWriteUtc);
-        if (OriginalChanged(s))
-            throw new IOException(UiLanguage.T("Original konnte nicht überprüft wiederhergestellt werden."));
-    }
-
-    /// <returns>Committed file path, or null when canceled.</returns>
-    public static string? Commit(ExternalEditSnapshot s, string? output,
-        ExternalEditDecision decision, CancellationToken token = default)
-    {
-        VerifySnapshot(s);
-        var result = output is null ? null : Path.GetFullPath(output);
-        using (SourceFileLocks.Enter(s.OriginalPath, token))
+        lock (Gate)
         {
             token.ThrowIfCancellationRequested();
+            CheckIdentity(requested);
+            var session = ReadPending()!;
+            if (session.Finalizing is { } choice && choice != decision)
+                throw new InvalidOperationException(
+                    "Die externe Bearbeitung wird bereits abgeschlossen.");
             if (decision == ExternalEditDecision.Cancel)
             {
-                if (OriginalChanged(s)) Restore(s, token);
-                else if (File.GetLastWriteTimeUtc(s.OriginalPath) != s.OriginalWriteUtc)
-                    File.SetLastWriteTimeUtc(s.OriginalPath, s.OriginalWriteUtc);
-                if (result is not null && IsSessionExport(s, result))
-                    File.Delete(result);
-                Directory.Delete(s.DirectoryPath, recursive: true);
+                // Nothing has ever changed the source image. No restore and
+                // no Undo entry are needed.
+                var finalizing = session with { Finalizing = decision };
+                WritePending(finalizing);
+                Directory.Delete(DirectoryPath, recursive: true);
                 return null;
             }
-            if (result is null || !File.Exists(result))
-                throw new FileNotFoundException(
-                    UiLanguage.T("Das externe Programm hat kein Ergebnis gespeichert."), result);
-            // Validate BEFORE Save / Save Copy could delete the rollback.
-            // A RAW result is explicitly out of scope for Alpha.32.
-            if (RawImageSource.IsRawPath(result))
-                throw new NotSupportedException(UiLanguage.T("RAW-Ausgaben werden nicht bearbeitet."));
-            if (new FileInfo(result).Length == 0)
+
+            var source = session.FinalTarget is null
+                ? result : result ?? DetectResult(session);
+            if (source is null || !File.Exists(source))
+                throw new FileNotFoundException(UiLanguage.T(
+                    "Das externe Programm hat kein Ergebnis gespeichert."), source);
+            source = Path.GetFullPath(source);
+            if (!Path.GetDirectoryName(source)!.Equals(
+                    DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "ExternalEdit: Ergebnis liegt nicht im Arbeitsverzeichnis.");
+            if (RawImageSource.IsRawPath(source) ||
+                (VideoFormats.IsVideo(session.OriginalPath)
+                    ? !VideoFormats.IsVideo(source)
+                    : !EditableImageFormats.Supports(source)))
+                throw new NotSupportedException(UiLanguage.T(
+                    "Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
+            if (new FileInfo(source).Length == 0)
                 throw new InvalidDataException(UiLanguage.T("Das externe Ergebnis ist leer."));
-            if (!VideoFormats.IsVideo(result))
-                EditableImageFormats.ValidateStillImage(result);
+            if (!VideoFormats.IsVideo(source))
+                EditableImageFormats.ValidateStillImage(source);
 
-            if (decision == ExternalEditDecision.SaveCopy)
+            using (SourceFileLocks.Enter(session.OriginalPath, token))
             {
-                var copy = MakeCopy(result, s.OriginalPath, token);
-                try
+                if (decision == ExternalEditDecision.Save)
                 {
-                    if (OriginalChanged(s)) Restore(s, token);
-                    else if (File.GetLastWriteTimeUtc(s.OriginalPath) != s.OriginalWriteUtc)
-                        File.SetLastWriteTimeUtc(s.OriginalPath, s.OriginalWriteUtc);
+                    if (!Path.GetExtension(source).Equals(
+                            Path.GetExtension(session.OriginalPath),
+                            StringComparison.OrdinalIgnoreCase))
+                        throw new NotSupportedException(UiLanguage.T(
+                            "Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
+                    var finalizing = session with
+                    {
+                        Finalizing = decision, FinalTarget = session.OriginalPath
+                    };
+                    if (session.Finalizing is null) WritePending(finalizing);
+                    // A crash after the replace but before cleanup must NOT
+                    // produce a second Undo copy of the edited file.
+                    if (Hash(session.OriginalPath) != Hash(source))
+                    {
+                        if (OriginalChanged(session))
+                            throw new IOException(
+                                "Das Original wurde außerhalb von PCasa verändert.");
+                        // Save uses exactly the central undo/recycle mechanism.
+                        new UndoHistoryService(undoOptions ?? UndoOptions.Load())
+                            .CaptureBeforeSave(session.OriginalPath, token);
+                        CopyAtomic(source, session.OriginalPath, replace: true, token, progress);
+                    }
+                    if (Hash(session.OriginalPath) != Hash(source))
+                        throw new IOException("ExternalEdit: Speichern nicht überprüfbar.");
+                    Directory.Delete(DirectoryPath, recursive: true);
+                    return session.OriginalPath;
                 }
-                catch
+
+                var destination = session.FinalTarget ??
+                    UniqueCopyDestination(source, session.OriginalPath);
+                var copying = session with
                 {
-                    // The new copy remains safe; the backup also remains for
-                    // recovery. Never delete either after a failed restore.
-                    throw;
-                }
-                if (IsSessionExport(s, result)) File.Delete(result);
-                Directory.Delete(s.DirectoryPath, recursive: true);
-                return copy;
+                    Finalizing = decision, FinalTarget = destination
+                };
+                if (session.Finalizing is null) WritePending(copying);
+                if (!File.Exists(destination))
+                    CopyAtomic(source, destination, replace: false, token, progress);
+                else if (Hash(destination) != Hash(source))
+                    throw new IOException("ExternalEdit: Kopie besitzt einen anderen Inhalt.");
+                Directory.Delete(DirectoryPath, recursive: true);
+                return destination;
             }
-
-            // Preserve JPG pre-launch pixels in the EXISTING central Undo
-            // archive before accepting any external replacement. No second
-            // user-visible backup and no sidecar is created.
-            if (Path.GetExtension(s.OriginalPath).ToLowerInvariant() is
-                    ".jpg" or ".jpeg")
-                new UndoHistoryService(UndoOptions.Load())
-                    .CaptureExternalOriginal(s, token);
-
-            if (!result.Equals(s.OriginalPath, StringComparison.OrdinalIgnoreCase))
-            {
-                if (!Path.GetExtension(result).Equals(
-                    Path.GetExtension(s.OriginalPath),
-                    StringComparison.OrdinalIgnoreCase))
-                    throw new NotSupportedException(
-                        UiLanguage.T("Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
-                ReplaceSafely(result, s.OriginalPath, token);
-                if (IsSessionExport(s, result)) File.Delete(result);
-            }
-            if (!File.Exists(s.OriginalPath) ||
-                new FileInfo(s.OriginalPath).Length == 0)
-                throw new IOException(UiLanguage.T("Bearbeitetes Original fehlt oder ist leer."));
-            Directory.Delete(s.DirectoryPath, recursive: true);
-            return s.OriginalPath;
         }
     }
 }

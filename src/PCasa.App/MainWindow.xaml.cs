@@ -64,6 +64,9 @@ public partial class MainWindow : Window
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
         InitializeAppearance();
+        // Recovery must own the scheduler pause before the Loaded handler
+        // activates the background scanner.
+        RecoverExternalEditSchedulerLease();
     }
 
     private bool _folderRemovalPending;

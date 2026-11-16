@@ -60,6 +60,28 @@ public partial class MainWindow
     private bool _backgroundMonitorRefreshRunning;
     private bool _backgroundMonitorRefreshRequested;
     private bool _backgroundMonitorClosing;
+    // A single external edit owns a P0 admission lease. Automatic ingestion
+    // is canceled/yielded but gallery/viewer reads remain independent.
+    private bool _externalEditPauseActive;
+
+    private void PauseBackgroundForExternalEdit()
+    {
+        _externalEditPauseActive = true;
+        _backgroundDebounceTimer?.Stop();
+        _backgroundCurrentScanCancellation?.Cancel();
+        _cacheMaintenanceCancellation?.Cancel();
+        _scheduler.NotifyTaskViewChanged();
+    }
+
+    private void ResumeBackgroundAfterExternalEdit()
+    {
+        if (!_externalEditPauseActive) return;
+        _externalEditPauseActive = false;
+        if (!_backgroundMonitorClosing && _backgroundPending.Count > 0 &&
+            _backgroundScanSettings?.Enabled == true)
+            _backgroundDebounceTimer?.Start();
+        _scheduler.NotifyTaskViewChanged();
+    }
     // Human-readable reason when Taskmanager has no actionable work.
     // Updated only by the existing 30-second source/eligibility probe.
     private string _backgroundIdleStatus =
@@ -98,7 +120,7 @@ public partial class MainWindow
             // A dead SMB share can stall an OS probe for longer than the
             // timer interval. Never stack probes while one is unfinished.
             // Explicit settings changes are still coalesced separately.
-            if (!_backgroundMonitorRefreshRunning)
+            if (!_externalEditPauseActive && !_backgroundMonitorRefreshRunning)
                 RefreshBackgroundMonitor();
         };
         _backgroundMonitorRefreshTimer.Start();
@@ -113,11 +135,14 @@ public partial class MainWindow
         _cacheMaintenanceTimer.Tick += (_, _) => _ = RunDeferredCacheMaintenanceAsync();
         _cacheMaintenanceTimer.Start();
 
-        RefreshBackgroundMonitor();
+        // A recovered session also suspends background ingestion. The
+        // scheduler lease is established by the external editing owner.
+        if (!_externalEditPauseActive) RefreshBackgroundMonitor();
     }
 
     private async Task RunDeferredCacheMaintenanceAsync()
     {
+        if (_externalEditPauseActive) return;
         if (_updateDownloadActive || _cacheMaintenanceRunning || _folderRemovalPending ||
             _backgroundMonitorClosing || _folderManagerOpen ||
             _isScanning || _backgroundWorkerRunning || _browseCacheBuilding ||
@@ -1096,6 +1121,7 @@ public partial class MainWindow
 
     private async void BackgroundDebounceTimer_Tick(object? sender, EventArgs e)
     {
+        if (_externalEditPauseActive) return;
         _backgroundDebounceTimer?.Stop();
 
         var urgentQueued = _backgroundPending.Values.Any(request =>
@@ -1190,6 +1216,9 @@ public partial class MainWindow
             for (; nextRequestIndex < requests.Length; nextRequestIndex++)
             {
                 _backgroundInFlightIndex = nextRequestIndex;
+                if (_externalEditPauseActive)
+                    throw new OperationCanceledException(
+                        "External image editing has foreground priority.");
                 // A user can change queued P4 order while an earlier
                 // automatic request is blocked behind a manual task.
                 // Rebuild from the same persisted ranks, not the old array.
@@ -1747,7 +1776,7 @@ public partial class MainWindow
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
             if (reordered || _manualContextScanActive || _manualScanAllActive ||
-                _manualFileTransferActive || _folderRemovalPending)
+                _manualFileTransferActive || _folderRemovalPending || _externalEditPauseActive)
             {
                 foreach (var remaining in requests.Skip(nextRequestIndex))
                     QueueBackgroundChange(new BackgroundFolderChange(
@@ -1770,6 +1799,7 @@ public partial class MainWindow
             }
 
             if (!_updateDownloadActive && !_folderRemovalPending &&
+                !_externalEditPauseActive &&
                 _backgroundPending.Count > 0 &&
                 _backgroundScanSettings?.Enabled == true)
             {

@@ -152,6 +152,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
             Interlocked.Exchange(ref _owner, null)?.EndNativeDragInteraction();
     }
 
+    // A PCasa-owned external edit is one deliberate foreground interaction.
+    // Reuse the same scheduler admission/yield gate as native drag: suspend
+    // P2-P4 source/import lanes while leaving viewer/gallery read lanes alive.
+    // The lease lives until PCasa commits Cancel, Save Copy or Save.
+    public IDisposable BeginExternalEditInteraction()
+        => BeginNativeDragInteraction();
+
     public IDisposable BeginNativeDragInteraction()
     {
         lock (_gate)
@@ -648,7 +655,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                (nonIdleWaiting || _pending.Any(p =>
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               (_nativeDragInteractionCount > 0 &&
-                               lane is LaneBackground or LaneInitialImport or LaneUserAction) ||
+                               lane is LaneBackground or LaneInitialImport or
+                                   LaneUserAction or LaneSourceProbe) ||
                               (highest is not null && Precedes(highest, running))))
                             continue;
                         running.YieldRequested = true;

@@ -64,7 +64,11 @@ public partial class MainWindow
         object? sender,
         BrowseImageClickedEventArgs e)
     {
-        if (_viewerOpen || _browseCacheBuilding || _displayedBrowseIndex.Count == 0)
+        // A slow thumbnail/cache rebuild must not disable double-click
+        // opening when the already-published gallery index is available.
+        // The viewer uses its independent read lanes and can show thumbnails
+        // while background catalog work continues.
+        if (_viewerOpen || _displayedBrowseIndex.Count == 0)
             return;
 
         // Videos share the gallery index but have their own read-only player.
