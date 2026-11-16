@@ -145,7 +145,7 @@ internal static class CropFlow
                 runningReplace.GetAwaiter().GetResult();
             }
             finally { heldReplace.Dispose(); }
-            if (!File.ReadAllBytes(blockedTarget).SequenceEqual([5, 6, 7, 8]) ||
+            if (!File.ReadAllBytes(blockedTarget).AsSpan().SequenceEqual(new byte[] { 5, 6, 7, 8 }) ||
                 File.Exists(readyStage))
                 throw new Exception("Locked edit could not commit after reader released.");
             Console.WriteLine("PASS: One atomic image write survives a transient Windows sharing lock.");
