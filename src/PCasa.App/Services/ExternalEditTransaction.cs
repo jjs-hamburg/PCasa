@@ -196,8 +196,10 @@ public static class ExternalEditTransaction
             if (File.Exists(SessionFile))
                 throw new InvalidOperationException(
                     UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
+            // Never spend a manual P0 editor launch on old large exports.
+            // Cleanup is a separate P4 scheduler job and each session has
+            // its own unique work directory, so no collision is possible.
             Directory.CreateDirectory(DirectoryPath);
-            CleanupCompletedWorkspaces();
             var id = Guid.NewGuid();
             var sessionDirectory = Path.Combine(DirectoryPath, "session-" + id.ToString("N"));
             Directory.CreateDirectory(sessionDirectory);
