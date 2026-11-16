@@ -97,6 +97,29 @@ public sealed class DurablePackageJournal
         }
     }
 
+    // Only scans have a durable execution lifetime. An image, tag, GPS,
+    // transfer or other file mutation must never reappear as a runnable job
+    // after the PCasa process has ended. Keep its history and last error;
+    // do NOT delete the DB record or imply that a partial file write finished.
+    public int RetireUnfinishedFileJobs()
+    {
+        using var db = _database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            UPDATE scheduler_packages
+               SET state='canceled', retry_after_utc=NULL,
+                   error=CASE WHEN error IS NULL OR error=''
+                       THEN 'Dateioperation mit der PCasa-Sitzung beendet.'
+                       ELSE error END,
+                   updated_utc=$now
+             WHERE package_type NOT IN
+                   ('manual-folder-scan-v1','manual-scan-all-v1')
+               AND state IN ('queued','running','deferred','paused');
+            """;
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        return command.ExecuteNonQuery();
+    }
+
     public DurablePackageRecord Put(string key, string type, string payload,
         SchedulerPriority priority, SchedulerWorkKind workKind)
     {
