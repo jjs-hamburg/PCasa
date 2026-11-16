@@ -307,11 +307,23 @@ public partial class MainWindow
             ViewerToolCancelButton.IsEnabled = false;
             CropUndoButton.IsEnabled = CropRedoButton.IsEnabled = false;
         }
+        // The visible image's file extension is authoritative even before
+        // the asynchronous database metadata arrives. Unsupported/RAW/video
+        // tools are disabled upfront, not clickable prompts.
+        var currentFile = _viewerSequence is { } seq &&
+            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < seq.Count
+                ? seq.At(_viewerCurrentIndex).FileName
+                : _viewerImageInfo?.LocalPath;
+        var editable = currentFile is not null &&
+            EditableImageFormats.Supports(currentFile);
+        EditorToolTabs.IsEnabled = editable && _externalEditReview is null;
         foreach (var tool in _editorToolLabels)
-            tool.Button.IsEnabled = _externalEditReview is null;
+            tool.Button.IsEnabled = editable && _externalEditReview is null;
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
                 button.IsEnabled = _externalEditReview is null;
+        // Sliders must be visibly disabled as well. The editor tab control
+        // disables its descendants without disabling GPS, tags or navigation.
         ViewerCropFooter.Visibility = Visibility.Visible;
     }
 
