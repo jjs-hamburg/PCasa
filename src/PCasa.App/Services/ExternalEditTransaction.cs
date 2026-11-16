@@ -460,7 +460,6 @@ public static class ExternalEditTransaction
                 // IPTC and GPS to the layered PSD BEFORE its atomic copy.
                 // This never re-encodes the Photoshop pixels or changes the JPEG.
                 if (RawImageSource.IsPsdPath(source) &&
-                    !RawImageSource.IsPsdPath(session.OriginalPath) &&
                     session.Finalizing is null)
                     ExternalResultMetadata.CopyAll(session.OriginalPath, source, token);
                 var destination = session.FinalTarget ??
