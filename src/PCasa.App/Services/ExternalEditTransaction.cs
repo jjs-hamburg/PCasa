@@ -284,7 +284,7 @@ public static class ExternalEditTransaction
                         StringComparison.OrdinalIgnoreCase) &&
                     (VideoFormats.IsVideo(session.OriginalPath)
                         ? VideoFormats.IsVideo(path)
-                        : EditableImageFormats.Supports(path)))
+                        : EditableImageFormats.SupportsExternalResult(path)))
                 .Where(path => new FileInfo(path).Length > 0)
                 .ToArray();
             if (candidates.Length > 1)
@@ -403,7 +403,7 @@ public static class ExternalEditTransaction
             if (RawImageSource.IsRawPath(source) ||
                 (VideoFormats.IsVideo(session.OriginalPath)
                     ? !VideoFormats.IsVideo(source)
-                    : !EditableImageFormats.Supports(source)))
+                    : !EditableImageFormats.SupportsExternalResult(source)))
                 throw new NotSupportedException(UiLanguage.T(
                     "Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
             if (new FileInfo(source).Length == 0)
