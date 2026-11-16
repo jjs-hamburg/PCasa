@@ -306,6 +306,18 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
+            // The scheduler has drained all critical source mutations. Only
+            // persistent scan packages may resume when PCasa starts again.
+            // This is a journal state transition, not a filesystem operation.
+            try
+            {
+                var retired = new DurablePackageJournal(_database)
+                    .RetireUnfinishedFileJobs();
+                if (retired > 0)
+                    PCasaDiagnostics.WriteMessage("Shutdown.FileJobs",
+                        retired + " Dateioperationen mit der Sitzung beendet.");
+            }
+            catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Journal", ex); }
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;
