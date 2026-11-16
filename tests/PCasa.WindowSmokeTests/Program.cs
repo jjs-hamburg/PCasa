@@ -379,6 +379,43 @@ internal static class Program
                 toolCards.Any(card =>
                     card.Children.OfType<TextBlock>().Count() != 1))
                 throw new Exception("Editor icon controls are not uniform.");
+            // Alpha.35: RAW viewing must disable EVERY editing tab and
+            // quick-action icon before a click, not show a two-click error.
+            var seqField = typeof(PCasa.App.MainWindow).GetField("_viewerSequence",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var indexField = typeof(PCasa.App.MainWindow).GetField("_viewerCurrentIndex",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var controlsMethod = typeof(PCasa.App.MainWindow).GetMethod(
+                "UpdateEditControls", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var oldSequence = seqField.GetValue(window);
+            var oldIndex = indexField.GetValue(window);
+            try
+            {
+                var rawIndex = new[] { thumbEntries[2] with { FileName = "photo.arw" } };
+                seqField.SetValue(window, PhotoSequence.Create(rawIndex,
+                    new HashSet<long>(), 12L, PhotoSequenceScope.Gallery));
+                indexField.SetValue(window, 0);
+                controlsMethod.Invoke(window, null);
+                if (tabs.IsEnabled || toolButtons.Any(btn => btn.IsEnabled))
+                    throw new Exception("RAW editor remains clickable.");
+
+                var jpegIndex = new[] { thumbEntries[2] };
+                seqField.SetValue(window, PhotoSequence.Create(jpegIndex,
+                    new HashSet<long>(), 12L, PhotoSequenceScope.Gallery));
+                controlsMethod.Invoke(window, null);
+                if (!tabs.IsEnabled || toolButtons.Any(btn => !btn.IsEnabled))
+                    throw new Exception("JPEG editor did not become available.");
+            }
+            finally
+            {
+                seqField.SetValue(window, oldSequence);
+                indexField.SetValue(window, oldIndex);
+                controlsMethod.Invoke(window, null);
+            }
+
             var activeLanguage = UiLanguage.Current.Code;
             try
             {
