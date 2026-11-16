@@ -185,6 +185,7 @@ public partial class MainWindow
 
     private ExternalEditReview? _externalEditReview;
     private IDisposable? _externalEditSchedulerLease;
+    private bool _externalEditLaunchPending;
 
     private void SuspendSchedulerForExternalEdit()
     {
@@ -241,9 +242,10 @@ public partial class MainWindow
     {
         try
         {
-            if (_externalEditReview is not null)
+            if (_externalEditReview is not null || _externalEditLaunchPending)
                 throw new InvalidOperationException(UiLanguage.T(
                     "Bitte die laufende externe Bearbeitung zuerst abschließen."));
+            _externalEditLaunchPending = true;
             var source = (await SelectedGalleryPathsAsync([id])).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(source)) return;
             if (RawImageSource.IsRawPath(source))
@@ -354,6 +356,7 @@ public partial class MainWindow
             }
             ShowFileActionError(ex);
         }
+        finally { _externalEditLaunchPending = false; }
     }
 
     private async Task PresentExternalResultAsync(ExternalEditReview review)
