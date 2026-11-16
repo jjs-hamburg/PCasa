@@ -69,6 +69,11 @@ internal static class Program
                 "PASS: Manual gallery deletion can classify recycle-bin policy without scheduler or NAS probe.");
 
             var app = new PCasa.App.App();
+            // A native libvips operation cache retaining the source file on
+            // Windows prevents File.Replace after editing that same photo.
+            if (NetVips.Cache.MaxFiles != 0)
+                throw new Exception("PCasa still caches native original-file handles.");
+            Console.WriteLine("PASS: Native image cache cannot retain original-file handles.");
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
