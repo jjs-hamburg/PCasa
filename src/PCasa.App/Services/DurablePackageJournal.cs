@@ -83,6 +83,18 @@ public sealed class DurablePackageJournal
                 """;
             migrate.ExecuteNonQuery();
         }
+        // Upgrade in-flight Alpha.33 databases: old image edits already parked
+        // with a retry timestamp must NOT keep retrying after this version
+        // starts. The durable recipe, cursor and last error remain intact.
+        using (var park = db.CreateCommand())
+        {
+            park.CommandText = """
+                UPDATE scheduler_packages
+                   SET retry_after_utc=NULL
+                 WHERE package_type='image-edit-v1' AND state='deferred';
+                """;
+            park.ExecuteNonQuery();
+        }
     }
 
     public DurablePackageRecord Put(string key, string type, string payload,
