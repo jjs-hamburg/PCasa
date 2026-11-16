@@ -442,8 +442,7 @@ public partial class MainWindow
         {
             if (await HasUnfinishedImageEditAsync(info.Id))
                 throw new InvalidOperationException(UiLanguage.T(
-                    "Für dieses Bild ist bereits ein Speicherauftrag vorgemerkt. " +
-                    "Bitte dessen Status im Taskmanager prüfen; keinen zweiten Auftrag starten."));
+                    "Für dieses Bild ist bereits ein Speicherauftrag vorgemerkt. Bitte dessen Status im Taskmanager prüfen; keinen zweiten Auftrag starten."));
             if (asCopy)
             {
                 // A NAS File.Exists must never block the WPF dispatcher.
