@@ -69,6 +69,9 @@ public partial class MainWindow
         _externalEditPauseActive = true;
         _backgroundDebounceTimer?.Stop();
         _backgroundCurrentScanCancellation?.Cancel();
+        // The first-import pump is distinct from background reconciliation.
+        // Stop its current file step too; its durable cursor survives.
+        _initialScanCancellation?.Cancel();
         _cacheMaintenanceCancellation?.Cancel();
         _scheduler.NotifyTaskViewChanged();
     }
@@ -80,6 +83,9 @@ public partial class MainWindow
         if (!_backgroundMonitorClosing && _backgroundPending.Count > 0 &&
             _backgroundScanSettings?.Enabled == true)
             _backgroundDebounceTimer?.Start();
+        // A yielded first import must be re-admitted only AFTER the lease
+        // has been released. Do not silently strand its saved file cursor.
+        if (!Dispatcher.HasShutdownStarted) QueuePendingInitialScans();
         _scheduler.NotifyTaskViewChanged();
     }
     // Human-readable reason when Taskmanager has no actionable work.
