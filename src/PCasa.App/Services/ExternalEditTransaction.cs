@@ -66,9 +66,18 @@ public static class ExternalEditTransaction
         var pending = JsonSerializer.Deserialize<ExternalEditSnapshot>(
             File.ReadAllText(SessionFile))
             ?? throw new InvalidDataException("ExternalEdit: session.json ist ungültig.");
-        if (pending.Id == Guid.Empty ||
-            !Path.GetFullPath(pending.DirectoryPath).Equals(
-                Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase) ||
+        // Alpha.33 stored the work image directly in ExternalEdit. Continue
+        // accepting that manifest so upgrades never discard a recoverable edit.
+        // New sessions have their own directory; a locked old photo must not
+        // prevent the next independent session from starting.
+        var legacy = Path.GetFullPath(pending.DirectoryPath).Equals(
+            Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase);
+        var isolated = Path.GetFullPath(
+                Path.GetDirectoryName(pending.DirectoryPath) ?? string.Empty).Equals(
+                Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase) &&
+            Path.GetFileName(pending.DirectoryPath).Equals(
+                "session-" + pending.Id.ToString("N"), StringComparison.OrdinalIgnoreCase);
+        if (pending.Id == Guid.Empty || !(legacy || isolated) ||
             !Path.GetFileName(pending.BackupPath).StartsWith(
                 VideoFormats.IsVideo(pending.OriginalPath) ? "video." : "photo.",
                 StringComparison.OrdinalIgnoreCase))
@@ -100,6 +109,80 @@ public static class ExternalEditTransaction
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+
+    // Files from a committed session can remain open in Topaz/PhotoCraft.
+    // They are garbage to collect, not an active editing transaction. Never
+    // delete an active manifest or reuse an old editor's fixed filename.
+    public static int PendingCleanupCount()
+    {
+        lock (Gate)
+        {
+            if (!Directory.Exists(DirectoryPath)) return 0;
+            var active = ReadPending();
+            var directories = Directory.EnumerateDirectories(DirectoryPath, "session-*")
+                .Count(dir => !dir.Equals(active?.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase));
+            var legacy = active is not null &&
+                active.DirectoryPath.Equals(DirectoryPath, StringComparison.OrdinalIgnoreCase);
+            return directories + (legacy ? 0 : Directory.EnumerateFiles(DirectoryPath)
+                .Count(file => !Path.GetFileName(file).Equals("session.json",
+                    StringComparison.OrdinalIgnoreCase) &&
+                    !Path.GetFileName(file).Equals("session.json.tmp",
+                    StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    public static int CleanupCompletedWorkspaces()
+    {
+        lock (Gate)
+        {
+            if (!Directory.Exists(DirectoryPath)) return 0;
+            var active = ReadPending();
+            foreach (var folder in Directory.EnumerateDirectories(DirectoryPath, "session-*"))
+            {
+                if (folder.Equals(active?.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                TryCleanupFolder(folder);
+            }
+            // Also clean up pre-Alpha.34 flat working images once no legacy
+            // transaction owns them. A locked image stays for the next attempt.
+            if (active is null || !active.DirectoryPath.Equals(
+                    DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                foreach (var file in Directory.EnumerateFiles(DirectoryPath))
+                {
+                    if (Path.GetFileName(file) is "session.json" or "session.json.tmp")
+                        continue;
+                    try { File.Delete(file); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    { PCasaDiagnostics.Write("ExternalEdit.CleanupPending", ex); }
+                }
+            return PendingCleanupCount();
+        }
+    }
+
+    private static void TryCleanupFolder(string folder)
+    {
+        try { if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The export/launcher may still hold photo.jpg. This must never
+            // turn an already committed Save or Cancel into a failed action.
+            PCasaDiagnostics.Write("ExternalEdit.CleanupPending", ex);
+        }
+    }
+
+    private static void Finish(ExternalEditSnapshot session)
+    {
+        // The durable decision is committed BEFORE any best-effort cleanup.
+        // If a crash follows this deletion, abandoned files remain isolated
+        // and never masquerade as a live transaction.
+        File.Delete(SessionFile);
+        if (!session.DirectoryPath.Equals(DirectoryPath, StringComparison.OrdinalIgnoreCase))
+            TryCleanupFolder(session.DirectoryPath);
+        else
+            CleanupCompletedWorkspaces();
+    }
+
     public static ExternalEditSnapshot Begin(string original, CancellationToken token = default,
         Action<long, long>? progress = null)
     {
@@ -113,16 +196,14 @@ public static class ExternalEditTransaction
             if (File.Exists(SessionFile))
                 throw new InvalidOperationException(
                     UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
-            // Nothing can be removed while a persisted session exists.
-            // A leftover directory without a manifest is a previously
-            // completed/incomplete staging attempt, not an active edit.
-            if (Directory.Exists(DirectoryPath))
-                Directory.Delete(DirectoryPath, recursive: true);
             Directory.CreateDirectory(DirectoryPath);
-
+            CleanupCompletedWorkspaces();
+            var id = Guid.NewGuid();
+            var sessionDirectory = Path.Combine(DirectoryPath, "session-" + id.ToString("N"));
+            Directory.CreateDirectory(sessionDirectory);
             var inputName = (VideoFormats.IsVideo(path) ? "video" : "photo") +
                 Path.GetExtension(path).ToLowerInvariant();
-            var work = Path.Combine(DirectoryPath, inputName);
+            var work = Path.Combine(sessionDirectory, inputName);
             try
             {
                 using (SourceFileLocks.Enter(path, token))
@@ -167,7 +248,7 @@ public static class ExternalEditTransaction
                     // A broken source is rejected before launching an editor.
                     if (!VideoFormats.IsVideo(work))
                         EditableImageFormats.ValidateStillImage(work);
-                    var session = new ExternalEditSnapshot(Guid.NewGuid(), path,
+                    var session = new ExternalEditSnapshot(id, path,
                         work, checksum, originalLength, originalWrite,
                         DateTime.UtcNow, []);
                     WritePending(session);
@@ -178,8 +259,7 @@ public static class ExternalEditTransaction
             {
                 // A published manifest means recovery must be possible.
                 if (!File.Exists(SessionFile))
-                    try { Directory.Delete(DirectoryPath, recursive: true); }
-                    catch (IOException) { }
+                    TryCleanupFolder(sessionDirectory);
                 throw;
             }
         }
@@ -195,7 +275,7 @@ public static class ExternalEditTransaction
         lock (Gate)
         {
             CheckIdentity(session);
-            var candidates = Directory.EnumerateFiles(DirectoryPath)
+            var candidates = Directory.EnumerateFiles(session.DirectoryPath)
                 .Where(path => !path.Equals(SessionFile,
                     StringComparison.OrdinalIgnoreCase) &&
                     !path.Equals(session.BackupPath,
@@ -297,7 +377,7 @@ public static class ExternalEditTransaction
                 // no Undo entry are needed.
                 var finalizing = session with { Finalizing = decision };
                 WritePending(finalizing);
-                Directory.Delete(DirectoryPath, recursive: true);
+                Finish(finalizing);
                 return null;
             }
 
@@ -308,7 +388,7 @@ public static class ExternalEditTransaction
                     "Das externe Programm hat kein Ergebnis gespeichert."), source);
             source = Path.GetFullPath(source);
             if (!Path.GetDirectoryName(source)!.Equals(
-                    DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                    session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
                     "ExternalEdit: Ergebnis liegt nicht im Arbeitsverzeichnis.");
             if (RawImageSource.IsRawPath(source) ||
@@ -350,7 +430,7 @@ public static class ExternalEditTransaction
                     }
                     if (Hash(session.OriginalPath) != Hash(source))
                         throw new IOException("ExternalEdit: Speichern nicht überprüfbar.");
-                    Directory.Delete(DirectoryPath, recursive: true);
+                    Finish(session);
                     return session.OriginalPath;
                 }
 
@@ -365,7 +445,7 @@ public static class ExternalEditTransaction
                     CopyAtomic(source, destination, replace: false, token, progress);
                 else if (Hash(destination) != Hash(source))
                     throw new IOException("ExternalEdit: Kopie besitzt einen anderen Inhalt.");
-                Directory.Delete(DirectoryPath, recursive: true);
+                Finish(session);
                 return destination;
             }
         }
