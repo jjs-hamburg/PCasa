@@ -24,9 +24,12 @@ public static class RawImageSource
 
     public static bool IsRawPath(string path) => Extensions.Contains(Path.GetExtension(path));
 
+    public static bool IsPsdPath(string path) =>
+        Path.GetExtension(path).Equals(".psd", StringComparison.OrdinalIgnoreCase);
+
     public static string Resolve(string path, CancellationToken cancellationToken = default)
     {
-        if (!IsRawPath(path)) return path;
+        if (!IsRawPath(path) && !IsPsdPath(path)) return path;
         cancellationToken.ThrowIfCancellationRequested();
 
         // Native libvips 8.18+ has a libraw loader when the native build
@@ -191,7 +194,10 @@ public static class RawImageSource
                     "ExifTool für die eingebettete RAW-Vorschau fehlt.", executable);
 
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            foreach (var tag in new[] { "JpgFromRaw", "PreviewImage", "OtherImage", "ThumbnailImage" })
+            var previewTags = IsPsdPath(path)
+                ? new[] { "PreviewImage", "ThumbnailImage", "PhotoshopThumbnail", "JpgFromRaw" }
+                : new[] { "JpgFromRaw", "PreviewImage", "OtherImage", "ThumbnailImage" };
+            foreach (var tag in previewTags)
             {
                 token.ThrowIfCancellationRequested();
                 var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -215,8 +221,8 @@ public static class RawImageSource
         }
 
         throw new NotSupportedException(
-            "RAW-Datei lässt sich weder direkt decodieren, noch enthält sie eine " +
-            "verwendbare eingebettete JPEG-Vorschau: " + path);
+            (IsPsdPath(path) ? "PSD" : "RAW") +
+            " lässt sich nicht decodieren und enthält keine JPEG-Vorschau: " + path);
     }
 
     private static void Extract(string executable, string original, string tag,
