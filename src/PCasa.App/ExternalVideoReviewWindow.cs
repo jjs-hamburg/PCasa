@@ -16,6 +16,14 @@ internal sealed class ExternalVideoReviewWindow : Window
     private readonly Button _copy = new();
     private readonly Button _save = new();
     private bool _busy;
+    private bool _hasResult;
+    public void SetHasResult(bool value)
+    {
+        _hasResult = value;
+        if (!_busy)
+            _copy.IsEnabled = _save.IsEnabled = value;
+    }
+
     public ExternalVideoReviewWindow(string fileName,
         Func<Services.ExternalEditDecision, Task<bool>> finish,
         bool hasResult)
@@ -27,8 +35,8 @@ internal sealed class ExternalVideoReviewWindow : Window
         MinWidth = 450;
         MaxHeight = 240;
         ResizeMode = ResizeMode.CanMinimize;
-        Background = new SolidColorBrush(Color.FromRgb(38, 41, 45));
-        Foreground = Brushes.White;
+        SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
+        SetResourceReference(ForegroundProperty, "PcasaTextBrush");
         var body = new DockPanel { Margin = new Thickness(18) };
         Content = body;
         var footer = new Grid { Margin = new Thickness(0, 20, 0, 0) };
@@ -40,8 +48,7 @@ internal sealed class ExternalVideoReviewWindow : Window
         Add(_cancel, 0, "Abbrechen", Services.ExternalEditDecision.Cancel);
         Add(_copy, 1, "Als Kopie speichern", Services.ExternalEditDecision.SaveCopy);
         Add(_save, 2, "Speichern", Services.ExternalEditDecision.Save);
-        _copy.IsEnabled = hasResult;
-        _save.IsEnabled = hasResult;
+        SetHasResult(hasResult);
         body.Children.Add(new TextBlock
         {
             Text = UiLanguage.T("Externe Bearbeitung beendet: ") + fileName,
@@ -74,7 +81,7 @@ internal sealed class ExternalVideoReviewWindow : Window
                     if (IsVisible)
                     {
                         _cancel.IsEnabled = true;
-                        _copy.IsEnabled = _save.IsEnabled = hasResult;
+                        _copy.IsEnabled = _save.IsEnabled = _hasResult;
                     }
                 }
             };

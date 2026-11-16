@@ -34,7 +34,6 @@ public partial class MainWindow
 
         foreach (var configured in _externalEditors.ForFile(fileName))
         {
-            if (!File.Exists(configured.ExecutablePath)) continue;
             var editor = configured; // Capture immutable program per card.
             var button = new Button
             {
@@ -60,6 +59,11 @@ public partial class MainWindow
                 Margin = new Thickness(0, 5, 0, 0),
                 ToolTip = editor.Name
             };
+            caption.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
+            // Win32 executable icon extraction can stall on antivirus or a
+            // network shortcut. Never perform it synchronously in ShowViewerImage.
+            if (!_externalEditorIconCache.ContainsKey(editor.ExecutablePath))
+                _ = LoadExternalEditorIconAsync(editor.ExecutablePath, button);
             var card = new StackPanel
             {
                 Width = 86,
@@ -73,43 +77,45 @@ public partial class MainWindow
 
     private UIElement CreateExternalEditorIcon(string executable)
     {
-        try
-        {
-            if (!_externalEditorIconCache.TryGetValue(executable, out var source))
-            {
-                using var extracted = System.Drawing.Icon.ExtractAssociatedIcon(executable)
-                    ?? throw new InvalidDataException("No icon in program.");
-                var bitmap = Imaging.CreateBitmapSourceFromHIcon(extracted.Handle,
-                    Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(30, 30));
-                bitmap.Freeze();
-                source = bitmap;
-                _externalEditorIconCache[executable] = source;
-            }
-            return new Image
-            {
-                Source = source,
-                Width = 30, Height = 30,
+        if (_externalEditorIconCache.TryGetValue(executable, out var image))
+            return new Image {
+                Source = image, Width = 30, Height = 30,
                 Stretch = Stretch.Uniform,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false
             };
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-            or ArgumentException or Win32Exception or InvalidDataException
-            or NotSupportedException)
-        {
-            PCasaDiagnostics.Write("ExternalEditor.Icon", ex);
-            return new TextBlock
-            {
-                Text = "↗", FontSize = 24,
-                Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-        }
+        var fallback = new TextBlock {
+            Text = "↗", FontSize = 24,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        fallback.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
+        return fallback;
     }
 
+    private async Task LoadExternalEditorIconAsync(string executable, Button button)
+    {
+        try
+        {
+            var image = await Task.Run(() =>
+            {
+                using var icon = System.Drawing.Icon.ExtractAssociatedIcon(executable);
+                if (icon is null) return null;
+                var pixels = Imaging.CreateBitmapSourceFromHIcon(icon.Handle,
+                    Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(30, 30));
+                pixels.Freeze();
+                return (ImageSource)pixels;
+            });
+            if (image is null || Dispatcher.HasShutdownStarted) return;
+            _externalEditorIconCache[executable] = image;
+            if (!ExternalEditorToolsList.Children.OfType<StackPanel>()
+                    .Any(card => card.Children.Contains(button))) return;
+            button.Content = CreateExternalEditorIcon(executable);
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEditor.Icon", ex);
+        }
+    }
 
     private string? CachedExternalEditorSource(long id)
     {
@@ -171,11 +177,65 @@ public partial class MainWindow
         public string Name { get; } = name;
         public bool IsVideo { get; } = video;
         public string? ResultPath { get; set; }
+        public DateTime ResultWriteUtc { get; set; }
+        public long ResultSize { get; set; }
         public bool Ready { get; set; }
         public bool Busy { get; set; }
     }
 
     private ExternalEditReview? _externalEditReview;
+    private IDisposable? _externalEditSchedulerLease;
+
+    private void SuspendSchedulerForExternalEdit()
+    {
+        if (_externalEditSchedulerLease is not null) return;
+        _externalEditSchedulerLease = _scheduler.BeginExternalEditInteraction();
+        PauseBackgroundForExternalEdit();
+    }
+
+    private void ResumeSchedulerAfterExternalEdit()
+    {
+        var lease = _externalEditSchedulerLease;
+        _externalEditSchedulerLease = null;
+        lease?.Dispose();
+        ResumeBackgroundAfterExternalEdit();
+    }
+
+    // Call at startup before the background monitor is allowed to enqueue
+    // more ingestion work. A persisted single session owns the same lease
+    // after a crash; it must never be accidentally overwritten.
+    private void RecoverExternalEditSchedulerLease()
+    {
+        try
+        {
+            if (ExternalEditTransaction.FindPending() is not null)
+                SuspendSchedulerForExternalEdit();
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEdit.Recovery", ex);
+            // Treat an unreadable manifest as busy, never overwrite/delete.
+            SuspendSchedulerForExternalEdit();
+        }
+    }
+
+    // One review is the sole authoritative UI session. Its lifetime is NOT
+    // inferred from Process.Exited, since launchers can hand off to another
+    // process or to an already-running instance.
+    private bool _externalReviewActivationHooked;
+    private bool _externalReviewRefreshing;
+    private ExternalVideoReviewWindow? _externalVideoReviewDialog;
+
+    private void EnsureExternalReviewActivationHook()
+    {
+        if (_externalReviewActivationHooked) return;
+        _externalReviewActivationHooked = true;
+        Activated += async (_, _) =>
+        {
+            if (_externalEditReview is { Ready: true, Busy: false } review)
+                await PresentExternalResultAsync(review);
+        };
+    }
 
     private async Task StartExternalEditorAsync(long id, ExternalEditorProgram? editor)
     {
@@ -189,176 +249,212 @@ public partial class MainWindow
             if (RawImageSource.IsRawPath(source))
                 throw new NotSupportedException(UiLanguage.T(
                     "RAW-Dateien können nicht extern bearbeitet werden."));
-            if (editor is null)
-                throw new InvalidOperationException(UiLanguage.T(
-                    "Bitte zuerst unter Optionen ein externes Programm konfigurieren."));
-            if (!editor.Matches(source))
+            if (editor is null || !editor.Matches(source))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Dieses Programm ist für das Dateiformat nicht konfiguriert."));
             if (_cropSavePending || _pendingEditImageIds.Contains(id))
-                throw new InvalidOperationException(
-                    UiLanguage.T("Für dieses Bild wird noch ein Speicherauftrag ausgeführt."));
-            // Never discard unsaved PCasa edits by launching another editor.
+                throw new InvalidOperationException(UiLanguage.T(
+                    "Für dieses Bild wird noch ein Speicherauftrag ausgeführt."));
             if (_viewerOpen && !ConfirmCropExit()) return;
 
-            // A previous application crash leaves a local, verified snapshot.
-            // Resume that transaction, do not launch over a possibly edited
-            // original and never overwrite the emergency backup.
-            var pending = await Task.Run(
-                () => ExternalEditTransaction.FindPending(source));
+            EnsureExternalReviewActivationHook();
+            SuspendSchedulerForExternalEdit();
+            // Reopening the same image after a crash restores the durable
+            // review. A different image is blocked by Begin's manifest gate.
+            var pending = await Task.Run(() => ExternalEditTransaction.FindPending(source));
             if (pending is not null)
             {
-                var recovered = new ExternalEditReview(pending, id,
-                    editor?.Name ?? "Externe Bearbeitung", VideoFormats.IsVideo(source));
-                _externalEditReview = recovered;
-                await PresentExternalResultAsync(recovered);
+                var old = new ExternalEditReview(pending, id, editor.Name,
+                    VideoFormats.IsVideo(source)) { Ready = true };
+                _externalEditReview = old;
+                await PresentExternalResultAsync(old);
                 return;
             }
 
-            StatusText.Text = UiLanguage.T("Original für externe Bearbeitung sichern …");
-            var snapshot = await Task.Run(() => ExternalEditTransaction.Begin(source));
-            if (Dispatcher.HasShutdownStarted) return; // Snapshot survives app exit.
+            var stageKey = "external:stage:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(stageKey,
+                UiLanguage.T("Lokale Arbeitskopie erstellen …"), 100);
+            ExternalEditSnapshot snapshot;
+            try
+            {
+                snapshot = await _scheduler.RunAsync(stageKey,
+                    SchedulerPriority.ManualAction,
+                    token => ExternalEditTransaction.Begin(source, token,
+                        (completed, total) => _scheduler.ReportProgress(stageKey,
+                            UiLanguage.T("Lokale Arbeitskopie erstellen …"),
+                            total <= 0 ? 100 : (int)(completed * 100 / total),
+                            100, source)),
+                    workKind: SchedulerWorkKind.Catalog);
+            }
+            finally { EndVisibleManualOperation(stageKey); }
+            if (Dispatcher.HasShutdownStarted) return; // Manifest survives crash.
 
-            var review = new ExternalEditReview(snapshot, id,
-                editor?.Name ?? UiLanguage.T("Windows: Öffnen mit …"),
-                VideoFormats.IsVideo(source));
+            var review = new ExternalEditReview(snapshot, id, editor.Name,
+                VideoFormats.IsVideo(source)) { Ready = true };
             _externalEditReview = review;
             UpdateEditControls();
 
-            Process? process = null;
             try
             {
-                // The editor gets the ACTUAL original path. There is no local
-                // working photo, no import dialog and no sidecar.
                 if (!File.Exists(editor.ExecutablePath))
                     throw new FileNotFoundException(UiLanguage.T(
                         "Programmdatei nicht gefunden: ") + editor.ExecutablePath);
-                var start = new ProcessStartInfo
+                // The EXE receives ONLY the local fixed working image.
+                // Never use the gallery folder as a process work directory.
+                var launch = new ProcessStartInfo
                 {
                     FileName = editor.ExecutablePath,
-                    WorkingDirectory = Path.GetDirectoryName(source)!,
+                    WorkingDirectory = ExternalEditTransaction.DirectoryPath,
                     UseShellExecute = false
                 };
-                // ArgumentList handles spaces/umlauts without shell quoting.
-                start.ArgumentList.Add(source);
-
-                process = await Task.Run(() => Process.Start(start))
-                    ?? throw new InvalidOperationException(UiLanguage.T(
-                        UiLanguage.T("Das externe Programm hat keinen beobachtbaren Prozess zurückgegeben.")));
-                StatusText.Text = UiLanguage.T("Externes Programm läuft: ") + review.Name;
-                // A tracked process returns control to PCasa after termination.
-                // Never wait synchronously on the WPF UI thread.
-                await process.WaitForExitAsync();
-                if (Dispatcher.HasShutdownStarted || !ReferenceEquals(
-                        _externalEditReview, review)) return;
-                await PresentExternalResultAsync(review);
+                launch.ArgumentList.Add(snapshot.BackupPath);
+                await Task.Run(() =>
+                {
+                    using var launched = Process.Start(launch)
+                        ?? throw new IOException(UiLanguage.T(
+                            "Das externe Programm konnte nicht gestartet werden."));
+                    // Deliberately NO WaitForExit: Topaz may use a launcher,
+                    // a secondary process or a pre-existing instance.
+                });
+                if (Dispatcher.HasShutdownStarted) return;
+                StatusText.Text = UiLanguage.T("Externe Bearbeitung");
+                // The application's main process may keep running or be a
+                // launcher. PCasa makes NO exit-time assumption. Returning
+                // focus to PCasa will refresh the locally exported result.
+                UpdateEditControls();
             }
-            catch (Exception)
+            catch
             {
-                // An abnormal return must NEVER discard the only backup.
-                // If the process was launched, leave the review recoverable.
-                if (process is null && ReferenceEquals(_externalEditReview, review))
+                // No external process was successfully launched: Cancel
+                // removes only the local work directory; source is untouched.
+                if (ReferenceEquals(_externalEditReview, review))
                 {
                     await Task.Run(() => ExternalEditTransaction.Commit(
                         snapshot, null, ExternalEditDecision.Cancel));
                     _externalEditReview = null;
+                    ResumeSchedulerAfterExternalEdit();
                     UpdateEditControls();
                 }
                 throw;
             }
-            finally { process?.Dispose(); }
         }
-        catch (Exception ex) { ShowFileActionError(ex); }
+        catch (Exception ex)
+        {
+            // No persisted transaction => no external editor still owns the
+            // global scheduling pause. A persisted one is deliberately kept.
+            try
+            {
+                if (_externalEditReview is null &&
+                    ExternalEditTransaction.FindPending() is null)
+                    ResumeSchedulerAfterExternalEdit();
+            }
+            catch (Exception recoveryError)
+            {
+                PCasaDiagnostics.Write("ExternalEdit.RecoveryCheck", recoveryError);
+            }
+            ShowFileActionError(ex);
+        }
     }
 
     private async Task PresentExternalResultAsync(ExternalEditReview review)
     {
-        if (!ReferenceEquals(_externalEditReview, review)) return;
+        if (!ReferenceEquals(_externalEditReview, review) ||
+            review.Busy || _externalReviewRefreshing) return;
+        _externalReviewRefreshing = true;
         try
         {
-            review.ResultPath = await Task.Run(() =>
-                ExternalEditTransaction.DetectResult(review.Snapshot));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-            or InvalidDataException)
-        {
-            // Ambiguous exports are never guessed. Keep rollback accessible.
-            PCasaDiagnostics.Write("ExternalEdit.AmbiguousOutput", ex);
-            PcasaDialog.Show(this, ex.Message, UiLanguage.T(
-                "Externe Bearbeitung"), MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-
-        review.Ready = true;
-        if (review.IsVideo)
-        {
-            var dialog = new ExternalVideoReviewWindow(
-                Path.GetFileName(review.Snapshot.OriginalPath),
-                decision => CompleteExternalReviewAsync(decision),
-                review.ResultPath is not null) { Owner = this };
-            dialog.Show();
-        }
-        else
-        {
-            if (!_viewerOpen)
-                BrowseSurface_ImageOpened(BrowseSurface,
-                    new PCasa.App.Controls.BrowseImageClickedEventArgs(
-                        review.ImageId, System.Windows.Input.ModifierKeys.None));
-            if (!_viewerOpen ||
-                _viewerSequence is null || _viewerCurrentIndex < 0 ||
-                _viewerSequence.At(_viewerCurrentIndex).ImageId != review.ImageId)
+            string? result = null;
+            try
             {
-                // The gallery may have been filtered/rebuilt during a long
-                // external edit. Still expose the SAME three PCasa choices;
-                // never strand the backup merely because the viewer is hidden.
-                new ExternalVideoReviewWindow(
-                    Path.GetFileName(review.Snapshot.OriginalPath),
-                    decision => CompleteExternalReviewAsync(decision),
-                    review.ResultPath is not null) { Owner = this }.Show();
-                return;
+                result = await Task.Run(() =>
+                    ExternalEditTransaction.DetectResult(review.Snapshot));
             }
-
-            if (review.ResultPath is { } output)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or InvalidDataException)
             {
-                try
+                // An in-progress export may be locked. Leave Cancel available
+                // and allow an automatic recheck when PCasa gets focus again.
+                PCasaDiagnostics.Write("ExternalEdit.Output", ex);
+            }
+            if (!ReferenceEquals(_externalEditReview, review)) return;
+            var metadata = result is not null ? await Task.Run(() =>
+            {
+                var f = new FileInfo(result);
+                return (Length: f.Length, Time: f.LastWriteTimeUtc);
+            }) : (Length: 0L, Time: DateTime.MinValue);
+            var changed = !string.Equals(result, review.ResultPath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                (result is not null && (metadata.Length != review.ResultSize ||
+                    metadata.Time != review.ResultWriteUtc));
+            review.ResultPath = result;
+            review.ResultSize = metadata.Length;
+            review.ResultWriteUtc = metadata.Time;
+            review.Ready = true;
+
+            if (review.IsVideo)
+            {
+                if (_externalVideoReviewDialog is null ||
+                    !_externalVideoReviewDialog.IsVisible)
                 {
-                    var required = GetViewerRequiredPixelSize();
-                    var bitmap = await Task.Run(() =>
-                    {
-                        var (width, height) = EditableImageFormats.Dimensions(output);
-                        var info = new PhotoViewerImageInfo(review.ImageId, output,
-                            Path.GetFileName(output), width, height);
-                        return PhotoViewerImageLoader.Load(info, required,
-                            CancellationToken.None);
-                    });
-                    if (!ReferenceEquals(_externalEditReview, review)) return;
-                    // Fence the previous asynchronous original decode, which
-                    // otherwise could replace the new result on-screen.
-                    _viewerDecodeCancellation?.Cancel();
-                    ++_viewerImageRequest;
-                    _viewerImageInfo = new PhotoViewerImageInfo(review.ImageId,
-                        review.Snapshot.OriginalPath,
+                    var dialog = new ExternalVideoReviewWindow(
                         Path.GetFileName(review.Snapshot.OriginalPath),
-                        bitmap.PixelWidth, bitmap.PixelHeight);
-                    _photoEditSession = null;
-                    SetViewerBitmap(bitmap);
-                    ApplyViewerImageLayout();
+                        choice => CompleteExternalReviewAsync(choice), result is not null)
+                    { Owner = this };
+                    _externalVideoReviewDialog = dialog;
+                    dialog.Activated += async (_, _) =>
+                    {
+                        if (ReferenceEquals(_externalEditReview, review) &&
+                            !_externalReviewRefreshing)
+                            await PresentExternalResultAsync(review);
+                    };
+                    dialog.Closed += (_, _) =>
+                    {
+                        if (ReferenceEquals(_externalVideoReviewDialog, dialog))
+                            _externalVideoReviewDialog = null;
+                    };
+                    dialog.Show();
                 }
-                catch (Exception ex)
+                else _externalVideoReviewDialog.SetHasResult(result is not null);
+            }
+            else
+            {
+                if (!_viewerOpen)
+                    BrowseSurface_ImageOpened(BrowseSurface,
+                        new PCasa.App.Controls.BrowseImageClickedEventArgs(
+                            review.ImageId, System.Windows.Input.ModifierKeys.None));
+                if (changed && result is not null && _viewerOpen &&
+                    _viewerSequence is not null && _viewerCurrentIndex >= 0 &&
+                    _viewerSequence.At(_viewerCurrentIndex).ImageId == review.ImageId)
                 {
-                    // If an external output cannot be decoded, keep the
-                    // verified backup and allow Cancel. Never save blindly.
-                    PCasaDiagnostics.Write("ExternalEdit.ResultPreview", ex);
-                    review.ResultPath = null;
-                    PcasaDialog.Show(this, ex.Message, UiLanguage.T(
-                        "Externe Bearbeitung"), MessageBoxButton.OK,
-                        MessageBoxImage.Warning);
+                    try
+                    {
+                        var size = GetViewerRequiredPixelSize();
+                        var bitmap = await Task.Run(() =>
+                        {
+                            var (width, height) = EditableImageFormats.Dimensions(result);
+                            return PhotoViewerImageLoader.Load(
+                                new PhotoViewerImageInfo(review.ImageId, result,
+                                    Path.GetFileName(result), width, height),
+                                size, CancellationToken.None);
+                        });
+                        if (!ReferenceEquals(_externalEditReview, review)) return;
+                        _viewerDecodeCancellation?.Cancel();
+                        ++_viewerImageRequest;
+                        _photoEditSession = null;
+                        SetViewerBitmap(bitmap);
+                        ApplyViewerImageLayout();
+                    }
+                    catch (Exception ex)
+                    {
+                        PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
+                        review.ResultPath = null;
+                    }
                 }
             }
+            StatusText.Text = UiLanguage.T("Externe Bearbeitung");
+            UpdateEditControls();
         }
-        StatusText.Text = review.ResultPath is null
-            ? UiLanguage.T("Externes Programm beendet – keine Änderungen gefunden.")
-            : UiLanguage.T("Externe Bearbeitung: Abbrechen / Als Kopie speichern / Speichern");
-        UpdateEditControls();
+        finally { _externalReviewRefreshing = false; }
     }
 
     private async Task<bool> CompleteExternalReviewAsync(ExternalEditDecision decision)
@@ -369,12 +465,44 @@ public partial class MainWindow
         UpdateEditControls();
         try
         {
-            var committed = await Task.Run(() =>
-                ExternalEditTransaction.Commit(review.Snapshot,
-                    review.ResultPath, decision));
+            // Re-evaluate the local working folder at commit time:
+            // an export may have finished AFTER the last window activation.
+            var saveKey = "external:commit:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(saveKey,
+                decision == ExternalEditDecision.Cancel
+                    ? UiLanguage.T("Abbrechen")
+                    : decision == ExternalEditDecision.SaveCopy
+                        ? UiLanguage.T("Als Kopie speichern")
+                        : UiLanguage.T("Speichern"), 100);
+            string? committed;
+            try
+            {
+                committed = await _scheduler.RunAsync(saveKey,
+                    SchedulerPriority.ManualAction, token =>
+                    {
+                        var result = decision == ExternalEditDecision.Cancel ? null :
+                            ExternalEditTransaction.DetectResult(review.Snapshot);
+                        _scheduler.ReportProgress(saveKey,
+                            UiLanguage.T("Externe Bearbeitung"), 0, 100,
+                            review.Snapshot.OriginalPath);
+                        var output = ExternalEditTransaction.Commit(review.Snapshot,
+                            result, decision, token,
+                            (done, total) => _scheduler.ReportProgress(saveKey,
+                                UiLanguage.T("Externe Bearbeitung"),
+                                total <= 0 ? 100 : (int)(done * 100 / total),
+                                100, review.Snapshot.OriginalPath));
+                        _scheduler.ReportProgress(saveKey,
+                            UiLanguage.T("Externe Bearbeitung"), 100, 100,
+                            review.Snapshot.OriginalPath);
+                        return output;
+                    }, workKind: SchedulerWorkKind.Catalog);
+            }
+            finally { EndVisibleManualOperation(saveKey); }
             // The file transaction is now complete, even if a subsequent
             // catalog refresh fails. It must not be submitted a second time.
             _externalEditReview = null;
+            _externalVideoReviewDialog?.Close();
+            _externalVideoReviewDialog = null;
             UpdateEditControls();
 
             try
@@ -389,9 +517,12 @@ public partial class MainWindow
                     ex.Message, UiLanguage.T("Externe Bearbeitung"),
                     MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+            // The source mutation/copy and its required catalog re-index
+            // have completed; the suspended scanner may now resume.
+            ResumeSchedulerAfterExternalEdit();
             StatusText.Text = decision switch
             {
-                ExternalEditDecision.Cancel => UiLanguage.T("Original wiederhergestellt."),
+                ExternalEditDecision.Cancel => UiLanguage.T("Externe Bearbeitung"),
                 ExternalEditDecision.SaveCopy => UiLanguage.T("Kopie gespeichert: ") +
                     Path.GetFileName(committed),
                 _ => UiLanguage.T("Externe Bearbeitung gespeichert.")
@@ -417,6 +548,14 @@ public partial class MainWindow
         ExternalEditReview review, string? committed)
     {
         var original = review.Snapshot.OriginalPath;
+        if (committed is null)
+        {
+            // Cancel never touched the original or catalog. Do not queue a
+            // pointless P0 scan or re-index the whole gallery.
+            if (_viewerOpen && _viewerImageInfo?.Id == review.ImageId)
+                ShowViewerImage();
+            return;
+        }
         var folderId = await _galleryCatalogReader.ReadAsync(token =>
         {
             token.ThrowIfCancellationRequested();
@@ -441,14 +580,19 @@ public partial class MainWindow
                         f => f.Id == folderId)
                         ?? throw new IOException(
                             UiLanguage.T("Der Katalogordner der externen Bearbeitung fehlt."));
-                    new BrowseCacheRepository(_database).InvalidateImage(review.ImageId);
-                    var res = _folderScanner.ScanFile(root, original,
-                        cancellationToken: token,
-                        publishCatalogChange: false, forceExifRefresh: true);
-                    if (res.Failed > 0)
-                        throw new IOException(UiLanguage.T("Original konnte nicht katalogisiert werden."));
-                    if (committed is { } copy &&
-                        !copy.Equals(original, StringComparison.OrdinalIgnoreCase))
+                    var isCopy = committed is { } output &&
+                        !output.Equals(original, StringComparison.OrdinalIgnoreCase);
+                    if (!isCopy)
+                    {
+                        new BrowseCacheRepository(_database).InvalidateImage(review.ImageId);
+                        var res = _folderScanner.ScanFile(root, original,
+                            cancellationToken: token,
+                            publishCatalogChange: false, forceExifRefresh: true);
+                        if (res.Failed > 0)
+                            throw new IOException(UiLanguage.T(
+                                "Original konnte nicht katalogisiert werden."));
+                    }
+                    if (isCopy && committed is { } copy)
                     {
                         var result = _folderScanner.ScanFile(root, copy,
                             cancellationToken: token,

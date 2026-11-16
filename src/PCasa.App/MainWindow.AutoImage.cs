@@ -39,6 +39,9 @@ public partial class MainWindow
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(0, 5, 0, 0)
         };
+        // Explicitly bind to the PCasa palette: the inherited foreground
+        // can be black on the dark editor background in Light mode.
+        caption.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
         var item = new StackPanel
         {
             Width = 86, Margin = new Thickness(1, 2, 1, 3)

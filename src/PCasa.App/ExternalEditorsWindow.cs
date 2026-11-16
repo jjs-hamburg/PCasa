@@ -1,12 +1,13 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using Microsoft.Win32;
 using PCasa.App.Services;
 
 namespace PCasa.App;
 
+// Approved Alpha.33 layout: wider application list; no headings, templates
+// or explanatory prose. Add/remove are +/-, arrows reorder the actual list.
 public sealed class ExternalEditorsWindow : Window
 {
     private readonly List<ExternalEditorProgram> _programs;
@@ -15,243 +16,198 @@ public sealed class ExternalEditorsWindow : Window
     private readonly TextBox _exe = new();
     private readonly TextBox _formats = new();
     private int _editingIndex = -1;
-    private bool _binding;
+    private bool _changing;
     public ExternalEditorSettings? SavedSettings { get; private set; }
 
     public ExternalEditorsWindow(ExternalEditorSettings existing)
     {
         Title = UiLanguage.T("Externe Programme verwalten");
-        Width = 780;
-        Height = 475;
-        MinWidth = 670;
-        MinHeight = 420;
+        Width = 840;
+        Height = 390;
+        MinWidth = 680;
+        MinHeight = 315;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        Background = new SolidColorBrush(Color.FromRgb(40, 43, 47));
-        Foreground = Brushes.White;
+        SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
+        SetResourceReference(ForegroundProperty, "PcasaTextBrush");
         _programs = existing.Programs.ToList();
 
-        var root = new Grid { Margin = new Thickness(14) };
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        var root = new Grid { Margin = new Thickness(12) };
+        root.RowDefinitions.Add(new RowDefinition {
+            Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(230) });
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
-        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(310) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
+        root.ColumnDefinitions.Add(new ColumnDefinition {
+            Width = new GridLength(1, GridUnitType.Star) });
         Content = root;
 
         var left = new DockPanel();
         Grid.SetColumn(left, 0);
         root.Children.Add(left);
-        DockPanel.SetDock(left, Dock.Top);
-        left.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Programme (Reihenfolge im Menü)"),
-            FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 8)
-        });
-        var controls = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        var controls = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 7, 0, 0) };
         DockPanel.SetDock(controls, Dock.Bottom);
         left.Children.Add(controls);
-        AddButton(controls, "Hinzufügen", () => Add(new ExternalEditorProgram(
-            UiLanguage.T("Neues Programm"), "", "photo")));
-        AddButton(controls, "Entfernen", Remove);
-        AddButton(controls, "↑", () => Move(-1));
-        AddButton(controls, "↓", () => Move(1));
-        _list.Background = new SolidColorBrush(Color.FromRgb(55, 58, 62));
-        _list.Foreground = Brushes.White;
-        _list.BorderBrush = Brushes.Gray;
-        _list.SelectionChanged += (_, _) => SelectEntry();
+        AddButton(controls, "+", () => AddProgram(), 38);
+        AddButton(controls, "−", Remove, 38);
+        AddButton(controls, "↑", () => Move(-1), 38);
+        AddButton(controls, "↓", () => Move(1), 38);
+        _list.SetResourceReference(Control.BackgroundProperty, "PcasaPanelAltBrush");
+        _list.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
+        _list.SetResourceReference(Control.BorderBrushProperty, "PcasaDividerBrush");
+        _list.SelectionChanged += (_, _) => SelectProgram();
+        // The list is LAST and therefore fills the remaining DockPanel width.
         left.Children.Add(_list);
 
-        var right = new StackPanel();
+        var right = new StackPanel { Margin = new Thickness(0, 0, 0, 0) };
         Grid.SetColumn(right, 2);
         root.Children.Add(right);
-        right.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Bearbeitungsprogramm"),
-            FontSize = 15, FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 12)
-        });
-        AddField(right, UiLanguage.T("Name im Menü"), _name);
-        var exeRow = new DockPanel();
-        AddField(right, UiLanguage.T("Programmdatei (*.exe)"), exeRow);
-        var browse = MakeButton(UiLanguage.T("Durchsuchen …"), Browse);
-        DockPanel.SetDock(browse, Dock.Right);
-        exeRow.Children.Add(browse);
-        _exe.Margin = new Thickness(0, 0, 7, 0);
-        exeRow.Children.Add(_exe);
-        AddField(right, UiLanguage.T("Dateiformate"), _formats);
-        right.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Beispiele: photo, video, *, .jpg;.png"),
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = Brushes.LightGray,
-            Margin = new Thickness(0, 3, 0, 14)
-        });
-        right.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Topaz-Vorlagen (Programmdatei anschließend auswählen):"),
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 0, 0, 6)
-        });
-        var templates = new WrapPanel();
-        right.Children.Add(templates);
-        AddButton(templates, "Topaz Photo", () => Add(
-            new ExternalEditorProgram("Topaz Photo", "", "photo")));
-        AddButton(templates, "Topaz Gigapixel", () => Add(
-            new ExternalEditorProgram("Topaz Gigapixel", "", "photo")));
-        AddButton(templates, "Topaz Video", () => Add(
-            new ExternalEditorProgram("Topaz Video", "", "video")));
+        AddField(right, "Name im Menü", _name);
+        AddField(right, "Programmdatei (*.exe)", MakeBrowseRow());
+        AddField(right, "Dateiformate", _formats);
 
-        var footer = new DockPanel { Margin = new Thickness(0, 12, 0, 0) };
+        var footer = new StackPanel {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 10, 0, 0) };
         Grid.SetRow(footer, 1);
         Grid.SetColumnSpan(footer, 3);
         root.Children.Add(footer);
-        var buttons = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        DockPanel.SetDock(buttons, Dock.Right);
-        footer.Children.Add(buttons);
-        AddButton(buttons, "Abbrechen", () => { DialogResult = false; Close(); });
-        AddButton(buttons, "Speichern", Save);
-        footer.Children.Add(new TextBlock
-        {
-            Text = UiLanguage.T("Programme werden nur auf ausdrücklichen Befehl gestartet."),
-            Foreground = Brushes.LightGray,
-            VerticalAlignment = VerticalAlignment.Center
-        });
-        RefreshList();
-        if (_programs.Count > 0) _list.SelectedIndex = 0;
-        else Bind(-1);
+        AddButton(footer, "Abbrechen", () => { DialogResult = false; Close(); }, 90);
+        AddButton(footer, "Speichern", Save, 90);
+        RefreshList(0);
     }
 
-    private static void AddField(Panel parent, string text, UIElement value)
+    private UIElement MakeBrowseRow()
     {
-        parent.Children.Add(new TextBlock
-        {
-            Text = text, Margin = new Thickness(0, 5, 0, 4),
-            Foreground = Brushes.White
-        });
-        if (value is Control control) control.MinHeight = 28;
-        parent.Children.Add(value);
+        var row = new DockPanel();
+        var browse = MakeButton(UiLanguage.T("Durchsuchen …"), Browse);
+        DockPanel.SetDock(browse, Dock.Right);
+        row.Children.Add(browse);
+        _exe.Margin = new Thickness(0, 0, 7, 0);
+        row.Children.Add(_exe);
+        return row;
     }
 
-    private static Button MakeButton(string text, Action action)
+    private static void AddField(Panel parent, string label, UIElement editor)
     {
-        var button = new Button
-        {
-            Content = UiLanguage.T(text),
-            Padding = new Thickness(9, 5, 9, 5),
-            Margin = new Thickness(0, 0, 5, 5),
-            MinHeight = 29
-        };
+        var caption = new TextBlock {
+            Text = UiLanguage.T(label), Margin = new Thickness(0, 8, 0, 4) };
+        parent.Children.Add(caption);
+        if (editor is Control control) control.MinHeight = 28;
+        parent.Children.Add(editor);
+    }
+
+    private static Button MakeButton(string label, Action action)
+    {
+        var button = new Button {
+            Content = label, Padding = new Thickness(9, 5, 9, 5),
+            Margin = new Thickness(0, 0, 6, 4), MinHeight = 30 };
         button.Click += (_, _) => action();
         return button;
     }
 
-    private static void AddButton(Panel panel, string text, Action action)
-        => panel.Children.Add(MakeButton(text, action));
-
-    private void RefreshList()
+    private static void AddButton(Panel parent, string label, Action action, double width)
     {
-        var selected = _list.SelectedIndex;
-        _binding = true;
-        _list.ItemsSource = null;
-        _list.ItemsSource = _programs;
-        _binding = false;
-        if (selected >= 0 && selected < _programs.Count)
-            _list.SelectedIndex = selected;
+        var button = MakeButton(UiLanguage.T(label), action);
+        button.MinWidth = width;
+        parent.Children.Add(button);
     }
 
-    private void CommitCurrent()
+    private void CommitFields()
     {
-        if (_binding || _editingIndex < 0 || _editingIndex >= _programs.Count)
-            return;
+        if (_changing || _editingIndex < 0 || _editingIndex >= _programs.Count) return;
         _programs[_editingIndex] = new ExternalEditorProgram(
             _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim());
     }
 
-    private void Bind(int index)
+    private void RefreshList(int selected)
     {
-        _binding = true;
+        _changing = true;
+        _list.ItemsSource = null;
+        _list.ItemsSource = _programs;
+        _list.SelectedIndex = _programs.Count == 0
+            ? -1 : Math.Clamp(selected, 0, _programs.Count - 1);
+        _changing = false;
+        LoadFields(_list.SelectedIndex);
+    }
+
+    private void LoadFields(int index)
+    {
         _editingIndex = index;
-        var program = index >= 0 && index < _programs.Count
+        var entry = index is >= 0 && index < _programs.Count
             ? _programs[index] : new ExternalEditorProgram("", "", "photo");
-        _name.Text = program.Name;
-        _exe.Text = program.ExecutablePath;
-        _formats.Text = program.Formats;
-        _binding = false;
+        _changing = true;
+        _name.Text = entry.Name;
+        _exe.Text = entry.ExecutablePath;
+        _formats.Text = entry.Formats;
+        _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled = index >= 0;
+        _changing = false;
     }
 
-    private void SelectEntry()
+    private void SelectProgram()
     {
-        if (_binding) return;
+        if (_changing) return;
         var selected = _list.SelectedIndex;
-        CommitCurrent();
-        Bind(selected);
+        CommitFields();
+        LoadFields(selected);
     }
 
-    private void Add(ExternalEditorProgram program)
+    private void AddProgram()
     {
-        CommitCurrent();
-        _programs.Add(program);
-        _editingIndex = -1;
-        RefreshList();
-        _list.SelectedIndex = _programs.Count - 1;
+        CommitFields();
+        _programs.Add(new ExternalEditorProgram("", "", "photo"));
+        RefreshList(_programs.Count - 1);
+        _name.Focus();
     }
 
     private void Remove()
     {
-        if (_list.SelectedIndex < 0) return;
-        var previous = _list.SelectedIndex;
+        var index = _list.SelectedIndex;
+        if (index < 0) return;
         _editingIndex = -1;
-        _programs.RemoveAt(previous);
-        RefreshList();
-        _list.SelectedIndex = _programs.Count == 0 ? -1 :
-            Math.Min(previous, _programs.Count - 1);
+        _programs.RemoveAt(index);
+        RefreshList(index);
     }
 
-    private void Move(int by)
+    private void Move(int direction)
     {
-        CommitCurrent();
+        CommitFields();
         var i = _list.SelectedIndex;
-        var next = i + by;
+        var next = i + direction;
         if (i < 0 || next < 0 || next >= _programs.Count) return;
         (_programs[i], _programs[next]) = (_programs[next], _programs[i]);
-        _editingIndex = -1;
-        RefreshList();
-        _list.SelectedIndex = next;
+        RefreshList(next);
     }
 
     private void Browse()
     {
-        var picker = new OpenFileDialog
-        {
+        if (_editingIndex < 0) return;
+        var dialog = new OpenFileDialog {
             Title = UiLanguage.T("Programmdatei auswählen"),
             Filter = "Windows-Programme (*.exe)|*.exe|Alle Dateien (*.*)|*.*",
-            CheckFileExists = true
-        };
-        if (picker.ShowDialog(this) == true) _exe.Text = picker.FileName;
+            CheckFileExists = true };
+        if (dialog.ShowDialog(this) == true) _exe.Text = dialog.FileName;
     }
 
     private void Save()
     {
         try
         {
-            CommitCurrent();
-            if (_programs.Any(p => string.IsNullOrWhiteSpace(p.Name)))
-                throw new InvalidDataException(UiLanguage.T("Bitte einen Programmnamen eingeben."));
-            foreach (var program in _programs.Where(p =>
-                         !string.IsNullOrWhiteSpace(p.ExecutablePath)))
+            CommitFields();
+            foreach (var entry in _programs)
             {
-                if (!Path.IsPathFullyQualified(program.ExecutablePath) ||
-                    !File.Exists(program.ExecutablePath))
-                    throw new FileNotFoundException(
-                        UiLanguage.T("Programmdatei nicht gefunden: ") +
-                        program.ExecutablePath);
+                if (string.IsNullOrWhiteSpace(entry.Name))
+                    throw new InvalidDataException(UiLanguage.T(
+                        "Bitte einen Programmnamen eingeben."));
+                if (!Path.IsPathFullyQualified(entry.ExecutablePath) ||
+                    !File.Exists(entry.ExecutablePath))
+                    throw new FileNotFoundException(UiLanguage.T(
+                        "Programmdatei nicht gefunden: ") + entry.ExecutablePath);
             }
-            var settings = new ExternalEditorSettings { Programs = _programs.ToList() };
+            var settings = new ExternalEditorSettings {
+                Programs = _programs.ToList() };
             settings.Save();
             SavedSettings = settings;
             DialogResult = true;

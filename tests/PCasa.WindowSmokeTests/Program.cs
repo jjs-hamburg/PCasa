@@ -205,18 +205,18 @@ internal static class Program
             lightTab.ApplyTemplate();
             var lightCaption = (TextBlock?)lightTab.Template.FindName(
                 "TabCaption", lightTab);
+            var editorTextColor = ((SolidColorBrush)Application.Current.Resources[
+                "PcasaTextBrush"]).Color;
             if (lightCaption?.Foreground is not SolidColorBrush lightBrush ||
-                lightBrush.Color.R < 220 || lightBrush.Color.G < 220 ||
-                lightBrush.Color.B < 220)
-                throw new Exception("The rendered Light tab caption is unreadable.");
+                lightBrush.Color != editorTextColor)
+                throw new Exception("Selected tab caption does not follow the active theme.");
             quickTab.IsSelected = true;
             quickTab.ApplyTemplate();
             var quickCaption = (TextBlock?)quickTab.Template.FindName(
                 "TabCaption", quickTab);
             if (quickCaption?.Foreground is not SolidColorBrush quickBrush ||
-                quickBrush.Color.R < 220 || quickBrush.Color.G < 220 ||
-                quickBrush.Color.B < 220)
-                throw new Exception("The unselected Quick caption is unreadable.");
+                quickBrush.Color != editorTextColor)
+                throw new Exception("Unselected tab caption does not follow the active theme.");
             lightTab.IsSelected = true;
             if (window.FindName("EditUndoOptionsMenuItem") is not MenuItem ||
                 window.FindName("ExternalEditorsOptionsMenuItem") is not MenuItem)
@@ -331,8 +331,43 @@ internal static class Program
                 configuredField.SetValue(window, originalSettings);
                 refreshCards.Invoke(window, [0L, "none.jpg"]);
             }
+            // The external editor setup dialog must not regress to its
+            // squeezed 120-px list, template buttons or decorative headings.
+            var externalSettingsDialog = new ExternalEditorsWindow(
+                new ExternalEditorSettings());
+            try
+            {
+                if (externalSettingsDialog.Content is not Grid editorRoot ||
+                    editorRoot.ColumnDefinitions[0].Width.Value < 290 ||
+                    editorRoot.Children.OfType<Grid>().Any())
+                    throw new Exception("External editor list is too narrow.");
+                static IEnumerable<DependencyObject> Descendants(DependencyObject node)
+                {
+                    foreach (var child in LogicalTreeHelper.GetChildren(node)
+                                 .OfType<DependencyObject>())
+                    {
+                        yield return child;
+                        foreach (var descendant in Descendants(child))
+                            yield return descendant;
+                    }
+                }
+                var editorText = Descendants(editorRoot)
+                    .OfType<TextBlock>().Select(label => label.Text).ToArray();
+                if (editorText.Any(label => label is
+                    "Topaz templates (then choose the executable):" or
+                    "Applications (menu order)" or "Editing application" or
+                    "Applications start only when you explicitly select them."))
+                    throw new Exception("Removed external editor headings/templates returned.");
+                var controls = Descendants(editorRoot).OfType<Button>()
+                    .Select(button => button.Content?.ToString()).ToArray();
+                if (!controls.Contains("+") || !controls.Contains("−") ||
+                    controls.Any(label => label is "Topaz Photo" or
+                        "Topaz Gigapixel" or "Topaz Video"))
+                    throw new Exception("External app manager does not use + / − controls.");
+            }
+            finally { externalSettingsDialog.Close(); }
             Console.WriteLine(
-                "PASS: Alpha.31 readable four tabs, masks retired and external program filters.");
+                "PASS: Alpha.33 high-contrast themed tabs and compact external editor dialog.");
             var toolCards = manualTools.Children.Cast<StackPanel>()
                 .Concat(automaticTools.Children.Cast<StackPanel>()).ToArray();
             var toolButtons = toolCards.Select(card =>

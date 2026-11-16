@@ -8,66 +8,104 @@ internal static class ExternalEditSmokeFlow
     public static void Run()
     {
         var root = Path.Combine(Path.GetTempPath(),
-            "pcasa-external-review-" + Guid.NewGuid().ToString("N"));
+            "pcasa-alpha33-external-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        using var testDirectory = ExternalEditTransaction.UseTestDirectory(
+            Path.Combine(root, "ExternalEdit"));
+        var undoOptions = new UndoOptions
+        {
+            DirectoryPath = Path.Combine(root, "Undo"),
+            MaximumVersionsPerImage = 5,
+            MaximumBytes = 10 * 1024 * 1024
+        };
         try
         {
-            var path = Path.Combine(root, "photo.jpg");
-            WriteJpeg(path, 36);
-            var original = File.ReadAllBytes(path);
-            // Crash recovery: a snapshot must be findable by source identity.
-            var cancel = ExternalEditTransaction.Begin(path);
-            if (ExternalEditTransaction.FindPending(path)?.Id != cancel.Id)
-                throw new Exception("External edit backup cannot be recovered.");
-            WriteJpeg(path, 175);
-            if (ExternalEditTransaction.DetectResult(cancel) != path)
-                throw new Exception("In-place edit was not detected.");
-            if (ExternalEditTransaction.Commit(cancel, path,
+            var photo = Path.Combine(root, "test-photo.jpg");
+            var other = Path.Combine(root, "other.jpg");
+            WriteJpeg(photo, 36);
+            WriteJpeg(other, 52);
+            var original = File.ReadAllBytes(photo);
+
+            // One fixed folder, one fixed working name and one durable slot.
+            var cancel = ExternalEditTransaction.Begin(photo);
+            if (Path.GetFileName(cancel.BackupPath) != "photo.jpg" ||
+                ExternalEditTransaction.FindPending()?.Id != cancel.Id ||
+                !File.ReadAllBytes(cancel.BackupPath).SequenceEqual(original))
+                throw new Exception("Fixed working image or durable session was not created.");
+            try
+            {
+                ExternalEditTransaction.Begin(other);
+                throw new Exception("A second external editing session was admitted.");
+            }
+            catch (InvalidOperationException) { }
+            if (!File.Exists(cancel.BackupPath))
+                throw new Exception("Blocked second editor destroyed the first session.");
+
+            WriteJpeg(cancel.BackupPath, 175);
+            if (!File.ReadAllBytes(photo).SequenceEqual(original) ||
+                ExternalEditTransaction.DetectResult(cancel) != cancel.BackupPath)
+                throw new Exception("External edit changed the original or lost its working result.");
+            if (ExternalEditTransaction.Commit(cancel, cancel.BackupPath,
                     ExternalEditDecision.Cancel) is not null ||
-                !File.ReadAllBytes(path).SequenceEqual(original) ||
-                Directory.Exists(cancel.DirectoryPath) ||
-                ExternalEditTransaction.FindPending(path) is not null)
-                throw new Exception("Cancel did not restore original and remove backup.");
+                !File.ReadAllBytes(photo).SequenceEqual(original) ||
+                Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                throw new Exception("Cancel failed to preserve original or clear the workspace.");
 
-            var copySession = ExternalEditTransaction.Begin(path);
-            WriteJpeg(path, 175);
-            var copy = ExternalEditTransaction.Commit(copySession, path,
-                ExternalEditDecision.SaveCopy);
+            // A named export as used by Topaz is equally valid.
+            var copied = ExternalEditTransaction.Begin(photo);
+            var export = Path.Combine(copied.DirectoryPath, "photo-topaz.jpg");
+            WriteJpeg(export, 170);
+            var copy = ExternalEditTransaction.Commit(copied, export,
+                ExternalEditDecision.SaveCopy, undoOptions: undoOptions);
             if (copy is null || !File.Exists(copy) ||
-                !Path.GetFileName(copy).Contains("-Kopie", StringComparison.OrdinalIgnoreCase) ||
-                File.ReadAllBytes(copy).SequenceEqual(original) || !File.ReadAllBytes(path).SequenceEqual(original) ||
-                Directory.Exists(copySession.DirectoryPath))
-                throw new Exception("Save as Copy did not keep result and restore original.");
+                !copy.EndsWith("-Kopie.jpg", StringComparison.OrdinalIgnoreCase) ||
+                File.ReadAllBytes(copy).SequenceEqual(original) ||
+                !File.ReadAllBytes(photo).SequenceEqual(original) ||
+                Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                throw new Exception("Save as Copy did not import a unique output and preserve original.");
 
-            var save = ExternalEditTransaction.Begin(path);
-            WriteJpeg(path, 225);
-            var savedPixels = File.ReadAllBytes(path);
-            var saved = ExternalEditTransaction.Commit(save, path,
-                ExternalEditDecision.Save);
-            if (saved != path || !File.ReadAllBytes(path).SequenceEqual(savedPixels) ||
-                Directory.Exists(save.DirectoryPath))
-                throw new Exception("Save did not keep edited original and delete backup.");
-            if (!new UndoHistoryService(UndoOptions.Load()).GetVersions(path)
-                    .Any(v => v.Id == save.Id && v.Sha256 == save.OriginalSha256))
-                throw new Exception("External Save did not preserve JPEG undo history.");
+            var save = ExternalEditTransaction.Begin(photo);
+            WriteJpeg(save.BackupPath, 225);
+            var edited = File.ReadAllBytes(save.BackupPath);
+            var saved = ExternalEditTransaction.Commit(save, save.BackupPath,
+                ExternalEditDecision.Save, undoOptions: undoOptions);
+            if (saved != photo || !File.ReadAllBytes(photo).SequenceEqual(edited) ||
+                Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                throw new Exception("Save failed to commit working pixels or clear the workspace.");
+            var history = new UndoHistoryService(undoOptions).GetVersions(photo);
+            if (!history.Any(v => v.Sha256 == save.OriginalSha256 &&
+                    v.SourcePath.Equals(photo, StringComparison.OrdinalIgnoreCase)))
+                throw new Exception("Save did not use the central Undo archive.");
 
-            var unchanged = ExternalEditTransaction.Begin(path);
+            var unchanged = ExternalEditTransaction.Begin(photo);
             if (ExternalEditTransaction.DetectResult(unchanged) is not null)
-                throw new Exception("Unedited file was mistaken for a saved result.");
-            ExternalEditTransaction.Commit(unchanged, null, ExternalEditDecision.Cancel);
+                throw new Exception("Unchanged workspace was incorrectly accepted as edited.");
+            ExternalEditTransaction.Commit(unchanged, null,
+                ExternalEditDecision.Cancel);
+            if (Directory.Exists(ExternalEditTransaction.DirectoryPath))
+                throw new Exception("Unchanged workspace was not cleaned.");
+
+            var orphan = ExternalEditTransaction.DirectoryPath;
+            Directory.CreateDirectory(orphan);
+            File.WriteAllText(Path.Combine(orphan, "stale.txt"), "stale");
+            var newSession = ExternalEditTransaction.Begin(photo);
+            if (File.Exists(Path.Combine(orphan, "stale.txt")))
+                throw new Exception("Completed session trash was not cleared before reuse.");
+            ExternalEditTransaction.Commit(newSession, null,
+                ExternalEditDecision.Cancel);
 
             foreach (var extension in new[] { ".arw", ".nef", ".nrw", ".cr2",
                 ".cr3", ".dng", ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw" })
             {
                 try
                 {
-                    ExternalEditTransaction.Begin(Path.Combine(root,
-                        "raw" + extension));
-                    throw new Exception("RAW was sent to the external transaction.");
+                    ExternalEditTransaction.Begin(Path.Combine(root, "raw" + extension));
+                    throw new Exception("RAW reached external editing.");
                 }
                 catch (NotSupportedException) { }
             }
-            Console.WriteLine("PASS: External edits Cancel/Save Copy/Save, undo, backup cleanup and RAW rejection.");
+            Console.WriteLine(
+                "PASS: Alpha.33 exclusive external session, working copy, recovery, Cancel/Copy/Save, Undo, cleanup, RAW.");
         }
         finally
         {
@@ -75,6 +113,7 @@ internal static class ExternalEditSmokeFlow
             catch (IOException) { }
         }
     }
+
     private static void WriteJpeg(string path, byte brightness)
     {
         const int width = 8, height = 8;
@@ -86,14 +125,13 @@ internal static class ExternalEditSmokeFlow
             pixels[i + 2] = brightness;
             pixels[i + 3] = 255;
         }
-        var bitmap = BitmapSource.Create(width, height, 96, 96,
+        var image = BitmapSource.Create(width, height, 96, 96,
             PixelFormats.Bgra32, null, pixels, width * 4);
         var encoder = new JpegBitmapEncoder { QualityLevel = 94 };
-        encoder.Frames.Add(BitmapFrame.Create(bitmap));
-        using var stream = new FileStream(path, FileMode.Create, FileAccess.Write,
-            FileShare.None);
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        using var stream = new FileStream(path, FileMode.Create,
+            FileAccess.Write, FileShare.None);
         encoder.Save(stream);
         stream.Flush(true);
     }
-
 }
