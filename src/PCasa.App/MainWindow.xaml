@@ -882,6 +882,7 @@
                               Background="Transparent"
                               BorderThickness="0"
                               ClipToBounds="True"
+                              ScrollViewer.CanContentScroll="False"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                               Margin="7,0,7,8"
                               Padding="0,0,12,0"
