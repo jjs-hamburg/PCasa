@@ -46,8 +46,20 @@ public static class EditableImageFormats
                     UiLanguage.T("Animierte oder mehrseitige Bilddateien können nicht bearbeitet werden."));
         }
 
-        // NetVips exposes page count for animated WebP, AVIF/HEIF etc.
-        // This check is on the scheduler worker, never on the WPF dispatcher.
+        // JPG/PNG/BMP have no multipage variant that requires libvips here,
+        // and GIF/TIFF have ALREADY been checked with WIC above. Opening every
+        // source through libvips before an in-place File.Replace can leave
+        // native loader/cache references to the source while it is replaced.
+        // Only the modern formats need libvips' n-pages metadata probe.
+        if (ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".gif", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".tif", StringComparison.OrdinalIgnoreCase) ||
+            ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase))
+            return;
+
         using var header = Image.NewFromFile(path, access: Enums.Access.Sequential);
         if (header.Contains("n-pages") &&
             Convert.ToInt32(header.Get("n-pages")) > 1)
