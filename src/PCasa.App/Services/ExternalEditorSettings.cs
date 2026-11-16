@@ -10,13 +10,17 @@ namespace PCasa.App.Services;
 /// RAW is excluded even if a wildcard or explicit RAW extension is configured.
 /// </summary>
 public sealed record ExternalEditorProgram(
-    string Name, string ExecutablePath, string Formats = "photo")
+    string Name, string ExecutablePath, string Formats = "photo",
+    bool Panorama = false, bool Psd = false)
 {
     public bool Matches(string sourcePath)
     {
         // RAW is viewable/catalogued but cannot be edited in this release.
         // Reject BEFORE matching photo, wildcard or explicit extensions.
-        if (RawImageSource.IsRawPath(sourcePath)) return false;
+        if (Panorama || RawImageSource.IsRawPath(sourcePath)) return false;
+        if (Path.GetExtension(sourcePath).Equals(".psd", StringComparison.OrdinalIgnoreCase))
+            return Psd && !string.IsNullOrWhiteSpace(Name) &&
+                   !string.IsNullOrWhiteSpace(ExecutablePath);
         if (string.IsNullOrWhiteSpace(Name) ||
             string.IsNullOrWhiteSpace(ExecutablePath)) return false;
         var extension = Path.GetExtension(sourcePath);
@@ -85,4 +89,9 @@ public sealed class ExternalEditorSettings
 
     public IReadOnlyList<ExternalEditorProgram> ForFile(string path) =>
         Programs.Where(p => p.Matches(path)).ToArray();
+
+    public IReadOnlyList<ExternalEditorProgram> ForPanorama() =>
+        Programs.Where(p => p.Panorama &&
+            !string.IsNullOrWhiteSpace(p.Name) &&
+            !string.IsNullOrWhiteSpace(p.ExecutablePath)).ToArray();
 }
