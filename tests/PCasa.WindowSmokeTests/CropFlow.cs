@@ -29,6 +29,29 @@ internal static class CropFlow
         var raw = Path.Combine(root, "untouched.arw");
         try
         {
+            // External editor elevation fallback is tested without invoking
+            // a program or triggering UAC on the GitHub CI machine.
+            var startInfoFactory = typeof(PCasa.App.MainWindow).GetMethod(
+                "BuildExternalEditorStartInfo",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("External editor launch factory missing.");
+            var executable = @"C:\Program Files (x86)\Ulead\Iedit.exe";
+            ProcessStartInfo BuildLaunch(bool elevated) =>
+                (ProcessStartInfo)(startInfoFactory.Invoke(null,
+                    [executable, root, path, elevated])
+                    ?? throw new Exception("No editor launch settings."));
+            var standard = BuildLaunch(false);
+            var admin = BuildLaunch(true);
+            if (standard.UseShellExecute || !string.IsNullOrEmpty(standard.Verb) ||
+                !admin.UseShellExecute || admin.Verb != "runas" ||
+                standard.FileName != executable || admin.FileName != executable ||
+                standard.WorkingDirectory != root || admin.WorkingDirectory != root ||
+                standard.ArgumentList.Count != 1 || admin.ArgumentList.Count != 1 ||
+                standard.ArgumentList[0] != path || admin.ArgumentList[0] != path)
+                throw new Exception("External editor UAC fallback changed source arguments.");
+            Console.WriteLine("PASS: External editor elevation uses shell only on fallback.");
+
             // Real JPEG, not a mocked bitmap, encoded on WPF's STA.
             var pixels = new byte[480 * 320 * 4];
             for (int y = 0; y < 320; y++)
