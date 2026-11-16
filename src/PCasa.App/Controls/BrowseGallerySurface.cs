@@ -905,7 +905,8 @@ public sealed class BrowseGallerySurface : FrameworkElement
                     if (_showStatusIcons)
                         ThumbnailStatusIconRenderer.Draw(drawingContext, imageRect,
                             entry.HasGps, entry.HasTags, entry.IsRaw, pixelsPerDip,
-                            entry.HasRestore);
+                            entry.HasRestore,
+                            entry.FileName.EndsWith(".psd", StringComparison.OrdinalIgnoreCase));
 
                     if (_selectedImageIds.Contains(entry.ImageId))
                     {

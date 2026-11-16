@@ -19,12 +19,29 @@ public static class EditableImageFormats
         };
 
     public static bool Supports(string path)
-        => Extensions.Contains(Path.GetExtension(path)) &&
+        => !RawImageSource.IsPsdPath(path) &&
+           Extensions.Contains(Path.GetExtension(path)) &&
            !RawImageSource.IsRawPath(path) &&
            !VideoFormats.IsVideo(path);
 
+    public static bool SupportsExternalResult(string path) =>
+        Supports(path) || RawImageSource.IsPsdPath(path);
+
     public static void ValidateStillImage(string path)
     {
+        if (RawImageSource.IsPsdPath(path))
+        {
+            // Verify the PSD header, never flatten or re-encode the layers.
+            // Thumbnail extraction is independent and may have to fall back.
+            using var psd = File.Open(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            Span<byte> signature = stackalloc byte[4];
+            if (psd.Read(signature) != signature.Length ||
+                signature[0] != (byte)'8' || signature[1] != (byte)'B' ||
+                signature[2] != (byte)'P' || signature[3] != (byte)'S')
+                throw new InvalidDataException("Ungültiger PSD-Dateikopf.");
+            return;
+        }
         if (!Supports(path))
             throw new NotSupportedException(
                 UiLanguage.T("Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
@@ -142,6 +159,14 @@ public static class EditableImageFormats
 
     public static (int Width, int Height) Dimensions(string path)
     {
+        if (RawImageSource.IsPsdPath(path))
+        {
+            // A native PSD loader is optional in the pinned Windows libvips.
+            // Resolve the embedded composite preview just as in the viewer.
+            var display = RawImageSource.Resolve(path);
+            using var image = Image.NewFromFile(display, access: Enums.Access.Sequential);
+            return (image.Width, image.Height);
+        }
         var ext = Path.GetExtension(path);
         // Immediately before an atomic Replace/Move the staged file MUST
         // have no open libvips source loader in the operation cache. In

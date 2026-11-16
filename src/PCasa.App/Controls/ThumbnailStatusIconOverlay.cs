@@ -26,7 +26,8 @@ internal static class ThumbnailStatusIconRenderer
     private static readonly Pen TagOutlinePen = new(Brushes.DimGray, 0.8);
 
     public static void Draw(DrawingContext context, Rect imageRect,
-        bool hasGps, bool hasTags, bool isRaw, double dpi, bool hasRestore = false)
+        bool hasGps, bool hasTags, bool isRaw, double dpi,
+        bool hasRestore = false, bool isPsd = false)
     {
         var x = imageRect.Right - 11;
         var y = imageRect.Bottom - 14;
@@ -53,9 +54,9 @@ internal static class ThumbnailStatusIconRenderer
             context.Pop();
             x -= 19;
         }
-        if (isRaw)
+        if (isRaw || isPsd)
         {
-            var label = new FormattedText("RAW", CultureInfo.InvariantCulture,
+            var label = new FormattedText(isPsd ? "PSD" : "RAW", CultureInfo.InvariantCulture,
                 FlowDirection.LeftToRight, new Typeface("Segoe UI Semibold"),
                 8, Brushes.White, dpi);
             var width = label.Width + 4;
@@ -86,6 +87,11 @@ public sealed class ThumbnailStatusIconOverlay : FrameworkElement
             typeof(ThumbnailStatusIconOverlay),
             new FrameworkPropertyMetadata(false,
                 FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty IsPsdProperty =
+        DependencyProperty.Register(nameof(IsPsd), typeof(bool),
+            typeof(ThumbnailStatusIconOverlay),
+            new FrameworkPropertyMetadata(false,
+                FrameworkPropertyMetadataOptions.AffectsRender));
     public static readonly DependencyProperty HasRestoreProperty =
         DependencyProperty.Register(nameof(HasRestore), typeof(bool),
             typeof(ThumbnailStatusIconOverlay),
@@ -112,6 +118,11 @@ public sealed class ThumbnailStatusIconOverlay : FrameworkElement
         get => (bool)GetValue(IsRawProperty);
         set => SetValue(IsRawProperty, value);
     }
+    public bool IsPsd
+    {
+        get => (bool)GetValue(IsPsdProperty);
+        set => SetValue(IsPsdProperty, value);
+    }
     public bool HasRestore
     {
         get => (bool)GetValue(HasRestoreProperty);
@@ -126,10 +137,10 @@ public sealed class ThumbnailStatusIconOverlay : FrameworkElement
     protected override void OnRender(DrawingContext drawingContext)
     {
         base.OnRender(drawingContext);
-        if (!ShowIcons || !(HasGps || HasTags || IsRaw || HasRestore)) return;
+        if (!ShowIcons || !(HasGps || HasTags || IsRaw || HasRestore || IsPsd)) return;
         ThumbnailStatusIconRenderer.Draw(drawingContext,
             new Rect(0, 0, ActualWidth, ActualHeight),
             HasGps, HasTags, IsRaw,
-            VisualTreeHelper.GetDpi(this).PixelsPerDip, HasRestore);
+            VisualTreeHelper.GetDpi(this).PixelsPerDip, HasRestore, IsPsd);
     }
 }

@@ -237,22 +237,27 @@ public static class ExifToolKeywordWriter
                     "Ungültige GPS-Koordinaten.");
             var extension = Path.GetExtension(imagePath).ToLowerInvariant();
             if (extension is not (".jpg" or ".jpeg" or ".tif" or ".tiff"
-                or ".dng" or ".nef" or ".arw" or ".cr2"))
+                or ".dng" or ".nef" or ".arw" or ".cr2" or ".psd"))
                 throw new NotSupportedException(
                     "GPS-Direktschreiben für " + extension +
                     " ist nicht verifiziert. Keine Sidecars werden erzeugt.");
             var commands = new List<string>();
+            var psd = extension == ".psd";
             if (latitude is double latValue && longitude is double lonValue)
             {
-                commands.Add("-EXIF:GPSLatitude=" +
+                commands.Add((psd ? "-XMP-exif:GPSLatitude=" : "-EXIF:GPSLatitude=") +
                     Math.Abs(latValue).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
-                commands.Add("-EXIF:GPSLatitudeRef=" + (latValue < 0 ? "S" : "N"));
-                commands.Add("-EXIF:GPSLongitude=" +
+                if (!psd) commands.Add("-EXIF:GPSLatitudeRef=" + (latValue < 0 ? "S" : "N"));
+                commands.Add((psd ? "-XMP-exif:GPSLongitude=" : "-EXIF:GPSLongitude=") +
                     Math.Abs(lonValue).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
-                commands.Add("-EXIF:GPSLongitudeRef=" + (lonValue < 0 ? "W" : "E"));
-                // Remove stale XMP coordinates so one photo has one position.
-                commands.Add("-XMP-exif:GPSLatitude=");
-                commands.Add("-XMP-exif:GPSLongitude=");
+                if (!psd) commands.Add("-EXIF:GPSLongitudeRef=" + (lonValue < 0 ? "W" : "E"));
+                // Non-PSD originals use native EXIF as the authoritative GPS.
+                // PSDs use XMP-exif; do not clear the values just written.
+                if (!psd)
+                {
+                    commands.Add("-XMP-exif:GPSLatitude=");
+                    commands.Add("-XMP-exif:GPSLongitude=");
+                }
             }
             else
             {

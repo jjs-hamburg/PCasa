@@ -15,6 +15,8 @@ public sealed class ExternalEditorsWindow : Window
     private readonly TextBox _name = new();
     private readonly TextBox _exe = new();
     private readonly TextBox _formats = new();
+    private readonly CheckBox _panorama = new() { Margin = new Thickness(0, 7, 0, 3) };
+    private readonly CheckBox _psd = new() { Margin = new Thickness(0, 4, 0, 3) };
     private int _editingIndex = -1;
     private bool _changing;
     public ExternalEditorSettings? SavedSettings { get; private set; }
@@ -66,6 +68,10 @@ public sealed class ExternalEditorsWindow : Window
         AddField(right, "Name im Menü", _name);
         AddField(right, "Programmdatei (*.exe)", MakeBrowseRow());
         AddField(right, "Dateiformate", _formats);
+        _panorama.Content = UiLanguage.T("Panorama");
+        _psd.Content = "PSD";
+        right.Children.Add(_panorama);
+        right.Children.Add(_psd);
 
         var footer = new StackPanel {
             Orientation = Orientation.Horizontal,
@@ -119,7 +125,8 @@ public sealed class ExternalEditorsWindow : Window
     {
         if (_changing || _editingIndex < 0 || _editingIndex >= _programs.Count) return;
         _programs[_editingIndex] = new ExternalEditorProgram(
-            _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim());
+            _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim(),
+            _panorama.IsChecked == true, _psd.IsChecked == true);
     }
 
     private void RefreshList(int selected)
@@ -142,7 +149,10 @@ public sealed class ExternalEditorsWindow : Window
         _name.Text = entry.Name;
         _exe.Text = entry.ExecutablePath;
         _formats.Text = entry.Formats;
-        _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled = index >= 0;
+        _panorama.IsChecked = entry.Panorama;
+        _psd.IsChecked = entry.Psd;
+        _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled =
+            _panorama.IsEnabled = _psd.IsEnabled = index >= 0;
         _changing = false;
     }
 

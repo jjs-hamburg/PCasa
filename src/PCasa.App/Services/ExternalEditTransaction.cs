@@ -284,7 +284,7 @@ public static class ExternalEditTransaction
                         StringComparison.OrdinalIgnoreCase) &&
                     (VideoFormats.IsVideo(session.OriginalPath)
                         ? VideoFormats.IsVideo(path)
-                        : EditableImageFormats.Supports(path)))
+                        : EditableImageFormats.SupportsExternalResult(path)))
                 .Where(path => new FileInfo(path).Length > 0)
                 .ToArray();
             if (candidates.Length > 1)
@@ -316,7 +316,11 @@ public static class ExternalEditTransaction
         var extension = Path.GetExtension(source);
         for (var i = 1; i < 100000; i++)
         {
-            var suffix = i == 1 ? "-Kopie" : "-Kopie-" + i;
+            var formatChanged = !Path.GetExtension(source).Equals(
+                Path.GetExtension(original), StringComparison.OrdinalIgnoreCase);
+            var suffix = formatChanged
+                ? (i == 1 ? "" : "-" + i)
+                : (i == 1 ? "-Kopie" : "-Kopie-" + i);
             var destination = Path.Combine(folder, basename + suffix + extension);
             if (!File.Exists(destination)) return destination;
         }
@@ -377,7 +381,9 @@ public static class ExternalEditTransaction
             token.ThrowIfCancellationRequested();
             CheckIdentity(requested);
             var session = ReadPending()!;
-            if (session.Finalizing is { } choice && choice != decision)
+            if (session.Finalizing is { } choice && choice != decision &&
+                !(choice == ExternalEditDecision.SaveCopy &&
+                  decision == ExternalEditDecision.Save))
                 throw new InvalidOperationException(
                     "Die externe Bearbeitung wird bereits abgeschlossen.");
             if (decision == ExternalEditDecision.Cancel)
@@ -396,6 +402,13 @@ public static class ExternalEditTransaction
                 throw new FileNotFoundException(UiLanguage.T(
                     "Das externe Programm hat kein Ergebnis gespeichert."), source);
             source = Path.GetFullPath(source);
+            // A layered PSD exported from a JPEG is always a NEW photo. Never
+            // replace the JPEG, even if the user clicked ordinary Save.
+            if (decision == ExternalEditDecision.Save &&
+                !Path.GetExtension(source).Equals(
+                    Path.GetExtension(session.OriginalPath),
+                    StringComparison.OrdinalIgnoreCase))
+                decision = ExternalEditDecision.SaveCopy;
             if (!Path.GetDirectoryName(source)!.Equals(
                     session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
@@ -403,7 +416,7 @@ public static class ExternalEditTransaction
             if (RawImageSource.IsRawPath(source) ||
                 (VideoFormats.IsVideo(session.OriginalPath)
                     ? !VideoFormats.IsVideo(source)
-                    : !EditableImageFormats.Supports(source)))
+                    : !EditableImageFormats.SupportsExternalResult(source)))
                 throw new NotSupportedException(UiLanguage.T(
                     "Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
             if (new FileInfo(source).Length == 0)
@@ -443,6 +456,12 @@ public static class ExternalEditTransaction
                     return session.OriginalPath;
                 }
 
+                // Transfer the source capture date, camera settings, XMP,
+                // IPTC and GPS to the layered PSD BEFORE its atomic copy.
+                // This never re-encodes the Photoshop pixels or changes the JPEG.
+                if (RawImageSource.IsPsdPath(source) &&
+                    session.Finalizing is null)
+                    ExternalResultMetadata.CopyAll(session.OriginalPath, source, token);
                 var destination = session.FinalTarget ??
                     UniqueCopyDestination(source, session.OriginalPath);
                 var copying = session with

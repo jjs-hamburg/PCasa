@@ -21,11 +21,13 @@ public partial class MainWindow
         private bool _hasGps;
         private bool _hasTags;
         private bool _isRaw;
+        private bool _isPsd;
         private bool _hasRestore;
         private bool _showIcons = true;
         public bool HasGps => _hasGps;
         public bool HasTags => _hasTags;
         public bool IsRaw => _isRaw;
+        public bool IsPsd => _isPsd;
         public bool HasRestore => _hasRestore;
         public bool ShowIcons
         {
@@ -53,6 +55,13 @@ public partial class MainWindow
             {
                 _isRaw = index.IsRaw;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRaw)));
+            }
+            var psd = index.FileName.EndsWith(".psd",
+                StringComparison.OrdinalIgnoreCase);
+            if (_isPsd != psd)
+            {
+                _isPsd = psd;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPsd)));
             }
             if (_hasRestore != index.HasRestore)
             {

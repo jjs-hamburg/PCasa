@@ -176,20 +176,22 @@ public partial class MainWindow
         }
 
         e.Cancel = true;
-        if (_shutdownStarted) return; // Double click/Alt+F4 cannot start a second shutdown.
-        // Unconfirmed Tag changes live only in the editing session. Do not
-        // silently discard them when the user closes the main window.
-        if (_tagDraft.HasChanges)
+        if (_shutdownStarted || _shutdownReviewOpen) return;
+        try
         {
-            var choice = PcasaDialog.Show(this,
-                UiLanguage.Format("{0:N0} Bilder mit {1:N0} vorgemerkten Tag-Änderungen verwerfen?",
-                    _tagDraft.ImageCount, _tagDraft.ChangeCount),
-                UiLanguage.T("Nicht bestätigte Tag-Änderungen"),
-                MessageBoxButton.YesNo, MessageBoxImage.Warning,
-                MessageBoxResult.No);
-            if (choice != MessageBoxResult.Yes) return;
-            _tagDraft.Clear();
+            // One review before any producer/scheduler is canceled.
+            // The review's Abbrechen buttons cancel exactly their tasks.
+            if (!ConfirmPendingShutdown()) return;
         }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Shutdown.Review", ex);
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("PCasa beenden"),
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+        _tagDraft.Clear();
+        if (_photoEditSession is { HasChanges: true }) CancelEditSession();
         // The user's gallery/tree focus belongs to the moment they close
         // PCasa, NOT the later Closed event after asynchronous worker cleanup.
         // A running import may still publish/reflow the gallery while waiting.
@@ -306,6 +308,18 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
+            // The scheduler has drained all critical source mutations. Only
+            // persistent scan packages may resume when PCasa starts again.
+            // This is a journal state transition, not a filesystem operation.
+            try
+            {
+                var retired = new DurablePackageJournal(_database)
+                    .RetireUnfinishedFileJobs();
+                if (retired > 0)
+                    PCasaDiagnostics.WriteMessage("Shutdown.FileJobs",
+                        retired + " Dateioperationen mit der Sitzung beendet.");
+            }
+            catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Journal", ex); }
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;
