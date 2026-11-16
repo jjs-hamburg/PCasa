@@ -65,5 +65,7 @@ public sealed class TagEditDraft
         return counts;
     }
 
+    public bool DiscardImage(long imageId) => _byImage.Remove(imageId);
+
     public void Clear() => _byImage.Clear();
 }
