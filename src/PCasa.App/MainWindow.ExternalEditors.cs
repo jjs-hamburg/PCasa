@@ -698,7 +698,12 @@ public partial class MainWindow
             await RefreshBrowseGalleryAsync(forceIndexReload: true,
                 warmViewport: false);
             if (_viewerOpen && _viewerImageInfo?.Id == review.ImageId)
-                ShowViewerImage();
+            {
+                // The result has already been decoded for the review. Do not
+                // blank it while an asynchronous catalog/metadata/original
+                // re-read catches up with the just-replaced source file.
+                ShowViewerImage(keepCurrentAsPlaceholder: true);
+            }
         }
     }
 }
