@@ -267,7 +267,10 @@ public sealed class SchedulerTaskView
                 try
                 {
                     var orphanCount = ExternalEditTransaction.PendingCleanupCount();
-                    if (orphanCount > 0)
+                    if (orphanCount > 0 && !latest.Values.Any(job =>
+                        job.Key.StartsWith("external:cleanup:", StringComparison.Ordinal) &&
+                        job.State is SchedulerJobState.Queued or SchedulerJobState.Running
+                            or SchedulerJobState.YieldRequested))
                         rows.Add(new SchedulerTaskViewItem(
                             "external:cleanup:pending",
                             UiLanguage.T("Temporäre Bereinigung ausstehend"),
