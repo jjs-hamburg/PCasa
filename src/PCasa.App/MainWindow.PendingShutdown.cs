@@ -8,7 +8,7 @@ public partial class MainWindow
 {
     private bool _shutdownReviewOpen;
 
-    private async Task<bool> ConfirmPendingShutdownAsync()
+    private bool ConfirmPendingShutdown()
     {
         if (_shutdownReviewOpen) return false;
         _shutdownReviewOpen = true;
