@@ -356,7 +356,14 @@ public static class ExternalEditTransaction
                     throw new IOException(UiLanguage.T("Kopie ist unvollständig."));
             }
             token.ThrowIfCancellationRequested();
-            File.Move(temp, target, overwrite: replace);
+            try { File.Move(temp, target, overwrite: replace); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                FileLockDiagnostics.ReportFailure(replace
+                    ? "ExternalEdit.Replace" : "ExternalEdit.SaveCopy",
+                    ex, source, target, temp);
+                throw;
+            }
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }

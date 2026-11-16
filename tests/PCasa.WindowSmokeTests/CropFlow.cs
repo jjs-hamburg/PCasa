@@ -110,6 +110,43 @@ internal static class CropFlow
                 "-GPSLongitudeRef=E", "-Keywords=PCasaCropSmoke", path);
             var original = File.ReadAllBytes(path);
 
+            // Alpha.35: verifying an ordinary JPEG's still-image format must
+            // NOT leave a native libvips loader holding the source open before
+            // Windows File.Replace. A fresh exclusive handle is a direct
+            // regression check for that particular failure path.
+            EditableImageFormats.ValidateStillImage(path);
+            var testedDimensions = EditableImageFormats.Dimensions(path);
+            if (testedDimensions != (480, 320))
+                throw new Exception("JPEG dimensions verification lost physical pixel dimensions.");
+            using (var exclusive = new FileStream(path, FileMode.Open,
+                       FileAccess.ReadWrite, FileShare.None))
+                if (exclusive.Length != original.Length)
+                    throw new Exception("Still-image format/dimensions probe kept the JPEG locked.");
+
+            // Alpha.35: the forensic probe MUST detect a held source handle
+            // and must never alter or close that handle. Windows Restart
+            // Manager may or may not identify its owner (especially on SMB).
+            using (var held = new FileStream(path, FileMode.Open, FileAccess.Read,
+                       FileShare.Read))
+            {
+                var report = FileLockDiagnostics.DescribeFailure(
+                    "Image.Edit.Replace:rotate",
+                    new IOException("Synthetic sharing violation"), path);
+                if (!report.Contains("Image.Edit.Replace:rotate") ||
+                    !report.Contains("exclusive-read=failed(") ||
+                    !report.Contains("exclusive-write=failed(") ||
+                    !report.Contains("HRESULT=0x") ||
+                    !report.Contains(path))
+                    throw new Exception("File lock diagnostics did not report a held source.");
+            }
+            var freeReport = FileLockDiagnostics.DescribeFailure(
+                "Image.Edit.Replace:rotate",
+                new IOException("Synthetic sharing violation"), path);
+            if (!freeReport.Contains("exclusive-read=ok") ||
+                !freeReport.Contains("exclusive-write=ok") ||
+                !File.ReadAllBytes(path).SequenceEqual(original))
+                throw new Exception("File lock diagnosis modified or retained a source handle.");
+
             // Alpha.27: all supported still formats, not RAW, videos or
             // animated/multipage images. No silent JPEG conversion.
             foreach (var suffix in new[] {
