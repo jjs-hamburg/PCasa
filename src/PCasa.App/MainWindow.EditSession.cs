@@ -503,7 +503,14 @@ public partial class MainWindow
             else
             {
                 JpegCropWriter.Save(request.Path, request.Steps, token);
-                new BrowseCacheRepository(_database).InvalidateImage(request.ImageId);
+                // Invalidating the gallery projection is NOT part of the
+                // original-file commit. A transient SQLite/cache fault after
+                // File.Replace must not misreport a successful save as failed.
+                try { new BrowseCacheRepository(_database).InvalidateImage(request.ImageId); }
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("Image.Edit.CacheInvalidation", ex);
+                }
             }
             _scheduler.ReportProgress(key, request.CopyPath is null
                     ? UiLanguage.T("Bildbearbeitung speichern")
