@@ -1077,6 +1077,36 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
+    // One-click cancellation for a session-only file operation. An already
+    // executing original-file mutation is allowed to finish its atomic
+    // boundary before the caller removes it from the exit review.
+    public async Task<bool> CancelActiveTaskAsync(string key)
+    {
+        WorkItem? executing;
+        Task? completion;
+        lock (_gate)
+        {
+            var waiting = _pending.FirstOrDefault(item =>
+                string.Equals(item.Key, key, StringComparison.Ordinal));
+            if (waiting is not null)
+            {
+                _pending.Remove(waiting);
+                SetStateUnsafe(waiting, SchedulerJobState.Canceled);
+                waiting.Completion.TrySetCanceled();
+                WakePendingWorkersUnsafe();
+                return true;
+            }
+            executing = _runningWork.FirstOrDefault(item =>
+                string.Equals(item.Key, key, StringComparison.Ordinal));
+            completion = executing?.Completion.Task;
+        }
+        if (executing is null) return false;
+        await executing.UserCancellation.CancelAsync();
+        try { await completion!; }
+        catch (OperationCanceledException) { }
+        return true;
+    }
+
     // A deferred durable record can remain queued in SQLite after its
     // last in-memory executor has failed. Only the scheduler may determine
     // whether a live execution for that identity still exists.
