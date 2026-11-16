@@ -110,6 +110,83 @@ internal static class CropFlow
                 "-GPSLongitudeRef=E", "-Keywords=PCasaCropSmoke", path);
             var original = File.ReadAllBytes(path);
 
+            // Alpha.37: libvips must release native source handles when a
+            // thumbnail has finished. Otherwise the viewer may keep Windows
+            // File.Replace blocked even after the result was decoded.
+            NetVips.Cache.MaxFiles = 0;
+            using (var thumb = NetVips.Image.Thumbnail(path, 96))
+                _ = thumb.JpegsaveBuffer();
+            using (var exclusive = File.Open(path, FileMode.Open,
+                       FileAccess.ReadWrite, FileShare.None))
+                if (exclusive.Length != original.Length)
+                    throw new Exception("Native preview left the source image locked.");
+            Console.WriteLine("PASS: libvips thumbnail releases original file handle.");
+
+            // Simulate a short foreign reader lock and verify that one
+            // validated staged write succeeds without losing/overwriting
+            // its original source and without a second edit transaction.
+            var blockedTarget = Path.Combine(root, "locked-replace-target.jpg");
+            var readyStage = Path.Combine(root, "locked-replace-stage.jpg");
+            File.WriteAllBytes(blockedTarget, [1, 2, 3, 4]);
+            File.WriteAllBytes(readyStage, [5, 6, 7, 8]);
+            var heldReplace = new FileStream(blockedTarget, FileMode.Open,
+                FileAccess.Read, FileShare.Read);
+            var replaceMethod = typeof(JpegCropWriter).GetMethod(
+                "ReplaceWithSharingRetry",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Sharing-lock retry implementation missing.");
+            try
+            {
+                var runningReplace = Task.Run(() => replaceMethod.Invoke(
+                    null, [readyStage, blockedTarget, CancellationToken.None]));
+                Thread.Sleep(480);
+                heldReplace.Dispose();
+                runningReplace.GetAwaiter().GetResult();
+            }
+            finally { heldReplace.Dispose(); }
+            if (!File.ReadAllBytes(blockedTarget).SequenceEqual([5, 6, 7, 8]) ||
+                File.Exists(readyStage))
+                throw new Exception("Locked edit could not commit after reader released.");
+            Console.WriteLine("PASS: One atomic image write survives a transient Windows sharing lock.");
+
+            // Panorama output can be rendered into an arbitrary folder. A
+            // local working copy inherits source tags/GPS; the rendered file
+            // outside PCasa remains byte-for-byte unchanged.
+            var renderedDirectory = Path.Combine(root, "external-panorama-output");
+            Directory.CreateDirectory(renderedDirectory);
+            var foreignRendered = Path.Combine(renderedDirectory, "AutopanoOutput.jpg");
+            File.Copy(path, foreignRendered);
+            var foreignBytes = File.ReadAllBytes(foreignRendered);
+            var secondSource = Path.Combine(root, "panorama-second.jpg");
+            File.Copy(path, secondSource);
+            var panorama = PanoramaTransaction.Begin(
+                [(21L, path), (22L, secondSource)],
+                ["PCasaCropSmoke"], 53.5, 10.25);
+            string imported;
+            try
+            {
+                var stagedPanorama = PanoramaTransaction.StageExternalResult(
+                    panorama, foreignRendered);
+                if (stagedPanorama == foreignRendered ||
+                    !stagedPanorama.StartsWith(panorama.Directory,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new Exception("Autopano result was not staged locally.");
+                imported = PanoramaTransaction.Import(panorama, stagedPanorama);
+            }
+            finally { PanoramaTransaction.Cleanup(panorama); }
+            if (!Path.GetFileName(imported).Equals(
+                    "croptest-2px-Panorama.jpg", StringComparison.OrdinalIgnoreCase) ||
+                !File.ReadAllBytes(foreignRendered).SequenceEqual(foreignBytes))
+                throw new Exception("External panorama result was overwritten or misnamed.");
+            var panoramaExif = ReadExif(exif, "-n", "-GPSLatitude",
+                "-GPSLongitude", "-Keywords", imported);
+            if (!panoramaExif.Contains("53.5") ||
+                !panoramaExif.Contains("10.25") ||
+                !panoramaExif.Contains("PCasaCropSmoke"))
+                throw new Exception("Autopano import lost inherited tags/GPS: " + panoramaExif);
+            Console.WriteLine("PASS: Arbitrary Autopano export path imports safely with tags and GPS.");
+
             // Alpha.35: verifying an ordinary JPEG's still-image format must
             // NOT leave a native libvips loader holding the source open before
             // Windows File.Replace. A fresh exclusive handle is a direct
