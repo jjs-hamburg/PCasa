@@ -90,6 +90,7 @@ public partial class BrowseCacheProgressWindow : Window
     private readonly HashSet<object> _cachePhaseOwners = new();
     private object? _cacheProgressOwner;
     private ScanProgress? _lastScanProgress;
+    private string? _scanPhaseOverride;
     private BrowseCacheBuildProgress? _lastCacheProgress;
     // Owned borderless WPF windows can lose their rendered composition when
     // the taskbar minimizes/restores the owner. Restore only an intentionally
@@ -558,12 +559,14 @@ public partial class BrowseCacheProgressWindow : Window
     // Only worker progress, not a queued scheduler request, activates a scan.
     // The source token prevents a completed scan from hiding a newer one.
     public void UpdateScan(ScanProgress progress,
-        bool showWhileManualWaiting = false, object? scanOwner = null)
+        bool showWhileManualWaiting = false, object? scanOwner = null,
+        string? phaseOverride = null)
     {
         if (_finished || Dispatcher.HasShutdownStarted) return;
         _scanPhaseActive = true;
         _activeScanOwner = scanOwner;
         _lastScanProgress = progress;
+        _scanPhaseOverride = phaseOverride;
         if (_databaseBackupRunning) return;
         if (_manualPresentationActive && !showWhileManualWaiting) return;
         if (_manualPresentationActive)
@@ -579,6 +582,7 @@ public partial class BrowseCacheProgressWindow : Window
         _scanPhaseActive = false;
         _activeScanOwner = null;
         _lastScanProgress = null;
+        _scanPhaseOverride = null;
         if (_databaseBackupRunning)
         {
             ShowDatabaseBackupIfIdle();
@@ -597,12 +601,16 @@ public partial class BrowseCacheProgressWindow : Window
 
     private void ShowScanProgress(ScanProgress progress)
     {
-        PhaseText.Text = progress.ReadingNew switch
-        {
-            true => UiLanguage.T("Bild einlesen"),
-            false => UiLanguage.T("Datei überprüfen"),
-            null => UiLanguage.T("Dateien überprüfen")
-        };
+        // A continued initial import is not a generic file verification.
+        // The scan owner supplies its real purpose, not a guessed counter.
+        PhaseText.Text = _scanPhaseOverride is { Length: > 0 } phase
+            ? UiLanguage.T(phase)
+            : progress.ReadingNew switch
+            {
+                true => UiLanguage.T("Bild einlesen"),
+                false => UiLanguage.T("Datei überprüfen"),
+                null => UiLanguage.T("Dateien überprüfen")
+            };
         Progress.IsIndeterminate = true;
         var processed = progress.Updated + progress.Unchanged + progress.Failed;
         CountText.Text = UiLanguage.Format("Neu: {0:N0} · geprüft: {1:N0}", progress.Added, processed) +
