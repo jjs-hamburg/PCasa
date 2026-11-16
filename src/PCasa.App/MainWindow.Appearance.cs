@@ -167,7 +167,7 @@ public partial class MainWindow
     private bool _shutdownFinished;
     private ShutdownProgressWindow? _shutdownProgressWindow;
 
-    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
         if (_shutdownFinished)
         {
@@ -176,20 +176,22 @@ public partial class MainWindow
         }
 
         e.Cancel = true;
-        if (_shutdownStarted) return; // Double click/Alt+F4 cannot start a second shutdown.
-        // Unconfirmed Tag changes live only in the editing session. Do not
-        // silently discard them when the user closes the main window.
-        if (_tagDraft.HasChanges)
+        if (_shutdownStarted || _shutdownReviewOpen) return;
+        try
         {
-            var choice = PcasaDialog.Show(this,
-                UiLanguage.Format("{0:N0} Bilder mit {1:N0} vorgemerkten Tag-Änderungen verwerfen?",
-                    _tagDraft.ImageCount, _tagDraft.ChangeCount),
-                UiLanguage.T("Nicht bestätigte Tag-Änderungen"),
-                MessageBoxButton.YesNo, MessageBoxImage.Warning,
-                MessageBoxResult.No);
-            if (choice != MessageBoxResult.Yes) return;
-            _tagDraft.Clear();
+            // One review before any producer/scheduler is canceled.
+            // The review's Abbrechen buttons cancel exactly their tasks.
+            if (!await ConfirmPendingShutdownAsync()) return;
         }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Shutdown.Review", ex);
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("PCasa beenden"),
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+        _tagDraft.Clear();
+        if (_photoEditSession is { HasChanges: true }) CancelEditSession();
         // The user's gallery/tree focus belongs to the moment they close
         // PCasa, NOT the later Closed event after asynchronous worker cleanup.
         // A running import may still publish/reflow the gallery while waiting.
