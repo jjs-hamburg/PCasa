@@ -43,7 +43,7 @@ public sealed class FolderScanner
     private static readonly HashSet<string> SupportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif",
-        ".webp", ".heic", ".heif", ".avif", ".jxl",
+        ".webp", ".heic", ".heif", ".avif", ".jxl", ".psd",
         ".arw", ".nef", ".nrw", ".cr2", ".cr3", ".dng",
         ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw"
     };
