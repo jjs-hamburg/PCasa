@@ -181,7 +181,7 @@ public partial class MainWindow
         {
             // One review before any producer/scheduler is canceled.
             // The review's Abbrechen buttons cancel exactly their tasks.
-            if (!await ConfirmPendingShutdownAsync()) return;
+            if (!ConfirmPendingShutdown()) return;
         }
         catch (Exception ex)
         {
