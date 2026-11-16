@@ -159,6 +159,14 @@ public static class EditableImageFormats
 
     public static (int Width, int Height) Dimensions(string path)
     {
+        if (RawImageSource.IsPsdPath(path))
+        {
+            // A native PSD loader is optional in the pinned Windows libvips.
+            // Resolve the embedded composite preview just as in the viewer.
+            var display = RawImageSource.Resolve(path);
+            using var image = Image.NewFromFile(display, access: Enums.Access.Sequential);
+            return (image.Width, image.Height);
+        }
         var ext = Path.GetExtension(path);
         // Immediately before an atomic Replace/Move the staged file MUST
         // have no open libvips source loader in the operation cache. In
