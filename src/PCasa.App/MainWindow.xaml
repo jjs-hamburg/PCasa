@@ -1941,6 +1941,7 @@
                                                         HasGps="{Binding HasGps}"
                                                         HasTags="{Binding HasTags}"
                                                         IsRaw="{Binding IsRaw}"
+                                                        IsPsd="{Binding IsPsd}"
                                                         HasRestore="{Binding HasRestore}"
                                                         ShowIcons="{Binding ShowIcons}"/>
                                                 </Grid>
