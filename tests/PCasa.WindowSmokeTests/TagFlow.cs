@@ -2031,6 +2031,25 @@ internal static class TagFlow
                 "Unable to stage six visible originals for relocation.");
             var originals = Enumerable.Range(6, 6)
                 .Select(i => Path.Combine(albumB, $"b-{i:00}.jpg")).ToArray();
+            // SourceFileLocks uses 1,021 hash stripes, rather than one gate
+            // per path. Locking a random last source can accidentally block
+            // one of the first five sources OR destinations as well. Select
+            // a last source whose gate is distinct from all earlier pair
+            // gates; otherwise this test may time out before five commits.
+            var blockedLast = originals.FirstOrDefault(candidate =>
+            {
+                var heldGate = SourceFileLocks.ForPath(candidate);
+                return originals.Where(source =>
+                        !source.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                    .All(source =>
+                        !ReferenceEquals(heldGate, SourceFileLocks.ForPath(source)) &&
+                        !ReferenceEquals(heldGate, SourceFileLocks.ForPath(
+                            Path.Combine(org, Path.GetFileName(source)))));
+            }) ?? throw new Exception(
+                "Test file-lock stripes collide for every possible final source.");
+            originals = originals.Where(path =>
+                !path.Equals(blockedLast, StringComparison.OrdinalIgnoreCase))
+                .Append(blockedLast).ToArray();
             var transfer = typeof(PCasa.App.MainWindow).GetMethod(
                 "TransferGalleryFilesAsync",
                 System.Reflection.BindingFlags.NonPublic |
@@ -2044,12 +2063,30 @@ internal static class TagFlow
             lock (SourceFileLocks.ForPath(originals[^1]))
             {
                 moveTask = (Task)transfer.Invoke(window, [originals, org, true])!;
-                Until(window, () =>
-                    originals.Take(originals.Length - 1).All(path =>
+                try
+                {
+                    Until(window, () =>
+                        originals.Take(originals.Length - 1).All(path =>
+                            !File.Exists(path) &&
+                            File.Exists(Path.Combine(org, Path.GetFileName(path)))) &&
+                        File.Exists(originals[^1]) && !moveTask.IsCompleted,
+                        "Manual move did not pause after its first five file commits.");
+                }
+                catch (TimeoutException ex)
+                {
+                    // Identify real scheduler/transfer failures without
+                    // weakening the timeout or hiding a stuck P0 worker.
+                    var moved = originals.Count(path =>
                         !File.Exists(path) &&
-                        File.Exists(Path.Combine(org, Path.GetFileName(path)))) &&
-                    File.Exists(originals[^1]) && !moveTask.IsCompleted,
-                    "Manual move did not pause after its first five file commits.");
+                        File.Exists(Path.Combine(org, Path.GetFileName(path))));
+                    var remaining = originals.Where(File.Exists)
+                        .Select(Path.GetFileName);
+                    throw new TimeoutException(
+                        $"Manual move stalled: {moved}/6 moved; " +
+                        $"remaining=[{string.Join(",", remaining)}]; " +
+                        $"P0 completed={moveTask.IsCompleted}; " +
+                        $"blocked last={Path.GetFileName(originals[^1])}.", ex);
+                }
 
                 var otherFolder = Walk(tree).FirstOrDefault(item =>
                     string.Equals(ReadPath(item), albumA,
