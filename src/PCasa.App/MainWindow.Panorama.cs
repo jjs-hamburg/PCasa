@@ -183,7 +183,9 @@ public partial class MainWindow
                 var picker = new Microsoft.Win32.OpenFileDialog
                 {
                     Title = UiLanguage.T("Panoramaergebnis auswählen"),
-                    Filter = "Bilder|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd|Alle Dateien|*.*",
+                    Filter = UiLanguage.T("Bilder") +
+                        "|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd|" +
+                        UiLanguage.T("Alle Dateien") + "|*.*",
                     CheckFileExists = true,
                     Multiselect = false
                 };
