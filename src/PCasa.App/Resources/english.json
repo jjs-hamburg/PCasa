@@ -931,5 +931,6 @@
   "Abschluss läuft": "Finalizing",
   "Abschluss fortsetzen": "Complete pending save",
   "Ergebnis bereit": "Result ready",
-  "Entscheidung offen": "Awaiting your decision"
+  "Entscheidung offen": "Awaiting your decision",
+  "Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.": "Preview unavailable; external result can still be saved."
 }
