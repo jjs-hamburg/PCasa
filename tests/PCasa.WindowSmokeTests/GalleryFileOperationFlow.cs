@@ -801,7 +801,36 @@ internal static class GalleryFileOperationFlow
                 File.Exists(replaceSource) ||
                 !File.ReadAllBytes(replaceTarget).SequenceEqual(fastOriginal))
                 throw new Exception("Replace move was not a server-side rename.");
-            Console.WriteLine("PASS: Rename and overwrite use OS metadata moves, not byte copies.");
+            // A newly created destination may still have a Windows reader
+            // without FILE_SHARE_DELETE when a real monitored scan opens it.
+            // Hold that reader explicitly: MoveFileEx reports 5/32, must retry
+            // the same native rename, and may not remove the source early.
+            var lockedMoveSource = Path.Combine(first, "locked-native-source.jpg");
+            var lockedMoveTarget = Path.Combine(third, "locked-native-target.jpg");
+            File.WriteAllBytes(lockedMoveSource, fastOriginal);
+            File.WriteAllText(lockedMoveTarget, "old-target");
+            var lockedReader = new FileStream(lockedMoveTarget, FileMode.Open,
+                FileAccess.Read, FileShare.Read);
+            ServerSideFileMover.MoveMethod lockedMoveResult;
+            try
+            {
+                var lockedMove = Task.Run(() => ServerSideFileMover.Move(
+                    lockedMoveSource, lockedMoveTarget, replace: true));
+                Thread.Sleep(330);
+                if (lockedMove.IsCompleted || !File.Exists(lockedMoveSource))
+                    throw new Exception(
+                        "Native rename modified an original while its target was still locked.");
+                lockedReader.Dispose();
+                lockedMoveResult = lockedMove.GetAwaiter().GetResult();
+            }
+            finally { lockedReader.Dispose(); }
+            if (lockedMoveResult != ServerSideFileMover.MoveMethod.Rename ||
+                File.Exists(lockedMoveSource) ||
+                !File.ReadAllBytes(lockedMoveTarget).SequenceEqual(fastOriginal))
+                throw new Exception(
+                    "Native retry lost the replacement or fell back to a byte copy.");
+            Console.WriteLine(
+                "PASS: Same-volume rename and overwrite retain native metadata moves; transient Windows target lock retries safely.");
 
             // Progress is read from the scheduler's live operation, not a
             // second UI timer. Block one file lock to observe Running before
