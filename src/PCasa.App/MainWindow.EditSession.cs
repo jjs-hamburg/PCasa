@@ -574,6 +574,23 @@ public partial class MainWindow
                 if (result.Failed > 0 || result.ImageFilesSeen == 0)
                     throw new IOException(
                         "Die gespeicherte Bildkopie konnte nicht katalogisiert werden.");
+                // The catalogue row alone cannot enter the viewer sequence:
+                // publish its packed thumbnail tiers in this same P0 step,
+                // matching external Save Copy and panorama import.
+                using (var db = _database.OpenConnection())
+                using (var command = db.CreateCommand())
+                {
+                    command.CommandText =
+                        "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                    command.Parameters.AddWithValue("$path", copy);
+                    if (command.ExecuteScalar() is not { } found)
+                        throw new IOException(
+                            "Die gespeicherte Bildkopie fehlt im Katalog.");
+                    new BrowseCacheBuilder(
+                        new BrowseCacheRepository(_database),
+                        new BrowseThumbnailProfileRepository(_database))
+                        .RebuildSingleImage(Convert.ToInt64(found), token);
+                }
                 _scheduler.ReportProgress(key, UiLanguage.T("Kopie katalogisieren"),
                     2, 2, copy);
                 return Task.CompletedTask;
