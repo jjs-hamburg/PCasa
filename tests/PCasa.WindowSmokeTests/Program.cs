@@ -131,8 +131,8 @@ internal static class Program
                     refresh.Invoke(window, []);
                     if (!copyButton.IsEnabled || saveButton.IsEnabled)
                         throw new Exception("Changed-format batch must disable original Save.");
-                    var panorama = session with { IsPanorama = true };
-                    var panoramaReview = reviewConstructor.Invoke([panorama]);
+                    var panoramaSession = session with { IsPanorama = true };
+                    var panoramaReview = reviewConstructor.Invoke([panoramaSession]);
                     outputsProperty.SetValue(panoramaReview,
                         new[] { new ExternalBatchOutput(0, @"C:\smoke\pano.jpg") });
                     reviewField.SetValue(window, panoramaReview);
