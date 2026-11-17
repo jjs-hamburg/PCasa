@@ -111,12 +111,17 @@ public partial class MainWindow
         EditCompareSingleButton.IsEnabled = _viewerOpen && !_comparisonActive;
         EditCompareSideButton.IsEnabled = eligible;
         EditCompareSplitButton.IsEnabled = eligible;
-        EditCompareSingleButton.FontWeight = _editCompareMode == EditCompareMode.Single
-            ? FontWeights.Bold : FontWeights.Normal;
-        EditCompareSideButton.FontWeight = _editCompareMode == EditCompareMode.SideBySide
-            ? FontWeights.Bold : FontWeights.Normal;
-        EditCompareSplitButton.FontWeight = _editCompareMode == EditCompareMode.Split
-            ? FontWeights.Bold : FontWeights.Normal;
+        // The icons are vector geometry, not text: FontWeight does NOTHING
+        // to their visual selection. Use a thick outlined active button and
+        // full opacity; do not rely on hue (color-blind accessibility).
+        void Mark(Button button, bool active)
+        {
+            button.BorderThickness = active ? new Thickness(3) : new Thickness(1);
+            button.Opacity = active ? 1 : 0.76;
+        }
+        Mark(EditCompareSingleButton, _editCompareMode == EditCompareMode.Single);
+        Mark(EditCompareSideButton, _editCompareMode == EditCompareMode.SideBySide);
+        Mark(EditCompareSplitButton, _editCompareMode == EditCompareMode.Split);
     }
 
     private void EditCompareSingle_Click(object sender, RoutedEventArgs e)
