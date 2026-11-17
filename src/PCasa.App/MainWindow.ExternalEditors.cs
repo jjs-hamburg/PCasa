@@ -37,8 +37,8 @@ public partial class MainWindow
             var editor = configured; // Capture immutable program per card.
             var button = new Button
             {
-                Width = 74,
-                Height = 49,
+                Width = 64,
+                Height = 43,
                 Padding = new Thickness(2),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Top,
@@ -49,14 +49,14 @@ public partial class MainWindow
             var caption = new TextBlock
             {
                 Text = editor.Name,
-                Width = 82,
-                Height = 31,
+                Width = 76,
+                Height = 26,
                 FontSize = 10,
                 TextAlignment = TextAlignment.Center,
                 TextWrapping = TextWrapping.Wrap,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 5, 0, 0),
+                Margin = new Thickness(0, 3, 0, 0),
                 ToolTip = editor.Name
             };
             caption.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
@@ -66,8 +66,8 @@ public partial class MainWindow
                 _ = LoadExternalEditorIconAsync(editor.ExecutablePath, button);
             var card = new StackPanel
             {
-                Width = 86,
-                Margin = new Thickness(1, 2, 1, 3)
+                Width = 80,
+                Margin = new Thickness(1, 1, 1, 2)
             };
             card.Children.Add(button);
             card.Children.Add(caption);
