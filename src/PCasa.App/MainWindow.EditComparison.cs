@@ -34,6 +34,64 @@ public partial class MainWindow
     // A newly generated panorama does NOT get such a link.
     private readonly Dictionary<long, long> _editCompareCopySources = new();
 
+    // The last external comparison belongs to ONE immutable editor session,
+    // not the newest Undo entry or whatever bitmap happens to be in the
+    // viewer. Retain decoded, bounded (2400px) pixels after the temporary
+    // exchange workspace is cleaned; never try to reopen its deleted file.
+    private sealed record ExternalComparisonSnapshot(
+        Guid SessionId, long ImageId, string ResultPath,
+        long ResultSize, DateTime ResultWriteUtc,
+        BitmapSource Before, BitmapSource After);
+    private ExternalComparisonSnapshot? _latestExternalComparison;
+
+    private async Task<ExternalComparisonSnapshot?> CaptureExternalComparisonAsync(
+        ExternalEditReview review)
+    {
+        if (review.ResultPath is not { Length: > 0 } output) return null;
+        var originalSnapshot = review.Snapshot.BeforePath;
+        if (!File.Exists(originalSnapshot))
+        {
+            // Pre-Alpha.41 sessions do not have an immutable input. Use the
+            // gallery source ONLY if its bytes are still the sent version.
+            // Otherwise do not show a mislabeled comparison.
+            if (ExternalEditTransaction.OriginalChanged(review.Snapshot))
+                return null;
+            originalSnapshot = review.Snapshot.OriginalPath;
+        }
+        var sessionId = review.Snapshot.Id;
+        var resultSize = review.ResultSize;
+        var resultWriteUtc = review.ResultWriteUtc;
+        try
+        {
+            var pair = await Task.Run(() =>
+            {
+                BitmapSource LoadLocal(string path)
+                {
+                    var dimensions = EditableImageFormats.Dimensions(path);
+                    return PhotoViewerImageLoader.Load(
+                        new PhotoViewerImageInfo(review.ImageId, path,
+                            Path.GetFileName(path), dimensions.Width,
+                            dimensions.Height), 2400, CancellationToken.None);
+                }
+                return (Before: LoadLocal(originalSnapshot), After: LoadLocal(output));
+            });
+            // If an editor exported again while we decoded, never label a
+            // stale preview as the result of that new export.
+            var resultNow = new FileInfo(output);
+            if (!resultNow.Exists || resultNow.Length != resultSize ||
+                resultNow.LastWriteTimeUtc != resultWriteUtc)
+                return null;
+            return new ExternalComparisonSnapshot(sessionId, review.ImageId,
+                output, resultSize, resultWriteUtc, pair.Before, pair.After);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidDataException or NotSupportedException)
+        {
+            PCasaDiagnostics.Write("EditComparison.ExternalSnapshot", ex);
+            return null; // Save/Cancel must remain available without a preview.
+        }
+    }
+
     private void UpdateEditComparisonAvailability()
     {
         if (EditCompareSingleButton is null) return;
@@ -45,6 +103,7 @@ public partial class MainWindow
             ((_photoEditSession is { HasChanges: true } live && live.ImageId == id) ||
              (_externalEditReview is { ResultPath: not null } external &&
               external.ImageId == id) ||
+             (_latestExternalComparison?.ImageId == id) ||
              _restoreBadgeImageIds.Contains(id) ||
              _editCompareCopySources.ContainsKey(id));
         EditCompareSingleButton.IsEnabled = _viewerOpen && !_comparisonActive;
@@ -79,15 +138,25 @@ public partial class MainWindow
         var external = _externalEditReview;
         if (external is { ResultPath: not null } && external.ImageId == imageId)
         {
-            var preview = PhotoViewerImage.Source as BitmapSource;
-            if (preview is null) return null;
-            var before = await _scheduler.RunAsync(
-                "viewer:edit-before:" + Guid.NewGuid().ToString("N"),
-                SchedulerPriority.Interactive,
-                token => LoadComparisonBitmap(imageId, token),
-                workKind: SchedulerWorkKind.ViewerRead);
-            return before is null ? null : (before, preview);
+            var captured = _latestExternalComparison;
+            if (captured is null || captured.SessionId != external.Snapshot.Id ||
+                !string.Equals(captured.ResultPath, external.ResultPath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                captured.ResultSize != external.ResultSize ||
+                captured.ResultWriteUtc != external.ResultWriteUtc)
+            {
+                captured = await CaptureExternalComparisonAsync(external);
+                if (captured is not null &&
+                    ReferenceEquals(_externalEditReview, external))
+                    _latestExternalComparison = captured;
+            }
+            return captured is not null
+                ? (captured.Before, captured.After) : null;
         }
+        // After Save/Save Copy the isolated workspace no longer exists.
+        // Its exact session-bound pixels take priority over Undo history.
+        if (_latestExternalComparison is { } last && last.ImageId == imageId)
+            return (last.Before, last.After);
         var info = _viewerImageInfo;
         if (info is null || info.Id != imageId) return null;
         if (_editCompareCopySources.TryGetValue(imageId, out var sourceId))
@@ -338,6 +407,7 @@ public partial class MainWindow
         var session = _photoEditSession;
         var live = session is { HasChanges: true } && session.ImageId == info.Id;
         if (!live && !_restoreBadgeImageIds.Contains(info.Id) &&
+            _latestExternalComparison?.ImageId != info.Id &&
             !_editCompareCopySources.ContainsKey(info.Id) &&
             _externalEditReview?.ResultPath is null)
             return false;
