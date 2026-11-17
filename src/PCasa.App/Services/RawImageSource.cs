@@ -55,7 +55,9 @@ public static class RawImageSource
 
     public static string Resolve(string path, CancellationToken cancellationToken = default)
     {
-        if (!IsRawPath(path) && !IsPsdPath(path)) return path;
+        if (IsPsdPath(path))
+            return PsdCompositePreview.Resolve(path, cancellationToken);
+        if (!IsRawPath(path)) return path;
         cancellationToken.ThrowIfCancellationRequested();
         NativeImageCachePolicy.EnsureConfigured();
 
