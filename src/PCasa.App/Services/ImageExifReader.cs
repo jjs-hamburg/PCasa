@@ -44,7 +44,7 @@ public sealed class ImageExifReader : IDisposable
             // Every response carries the request identity. A timeout may
             // leave an outstanding ReadLineAsync and a delayed ExifTool reply;
             // NEVER allow that reply to be stored under the next photo ID.
-            var arguments = new List<string> { "-j", "-G1", "-n", "-EXIF:All",
+            var arguments = new List<string> { "-j", "-G1", "-n", "-File:FileType", "-EXIF:All",
                 "-GPS:All", "-XMP:GPSLatitude", "-XMP:GPSLongitude",
                 "-XMP:Make", "-XMP:Model" };
             // ExifTool video metadata lives in container groups rather than

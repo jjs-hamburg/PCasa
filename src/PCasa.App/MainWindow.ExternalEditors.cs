@@ -134,8 +134,7 @@ public partial class MainWindow
     private void PopulateExternalEditorMenu(ItemsControl menu, long id,
         string? sourceName)
     {
-        // Do not offer external editors OR Windows Open With for RAW.
-        if (sourceName is null || RawImageSource.IsRawPath(sourceName)) return;
+        if (sourceName is null) return;
         IReadOnlyList<ExternalEditorProgram> programs = sourceName is null
             ? [] : _externalEditors.ForFile(sourceName);
         foreach (var program in programs)
@@ -256,9 +255,6 @@ public partial class MainWindow
             _externalEditLaunchPending = true;
             var source = (await SelectedGalleryPathsAsync([id])).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(source)) return;
-            if (RawImageSource.IsRawPath(source))
-                throw new NotSupportedException(UiLanguage.T(
-                    "RAW-Dateien können nicht extern bearbeitet werden."));
             if (editor is null || !editor.Matches(source))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Dieses Programm ist für das Dateiformat nicht konfiguriert."));
@@ -376,6 +372,41 @@ public partial class MainWindow
         if (!ReferenceEquals(_externalEditReview, review) ||
             review.Busy || _externalReviewRefreshing) return;
         _externalReviewRefreshing = true;
+        // session.json, not the external process lifetime, owns the decision.
+        // Resume a durably chosen Save/Copy/Cancel rather than offering an
+        // invalid new Cancel after the commit has already started.
+        ExternalEditSnapshot? persisted;
+        try
+        {
+            persisted = await Task.Run(() =>
+                ExternalEditTransaction.FindPending(review.Snapshot.OriginalPath));
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEdit.Manifest", ex);
+            StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
+            _externalReviewRefreshing = false;
+            return;
+        }
+        if (!ReferenceEquals(_externalEditReview, review) || review.Busy)
+        {
+            _externalReviewRefreshing = false;
+            return;
+        }
+        if (persisted is null)
+        {
+            _externalEditReview = null;
+            ResumeSchedulerAfterExternalEdit();
+            UpdateEditControls();
+            _externalReviewRefreshing = false;
+            return;
+        }
+        if (persisted.Finalizing is { } pendingDecision)
+        {
+            _externalReviewRefreshing = false;
+            await CompleteExternalReviewAsync(pendingDecision);
+            return;
+        }
         try
         {
             string? result = null;
@@ -406,6 +437,7 @@ public partial class MainWindow
             review.ResultSize = metadata.Length;
             review.ResultWriteUtc = metadata.Time;
             review.Ready = true;
+            var previewFailed = false;
 
             if (review.IsVideo)
             {
@@ -462,12 +494,20 @@ public partial class MainWindow
                     }
                     catch (Exception ex)
                     {
+                        // A decoder/preview failure is NOT evidence that the
+                        // externally rendered file is missing or unsaveable.
+                        // Preserve the detected result and the Save/Save Copy
+                        // actions; commit will validate the file independently.
+                        // Cancel remains available until finalization begins.
                         PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
-                        review.ResultPath = null;
+                        previewFailed = true;
                     }
                 }
             }
-            StatusText.Text = result is null
+            StatusText.Text = previewFailed
+                ? UiLanguage.T("Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
+                    " · " + Path.GetFileName(result)
+                : result is null
                 ? UiLanguage.T("Externe Bearbeitung: warte auf Ergebnis oder Abbrechen · ") +
                     Path.GetFileName(review.Snapshot.OriginalPath)
                 : UiLanguage.T("Externes Ergebnis erkannt: Speichern, Kopie oder Abbrechen · ") +

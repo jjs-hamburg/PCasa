@@ -187,9 +187,6 @@ public static class ExternalEditTransaction
         Action<long, long>? progress = null)
     {
         var path = Path.GetFullPath(original);
-        if (RawImageSource.IsRawPath(path))
-            throw new NotSupportedException(
-                UiLanguage.T("RAW-Dateien können nicht extern bearbeitet werden."));
         lock (Gate)
         {
             token.ThrowIfCancellationRequested();
@@ -248,8 +245,11 @@ public static class ExternalEditTransaction
                         throw new IOException(UiLanguage.T(
                             "Das Original wurde während der Sicherung verändert."));
                     // A broken source is rejected before launching an editor.
-                    if (!VideoFormats.IsVideo(work))
+                    if (!VideoFormats.IsVideo(work) &&
+                        !RawImageSource.IsRawPath(work))
                         EditableImageFormats.ValidateStillImage(work);
+                    // RAW is staged byte-for-byte; no pixel converter may
+                    // process or rewrite the original or working input.
                     var session = new ExternalEditSnapshot(id, path,
                         work, checksum, originalLength, originalWrite,
                         DateTime.UtcNow, []);
@@ -308,6 +308,41 @@ public static class ExternalEditTransaction
             throw new InvalidOperationException(
                 "Die externe Sitzung stimmt nicht mit dem gespeicherten Status überein.");
     }
+
+    // Never trust a RAW filename alone. ExifTool reads the container bytes,
+    // not the suffix; this rejects a JPEG renamed to .ARW before an atomic
+    // replacement could destroy the original camera negative.
+    private static void ValidateExternalRawResult(string path,
+        CancellationToken token)
+    {
+        using var reader = new ImageExifReader();
+        var exif = reader.Read(path, token);
+        using var json = JsonDocument.Parse(exif.Json);
+        var entry = json.RootElement;
+        if (entry.ValueKind == JsonValueKind.Array && entry.GetArrayLength() == 1)
+            entry = entry[0];
+        if (entry.ValueKind != JsonValueKind.Object ||
+            !(entry.TryGetProperty("File:FileType", out var type) ||
+              entry.TryGetProperty("FileType", out type)) ||
+            type.ValueKind != JsonValueKind.String ||
+            type.GetString() is not { } actual ||
+            !SupportedRawFileTypes.Contains(actual))
+            throw new InvalidDataException(
+                "Das externe RAW-Ergebnis ist kein erkanntes RAW-Format.");
+    }
+
+    private static readonly HashSet<string> SupportedRawFileTypes =
+        new(StringComparer.OrdinalIgnoreCase)
+        { "ARW", "NEF", "NRW", "CR2", "CR3", "DNG",
+          "RAF", "RW2", "ORF", "PEF", "SRW", "CRW" };
+
+    // Same container/extension may be deliberately saved into the original
+    // (with a central Undo snapshot). A format change is ALWAYS a new image.
+    // In particular an exported JPEG/PSD/TIFF cannot overwrite a RAW or
+    // replace a layered PSD under its old extension.
+    public static bool RequiresNewFile(string original, string result)
+        => !Path.GetExtension(original).Equals(Path.GetExtension(result),
+            StringComparison.OrdinalIgnoreCase);
 
     private static string UniqueCopyDestination(string source, string original)
     {
@@ -405,32 +440,35 @@ public static class ExternalEditTransaction
             // A layered PSD exported from a JPEG is always a NEW photo. Never
             // replace the JPEG, even if the user clicked ordinary Save.
             if (decision == ExternalEditDecision.Save &&
-                !Path.GetExtension(source).Equals(
-                    Path.GetExtension(session.OriginalPath),
-                    StringComparison.OrdinalIgnoreCase))
+                RequiresNewFile(session.OriginalPath, source))
                 decision = ExternalEditDecision.SaveCopy;
             if (!Path.GetDirectoryName(source)!.Equals(
                     session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
                     "ExternalEdit: Ergebnis liegt nicht im Arbeitsverzeichnis.");
-            if (RawImageSource.IsRawPath(source) ||
-                (VideoFormats.IsVideo(session.OriginalPath)
+            if (VideoFormats.IsVideo(session.OriginalPath)
                     ? !VideoFormats.IsVideo(source)
-                    : !EditableImageFormats.SupportsExternalResult(source)))
+                    : !EditableImageFormats.SupportsExternalResult(source) &&
+                      !(RawImageSource.IsRawPath(session.OriginalPath) &&
+                        RawImageSource.IsRawPath(source)))
                 throw new NotSupportedException(UiLanguage.T(
                     "Dieses Format kann nicht bearbeitet werden. RAW und Videos bleiben unverändert."));
             if (new FileInfo(source).Length == 0)
                 throw new InvalidDataException(UiLanguage.T("Das externe Ergebnis ist leer."));
-            if (!VideoFormats.IsVideo(source))
+            if (RawImageSource.IsRawPath(source))
+            {
+                // A native RAW may be replaced ONLY by an externally
+                // produced, readable RAW; never accept a renamed JPG.
+                ValidateExternalRawResult(source, token);
+            }
+            else if (!VideoFormats.IsVideo(source))
                 EditableImageFormats.ValidateStillImage(source);
 
             using (SourceFileLocks.Enter(session.OriginalPath, token))
             {
                 if (decision == ExternalEditDecision.Save)
                 {
-                    if (!Path.GetExtension(source).Equals(
-                            Path.GetExtension(session.OriginalPath),
-                            StringComparison.OrdinalIgnoreCase))
+                    if (RequiresNewFile(session.OriginalPath, source))
                         throw new NotSupportedException(UiLanguage.T(
                             "Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
                     var finalizing = session with
@@ -438,6 +476,13 @@ public static class ExternalEditTransaction
                         Finalizing = decision, FinalTarget = session.OriginalPath
                     };
                     if (session.Finalizing is null) WritePending(finalizing);
+                    // An external PSD editor may drop camera EXIF on re-save.
+                    // Restore capture metadata on its staged result before
+                    // changing the original layered file. RAW bytes are never
+                    // touched by PCasa's metadata writer here.
+                    if (RawImageSource.IsPsdPath(source) &&
+                        session.Finalizing is null)
+                        ExternalResultMetadata.CopyAll(session.OriginalPath, source, token);
                     // A crash after the replace but before cleanup must NOT
                     // produce a second Undo copy of the edited file.
                     if (Hash(session.OriginalPath) != Hash(source))
@@ -459,7 +504,9 @@ public static class ExternalEditTransaction
                 // Transfer the source capture date, camera settings, XMP,
                 // IPTC and GPS to the layered PSD BEFORE its atomic copy.
                 // This never re-encodes the Photoshop pixels or changes the JPEG.
-                if (RawImageSource.IsPsdPath(source) &&
+                if ((RawImageSource.IsPsdPath(source) ||
+                     (RawImageSource.IsRawPath(session.OriginalPath) &&
+                      !RawImageSource.IsRawPath(source))) &&
                     session.Finalizing is null)
                     ExternalResultMetadata.CopyAll(session.OriginalPath, source, token);
                 var destination = session.FinalTarget ??

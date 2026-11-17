@@ -7,17 +7,18 @@ namespace PCasa.App.Services;
 /// Configured independent applications, not PCasa plug-ins. No executable is
 /// installed or launched implicitly. Paths belong in the user's profile.
 /// A format selector accepts photo, video, *, or extensions (.jpg;.png).
-/// RAW is excluded even if a wildcard or explicit RAW extension is configured.
+/// RAW/PSD are opt-in; the general photo and wildcard filters do not grant them.
 /// </summary>
 public sealed record ExternalEditorProgram(
     string Name, string ExecutablePath, string Formats = "photo",
-    bool Panorama = false, bool Psd = false)
+    bool Panorama = false, bool Psd = false, bool Raw = false)
 {
     public bool Matches(string sourcePath)
     {
-        // RAW is viewable/catalogued but cannot be edited in this release.
-        // Reject BEFORE matching photo, wildcard or explicit extensions.
-        if (Panorama || RawImageSource.IsRawPath(sourcePath)) return false;
+        if (Panorama) return false;
+        if (RawImageSource.IsRawPath(sourcePath))
+            return Raw && !string.IsNullOrWhiteSpace(Name) &&
+                   !string.IsNullOrWhiteSpace(ExecutablePath);
         if (Path.GetExtension(sourcePath).Equals(".psd", StringComparison.OrdinalIgnoreCase))
             return Psd && !string.IsNullOrWhiteSpace(Name) &&
                    !string.IsNullOrWhiteSpace(ExecutablePath);
