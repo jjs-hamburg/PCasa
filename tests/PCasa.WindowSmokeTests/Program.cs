@@ -2812,7 +2812,8 @@ internal static class Program
                         Math.Abs(firstBounds.Width - secondBounds.Width) > 0.5 ||
                         Math.Abs(firstBounds.Height - secondBounds.Height) > 0.5)
                         throw new Exception(
-                            "Split compared two image frames that were not exactly overlaid.");
+                            $"Split frames diverged in WPF layout: before={firstBounds}; " +
+                            $"after={secondBounds}; viewport={swipe.ActualWidth}x{swipe.ActualHeight}.");
                     if (beforeImage.Clip is not RectangleGeometry clip ||
                         clip.Rect.Width <= 0 ||
                         clip.Rect.Width >= swipe.ActualWidth)
