@@ -18,6 +18,7 @@ public sealed class ExternalEditorsWindow : Window
     private readonly CheckBox _panorama = new() { Margin = new Thickness(0, 7, 0, 3) };
     private readonly CheckBox _psd = new() { Margin = new Thickness(0, 4, 0, 3) };
     private readonly CheckBox _raw = new() { Content = "RAW", Margin = new Thickness(0, 4, 0, 3) };
+    private readonly CheckBox _multi = new() { Margin = new Thickness(0, 4, 0, 3) };
     private int _editingIndex = -1;
     private bool _changing;
     public ExternalEditorSettings? SavedSettings { get; private set; }
@@ -26,7 +27,7 @@ public sealed class ExternalEditorsWindow : Window
     {
         Title = UiLanguage.T("Externe Programme verwalten");
         Width = 840;
-        Height = 390;
+        Height = 420;
         MinWidth = 680;
         MinHeight = 315;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -74,6 +75,8 @@ public sealed class ExternalEditorsWindow : Window
         right.Children.Add(_panorama);
         right.Children.Add(_psd);
         right.Children.Add(_raw);
+        _multi.Content = UiLanguage.T("Mehrfachbearbeitung");
+        right.Children.Add(_multi);
 
         var footer = new StackPanel {
             Orientation = Orientation.Horizontal,
@@ -129,7 +132,7 @@ public sealed class ExternalEditorsWindow : Window
         _programs[_editingIndex] = new ExternalEditorProgram(
             _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim(),
             _panorama.IsChecked == true, _psd.IsChecked == true,
-            _raw.IsChecked == true);
+            _raw.IsChecked == true, _multi.IsChecked == true);
     }
 
     private void RefreshList(int selected)
@@ -155,8 +158,10 @@ public sealed class ExternalEditorsWindow : Window
         _panorama.IsChecked = entry.Panorama;
         _psd.IsChecked = entry.Psd;
         _raw.IsChecked = entry.Raw;
+        _multi.IsChecked = entry.MultiEdit;
         _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled =
-            _panorama.IsEnabled = _psd.IsEnabled = _raw.IsEnabled = index >= 0;
+            _panorama.IsEnabled = _psd.IsEnabled = _raw.IsEnabled =
+            _multi.IsEnabled = index >= 0;
         _changing = false;
     }
 

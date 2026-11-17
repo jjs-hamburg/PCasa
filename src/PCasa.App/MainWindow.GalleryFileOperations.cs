@@ -218,16 +218,7 @@ public partial class MainWindow
     }
 
     private static string UniqueCopyPath(string target, IReadOnlySet<string> reserved)
-    {
-        var folder = Path.GetDirectoryName(target)!;
-        var stem = Path.GetFileNameWithoutExtension(target);
-        var ext = Path.GetExtension(target);
-        var result = Path.Combine(folder, stem + " - Kopie" + ext);
-        var suffix = 2;
-        while (File.Exists(result) || reserved.Contains(result))
-            result = Path.Combine(folder, stem + $" - Kopie ({suffix++})" + ext);
-        return result;
-    }
+        => ExternalCopyNames.NextAvailable(target, reserved, requireCopySuffix: true);
 
     private enum NameConflict { Replace, KeepBoth, Skip, Cancel }
 

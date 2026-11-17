@@ -11,11 +11,14 @@ namespace PCasa.App.Services;
 /// </summary>
 public sealed record ExternalEditorProgram(
     string Name, string ExecutablePath, string Formats = "photo",
-    bool Panorama = false, bool Psd = false, bool Raw = false)
+    bool Panorama = false, bool Psd = false, bool Raw = false,
+    bool MultiEdit = false)
 {
     public bool Matches(string sourcePath)
     {
-        if (Panorama) return false;
+        // Panorama and multi-selection are independent capabilities.
+        // A panorama-only program is hidden for ordinary single edits.
+        if (Panorama && !MultiEdit) return false;
         if (RawImageSource.IsRawPath(sourcePath))
             return Raw && !string.IsNullOrWhiteSpace(Name) &&
                    !string.IsNullOrWhiteSpace(ExecutablePath);
@@ -41,6 +44,10 @@ public sealed record ExternalEditorProgram(
         }
         return false;
     }
+
+    public bool MatchesMultiple(IReadOnlyList<string> sourcePaths)
+        => MultiEdit && sourcePaths.Count >= 2 &&
+           sourcePaths.All(Matches);
 }
 
 public sealed class ExternalEditorSettings
@@ -90,6 +97,10 @@ public sealed class ExternalEditorSettings
 
     public IReadOnlyList<ExternalEditorProgram> ForFile(string path) =>
         Programs.Where(p => p.Matches(path)).ToArray();
+
+    public IReadOnlyList<ExternalEditorProgram> ForMultiple(
+        IReadOnlyList<string> sourcePaths) =>
+        Programs.Where(program => program.MatchesMultiple(sourcePaths)).ToArray();
 
     public IReadOnlyList<ExternalEditorProgram> ForPanorama() =>
         Programs.Where(p => p.Panorama &&

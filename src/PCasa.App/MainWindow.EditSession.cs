@@ -300,9 +300,24 @@ public partial class MainWindow
             // Never permit another tool to start while the original is in
             // an unresolved external-editor transaction.
             var ready = external.Ready && !external.Busy;
-            CropSaveButton.IsEnabled = ready && external.ResultPath is not null;
-            CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
+            CropSaveCopyButton.IsEnabled = ready && external.ResultPath is not null;
+            CropSaveButton.IsEnabled = CropSaveCopyButton.IsEnabled &&
+                !ExternalEditTransaction.RequiresNewFile(
+                    external.Snapshot.OriginalPath, external.ResultPath!);
             CropCancelButton.IsEnabled = ready;
+            CropApplyButton.IsEnabled = false;
+            ViewerToolCancelButton.IsEnabled = false;
+            CropUndoButton.IsEnabled = CropRedoButton.IsEnabled = false;
+        }
+        if (_externalBatchReview is { } batch)
+        {
+            // The exact SAME footer that decides a single external edit
+            // decides a panorama or multi-image result. No auto-import.
+            var ready = !batch.Busy && batch.Outputs.Length > 0;
+            CropSaveCopyButton.IsEnabled = ready;
+            CropSaveButton.IsEnabled = ready &&
+                PanoramaTransaction.CanSaveMultiple(batch.Session, batch.Outputs);
+            CropCancelButton.IsEnabled = !batch.Busy;
             CropApplyButton.IsEnabled = false;
             ViewerToolCancelButton.IsEnabled = false;
             CropUndoButton.IsEnabled = CropRedoButton.IsEnabled = false;
@@ -316,12 +331,14 @@ public partial class MainWindow
                 : _viewerImageInfo?.LocalPath;
         var editable = currentFile is not null &&
             EditableImageFormats.Supports(currentFile);
-        EditorToolTabs.IsEnabled = editable && _externalEditReview is null;
+        var noExternalEdit = _externalEditReview is null &&
+            _externalBatchReview is null;
+        EditorToolTabs.IsEnabled = editable && noExternalEdit;
         foreach (var tool in _editorToolLabels)
-            tool.Button.IsEnabled = editable && _externalEditReview is null;
+            tool.Button.IsEnabled = editable && noExternalEdit;
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
-                button.IsEnabled = _externalEditReview is null;
+                button.IsEnabled = noExternalEdit;
         // Sliders must be visibly disabled as well. The editor tab control
         // disables its descendants without disabling GPS, tags or navigation.
         ViewerCropFooter.Visibility = Visibility.Visible;
@@ -387,6 +404,11 @@ public partial class MainWindow
 
     private void CancelEditSession()
     {
+        if (_externalBatchReview is not null)
+        {
+            _ = CompleteExternalBatchReviewAsync(ExternalEditDecision.Cancel);
+            return;
+        }
         if (_externalEditReview is not null)
         {
             _ = CompleteExternalReviewAsync(ExternalEditDecision.Cancel);
@@ -420,6 +442,12 @@ public partial class MainWindow
 
     private async void SaveEdits(bool asCopy = false)
     {
+        if (_externalBatchReview is not null)
+        {
+            await CompleteExternalBatchReviewAsync(asCopy
+                ? ExternalEditDecision.SaveCopy : ExternalEditDecision.Save);
+            return;
+        }
         if (_externalEditReview is not null)
         {
             await CompleteExternalReviewAsync(asCopy

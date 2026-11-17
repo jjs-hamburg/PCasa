@@ -24,6 +24,11 @@ internal static class ExternalEditSmokeFlow
             var other = Path.Combine(root, "other.jpg");
             WriteJpeg(photo, 36);
             WriteJpeg(other, 52);
+            var originalCreation = new DateTime(2024, 6, 15, 12, 0, 0,
+                DateTimeKind.Utc);
+            var externalEditTime = new DateTime(2026, 11, 17, 9, 10, 0,
+                DateTimeKind.Utc);
+            File.SetCreationTimeUtc(photo, originalCreation);
             var original = File.ReadAllBytes(photo);
 
             // One fixed folder, one fixed working name and one durable slot.
@@ -55,6 +60,7 @@ internal static class ExternalEditSmokeFlow
             var copied = ExternalEditTransaction.Begin(photo);
             var export = Path.Combine(copied.DirectoryPath, "photo-topaz.jpg");
             WriteJpeg(export, 170);
+            File.SetLastWriteTimeUtc(export, externalEditTime);
             var copy = ExternalEditTransaction.Commit(copied, export,
                 ExternalEditDecision.SaveCopy, undoOptions: undoOptions);
             if (copy is null || !File.Exists(copy) ||
@@ -63,6 +69,41 @@ internal static class ExternalEditSmokeFlow
                 !File.ReadAllBytes(photo).SequenceEqual(original) ||
                 Directory.Exists(copied.DirectoryPath))
                 throw new Exception("Save as Copy did not import a unique output and preserve original.");
+            VerifyDates(copy, originalCreation, externalEditTime);
+
+            // Format changes use the original stem, without a suffix when
+            // free; only an actual collision triggers gallery '-Kopie'.
+            var changedFormat = ExternalEditTransaction.Begin(photo);
+            var png = Path.Combine(changedFormat.DirectoryPath, "photo.png");
+            WritePng(png, 92);
+            File.SetLastWriteTimeUtc(png, externalEditTime);
+            try
+            {
+                ExternalEditTransaction.Commit(changedFormat, png,
+                    ExternalEditDecision.Save, undoOptions: undoOptions);
+                throw new Exception("Format change was silently treated as Save Copy.");
+            }
+            catch (NotSupportedException) { }
+            if (ExternalEditTransaction.FindPending()?.Id != changedFormat.Id)
+                throw new Exception("Rejected Save destroyed the editing session.");
+            var firstPng = ExternalEditTransaction.Commit(changedFormat, png,
+                ExternalEditDecision.SaveCopy, undoOptions: undoOptions);
+            if (firstPng is null ||
+                !firstPng.EndsWith("test-photo.png", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Format change incorrectly added a copy suffix.");
+            VerifyDates(firstPng, originalCreation, externalEditTime);
+
+            var collision = ExternalEditTransaction.Begin(photo);
+            var pngAgain = Path.Combine(collision.DirectoryPath, "second.png");
+            WritePng(pngAgain, 105);
+            File.SetLastWriteTimeUtc(pngAgain, externalEditTime);
+            var secondPng = ExternalEditTransaction.Commit(collision, pngAgain,
+                ExternalEditDecision.SaveCopy, undoOptions: undoOptions);
+            if (secondPng is null ||
+                !secondPng.EndsWith("test-photo-Kopie.png",
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Format collision did not use gallery copy naming.");
+            VerifyDates(secondPng, originalCreation, externalEditTime);
 
             var save = ExternalEditTransaction.Begin(photo);
             WriteJpeg(save.BackupPath, 225);
@@ -156,18 +197,136 @@ internal static class ExternalEditSmokeFlow
             if (!File.ReadAllBytes(rawSession.BackupPath).SequenceEqual(cameraBytes) ||
                 !rawSession.BackupPath.EndsWith(".arw", StringComparison.OrdinalIgnoreCase))
                 throw new Exception("RAW source was not staged byte-for-byte.");
+            // A DNG is a RAW output, not a still-image encoder extension.
+            // Detect it before trying any preview/ExifTool operation.
+            var dng = Path.Combine(rawSession.DirectoryPath, "photo.dng");
+            File.WriteAllBytes(dng, [0x49, 0x49, 0x2A, 0x00]);
+            if (ExternalEditTransaction.DetectResult(rawSession) != dng)
+                throw new Exception("DNG output was not detected for RAW editing.");
             ExternalEditTransaction.Commit(rawSession, null, ExternalEditDecision.Cancel);
             if (!File.ReadAllBytes(cameraRaw).SequenceEqual(cameraBytes) ||
                 ExternalEditTransaction.FindPending() is not null)
                 throw new Exception("Cancel modified camera RAW or left active session.");
+
+            // Panorama and batch-edit program capabilities are independent.
+            var panoramic = new ExternalEditorProgram("Pano", "pano.exe",
+                "photo", Panorama: true);
+            var batchEditor = new ExternalEditorProgram("Batch", "batch.exe",
+                "photo", MultiEdit: true);
+            var combined = new ExternalEditorProgram("Both", "both.exe",
+                "photo", Panorama: true, MultiEdit: true);
+            var selection = new[] { photo, other };
+            var editorSettings = new ExternalEditorSettings
+            {
+                Programs = [panoramic, batchEditor, combined]
+            };
+            if (panoramic.MatchesMultiple(selection) ||
+                !batchEditor.MatchesMultiple(selection) ||
+                !combined.MatchesMultiple(selection) ||
+                editorSettings.ForMultiple(selection).Count != 2 ||
+                editorSettings.ForPanorama().Count != 2)
+                throw new Exception("Panorama/multiple-edit program flags are conflated.");
+
+            // Two staged images may have different output extensions or
+            // editors may overwrite a staged file in place. Never map by
+            // directory enumeration order; use staged/source identities.
+            var batchRoot = Path.Combine(root, "Batch");
+            var originals = new[] { File.ReadAllBytes(photo), File.ReadAllBytes(other) };
+            var batch = PanoramaTransaction.Begin(
+                [(1L, photo), (2L, other)], [], null, null,
+                isPanorama: false, workspaceRoot: batchRoot);
+            try
+            {
+                WriteJpeg(batch.Inputs[0], 205);
+                var secondExport = Path.Combine(batch.Directory,
+                    Path.GetFileNameWithoutExtension(batch.Inputs[1]) +
+                    "-Enhanced.png");
+                WritePng(secondExport, 120);
+                var detected = PanoramaTransaction.FindMultipleResults(batch);
+                if (detected.Length != 2 ||
+                    detected.Count(x => x.SourceIndex == 0 &&
+                        x.Path == batch.Inputs[0]) != 1 ||
+                    detected.Count(x => x.SourceIndex == 1 &&
+                        x.Path == secondExport) != 1)
+                    throw new Exception("Multiple-edit output mapping lost a changed input/export.");
+                if (PanoramaTransaction.CanSaveMultiple(batch, detected))
+                    throw new Exception("Format-changing batch result was allowed to overwrite an original.");
+                var sameFormat = new[]
+                {
+                    new ExternalBatchOutput(0, batch.Inputs[0]),
+                    new ExternalBatchOutput(1, batch.Inputs[1])
+                };
+                if (!PanoramaTransaction.CanSaveMultiple(batch, sameFormat))
+                    throw new Exception("Same-format one-to-one batch cannot use Save.");
+                var ambiguous = new[]
+                {
+                    new ExternalBatchOutput(0, batch.Inputs[0]),
+                    new ExternalBatchOutput(0, batch.Inputs[0])
+                };
+                if (PanoramaTransaction.CanSaveMultiple(batch, ambiguous))
+                    throw new Exception("Two results for one original enabled destructive Save.");
+                if (PanoramaTransaction.CanSaveMultiple(batch with
+                    { IsPanorama = true }, sameFormat))
+                    throw new Exception("Panorama was offered in-place Save.");
+                try
+                {
+                    PanoramaTransaction.MatchSourceIndex(batch, "unrelated.png");
+                    throw new Exception("Unrelated result was assigned to an input.");
+                }
+                catch (InvalidDataException) { }
+                if (!File.ReadAllBytes(photo).SequenceEqual(originals[0]) ||
+                    !File.ReadAllBytes(other).SequenceEqual(originals[1]))
+                    throw new Exception("Batch staging altered an original.");
+
+                var intended = Path.Combine(root, "collision.jpg");
+                WriteJpeg(intended, 33);
+                if (ExternalCopyNames.NextAvailable(intended) !=
+                    Path.Combine(root, "collision-Kopie.jpg"))
+                    throw new Exception("Gallery and batch copy names diverged.");
+                File.WriteAllText(Path.Combine(root, "collision-Kopie.jpg"), "reserved");
+                if (ExternalCopyNames.NextAvailable(intended) !=
+                    Path.Combine(root, "collision-Kopie-2.jpg"))
+                    throw new Exception("Second collision did not allocate -Kopie-2.");
+            }
+            finally { PanoramaTransaction.Cleanup(batch); }
+
             Console.WriteLine(
-                "PASS: Isolated external sessions, locked Cancel/Save, recovery, Undo, RAW staging and Cancel.");
+                "PASS: Isolated external sessions, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");
         }
         finally
         {
             try { Directory.Delete(root, recursive: true); }
             catch (IOException) { }
         }
+    }
+
+    private static void VerifyDates(string path, DateTime creation,
+        DateTime modified)
+    {
+        if (Math.Abs((File.GetCreationTimeUtc(path) - creation).TotalSeconds) > 2 ||
+            Math.Abs((File.GetLastWriteTimeUtc(path) - modified).TotalSeconds) > 2)
+            throw new Exception("Save Copy did not preserve creation/edit timestamps.");
+    }
+
+    private static void WritePng(string path, byte brightness)
+    {
+        const int width = 8, height = 8;
+        var pixels = new byte[width * height * 4];
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = brightness;
+            pixels[i + 1] = (byte)(255 - brightness);
+            pixels[i + 2] = brightness;
+            pixels[i + 3] = 255;
+        }
+        var image = BitmapSource.Create(width, height, 96, 96,
+            PixelFormats.Bgra32, null, pixels, width * 4);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        using var stream = new FileStream(path, FileMode.Create,
+            FileAccess.Write, FileShare.None);
+        encoder.Save(stream);
+        stream.Flush(true);
     }
 
     private static void WriteJpeg(string path, byte brightness)

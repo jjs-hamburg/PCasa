@@ -22,8 +22,13 @@ public partial class MainWindow
             var pending = SnapshotShutdownOperations(tagDrafts, editId);
             if (_panoramaSession is { } panorama)
                 pending.Add(new ShutdownPendingOperation("panorama:active",
-                    UiLanguage.T("Panorama erstellen"), UiLanguage.T("Läuft"),
-                    panorama.Sources.Select(path => new ShutdownPendingFile(path, null)).ToArray()));
+                    UiLanguage.T(panorama.IsPanorama
+                        ? "Panorama erstellen" : "Mehrfachbearbeitung"),
+                    UiLanguage.T(_externalBatchReview is { Outputs.Length: > 0 }
+                        ? "Entscheidung offen" : "Läuft"),
+                    panorama.Sources.Select(path =>
+                        new ShutdownPendingFile(path, null)).ToArray(),
+                    CanCancel: _externalBatchReview?.Busy != true));
             if (_externalEditReview is { } review)
             {
                 // The session is independent of PhotoCraft's process lifetime.
@@ -192,9 +197,12 @@ public partial class MainWindow
         }
         if (item.Key == "panorama:active" && _panoramaSession is { } session)
         {
+            if (_externalBatchReview?.Busy == true) return false;
             _panoramaSession = null;
+            _externalBatchReview = null;
             await Task.Run(() => PanoramaTransaction.Cleanup(session));
             ResumeSchedulerAfterExternalEdit();
+            UpdateEditControls();
             return true;
         }
         if (item.Key == "external:active")

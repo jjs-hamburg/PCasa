@@ -80,6 +80,75 @@ internal static class Program
             window.Width = 1500;
             Flush(window);
 
+            // The external batch and panorama decisions must use the SAME
+            // existing three-button viewer footer as a single external edit.
+            // Verify that Save cannot replace mismatched formats or panoramas.
+            {
+                const System.Reflection.BindingFlags privateInstance =
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var mainType = typeof(PCasa.App.MainWindow);
+                var nested = mainType.GetNestedType("ExternalBatchReview",
+                    System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new Exception("Missing shared batch review state.");
+                var reviewConstructor = nested.GetConstructors(
+                    System.Reflection.BindingFlags.Public |
+                    privateInstance).Single();
+                var reviewField = mainType.GetField(
+                    "_externalBatchReview", privateInstance)!;
+                var refresh = mainType.GetMethod(
+                    "UpdateEditControls", privateInstance)!;
+                var outputsProperty = nested.GetProperty("Outputs")!;
+                var cancelButton = (Button)window.FindName("CropCancelButton")!;
+                var copyButton = (Button)window.FindName("CropSaveCopyButton")!;
+                var saveButton = (Button)window.FindName("CropSaveButton")!;
+                var sourceFiles = new[] { @"C:\smoke\a.jpg", @"C:\smoke\b.jpg" };
+                var session = new PanoramaSession(Guid.NewGuid(),
+                    [1, 2], sourceFiles, sourceFiles,
+                    @"C:\smoke", [], null, null, IsPanorama: false);
+                var review = reviewConstructor.Invoke([session]);
+                try
+                {
+                    reviewField.SetValue(window, review);
+                    refresh.Invoke(window, []);
+                    if (!cancelButton.IsEnabled || copyButton.IsEnabled ||
+                        saveButton.IsEnabled)
+                        throw new Exception("Unfinished batch footer must offer Cancel only.");
+                    outputsProperty.SetValue(review, new[]
+                    {
+                        new ExternalBatchOutput(0, @"C:\smoke\a.jpg"),
+                        new ExternalBatchOutput(1, @"C:\smoke\b.jpg")
+                    });
+                    refresh.Invoke(window, []);
+                    if (!cancelButton.IsEnabled || !copyButton.IsEnabled ||
+                        !saveButton.IsEnabled)
+                        throw new Exception("Same-format batch must offer all three choices.");
+                    outputsProperty.SetValue(review, new[]
+                    {
+                        new ExternalBatchOutput(0, @"C:\smoke\a.png"),
+                        new ExternalBatchOutput(1, @"C:\smoke\b.jpg")
+                    });
+                    refresh.Invoke(window, []);
+                    if (!copyButton.IsEnabled || saveButton.IsEnabled)
+                        throw new Exception("Changed-format batch must disable original Save.");
+                    var panoramaSession = session with { IsPanorama = true };
+                    var panoramaReview = reviewConstructor.Invoke([panoramaSession]);
+                    outputsProperty.SetValue(panoramaReview,
+                        new[] { new ExternalBatchOutput(0, @"C:\smoke\pano.jpg") });
+                    reviewField.SetValue(window, panoramaReview);
+                    refresh.Invoke(window, []);
+                    if (!copyButton.IsEnabled || saveButton.IsEnabled)
+                        throw new Exception("Panorama footer must allow Copy, not Save.");
+                }
+                finally
+                {
+                    reviewField.SetValue(window, null);
+                    refresh.Invoke(window, []);
+                }
+                Console.WriteLine(
+                    "PASS: Shared external batch/panorama footer has correct Cancel, Copy and Save gates.");
+            }
+
             // Folder tree uses pixel rather than item-step scrolling, allowing
             // precision touchpads to move in smaller increments. This must
             // not alter the gallery's independent scrolling behavior.

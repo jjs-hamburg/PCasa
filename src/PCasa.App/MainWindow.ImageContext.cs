@@ -55,16 +55,50 @@ public partial class MainWindow
                 AddContextAction(menu, "Panorama erstellen",
                     () => _ = StartPanoramaSelectionAsync(ordered));
         }
-        var editorSource = CachedExternalEditorSource(id);
-        // Only show compatible, explicitly configured external editors.
-        if (editorSource is not null && _externalEditors.ForFile(editorSource).Count > 0)
+        // Multiple selected photos go through one batch session. Do not
+        // silently edit only the clicked image when several are selected.
+        var orderedSelection = _displayedBrowseIndex
+            .Where(item => thumbnailIds.Contains(item.ImageId))
+            .Select(item => item.ImageId).ToArray();
+        if (orderedSelection.Length >= 2)
         {
-            var external = new MenuItem
+            var sourceNames = orderedSelection
+                .Select(CachedExternalEditorSource).ToArray();
+            if (sourceNames.All(path => path is not null))
             {
-                Header = UiLanguage.T("Bearbeiten mit …")
-            };
-            PopulateExternalEditorMenu(external, id, editorSource);
-            menu.Items.Add(external);
+                var multiPrograms = _externalEditors.ForMultiple(
+                    sourceNames.Select(path => path!).ToArray());
+                if (multiPrograms.Count > 0)
+                {
+                    var external = new MenuItem
+                    {
+                        Header = UiLanguage.T("Bearbeiten mit …")
+                    };
+                    foreach (var program in multiPrograms)
+                    {
+                        var chosen = program;
+                        var item = new MenuItem { Header = chosen.Name };
+                        item.Click += (_, _) =>
+                            _ = StartMultipleEditorAsync(orderedSelection, chosen);
+                        external.Items.Add(item);
+                    }
+                    menu.Items.Add(external);
+                }
+            }
+        }
+        else
+        {
+            var editorSource = CachedExternalEditorSource(id);
+            if (editorSource is not null &&
+                _externalEditors.ForFile(editorSource).Count > 0)
+            {
+                var external = new MenuItem
+                {
+                    Header = UiLanguage.T("Bearbeiten mit …")
+                };
+                PopulateExternalEditorMenu(external, id, editorSource);
+                menu.Items.Add(external);
+            }
         }
         var restore = new MenuItem { Header = UiLanguage.T("Bild wiederherstellen"),
             IsEnabled = false };

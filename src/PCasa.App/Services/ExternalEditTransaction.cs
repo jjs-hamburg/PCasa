@@ -27,6 +27,9 @@ public static class ExternalEditTransaction
 {
     private static readonly object Gate = new();
     private static string? _testDirectory;
+    private static Guid? _currentProcessSessionId;
+    private const string RetiredWorkspaceMarker = ".pcasa-retired-session";
+    private const string RetiredLegacyMarker = ".pcasa-retired-legacy";
     public static string DirectoryPath => _testDirectory ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PCasa", "ExternalEdit");
@@ -52,6 +55,90 @@ public static class ExternalEditTransaction
         }
     }
     private static string SessionFile => Path.Combine(DirectoryPath, "session.json");
+
+    // History is evidence and possibly an external application's only copy
+    // of an export. It is deliberately NOT a runnable task, manifest or queue.
+    private static string RetiredHistoryRoot => Path.Combine(
+        Path.GetDirectoryName(DirectoryPath)!,
+        "ExternalEditRetired");
+
+    /// <summary>
+    /// At application startup, retire the previous *process*'s external edit.
+    /// Only scan jobs survive a restart. This never commits/cancels a file
+    /// mutation, writes the original or deletes external work products.
+    /// Keep the original manifest as inert evidence outside the active root.
+    /// </summary>
+    public static bool RetirePreviousProcessSession()
+    {
+        lock (Gate)
+        {
+            _currentProcessSessionId = null;
+            if (!File.Exists(SessionFile)) return false;
+
+            // Preserve the raw manifest even if a previous crash truncated it.
+            // Unreadable manifests must never indefinitely pause the scheduler.
+            ExternalEditSnapshot? previous = null;
+            try { previous = ReadPending(); }
+            catch (Exception ex) when (ex is InvalidDataException or JsonException
+                or IOException or ArgumentException)
+            {
+                PCasaDiagnostics.Write("ExternalEdit.RetireInvalidManifest", ex);
+            }
+
+            var manifestContent = File.ReadAllText(SessionFile);
+            if (previous is not null)
+            {
+                // An old external process might still have photo.psd open.
+                // Do not move/delete that workspace. Mark it exempt from
+                // automatic P4 cleanup and leave the content retrievable.
+                Directory.CreateDirectory(previous.DirectoryPath);
+                var marker = previous.DirectoryPath.Equals(DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? RetiredLegacyMarker : RetiredWorkspaceMarker;
+                File.WriteAllText(Path.Combine(previous.DirectoryPath, marker),
+                    previous.Id.ToString("N"));
+            }
+            else
+            {
+                // A corrupt old manifest does not identify its workdir.
+                // Conservatively preserve every possible workdir and old
+                // flat-workspace file, rather than risking their deletion.
+                foreach (var folder in Directory.EnumerateDirectories(
+                    DirectoryPath, "session-*"))
+                    File.WriteAllText(Path.Combine(folder, RetiredWorkspaceMarker),
+                        "invalid prior manifest");
+                File.WriteAllText(Path.Combine(DirectoryPath, RetiredLegacyMarker),
+                    "invalid prior manifest");
+            }
+
+            Directory.CreateDirectory(RetiredHistoryRoot);
+            var archive = Path.Combine(RetiredHistoryRoot,
+                DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + "-" +
+                (previous?.Id.ToString("N") ?? Guid.NewGuid().ToString("N")) +
+                ".json");
+            // Same-volume rename detaches the ONLY active session manifest.
+            // A crash before this boundary is safe to retry on next startup.
+            File.Move(SessionFile, archive);
+            PCasaDiagnostics.WriteMessage("ExternalEdit.RetiredAfterRestart",
+                "Previous-process session retired without file writes. " +
+                "Manifest: " + archive);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The Taskmanager must show only an edit created in THIS process.
+    /// A historic session.json on disk is never proof of a live task.
+    /// </summary>
+    public static ExternalEditSnapshot? FindCurrentProcessSession()
+    {
+        lock (Gate)
+        {
+            if (_currentProcessSessionId is not Guid id) return null;
+            var pending = ReadPending();
+            return pending?.Id == id ? pending : null;
+        }
+    }
 
     private static string Hash(string path)
     {
@@ -124,11 +211,20 @@ public static class ExternalEditTransaction
                     StringComparison.OrdinalIgnoreCase));
             var legacy = active is not null &&
                 active.DirectoryPath.Equals(DirectoryPath, StringComparison.OrdinalIgnoreCase);
-            return directories + (legacy ? 0 : Directory.EnumerateFiles(DirectoryPath)
-                .Count(file => !Path.GetFileName(file).Equals("session.json",
+            var unprotectedDirectories = Directory.EnumerateDirectories(
+                DirectoryPath, "session-*")
+                .Count(dir => !dir.Equals(active?.DirectoryPath,
                     StringComparison.OrdinalIgnoreCase) &&
-                    !Path.GetFileName(file).Equals("session.json.tmp",
-                    StringComparison.OrdinalIgnoreCase)));
+                    !File.Exists(Path.Combine(dir, RetiredWorkspaceMarker)));
+            // A retired legacy workspace is kept as evidence only; no
+            // task/cleanup row should be created for its data.
+            var hasLegacyArchive = File.Exists(
+                Path.Combine(DirectoryPath, RetiredLegacyMarker));
+            return unprotectedDirectories +
+                (legacy || hasLegacyArchive ? 0 :
+                    Directory.EnumerateFiles(DirectoryPath).Count(file =>
+                        Path.GetFileName(file) is not
+                            ("session.json" or "session.json.tmp")));
         }
     }
 
@@ -140,14 +236,16 @@ public static class ExternalEditTransaction
             var active = ReadPending();
             foreach (var folder in Directory.EnumerateDirectories(DirectoryPath, "session-*"))
             {
-                if (folder.Equals(active?.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                if (folder.Equals(active?.DirectoryPath, StringComparison.OrdinalIgnoreCase) ||
+                    File.Exists(Path.Combine(folder, RetiredWorkspaceMarker)))
                     continue;
                 TryCleanupFolder(folder);
             }
             // Also clean up pre-Alpha.34 flat working images once no legacy
             // transaction owns them. A locked image stays for the next attempt.
-            if (active is null || !active.DirectoryPath.Equals(
-                    DirectoryPath, StringComparison.OrdinalIgnoreCase))
+            if ((active is null || !active.DirectoryPath.Equals(
+                    DirectoryPath, StringComparison.OrdinalIgnoreCase)) &&
+                !File.Exists(Path.Combine(DirectoryPath, RetiredLegacyMarker)))
                 foreach (var file in Directory.EnumerateFiles(DirectoryPath))
                 {
                     if (Path.GetFileName(file) is "session.json" or "session.json.tmp")
@@ -177,6 +275,7 @@ public static class ExternalEditTransaction
         // If a crash follows this deletion, abandoned files remain isolated
         // and never masquerade as a live transaction.
         File.Delete(SessionFile);
+        if (_currentProcessSessionId == session.Id) _currentProcessSessionId = null;
         if (!session.DirectoryPath.Equals(DirectoryPath, StringComparison.OrdinalIgnoreCase))
             TryCleanupFolder(session.DirectoryPath);
         else
@@ -254,6 +353,7 @@ public static class ExternalEditTransaction
                         work, checksum, originalLength, originalWrite,
                         DateTime.UtcNow, []);
                     WritePending(session);
+                    _currentProcessSessionId = session.Id;
                     return session;
                 }
             }
@@ -284,7 +384,8 @@ public static class ExternalEditTransaction
                         StringComparison.OrdinalIgnoreCase) &&
                     (VideoFormats.IsVideo(session.OriginalPath)
                         ? VideoFormats.IsVideo(path)
-                        : EditableImageFormats.SupportsExternalResult(path)))
+                        : EditableImageFormats.SupportsExternalResult(path) ||
+                          RawImageSource.IsRawPath(path)))
                 .Where(path => new FileInfo(path).Length > 0)
                 .ToArray();
             if (candidates.Length > 1)
@@ -312,7 +413,7 @@ public static class ExternalEditTransaction
     // Never trust a RAW filename alone. ExifTool reads the container bytes,
     // not the suffix; this rejects a JPEG renamed to .ARW before an atomic
     // replacement could destroy the original camera negative.
-    private static void ValidateExternalRawResult(string path,
+    internal static void ValidateExternalRawResult(string path,
         CancellationToken token)
     {
         using var reader = new ImageExifReader();
@@ -346,25 +447,15 @@ public static class ExternalEditTransaction
 
     private static string UniqueCopyDestination(string source, string original)
     {
-        var folder = Path.GetDirectoryName(original)!;
-        var basename = Path.GetFileNameWithoutExtension(original);
-        var extension = Path.GetExtension(source);
-        for (var i = 1; i < 100000; i++)
-        {
-            var formatChanged = !Path.GetExtension(source).Equals(
-                Path.GetExtension(original), StringComparison.OrdinalIgnoreCase);
-            var suffix = formatChanged
-                ? (i == 1 ? "" : "-" + i)
-                : (i == 1 ? "-Kopie" : "-Kopie-" + i);
-            var destination = Path.Combine(folder, basename + suffix + extension);
-            if (!File.Exists(destination)) return destination;
-        }
-        throw new IOException(UiLanguage.T("Kein freier Dateiname für die Kopie."));
+        var desired = Path.Combine(Path.GetDirectoryName(original)!,
+            Path.GetFileNameWithoutExtension(original) + Path.GetExtension(source));
+        return ExternalCopyNames.NextAvailable(desired);
     }
 
     private static void CopyAtomic(string source, string target,
         bool replace, CancellationToken token,
-        Action<long, long>? progress = null)
+        Action<long, long>? progress = null,
+        DateTime? creationUtc = null, DateTime? modifiedUtc = null)
     {
         // Stage on the TARGET volume, then rename. A crashed copy never
         // writes half an image directly over a photo (also over SMB).
@@ -395,6 +486,13 @@ public static class ExternalEditTransaction
                     throw new IOException(UiLanguage.T("Kopie ist unvollständig."));
             }
             token.ThrowIfCancellationRequested();
+            // Apply dates to the staged file BEFORE the atomic publication.
+            // The result's editing timestamp was captured before ExifTool
+            // touched its metadata, and Windows creation follows the source.
+            if (creationUtc is DateTime created)
+                File.SetCreationTimeUtc(temp, created);
+            if (modifiedUtc is DateTime modified)
+                File.SetLastWriteTimeUtc(temp, modified);
             try { File.Move(temp, target, overwrite: replace); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -437,11 +535,14 @@ public static class ExternalEditTransaction
                 throw new FileNotFoundException(UiLanguage.T(
                     "Das externe Programm hat kein Ergebnis gespeichert."), source);
             source = Path.GetFullPath(source);
+            var sourceModifiedUtc = File.GetLastWriteTimeUtc(source);
+            var originalCreatedUtc = File.GetCreationTimeUtc(session.OriginalPath);
             // A layered PSD exported from a JPEG is always a NEW photo. Never
             // replace the JPEG, even if the user clicked ordinary Save.
             if (decision == ExternalEditDecision.Save &&
                 RequiresNewFile(session.OriginalPath, source))
-                decision = ExternalEditDecision.SaveCopy;
+                throw new NotSupportedException(UiLanguage.T(
+                    "Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
             if (!Path.GetDirectoryName(source)!.Equals(
                     session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
@@ -493,7 +594,8 @@ public static class ExternalEditTransaction
                         // Save uses exactly the central undo/recycle mechanism.
                         new UndoHistoryService(undoOptions ?? UndoOptions.Load())
                             .CaptureBeforeSave(session.OriginalPath, token);
-                        CopyAtomic(source, session.OriginalPath, replace: true, token, progress);
+                        CopyAtomic(source, session.OriginalPath, replace: true, token,
+                            progress, originalCreatedUtc, sourceModifiedUtc);
                     }
                     if (Hash(session.OriginalPath) != Hash(source))
                         throw new IOException("ExternalEdit: Speichern nicht überprüfbar.");
@@ -517,7 +619,8 @@ public static class ExternalEditTransaction
                 };
                 if (session.Finalizing is null) WritePending(copying);
                 if (!File.Exists(destination))
-                    CopyAtomic(source, destination, replace: false, token, progress);
+                    CopyAtomic(source, destination, replace: false, token,
+                        progress, originalCreatedUtc, sourceModifiedUtc);
                 else if (Hash(destination) != Hash(source))
                     throw new IOException("ExternalEdit: Kopie besitzt einen anderen Inhalt.");
                 Finish(session);
