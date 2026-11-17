@@ -15,6 +15,7 @@ public sealed class ExternalEditorsWindow : Window
     private readonly TextBox _name = new();
     private readonly TextBox _exe = new();
     private readonly TextBox _formats = new();
+    private readonly TextBox _exchange = new();
     private readonly CheckBox _panorama = new() { Margin = new Thickness(0, 7, 0, 3) };
     private readonly CheckBox _psd = new() { Margin = new Thickness(0, 4, 0, 3) };
     private readonly CheckBox _raw = new() { Content = "RAW", Margin = new Thickness(0, 4, 0, 3) };
@@ -27,9 +28,9 @@ public sealed class ExternalEditorsWindow : Window
     {
         Title = UiLanguage.T("Externe Programme verwalten");
         Width = 840;
-        Height = 420;
+        Height = 520;
         MinWidth = 680;
-        MinHeight = 315;
+        MinHeight = 450;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         SetResourceReference(BackgroundProperty, "PcasaPanelBrush");
         SetResourceReference(ForegroundProperty, "PcasaTextBrush");
@@ -70,6 +71,7 @@ public sealed class ExternalEditorsWindow : Window
         AddField(right, "Name im Menü", _name);
         AddField(right, "Programmdatei (*.exe)", MakeBrowseRow());
         AddField(right, "Dateiformate", _formats);
+        AddField(right, "Austauschverzeichnis (optional)", MakeExchangeRow());
         _panorama.Content = UiLanguage.T("Panorama");
         _psd.Content = "PSD";
         right.Children.Add(_panorama);
@@ -98,6 +100,19 @@ public sealed class ExternalEditorsWindow : Window
         row.Children.Add(browse);
         _exe.Margin = new Thickness(0, 0, 7, 0);
         row.Children.Add(_exe);
+        return row;
+    }
+
+    private UIElement MakeExchangeRow()
+    {
+        var row = new DockPanel();
+        var browse = MakeButton(UiLanguage.T("Durchsuchen …"), BrowseExchange);
+        DockPanel.SetDock(browse, Dock.Right);
+        row.Children.Add(browse);
+        _exchange.Margin = new Thickness(0, 0, 7, 0);
+        _exchange.ToolTip = UiLanguage.T(
+            "Leer: lokaler PCasa-Standardordner. Sonst eigener Sitzungsordner im gewählten Verzeichnis.");
+        row.Children.Add(_exchange);
         return row;
     }
 
@@ -132,7 +147,9 @@ public sealed class ExternalEditorsWindow : Window
         _programs[_editingIndex] = new ExternalEditorProgram(
             _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim(),
             _panorama.IsChecked == true, _psd.IsChecked == true,
-            _raw.IsChecked == true, _multi.IsChecked == true);
+            _raw.IsChecked == true, _multi.IsChecked == true,
+            string.IsNullOrWhiteSpace(_exchange.Text)
+                ? null : _exchange.Text.Trim().Trim('"'));
     }
 
     private void RefreshList(int selected)
@@ -155,11 +172,13 @@ public sealed class ExternalEditorsWindow : Window
         _name.Text = entry.Name;
         _exe.Text = entry.ExecutablePath;
         _formats.Text = entry.Formats;
+        _exchange.Text = entry.ExchangeDirectory ?? string.Empty;
         _panorama.IsChecked = entry.Panorama;
         _psd.IsChecked = entry.Psd;
         _raw.IsChecked = entry.Raw;
         _multi.IsChecked = entry.MultiEdit;
         _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled =
+            _exchange.IsEnabled =
             _panorama.IsEnabled = _psd.IsEnabled = _raw.IsEnabled =
             _multi.IsEnabled = index >= 0;
         _changing = false;
@@ -208,6 +227,20 @@ public sealed class ExternalEditorsWindow : Window
             Filter = "Windows-Programme (*.exe)|*.exe|Alle Dateien (*.*)|*.*",
             CheckFileExists = true };
         if (dialog.ShowDialog(this) == true) _exe.Text = dialog.FileName;
+    }
+
+    private void BrowseExchange()
+    {
+        if (_editingIndex < 0) return;
+        var picker = new OpenFolderDialog
+        {
+            Title = UiLanguage.T("Austauschverzeichnis auswählen"),
+            Multiselect = false
+        };
+        if (Directory.Exists(_exchange.Text))
+            picker.InitialDirectory = _exchange.Text;
+        if (picker.ShowDialog(this) == true)
+            _exchange.Text = picker.FolderName;
     }
 
     private void Save()
