@@ -193,16 +193,16 @@ internal static class Program
                 !Equals(fileMenu.Items.OfType<MenuItem>().Single().Header, "Beenden"))
                 throw new Exception("File menu must contain only Exit.");
             var optionsMenu = items.Single(item => Equals(item.Header, "Optionen"));
-            var options = optionsMenu.Items.OfType<MenuItem>()
+            var optionLabels = optionsMenu.Items.OfType<MenuItem>()
                 .Select(item => item.Header?.ToString()).ToArray();
-            if (!options.SequenceEqual(new[]
+            if (!optionLabels.SequenceEqual(new[]
                 {
                     "Ordnermanager", "Sprache", "Externe Programme",
                     "GPX Import", "Taskmanager...", "Datenbankverwaltung...",
                     "Schreibfehler (GPS/Tags)"
                 }))
                 throw new Exception("Incorrect Options menu order: " +
-                    string.Join(", ", options));
+                    string.Join(", ", optionLabels));
             if (items.Any(item => Equals(item.Header, "Ordner") ||
                 Equals(item.Header, "Extras")))
                 throw new Exception("Obsolete top-level menu remains.");
