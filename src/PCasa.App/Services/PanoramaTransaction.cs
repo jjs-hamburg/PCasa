@@ -315,14 +315,32 @@ public static class PanoramaTransaction
     }
 
 
+    public static bool CanSaveMultiple(PanoramaSession session,
+        IReadOnlyList<ExternalBatchOutput> results)
+    {
+        if (session.IsPanorama || results.Count != session.Sources.Length)
+            return false;
+        return results.Select(result => result.SourceIndex).Distinct().Count()
+                == session.Sources.Length &&
+            results.All(result => result.SourceIndex >= 0 &&
+                result.SourceIndex < session.Sources.Length &&
+                Path.GetExtension(result.Path).Equals(
+                    Path.GetExtension(session.Sources[result.SourceIndex]),
+                    StringComparison.OrdinalIgnoreCase));
+    }
+
     public static string[] ImportMultiple(PanoramaSession session,
         IReadOnlyList<ExternalBatchOutput> results,
-        CancellationToken token = default, Action<long, long>? progress = null)
+        CancellationToken token = default, Action<long, long>? progress = null,
+        bool replaceOriginals = false)
     {
         if (session.IsPanorama)
             throw new InvalidOperationException("Panorama ist keine Mehrfachbearbeitung.");
         if (results.Count == 0)
             throw new InvalidOperationException("Keine Ergebnisse zur Übernahme vorhanden.");
+        if (replaceOriginals && !CanSaveMultiple(session, results))
+            throw new InvalidOperationException(
+                "Speichern erfordert genau ein Ergebnis gleichen Formats pro Original.");
 
         var planned = new List<(string Temp, string Target)>();
         var published = new List<string>();
@@ -354,7 +372,8 @@ public static class PanoramaTransaction
 
                 var desired = Path.Combine(Path.GetDirectoryName(source)!,
                     Path.GetFileNameWithoutExtension(source) + Path.GetExtension(output.Path));
-                var destination = ExternalCopyNames.NextAvailable(desired, reserved);
+                var destination = replaceOriginals ? source :
+                    ExternalCopyNames.NextAvailable(desired, reserved);
                 reserved.Add(destination);
                 var temp = Path.Combine(Path.GetDirectoryName(destination)!,
                     ".pcasa-multiedit-" + Guid.NewGuid().ToString("N") + ".tmp");
@@ -381,25 +400,58 @@ public static class PanoramaTransaction
                 File.SetLastWriteTimeUtc(temp, modifiedUtc);
             }
             token.ThrowIfCancellationRequested();
+            if (replaceOriginals)
+            {
+                // Verify *all* original bytes are still those staged at the
+                // start of this session before writing even the first one.
+                // Each replacement then enters the central Undo archive.
+                if (session.InputHashes is not { } stamps ||
+                    stamps.Length != session.Sources.Length)
+                    throw new InvalidDataException("Die ursprüngliche Sitzungsidentität fehlt.");
+                for (var i = 0; i < session.Sources.Length; i++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    using var stream = File.OpenRead(session.Sources[i]);
+                    var current = Convert.ToHexString(SHA256.HashData(stream));
+                    if (!current.Equals(stamps[i], StringComparison.OrdinalIgnoreCase))
+                        throw new IOException(
+                            "Ein Original wurde seit Beginn der externen Bearbeitung verändert.");
+                }
+            }
             foreach (var (temp, target) in planned)
             {
-                // A collision detected after preparation is an error, never
-                // permission to replace a photo in a monitored folder.
-                File.Move(temp, target, overwrite: false);
+                token.ThrowIfCancellationRequested();
+                if (replaceOriginals)
+                {
+                    using (SourceFileLocks.Enter(target, token))
+                    {
+                        // A partial multi-file failure never loses the earlier
+                        // versions: the existing central Undo archive owns them.
+                        new UndoHistoryService(UndoOptions.Load())
+                            .CaptureBeforeSave(target, token);
+                        File.Move(temp, target, overwrite: true);
+                    }
+                }
+                else
+                    // A collision detected after preparation is never
+                    // permission to overwrite an unrelated photo.
+                    File.Move(temp, target, overwrite: false);
                 published.Add(target);
             }
             return published.ToArray();
         }
         catch
         {
-            // Best-effort rollback affects ONLY new files from this batch,
-            // never any original or unrelated external result.
-            foreach (var path in published)
-            {
-                try { File.Delete(path); }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
-            }
+            // Copy-only results can be removed on failure. A replaced
+            // original must never be deleted here; its earlier state was
+            // captured in central Undo before the replacement.
+            if (!replaceOriginals)
+                foreach (var path in published)
+                {
+                    try { File.Delete(path); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
             throw;
         }
         finally
