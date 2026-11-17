@@ -384,14 +384,21 @@ public partial class MainWindow
         finally { _externalEditLaunchPending = false; }
     }
 
+    private bool _unchangedExternalReleasePending;
+
     private async Task ReleaseUnchangedExternalEditorAsync(
-        ExternalEditReview review, bool closeViewer)
+        ExternalEditReview review, Action continueAfterRelease)
     {
-        if (!ReferenceEquals(_externalEditReview, review) ||
+        if (_unchangedExternalReleasePending ||
+            !ReferenceEquals(_externalEditReview, review) ||
             !review.Ready || review.Busy || review.ResultPath is not null)
             return;
+
+        _unchangedExternalReleasePending = true;
         try
         {
+            // A focus change may race a late external export. Never release
+            // an actual result without giving Save/Copy/Cancel priority.
             var output = await Task.Run(() =>
                 ExternalEditTransaction.DetectResult(review.Snapshot));
             if (!ReferenceEquals(_externalEditReview, review)) return;
@@ -400,17 +407,25 @@ public partial class MainWindow
                 await PresentExternalResultAsync(review);
                 return;
             }
+
             if (await CompleteExternalReviewAsync(ExternalEditDecision.Cancel))
             {
                 PCasaDiagnostics.WriteMessage("ExternalEdit.UnchangedRelease",
-                    "Unchanged session released by navigation.");
-                if (closeViewer && _viewerOpen) ClosePhotoViewer();
+                    "Unchanged session released by viewer action.");
+                // Resume the actual original click/key action, but only while
+                // its source photo is still the active viewer identity.
+                if (_viewerOpen && _viewerImageInfo?.Id == review.ImageId)
+                    continueAfterRelease();
             }
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("ExternalEdit.UnchangedRelease", ex);
             StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
+        }
+        finally
+        {
+            _unchangedExternalReleasePending = false;
         }
     }
 
