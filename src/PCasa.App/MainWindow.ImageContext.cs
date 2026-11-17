@@ -56,8 +56,8 @@ public partial class MainWindow
                     () => _ = StartPanoramaSelectionAsync(ordered));
         }
         var editorSource = CachedExternalEditorSource(id);
-        // RAW is for viewing/cataloguing, not editing. Hide the entire menu.
-        if (editorSource is not null && !RawImageSource.IsRawPath(editorSource))
+        // Only show compatible, explicitly configured external editors.
+        if (editorSource is not null && _externalEditors.ForFile(editorSource).Count > 0)
         {
             var external = new MenuItem
             {
