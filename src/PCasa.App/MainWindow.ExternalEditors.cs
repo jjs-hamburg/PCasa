@@ -134,8 +134,7 @@ public partial class MainWindow
     private void PopulateExternalEditorMenu(ItemsControl menu, long id,
         string? sourceName)
     {
-        // Do not offer external editors OR Windows Open With for RAW.
-        if (sourceName is null || RawImageSource.IsRawPath(sourceName)) return;
+        if (sourceName is null) return;
         IReadOnlyList<ExternalEditorProgram> programs = sourceName is null
             ? [] : _externalEditors.ForFile(sourceName);
         foreach (var program in programs)
@@ -256,9 +255,6 @@ public partial class MainWindow
             _externalEditLaunchPending = true;
             var source = (await SelectedGalleryPathsAsync([id])).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(source)) return;
-            if (RawImageSource.IsRawPath(source))
-                throw new NotSupportedException(UiLanguage.T(
-                    "RAW-Dateien können nicht extern bearbeitet werden."));
             if (editor is null || !editor.Matches(source))
                 throw new InvalidOperationException(UiLanguage.T(
                     "Dieses Programm ist für das Dateiformat nicht konfiguriert."));
