@@ -605,7 +605,8 @@ public partial class MainWindow
         finally { _externalReviewRefreshing = false; }
     }
 
-    private async Task<bool> CompleteExternalReviewAsync(ExternalEditDecision decision)
+    private async Task<bool> CompleteExternalReviewAsync(
+        ExternalEditDecision decision, bool returnToGalleryAfterCancel = false)
     {
         var review = _externalEditReview;
         if (review is null || !review.Ready || review.Busy) return false;
@@ -668,6 +669,13 @@ public partial class MainWindow
             // The source mutation/copy and its required catalog re-index
             // have completed; the suspended scanner may now resume.
             ResumeSchedulerAfterExternalEdit();
+            if (decision == ExternalEditDecision.Cancel &&
+                returnToGalleryAfterCancel && _viewerOpen &&
+                _viewerSequence is { } activeSequence &&
+                _viewerCurrentIndex >= 0 &&
+                _viewerCurrentIndex < activeSequence.Count &&
+                activeSequence.At(_viewerCurrentIndex).ImageId == review.ImageId)
+                ClosePhotoViewer();
             var cleanupPending = ExternalEditTransaction.PendingCleanupCount();
             StatusText.Text = (decision switch
             {
