@@ -1256,6 +1256,7 @@ public partial class MainWindow
         }
 
         _viewerDragMoved = true;
+        CancelPendingOriginalHold();
         var scroller = ActiveViewerScroller;
         scroller.ScrollToHorizontalOffset(_viewerPanOffsetX - dx);
         scroller.ScrollToVerticalOffset(_viewerPanOffsetY - dy);
