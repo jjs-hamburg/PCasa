@@ -212,6 +212,30 @@ public static class ExternalEditTransaction
     // Files from a committed session can remain open in Topaz/PhotoCraft.
     // They are garbage to collect, not an active editing transaction. Never
     // delete an active manifest or reuse an old editor's fixed filename.
+    private static IEnumerable<string> CustomOwnedWorkspaceDirectories()
+    {
+        // Only folders carrying PCasa's own marker may ever be recursively
+        // deleted from a USER-CHOSEN exchange root. Other user files,
+        // including arbitrarily named session-* directories, are untouchable.
+        foreach (var root in ExternalEditorSettings.Load().Programs
+            .Select(p => p.ExchangeDirectory)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (root is null || !Directory.Exists(root)) continue;
+            string[] candidates;
+            try { candidates = Directory.GetDirectories(root, "session-*"); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                PCasaDiagnostics.Write("ExternalEdit.CustomCleanupList", ex);
+                continue;
+            }
+            foreach (var candidate in candidates)
+                if (File.Exists(Path.Combine(candidate, OwnedWorkspaceMarker)))
+                    yield return candidate;
+        }
+    }
+
     public static int PendingCleanupCount()
     {
         lock (Gate)
@@ -232,7 +256,11 @@ public static class ExternalEditTransaction
             // task/cleanup row should be created for its data.
             var hasLegacyArchive = File.Exists(
                 Path.Combine(DirectoryPath, RetiredLegacyMarker));
-            return unprotectedDirectories +
+            var customPending = CustomOwnedWorkspaceDirectories().Count(dir =>
+                !dir.Equals(active?.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase) &&
+                !File.Exists(Path.Combine(dir, RetiredWorkspaceMarker)));
+            return unprotectedDirectories + customPending +
                 (legacy || hasLegacyArchive ? 0 :
                     Directory.EnumerateFiles(DirectoryPath).Count(file =>
                         Path.GetFileName(file) is not
@@ -246,6 +274,14 @@ public static class ExternalEditTransaction
         {
             if (!Directory.Exists(DirectoryPath)) return 0;
             var active = ReadPending();
+            foreach (var custom in CustomOwnedWorkspaceDirectories())
+            {
+                if (custom.Equals(active?.DirectoryPath,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    File.Exists(Path.Combine(custom, RetiredWorkspaceMarker)))
+                    continue;
+                TryCleanupFolder(custom);
+            }
             foreach (var folder in Directory.EnumerateDirectories(DirectoryPath, "session-*"))
             {
                 if (folder.Equals(active?.DirectoryPath, StringComparison.OrdinalIgnoreCase) ||
