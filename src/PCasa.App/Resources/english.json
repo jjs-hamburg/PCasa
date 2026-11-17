@@ -927,5 +927,9 @@
   "Panorama erstellen": "Create panorama",
   "Panoramaergebnis auswählen": "Select panorama output",
   "Bilder": "Images",
-  "Alle Dateien": "All files"
+  "Alle Dateien": "All files",
+  "Abschluss läuft": "Finalizing",
+  "Abschluss fortsetzen": "Complete pending save",
+  "Ergebnis bereit": "Result ready",
+  "Entscheidung offen": "Awaiting your decision"
 }
