@@ -414,7 +414,13 @@ public partial class MainWindow
                     "Unchanged session released by viewer action.");
                 // Resume the actual original click/key action, but only while
                 // its source photo is still the active viewer identity.
-                if (_viewerOpen && _viewerImageInfo?.Id == review.ImageId)
+                // Cancel starts a new asynchronous original decode and
+                // clears _viewerImageInfo before this continuation resumes.
+                // The sequence, not transient metadata, owns viewer identity.
+                if (_viewerOpen && _viewerSequence is not null &&
+                    _viewerCurrentIndex >= 0 &&
+                    _viewerCurrentIndex < _viewerSequence.Count &&
+                    _viewerSequence.At(_viewerCurrentIndex).ImageId == review.ImageId)
                     continueAfterRelease();
             }
         }
