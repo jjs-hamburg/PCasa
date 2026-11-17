@@ -493,8 +493,15 @@ public partial class MainWindow
                     }
                     catch (Exception ex)
                     {
+                        // A decoder/preview failure is NOT evidence that the
+                        // externally rendered file is missing or unsaveable.
+                        // Preserve the detected result and the Save/Save Copy
+                        // actions; commit will validate the file independently.
+                        // Cancel remains available until finalization begins.
                         PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
-                        review.ResultPath = null;
+                        StatusText.Text = UiLanguage.T(
+                            "Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
+                            " · " + Path.GetFileName(result);
                     }
                 }
             }
