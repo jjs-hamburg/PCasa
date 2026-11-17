@@ -269,7 +269,8 @@ public partial class MainWindow
             await TryImportMultipleAsync(session);
             return;
         }
-        if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session))
+        if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session) ||
+            _externalBatchReview is { Outputs.Length: > 0 })
             return;
         _panoramaImportRunning = true;
         try
@@ -313,7 +314,8 @@ public partial class MainWindow
 
     private async Task TryImportMultipleAsync(PanoramaSession session)
     {
-        if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session))
+        if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session) ||
+            _externalBatchReview is { Outputs.Length: > 0 })
             return;
         _panoramaImportRunning = true;
         try
