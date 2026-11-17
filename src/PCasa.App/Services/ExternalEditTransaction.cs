@@ -309,6 +309,33 @@ public static class ExternalEditTransaction
                 "Die externe Sitzung stimmt nicht mit dem gespeicherten Status überein.");
     }
 
+    // Never trust a RAW filename alone. ExifTool reads the container bytes,
+    // not the suffix; this rejects a JPEG renamed to .ARW before an atomic
+    // replacement could destroy the original camera negative.
+    private static void ValidateExternalRawResult(string path,
+        CancellationToken token)
+    {
+        using var reader = new ImageExifReader();
+        var exif = reader.Read(path, token);
+        using var json = JsonDocument.Parse(exif.Json);
+        var entry = json.RootElement;
+        if (entry.ValueKind == JsonValueKind.Array && entry.GetArrayLength() == 1)
+            entry = entry[0];
+        if (entry.ValueKind != JsonValueKind.Object ||
+            !(entry.TryGetProperty("File:FileType", out var type) ||
+              entry.TryGetProperty("FileType", out type)) ||
+            type.ValueKind != JsonValueKind.String ||
+            type.GetString() is not { } actual ||
+            !SupportedRawFileTypes.Contains(actual))
+            throw new InvalidDataException(
+                "Das externe RAW-Ergebnis ist kein erkanntes RAW-Format.");
+    }
+
+    private static readonly HashSet<string> SupportedRawFileTypes =
+        new(StringComparer.OrdinalIgnoreCase)
+        { "ARW", "NEF", "NRW", "CR2", "CR3", "DNG",
+          "RAF", "RW2", "ORF", "PEF", "SRW", "CRW" };
+
     // Same container/extension may be deliberately saved into the original
     // (with a central Undo snapshot). A format change is ALWAYS a new image.
     // In particular an exported JPEG/PSD/TIFF cannot overwrite a RAW or
@@ -432,7 +459,7 @@ public static class ExternalEditTransaction
             {
                 // A native RAW may be replaced ONLY by an externally
                 // produced, readable RAW; never accept a renamed JPG.
-                _ = RawImageSource.Resolve(source, token);
+                ValidateExternalRawResult(source, token);
             }
             else if (!VideoFormats.IsVideo(source))
                 EditableImageFormats.ValidateStillImage(source);
