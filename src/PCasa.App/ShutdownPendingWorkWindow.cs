@@ -11,7 +11,8 @@ public sealed record ShutdownPendingFile(string Path, string? ThumbnailPath);
 public sealed record ShutdownPendingOperation(
     string Key, string Action, string Status,
     IReadOnlyList<ShutdownPendingFile> Files,
-    long? DraftImageId = null);
+    long? DraftImageId = null, bool CanCancel = true,
+    string? ActionLabel = null);
 
 /// <summary>
 /// Only the agreed shutdown review: affected files with cached thumbnails,
@@ -74,7 +75,9 @@ public sealed class ShutdownPendingWorkWindow : Window
             var background = new Border { Padding = new Thickness(8),
                 BorderThickness = new Thickness(0, 0, 0, 1), Child = row };
             background.SetResourceReference(Border.BorderBrushProperty, "PcasaDividerBrush");
-            var abort = new Button { Content = UiLanguage.T("Abbrechen"),
+            var abort = new Button {
+                Content = UiLanguage.T(item.ActionLabel ?? "Abbrechen"),
+                IsEnabled = item.CanCancel,
                 MinWidth = 88, Padding = new Thickness(7, 5, 7, 5),
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(9, 0, 0, 0) };
