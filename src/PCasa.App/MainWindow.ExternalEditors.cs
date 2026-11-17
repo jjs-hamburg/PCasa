@@ -309,7 +309,7 @@ public partial class MainWindow
                         (completed, total) => _scheduler.ReportProgress(stageKey,
                             UiLanguage.T("Lokale Arbeitskopie erstellen …"),
                             total <= 0 ? 100 : (int)(completed * 100 / total),
-                            100, source)),
+                            100, source), editor.ExchangeDirectory),
                     workKind: SchedulerWorkKind.Catalog);
             }
             finally { EndVisibleManualOperation(stageKey); }
