@@ -61,6 +61,23 @@ public static class PsdCompositePreview
         }
     }
 
+    /// <summary>PSD source dimensions; never substitute downsampled preview dimensions.</summary>
+    public static (int Width, int Height) GetDimensions(string psd)
+    {
+        using var source = new FileStream(psd, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        Span<byte> header = stackalloc byte[26];
+        source.ReadExactly(header);
+        if (!header[..4].SequenceEqual("8BPS"u8) ||
+            BinaryPrimitives.ReadUInt16BigEndian(header.Slice(4, 2)) != 1)
+            throw new InvalidDataException("PSD-Signatur oder Version ungültig.");
+        var height = checked((int)BinaryPrimitives.ReadUInt32BigEndian(header.Slice(14, 4)));
+        var width = checked((int)BinaryPrimitives.ReadUInt32BigEndian(header.Slice(18, 4)));
+        if (width < 1 || height < 1 || width > 300000 || height > 300000)
+            throw new InvalidDataException("Ungültige PSD-Abmessungen.");
+        return (width, height);
+    }
+
     /// <summary>Pure PSD merged-composite decoder; exposed to regression tests.</summary>
     public static BitmapSource DecodeComposite(Stream input,
         CancellationToken token = default)
