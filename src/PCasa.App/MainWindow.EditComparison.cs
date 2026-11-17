@@ -23,6 +23,7 @@ public partial class MainWindow
     private bool _editCompareHoldingOriginal;
     private double _editCompareZoomFactor = 1;
     private bool _editComparePanActive;
+    private bool _editComparePanMoved;
     private Point _editComparePanStart;
     private double _editComparePanStartX;
     private double _editComparePanStartY;
@@ -143,16 +144,10 @@ public partial class MainWindow
             _editCompareOriginal = pair.Value.Original;
             _editCompareEdited = pair.Value.Edited;
             _editCompareImageId = id;
-            if (requested == EditCompareMode.Split &&
-                (long)_editCompareOriginal.PixelWidth * _editCompareEdited.PixelHeight !=
-                (long)_editCompareEdited.PixelWidth * _editCompareOriginal.PixelHeight)
-            {
-                // A crop changes image geometry. A split line would falsely
-                // align unrelated pixel coordinates; side-by-side is honest.
-                requested = EditCompareMode.SideBySide;
-                StatusText.Text = UiLanguage.T(
-                    "Unterschiedliche Bildausschnitte: Vergleich nebeneinander.");
-            }
+            // Never silently switch the requested split into side-by-side.
+            // JPEG/RAW decoders often round preview pixel sizes differently
+            // even when their source aspect ratios are visually identical.
+            // Two uniformly fitted images share the same full-size viewport.
             _editCompareMode = requested;
             EditCompareSideOriginal.Source = _editCompareOriginal;
             EditCompareSideEdited.Source = _editCompareEdited;
@@ -240,8 +235,8 @@ public partial class MainWindow
             catch (InvalidOperationException) { break; }
         }
         e.Handled = true;
-        if (_editCompareZoomFactor <= 1.001) return true;
         _editComparePanActive = true;
+        _editComparePanMoved = false;
         _editComparePanStart = e.GetPosition(PhotoViewerPanel);
         _editComparePanStartX = _editComparePanX;
         _editComparePanStartY = _editComparePanY;
@@ -259,6 +254,16 @@ public partial class MainWindow
             return true;
         }
         var point = e.GetPosition(PhotoViewerPanel);
+        if (Math.Abs(point.X - _editComparePanStart.X) >=
+                SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(point.Y - _editComparePanStart.Y) >=
+                SystemParameters.MinimumVerticalDragDistance)
+            _editComparePanMoved = true;
+        if (!_editComparePanMoved || _editCompareZoomFactor <= 1.001)
+        {
+            e.Handled = true;
+            return true;
+        }
         var maxX = Math.Max(0,
             (_editCompareZoomFactor - 1) * EditComparePanel.ActualWidth /
             (_editCompareMode == EditCompareMode.SideBySide ? 4 : 2));
@@ -281,6 +286,10 @@ public partial class MainWindow
         _editComparePanActive = false;
         PhotoViewerPanel.ReleaseMouseCapture();
         e.Handled = true;
+        // A regular click must still leave the viewer, including after
+        // a successful external Save. Only a real drag pans the comparison.
+        if (!_editComparePanMoved) ClosePhotoViewer();
+        _editComparePanMoved = false;
         return true;
     }
 
@@ -318,7 +327,11 @@ public partial class MainWindow
 
     private bool TryBeginEditOriginalHold(MouseButtonEventArgs e)
     {
-        if (_editCompareMode != EditCompareMode.Single ||
+        // The ordinary image click belongs to Gallery navigation. Showing
+        // Before on mouse-down requires an explicit Shift gesture, otherwise
+        // any Undo/Copy history silently makes the viewer impossible to exit.
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0 ||
+            _editCompareMode != EditCompareMode.Single ||
             _externalBatchReview is not null || _comparisonActive ||
             _cropActive || _straightenActive || _viewerImageInfo is not { } info)
             return false;
