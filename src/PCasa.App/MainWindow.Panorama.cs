@@ -71,7 +71,7 @@ public partial class MainWindow
             var sources = await SelectedGalleryImagePathsAsync(imageIds,
                 SchedulerPriority.ManualAction);
             if (sources.Length != imageIds.Length)
-                throw new IOException("Nicht alle ausgewählten Panoramabilder sind erreichbar.");
+                throw new IOException("Nicht alle ausgewählten Bilder sind erreichbar.");
             var selectedById = sources.ToDictionary(x => x.Id, x => x.Path);
             var inputs = imageIds.Select(id => (Id: id, Path: selectedById[id])).ToArray();
             if (inputs.Any(input => VideoFormats.IsVideo(input.Path)))
@@ -80,8 +80,10 @@ public partial class MainWindow
                 throw new InvalidOperationException(
                     "Dieses Programm unterstützt nicht alle ausgewählten Bildformate.");
 
-            var key = "panorama:stage:" + Guid.NewGuid().ToString("N");
-            BeginVisibleManualOperation(key, UiLanguage.T("Panorama erstellen"), 100);
+            var key = (isPanorama ? "panorama:stage:" : "external:multi-stage:") +
+                Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, UiLanguage.T(isPanorama
+                ? "Panorama erstellen" : "Mehrfachbearbeitung"), 100);
             SuspendSchedulerForExternalEdit();
             suspended = true;
             PanoramaSession session;
@@ -90,7 +92,10 @@ public partial class MainWindow
                 session = await _scheduler.RunAsync(key,
                     SchedulerPriority.ManualAction, token =>
                     {
-                        var (tags, lat, lon) = ReadPanoramaMetadata(imageIds, token);
+                        string[] tags = [];
+                        double? lat = null, lon = null;
+                        if (isPanorama)
+                            (tags, lat, lon) = ReadPanoramaMetadata(imageIds, token);
                         return PanoramaTransaction.Begin(inputs, tags, lat, lon,
                             token, (completed, total) => _scheduler.ReportProgress(
                                 key, UiLanguage.T(isPanorama
