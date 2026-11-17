@@ -226,7 +226,8 @@ public partial class MainWindow
                                     receipt.Source, receipt.Destination,
                                     receipt.Replace,
                                     stagingPath: TransferStagePath(key, ordinal,
-                                        receipt.Destination));
+                                        receipt.Destination),
+                                    cancellationToken: token);
                             else
                                 StageCopyToDestination(
                                     key, ordinal, receipt, token);
