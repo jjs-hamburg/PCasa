@@ -88,6 +88,76 @@ public static class PanoramaTransaction
         return results.FirstOrDefault();
     }
 
+    // Autopano Giga and other panorama editors export to a user-selected
+    // directory, not necessarily the process working directory. Capture only
+    // the ONE result explicitly chosen by the user. Stage it locally so that
+    // metadata writing and catalog import never change the external output.
+    // We do not scan/watch arbitrary user folders or guess from timestamps.
+    public static string StageExternalResult(PanoramaSession session,
+        string selectedPath, CancellationToken token = default,
+        Action<long, long>? progress = null)
+    {
+        token.ThrowIfCancellationRequested();
+        var source = Path.GetFullPath(selectedPath);
+        if (session.Inputs.Concat(session.Sources).Any(path =>
+                Path.GetFullPath(path).Equals(source,
+                    StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException(
+                "Ein Ausgangsbild darf nicht als Panoramaergebnis übernommen werden.");
+        if (!EditableImageFormats.SupportsExternalResult(source))
+            throw new NotSupportedException(
+                "Dieses Panorama-Ausgabeformat kann PCasa nicht übernehmen.");
+        if (!File.Exists(source))
+            throw new FileNotFoundException("Panoramaergebnis nicht gefunden.", source);
+        var extension = Path.GetExtension(source).ToLowerInvariant();
+        var destination = Path.Combine(session.Directory,
+            "panorama-output-" + Guid.NewGuid().ToString("N") + extension);
+        var sourceInfo = new FileInfo(source);
+        var originalLength = sourceInfo.Length;
+        var originalWriteTicks = sourceInfo.LastWriteTimeUtc.Ticks;
+        if (originalLength == 0)
+            throw new InvalidDataException("Panoramaergebnis ist leer.");
+        try
+        {
+            using (SourceFileLocks.Enter(source, token))
+            using (var input = new FileStream(source, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete, 1024 * 1024))
+            using (var output = new FileStream(destination, FileMode.CreateNew,
+                       FileAccess.Write, FileShare.None, 1024 * 1024,
+                       FileOptions.WriteThrough))
+            {
+                var bytes = new byte[1024 * 1024];
+                long copied = 0;
+                int count;
+                while ((count = input.Read(bytes)) > 0)
+                {
+                    token.ThrowIfCancellationRequested();
+                    output.Write(bytes, 0, count);
+                    copied += count;
+                    progress?.Invoke(copied, originalLength);
+                }
+                output.Flush(true);
+            }
+            token.ThrowIfCancellationRequested();
+            sourceInfo.Refresh();
+            if (sourceInfo.Length != originalLength ||
+                sourceInfo.LastWriteTimeUtc.Ticks != originalWriteTicks)
+                throw new IOException(
+                    "Das Panoramaprogramm schreibt noch am Ergebnis. Bitte nach Abschluss erneut auswählen.");
+            if (new FileInfo(destination).Length != originalLength)
+                throw new IOException("Die Panorama-Arbeitskopie ist unvollständig.");
+            EditableImageFormats.ValidateStillImage(destination);
+            return destination;
+        }
+        catch
+        {
+            try { if (File.Exists(destination)) File.Delete(destination); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            throw;
+        }
+    }
+
     public static string Import(PanoramaSession session, string result,
         CancellationToken token = default, Action<long, long>? progress = null)
     {

@@ -77,6 +77,7 @@ public static class EditableImageFormats
             ext.Equals(".tiff", StringComparison.OrdinalIgnoreCase))
             return;
 
+        NativeImageCachePolicy.EnsureConfigured();
         using var header = Image.NewFromFile(path, access: Enums.Access.Sequential);
         if (header.Contains("n-pages") &&
             Convert.ToInt32(header.Get("n-pages")) > 1)
@@ -109,6 +110,7 @@ public static class EditableImageFormats
 
         // Modern still formats use the *same* pinned libvips already bundled
         // for image viewing. Transfer via lossless PNG with alpha intact.
+        NativeImageCachePolicy.EnsureConfigured();
         using var source = Image.NewFromFile(path, access: Enums.Access.Sequential);
         using var oriented = source.Autorot();
         var png = oriented.PngsaveBuffer(compression: 1,
@@ -153,6 +155,7 @@ public static class EditableImageFormats
         var png = new PngBitmapEncoder();
         png.Frames.Add(BitmapFrame.Create(edited));
         png.Save(encoded);
+        NativeImageCachePolicy.EnsureConfigured();
         using var source = Image.NewFromBuffer(encoded.ToArray());
         source.WriteToFile(destination);
     }
@@ -164,6 +167,7 @@ public static class EditableImageFormats
             // A native PSD loader is optional in the pinned Windows libvips.
             // Resolve the embedded composite preview just as in the viewer.
             var display = RawImageSource.Resolve(path);
+            NativeImageCachePolicy.EnsureConfigured();
             using var image = Image.NewFromFile(display, access: Enums.Access.Sequential);
             return (image.Width, image.Height);
         }
@@ -189,6 +193,7 @@ public static class EditableImageFormats
             var frame = decoder.Frames[0];
             return (frame.PixelWidth, frame.PixelHeight);
         }
+        NativeImageCachePolicy.EnsureConfigured();
         using var source = Image.NewFromFile(path, access: Enums.Access.Sequential);
         return (source.Width, source.Height);
     }

@@ -28,6 +28,7 @@ public sealed class ThumbnailCache
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        NativeImageCachePolicy.EnsureConfigured();
         originalSourcePath ??= sourcePath;
         var rawSource = RawImageSource.IsRawPath(originalSourcePath);
         var cachePath = GetCachePath(canonicalPath, fileSize, modifiedUtcTicks,

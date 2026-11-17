@@ -2841,6 +2841,15 @@ internal static class Program
                     {
                         stripUpdating.SetValue(window, false);
                     }
+                    // A preceding asynchronous GPS catalog refresh can
+                    // replace the synthetic point fixture between UI flushes.
+                    // Reestablish its selected identity at the actual click
+                    // boundary, not while unrelated catalog work is running.
+                    fullscreenPointField.SetValue(window, fullscreenPointArray);
+                    fullscreenSelectedIds.Add(999L);
+                    if (filmstripList.SelectedItem is not
+                        PCasa.App.MainWindow.GpsFilmstripEntry { Id: 999L })
+                        throw new Exception("Synthetic filmstrip selection was replaced before double-click.");
                     var filmstripDblClick = viewerType.GetMethod(
                         "GpsFilmstrip_MouseDoubleClick", reflectFlags)!;
                     filmstripDblClick.Invoke(window, new object[] {
@@ -2854,7 +2863,13 @@ internal static class Program
                         gpsOverlay.Visibility != Visibility.Visible ||
                         gpsOverlay.Tag is not long shownId || shownId != 999L)
                         throw new Exception(
-                            "Filmstrip double-click exited fullscreen or failed to show the photo.");
+                            "Filmstrip double-click exited fullscreen or failed to show the photo." +
+                            $" Fullscreen={gpsFullscreenFlag.GetValue(window)};" +
+                            $" Mode={sidebarModeField.GetValue(window)};" +
+                            $" Overlay={gpsOverlay.Visibility}; Tag={gpsOverlay.Tag};" +
+                            $" SelectedItem={(filmstripList.SelectedItem as PCasa.App.MainWindow.GpsFilmstripEntry)?.Id};" +
+                            $" Selected999={fullscreenSelectedIds.Contains(999L)};" +
+                            $" GpsPoint999={((System.Collections.IEnumerable)fullscreenPointField.GetValue(window)!).Cast<object>().Any(point => (long)point.GetType().GetProperty("Id")!.GetValue(point)! == 999L)}");
                     filmstripList.ItemsSource = null;
                     gpsFullscreenClick.Invoke(window, new object[] {
                         window, new RoutedEventArgs(Button.ClickEvent) });
