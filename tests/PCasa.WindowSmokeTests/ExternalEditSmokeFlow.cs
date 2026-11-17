@@ -56,8 +56,7 @@ internal static class ExternalEditSmokeFlow
                 try
                 {
                     replaceMethod.Invoke(null,
-                        [lockedCandidate, lockedOriginal,
-                            CancellationToken.None, null, null]);
+                        [lockedCandidate, lockedOriginal, CancellationToken.None]);
                 }
                 catch (System.Reflection.TargetInvocationException ex)
                     when (ex.InnerException is not null)
