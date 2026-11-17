@@ -299,6 +299,7 @@ public partial class MainWindow
             BeginVisibleManualOperation(key, UiLanguage.T("Mehrfachbearbeitung"),
                 Math.Max(1, outputs.Length));
             string[] saved;
+            var catalogWarnings = new List<string>();
             try
             {
                 saved = await _scheduler.RunAsync(key,
@@ -322,16 +323,32 @@ public partial class MainWindow
                                     100, session.Sources[0]));
                         foreach (var file in files)
                         {
-                            var root = FolderExclusionRules.FindOwner(file,
-                                _folderRepository.GetAll());
-                            if (root is null)
-                                throw new IOException("Ausgabeverzeichnis nicht im Katalog: " + file);
-                            var indexed = _folderScanner.ScanFile(root, file,
-                                cancellationToken: token, publishCatalogChange: false,
-                                forceExifRefresh: true);
-                            if (indexed.Failed > 0 || indexed.ImageFilesSeen == 0)
-                                throw new IOException(
-                                    "Mehrfachergebnis gespeichert, aber nicht katalogisiert: " + file);
+                            try
+                            {
+                                token.ThrowIfCancellationRequested();
+                                var root = FolderExclusionRules.FindOwner(file,
+                                    _folderRepository.GetAll());
+                                if (root is null)
+                                    throw new IOException(
+                                        "Ausgabeverzeichnis nicht im Katalog: " + file);
+                                var indexed = _folderScanner.ScanFile(root, file,
+                                    cancellationToken: token, publishCatalogChange: false,
+                                    forceExifRefresh: true);
+                                if (indexed.Failed > 0 || indexed.ImageFilesSeen == 0)
+                                    throw new IOException(
+                                        "Mehrfachergebnis gespeichert, aber nicht katalogisiert: " +
+                                        file);
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                // The files are already safely published.
+                                // Do NOT retry the physical import and create
+                                // extra -Kopie duplicates after a catalog error.
+                                PCasaDiagnostics.Write("ExternalBatch.Catalog", ex);
+                                catalogWarnings.Add(Path.GetFileName(file) + ": " +
+                                    ex.Message);
+                            }
                         }
                         return files;
                     }, workKind: SchedulerWorkKind.Catalog);
@@ -343,6 +360,11 @@ public partial class MainWindow
             await RefreshBrowseGalleryAsync(forceIndexReload: true);
             StatusText.Text = UiLanguage.T("Mehrfachbearbeitung") +
                 ": " + saved.Length + " " + UiLanguage.T("Bilder gespeichert");
+            if (catalogWarnings.Count > 0)
+                PcasaDialog.Show(this,
+                    string.Join(Environment.NewLine, catalogWarnings.Take(10)),
+                    UiLanguage.T("Mehrfachbearbeitung"),
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally { _panoramaImportRunning = false; }
     }
