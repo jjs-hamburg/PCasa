@@ -250,13 +250,14 @@ internal static class ExternalEditSmokeFlow
                     !File.ReadAllBytes(other).SequenceEqual(originals[1]))
                     throw new Exception("Batch staging altered an original.");
 
-                var intended = Path.Combine(root, "test-photo.jpg");
+                var intended = Path.Combine(root, "collision.jpg");
+                WriteJpeg(intended, 33);
                 if (ExternalCopyNames.NextAvailable(intended) !=
-                    Path.Combine(root, "test-photo-Kopie.jpg"))
+                    Path.Combine(root, "collision-Kopie.jpg"))
                     throw new Exception("Gallery and batch copy names diverged.");
-                File.WriteAllText(Path.Combine(root, "test-photo-Kopie.jpg"), "reserved");
+                File.WriteAllText(Path.Combine(root, "collision-Kopie.jpg"), "reserved");
                 if (ExternalCopyNames.NextAvailable(intended) !=
-                    Path.Combine(root, "test-photo-Kopie-2.jpg"))
+                    Path.Combine(root, "collision-Kopie-2.jpg"))
                     throw new Exception("Second collision did not allocate -Kopie-2.");
             }
             finally { PanoramaTransaction.Cleanup(batch); }
