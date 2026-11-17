@@ -25,9 +25,26 @@ public partial class MainWindow
                     UiLanguage.T("Panorama erstellen"), UiLanguage.T("Läuft"),
                     panorama.Sources.Select(path => new ShutdownPendingFile(path, null)).ToArray()));
             if (_externalEditReview is { } review)
-                pending.Add(new ShutdownPendingOperation("external:active",
-                    UiLanguage.T("Externe Bearbeitung"), UiLanguage.T("Läuft"),
-                    [new ShutdownPendingFile(review.Snapshot.OriginalPath, null)]));
+            {
+                // The session is independent of PhotoCraft's process lifetime.
+                // Report a pending decision, not a supposedly running editor.
+                var onDisk = ExternalEditTransaction.FindPending(
+                    review.Snapshot.OriginalPath);
+                if (onDisk is not null)
+                {
+                    var finalizing = onDisk.Finalizing;
+                    pending.Add(new ShutdownPendingOperation("external:active",
+                        UiLanguage.T("Externe Bearbeitung"),
+                        review.Busy ? UiLanguage.T("Abschluss läuft") :
+                            finalizing is not null ? UiLanguage.T("Abschluss fortsetzen") :
+                            review.ResultPath is not null ? UiLanguage.T("Ergebnis bereit") :
+                            UiLanguage.T("Entscheidung offen"),
+                        [new ShutdownPendingFile(review.Snapshot.OriginalPath, null)],
+                        CanCancel: !review.Busy,
+                        ActionLabel: review.Busy ? "Abschluss läuft" :
+                            finalizing is not null ? "Abschluss fortsetzen" : null));
+                }
+            }
             if (pending.Count == 0) return true;
             var window = new ShutdownPendingWorkWindow(pending,
                 CancelShutdownOperationAsync) { Owner = this };
@@ -181,7 +198,24 @@ public partial class MainWindow
             return true;
         }
         if (item.Key == "external:active")
-            return await CompleteExternalReviewAsync(ExternalEditDecision.Cancel);
+        {
+            var review = _externalEditReview;
+            if (review is null) return true;
+            if (review.Busy) return false;
+            var persisted = ExternalEditTransaction.FindPending(
+                review.Snapshot.OriginalPath);
+            if (persisted is null)
+            {
+                _externalEditReview = null;
+                ResumeSchedulerAfterExternalEdit();
+                UpdateEditControls();
+                return true;
+            }
+            // Once a Save or Copy has been selected and durably recorded,
+            // 'Cancel' can no longer roll it back. Complete the SAME choice.
+            return await CompleteExternalReviewAsync(
+                persisted.Finalizing ?? ExternalEditDecision.Cancel);
+        }
         if (new DurablePackageJournal(_database).Pending()
             .Any(record => record.Key == item.Key))
             return await _scheduler.DeleteDurableTaskAsync(item.Key);
