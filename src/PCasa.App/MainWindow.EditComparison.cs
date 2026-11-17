@@ -59,9 +59,18 @@ public partial class MainWindow
         {
             // Pre-Alpha.41 sessions do not have an immutable input. Use the
             // gallery source ONLY if its bytes are still the sent version.
-            // Otherwise do not show a mislabeled comparison.
-            if (ExternalEditTransaction.OriginalChanged(review.Snapshot))
+            // If that original is offline, do not stall Save/Cancel or display
+            // a misleading comparison.
+            try
+            {
+                if (ExternalEditTransaction.OriginalChanged(review.Snapshot))
+                    return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                PCasaDiagnostics.Write("EditComparison.LegacyOriginal", ex);
                 return null;
+            }
             originalSnapshot = review.Snapshot.OriginalPath;
         }
         var sessionId = review.Snapshot.Id;
