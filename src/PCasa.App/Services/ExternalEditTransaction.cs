@@ -235,15 +235,16 @@ public static class ExternalEditTransaction
                     !Guid.TryParseExact(name["session-".Length..], "N", out var expected))
                     continue;
                 var marker = Path.Combine(candidate, OwnedWorkspaceMarker);
+                bool owned = false;
                 try
                 {
-                    if (File.Exists(marker) &&
+                    owned = File.Exists(marker) &&
                         string.Equals(File.ReadAllText(marker).Trim(),
-                            expected.ToString("N"), StringComparison.OrdinalIgnoreCase))
-                        yield return candidate;
+                            expected.ToString("N"), StringComparison.OrdinalIgnoreCase);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 { PCasaDiagnostics.Write("ExternalEdit.CustomCleanupMarker", ex); }
+                if (owned) yield return candidate;
             }
         }
     }
