@@ -229,8 +229,22 @@ public static class ExternalEditTransaction
                 continue;
             }
             foreach (var candidate in candidates)
-                if (File.Exists(Path.Combine(candidate, OwnedWorkspaceMarker)))
-                    yield return candidate;
+            {
+                var name = Path.GetFileName(candidate);
+                if (!name.StartsWith("session-", StringComparison.OrdinalIgnoreCase) ||
+                    !Guid.TryParseExact(name["session-".Length..], "N", out var expected))
+                    continue;
+                var marker = Path.Combine(candidate, OwnedWorkspaceMarker);
+                try
+                {
+                    if (File.Exists(marker) &&
+                        string.Equals(File.ReadAllText(marker).Trim(),
+                            expected.ToString("N"), StringComparison.OrdinalIgnoreCase))
+                        yield return candidate;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { PCasaDiagnostics.Write("ExternalEdit.CustomCleanupMarker", ex); }
+            }
         }
     }
 
