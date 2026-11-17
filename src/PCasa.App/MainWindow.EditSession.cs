@@ -681,10 +681,8 @@ public partial class MainWindow
                 }
                 _viewerOriginalCache.Remove(request.ImageId);
                 _ = RefreshRestoreBadgesAsync();
-                QueueBackgroundChange(new BackgroundFolderChange(
-                    request.FolderId, request.Path,
-                    BackgroundFolderChangeKind.ScanFile,
-                    Recursive: false, ForceExifRefresh: true));
+                // The P0 transaction below owns the immediate re-index.
+                // Do not also enqueue the same file as a redundant P3 scan.
                 if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
                     ShowViewerImage(keepCurrentAsPlaceholder: true);
                 // Reconcile catalog size, timestamp and EXIF before packing
@@ -715,6 +713,12 @@ public partial class MainWindow
                     // Never replay an already completed original-file write
                     // because an independent catalog update failed.
                     PCasaDiagnostics.Write("Image.Edit.PostCommitScan", ex);
+                    // Only an unsuccessful immediate P0 re-index needs a
+                    // background retry; the file write must never be replayed.
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        request.FolderId, request.Path,
+                        BackgroundFolderChangeKind.ScanFile,
+                        Recursive: false, ForceExifRefresh: true));
                     StatusText.Text = UiLanguage.T(
                         "Bild gespeichert, Katalogaktualisierung ausstehend.");
                 }
