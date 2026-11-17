@@ -418,7 +418,11 @@ public partial class MainWindow
         }
         if (_externalEditReview is not null)
         {
-            _ = CompleteExternalReviewAsync(ExternalEditDecision.Cancel);
+            // Explicit Cancel is a complete user action: discard the isolated
+            // workspace and return to the gallery. An unchanged click or a
+            // switch to another editor uses a different continuation instead.
+            _ = CompleteExternalReviewAsync(ExternalEditDecision.Cancel,
+                returnToGalleryAfterCancel: true);
             return;
         }
         // An already submitted immutable P0 recipe is independent of the
