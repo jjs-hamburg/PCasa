@@ -1590,30 +1590,26 @@
                             </Grid>
                             <Grid x:Name="EditCompareSwipePanel" Visibility="Collapsed"
                                   ClipToBounds="True" SizeChanged="EditCompareSwipe_SizeChanged">
-                                <!-- Both images occupy the SAME measured viewport.
-                                     Otherwise WPF's natural Image desired size can
-                                     differ with decode dimensions and shift the
-                                     aligned split unexpectedly. Only the left
-                                     original is clipped by the movable divider. -->
-                                <!-- Canvas pins BOTH full-view image frames to the
-                                     exact same (0,0) origin. Two independently
-                                     center-aligned Image elements in a Grid can
-                                     drift under WPF layout / preview aspect
-                                     rounding despite identical Width bindings. -->
-                                <Canvas ClipToBounds="True">
-                                    <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
-                                           Canvas.Left="0" Canvas.Top="0"
-                                           Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
-                                           Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                <!-- One centered image frame. Its geometry is computed
+                                     ONCE from the edited pixels; both images fill this
+                                     exact frame, so independently rounded decoder
+                                     dimensions cannot create different visible bounds.
+                                     Stretch=Fill is intentional INSIDE the common
+                                     image-ratio frame, never across the entire panel. -->
+                                <Grid x:Name="EditCompareImageFrame"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      ClipToBounds="False">
+                                    <Image x:Name="EditCompareSwipeEdited" Stretch="Fill"
+                                           Width="{Binding ActualWidth, ElementName=EditCompareImageFrame}"
+                                           Height="{Binding ActualHeight, ElementName=EditCompareImageFrame}"
                                            RenderTransformOrigin="0.5,0.5"
                                            RenderOptions.BitmapScalingMode="HighQuality"/>
-                                    <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
-                                           Canvas.Left="0" Canvas.Top="0"
-                                           Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
-                                           Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                    <Image x:Name="EditCompareSwipeOriginal" Stretch="Fill"
+                                           Width="{Binding ActualWidth, ElementName=EditCompareImageFrame}"
+                                           Height="{Binding ActualHeight, ElementName=EditCompareImageFrame}"
                                            RenderTransformOrigin="0.5,0.5"
                                            RenderOptions.BitmapScalingMode="HighQuality"/>
-                                </Canvas>
+                                </Grid>
                                 <Canvas Background="Transparent">
                                     <primitives:Thumb x:Name="EditCompareSplitHandle"
                                                       Width="18"
