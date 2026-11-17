@@ -766,6 +766,20 @@ public partial class MainWindow
                             publishCatalogChange: false, forceExifRefresh: true);
                         if (result.Failed > 0 || result.ImageFilesSeen == 0)
                             throw new IOException(UiLanguage.T("Kopie konnte nicht katalogisiert werden."));
+                        // The viewer can activate the copy only after the
+                        // gallery index has real packed thumbnail tiers.
+                        using var lookup = _database.OpenConnection();
+                        using var command = lookup.CreateCommand();
+                        command.CommandText =
+                            "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                        command.Parameters.AddWithValue("$path", copy);
+                        if (command.ExecuteScalar() is not { } found)
+                            throw new IOException(
+                                "Die gespeicherte Kopie fehlt im Katalog.");
+                        new BrowseCacheBuilder(
+                            new BrowseCacheRepository(_database),
+                            new BrowseThumbnailProfileRepository(_database))
+                            .RebuildSingleImage(Convert.ToInt64(found), token);
                     }
                     return Task.CompletedTask;
                 });

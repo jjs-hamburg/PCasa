@@ -948,5 +948,6 @@
   "Keine bearbeitete und ursprüngliche Version verfügbar.": "No edited and original versions are available.",
   "Unterschiedliche Bildausschnitte: Vergleich nebeneinander.": "Different image crops: switching to side-by-side comparison.",
   "Bildvergleich fehlgeschlagen: ": "Image comparison failed: ",
-  "Bild gespeichert, Katalogaktualisierung ausstehend.": "Image saved; catalog refresh pending."
+  "Bild gespeichert, Katalogaktualisierung ausstehend.": "Image saved; catalog refresh pending.",
+  "Überwachte Ordner im Ordnermanager auswählen.": "Choose monitored folders in Folder Manager."
 }
