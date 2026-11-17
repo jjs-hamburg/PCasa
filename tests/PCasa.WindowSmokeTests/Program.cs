@@ -2774,7 +2774,8 @@ internal static class Program
                 var compareCtor = compareType.GetConstructors(
                     System.Reflection.BindingFlags.Public |
                     System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance).Single();
+                    System.Reflection.BindingFlags.Instance)
+                    .Single(ctor => ctor.GetParameters().Length == 7);
                 var compareMode = viewerType.GetNestedType("EditCompareMode",
                     System.Reflection.BindingFlags.NonPublic)!;
                 var showComparison = viewerType.GetMethod(
