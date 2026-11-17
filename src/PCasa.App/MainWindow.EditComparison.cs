@@ -28,6 +28,10 @@ public partial class MainWindow
     private double _editComparePanStartY;
     private double _editComparePanX;
     private double _editComparePanY;
+    // A Save-Copy result retains its source identity only for this process,
+    // without extra files, sidecars, catalog relationships or sorting rules.
+    // A newly generated panorama does NOT get such a link.
+    private readonly Dictionary<long, long> _editCompareCopySources = new();
 
     private void UpdateEditComparisonAvailability()
     {
@@ -40,7 +44,8 @@ public partial class MainWindow
             ((_photoEditSession is { HasChanges: true } live && live.ImageId == id) ||
              (_externalEditReview is { ResultPath: not null } external &&
               external.ImageId == id) ||
-             _restoreBadgeImageIds.Contains(id));
+             _restoreBadgeImageIds.Contains(id) ||
+             _editCompareCopySources.ContainsKey(id));
         EditCompareSingleButton.IsEnabled = _viewerOpen && !_comparisonActive;
         EditCompareSideButton.IsEnabled = eligible;
         EditCompareSplitButton.IsEnabled = eligible;
@@ -84,6 +89,17 @@ public partial class MainWindow
         }
         var info = _viewerImageInfo;
         if (info is null || info.Id != imageId) return null;
+        if (_editCompareCopySources.TryGetValue(imageId, out var sourceId))
+        {
+            var images = await Task.WhenAll(new[] { sourceId, imageId }
+                .Select(id => _scheduler.RunAsync(
+                    "viewer:edit-copy-before:" + Guid.NewGuid().ToString("N"),
+                    SchedulerPriority.Interactive,
+                    token => LoadComparisonBitmap(id, token),
+                    workKind: SchedulerWorkKind.ViewerRead)));
+            return images[0] is { } original && images[1] is { } edited
+                ? (original, edited) : null;
+        }
         var version = await Task.Run(() =>
             new UndoHistoryService(UndoOptions.Load())
                 .GetVersions(info.LocalPath).FirstOrDefault());
@@ -309,6 +325,7 @@ public partial class MainWindow
         var session = _photoEditSession;
         var live = session is { HasChanges: true } && session.ImageId == info.Id;
         if (!live && !_restoreBadgeImageIds.Contains(info.Id) &&
+            !_editCompareCopySources.ContainsKey(info.Id) &&
             _externalEditReview?.ResultPath is null)
             return false;
         _editCompareHoldingOriginal = true;

@@ -582,7 +582,8 @@ public partial class MainWindow
         return package;
     }
 
-    private async Task ActivateSavedCopyAsync(EditWriteRecipe request)
+    private async Task ActivateSavedCopyAsync(EditWriteRecipe request,
+        bool linkToSourceForComparison = true)
     {
         var copy = request.CopyPath
             ?? throw new InvalidOperationException("Kein Kopiepfad vorhanden.");
@@ -602,6 +603,12 @@ public partial class MainWindow
         });
         if (copyId is not long newId)
             throw new InvalidDataException("Die Bildkopie wurde nicht im Katalog gefunden.");
+        if (linkToSourceForComparison && request.ImageId != newId)
+        {
+            if (_editCompareCopySources.Count >= 64)
+                _editCompareCopySources.Remove(_editCompareCopySources.Keys.First());
+            _editCompareCopySources[newId] = request.ImageId;
+        }
 
         await RefreshBrowseGalleryAsync(forceIndexReload: true);
         if (!_viewerOpen || _viewerSequence is null ||

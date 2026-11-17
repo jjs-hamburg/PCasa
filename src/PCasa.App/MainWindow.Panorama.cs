@@ -497,7 +497,8 @@ public partial class MainWindow
                 try
                 {
                     await ActivateSavedCopyAsync(new EditWriteRecipe(
-                        session.ImageIds[0], 0, session.Sources[0], [], saved[0]));
+                        session.ImageIds[0], 0, session.Sources[0], [], saved[0]),
+                        linkToSourceForComparison: false);
                 }
                 catch (Exception ex)
                 {
