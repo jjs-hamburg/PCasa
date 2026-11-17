@@ -147,18 +147,21 @@ internal static class ExternalEditSmokeFlow
             if (Directory.Exists(lockedSave.DirectoryPath))
                 throw new Exception("Deferred locked Save workspace not cleaned.");
 
-            foreach (var extension in new[] { ".arw", ".nef", ".nrw", ".cr2",
-                ".cr3", ".dng", ".raf", ".rw2", ".orf", ".pef", ".srw", ".crw" })
-            {
-                try
-                {
-                    ExternalEditTransaction.Begin(Path.Combine(root, "raw" + extension));
-                    throw new Exception("RAW reached external editing.");
-                }
-                catch (NotSupportedException) { }
-            }
+            // A RAW input is staged verbatim for an explicitly RAW-enabled
+            // external application. Cancel must never alter the camera file.
+            var cameraRaw = Path.Combine(root, "camera.arw");
+            var cameraBytes = new byte[] { 1, 33, 76, 9, 28, 119, 20 };
+            File.WriteAllBytes(cameraRaw, cameraBytes);
+            var rawSession = ExternalEditTransaction.Begin(cameraRaw);
+            if (!File.ReadAllBytes(rawSession.BackupPath).SequenceEqual(cameraBytes) ||
+                !rawSession.BackupPath.EndsWith(".arw", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("RAW source was not staged byte-for-byte.");
+            ExternalEditTransaction.Commit(rawSession, null, ExternalEditDecision.Cancel);
+            if (!File.ReadAllBytes(cameraRaw).SequenceEqual(cameraBytes) ||
+                ExternalEditTransaction.FindPending() is not null)
+                throw new Exception("Cancel modified camera RAW or left active session.");
             Console.WriteLine(
-                "PASS: Alpha.34 isolated external sessions, locked Cancel/Save, deferred cleanup, crash-safe commit, Copy, Undo, RAW.");
+                "PASS: Isolated external sessions, locked Cancel/Save, recovery, Undo, RAW staging and Cancel.");
         }
         finally
         {
