@@ -930,6 +930,14 @@ public partial class MainWindow
 
     private void ViewerNavigate(int direction)
     {
+        if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } unchanged)
+        {
+            // Once the local working copy is confirmed unchanged, perform
+            // the requested NEXT/PREV action, not an unrelated viewer close.
+            _ = ReleaseUnchangedExternalEditorAsync(unchanged,
+                () => ViewerNavigate(direction));
+            return;
+        }
         if (!ConfirmCropExit()) return;
         CancelViewerPendingClose();
         ReleaseViewerPan();
@@ -1394,6 +1402,11 @@ public partial class MainWindow
 
     private void ClosePhotoViewer()
     {
+        if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } unchanged)
+        {
+            _ = ReleaseUnchangedExternalEditorAsync(unchanged, ClosePhotoViewer);
+            return;
+        }
         if (!ConfirmCropExit()) return;
         var comparisonSelection = _comparisonActive ? _comparisonImageIds.Distinct().ToArray() : null;
         HideComparison();
