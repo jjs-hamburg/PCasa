@@ -541,7 +541,8 @@ public static class ExternalEditTransaction
             // replace the JPEG, even if the user clicked ordinary Save.
             if (decision == ExternalEditDecision.Save &&
                 RequiresNewFile(session.OriginalPath, source))
-                decision = ExternalEditDecision.SaveCopy;
+                throw new NotSupportedException(UiLanguage.T(
+                    "Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
             if (!Path.GetDirectoryName(source)!.Equals(
                     session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
