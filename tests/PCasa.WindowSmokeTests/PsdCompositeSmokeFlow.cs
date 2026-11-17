@@ -40,6 +40,11 @@ internal static class PsdCompositeSmokeFlow
             WriteRgbPsd(depth16, 0, 8, 8, 16, [96, 165, 33]);
             CheckColor(PsdCompositePreview.DecodeComposite(
                 new MemoryStream(File.ReadAllBytes(depth16))), 96, 165, 33);
+            var depth16Predicted = Path.Combine(root, "merged-16bit-zip-pred.psd");
+            WriteRgbPsd(depth16Predicted, 3, 8, 8, 16, [96, 165, 33]);
+            CheckColor(PsdCompositePreview.DecodeComposite(
+                new MemoryStream(File.ReadAllBytes(depth16Predicted))),
+                96, 165, 33);
             if (!ExternalEditTransaction.RequiresNewFile(
                     "source.arw", "output.psd") ||
                 ExternalEditTransaction.RequiresNewFile(
@@ -111,9 +116,20 @@ internal static class PsdCompositeSmokeFlow
                 var row = new byte[perRow];
                 for (var x = 0; x < width; x++)
                     row[x * (depth / 8)] = color[channel];
-                if (compression == 3)
+                if (compression == 3 && depth == 8)
                     for (var x = row.Length - 1; x > 0; x--)
                         row[x] = unchecked((byte)(row[x] - row[x - 1]));
+                else if (compression == 3 && depth == 16)
+                    for (var x = width - 1; x > 0; x--)
+                    {
+                        var index = x * 2;
+                        var current = BinaryPrimitives.ReadUInt16BigEndian(
+                            row.AsSpan(index, 2));
+                        var previous = BinaryPrimitives.ReadUInt16BigEndian(
+                            row.AsSpan(index - 2, 2));
+                        BinaryPrimitives.WriteUInt16BigEndian(row.AsSpan(index, 2),
+                            unchecked((ushort)(current - previous)));
+                    }
                 if (compression == 1)
                 {
                     // PackBits literal row (one run, 8 pixels, 8/16bit).
