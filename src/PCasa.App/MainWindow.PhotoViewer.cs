@@ -115,6 +115,7 @@ public partial class MainWindow
         ViewerEditingPanel.Visibility = Visibility.Visible;
         InitializeCropTools();
         ThumbnailSizeToolbar.Visibility = Visibility.Collapsed;
+        ThumbnailSpacingToolbar.Visibility = Visibility.Collapsed;
         BrowseToolbar.Visibility = Visibility.Collapsed;
         ViewerToolbar.Visibility = Visibility.Visible;
         PhotoZoomToolbar.Visibility = Visibility.Visible;
@@ -1434,6 +1435,7 @@ public partial class MainWindow
         FolderTreePanel.Visibility = Visibility.Visible;
         PhotoZoomToolbar.Visibility = Visibility.Collapsed;
         ThumbnailSizeToolbar.Visibility = Visibility.Visible;
+        ThumbnailSpacingToolbar.Visibility = Visibility.Visible;
         // Restore the gallery's own persisted folder-pane preference.
         UpdateWorkspaceLayoutPreservingGallery();
         UpdateComparisonButtons();

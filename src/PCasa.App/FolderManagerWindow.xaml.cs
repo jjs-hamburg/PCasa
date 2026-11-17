@@ -17,7 +17,6 @@ public partial class FolderManagerWindow : Window
         int CatalogImageCount = 0);
 
     private readonly ForegroundReadService _foregroundReadService;
-    private readonly BackgroundScanSettings _backgroundScanSettings;
     // Already-indexed folders are a read-only catalog projection. They are
     // not additional monitored roots, do not change scan scope, and require
     // no NAS directory enumeration.
@@ -48,7 +47,7 @@ public partial class FolderManagerWindow : Window
             _exclusions.TryGetValue(root.Id, out var excluded)
                 ? excluded.ToArray() : Array.Empty<string>(),
             root.ServerSyncEnabled)).ToArray(),
-        BackgroundScanCheckBox.IsChecked == true);
+        true);
 
     public FolderManagerWindow(
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> configuration,
@@ -58,14 +57,12 @@ public partial class FolderManagerWindow : Window
         InitializeComponent();
         _catalogPhotoFolders = catalogPhotoFolders ?? Array.Empty<PhotoFolderSummary>();
         _foregroundReadService = foregroundReadService;
-        _backgroundScanSettings = BackgroundScanSettings.Load();
         _monitoredRoots = configuration.Select(item => item.Folder).ToArray();
         foreach (var (folder, excludedPaths) in configuration)
             _exclusions[folder.Id] = excludedPaths;
 
         ServerSyncCheckBox.Visibility = serverDatabaseConfigured
             ? Visibility.Visible : Visibility.Collapsed;
-        BackgroundScanCheckBox.IsChecked = _backgroundScanSettings.Enabled;
 
         _systemFolders = new[]
         {
