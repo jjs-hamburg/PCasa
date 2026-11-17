@@ -110,7 +110,7 @@ public static class PsdCompositePreview
         SkipSection(input); // Image resources
         SkipSection(input); // Layer & mask information
         var compression = ReadU16(input);
-        if (compression > 3 || (compression == 3 && bitDepth != 8))
+        if (compression > 3)
             throw new NotSupportedException(
                 "Die PSD-Kompression der Gesamtvorschau wird nicht unterstützt.");
 
@@ -155,8 +155,27 @@ public static class PsdCompositePreview
                         source.ReadExactly(row);
                         if (compression == 3)
                         {
-                            for (var x = 1; x < row.Length; x++)
-                                row[x] = unchecked((byte)(row[x] + row[x - 1]));
+                            // Photoshop 8-bit prediction uses byte deltas;
+                            // 16-bit prediction uses big-endian SAMPLE
+                            // deltas, not byte-wise deltas.
+                            if (bitDepth == 8)
+                            {
+                                for (var x = 1; x < row.Length; x++)
+                                    row[x] = unchecked((byte)(row[x] + row[x - 1]));
+                            }
+                            else
+                            {
+                                for (var x = 2; x < row.Length; x += 2)
+                                {
+                                    var prior = BinaryPrimitives.ReadUInt16BigEndian(
+                                        row.AsSpan(x - 2, 2));
+                                    var delta = BinaryPrimitives.ReadUInt16BigEndian(
+                                        row.AsSpan(x, 2));
+                                    BinaryPrimitives.WriteUInt16BigEndian(
+                                        row.AsSpan(x, 2),
+                                        unchecked((ushort)(prior + delta)));
+                                }
+                            }
                         }
                         break;
                     case 1:
