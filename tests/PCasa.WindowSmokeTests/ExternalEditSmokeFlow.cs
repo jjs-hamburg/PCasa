@@ -290,6 +290,35 @@ internal static class ExternalEditSmokeFlow
             }
             finally { PanoramaTransaction.Cleanup(batch); }
 
+            // A program may place the panorama in PCasa's already-known
+            // ExternalEdit root, not inside its panorama session directory.
+            // Discover exactly one NEW result there, never a historic file.
+            var panorama = PanoramaTransaction.Begin(
+                [(1L, photo), (2L, other)], [], null, null,
+                workspaceRoot: Path.Combine(root, "PanoramaTests"));
+            try
+            {
+                Directory.CreateDirectory(ExternalEditTransaction.DirectoryPath);
+                var stale = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "historic-export.jpg");
+                WriteJpeg(stale, 21);
+                File.SetCreationTimeUtc(stale, DateTime.UtcNow.AddDays(-1));
+                File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-1));
+                var output = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "topaz-panorama.jpg");
+                WriteJpeg(output, 211);
+                if (PanoramaTransaction.FindResult(panorama) != output)
+                    throw new Exception(
+                        "Fresh panorama in known ExternalEdit root was not found.");
+                var competing = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "second-panorama.jpg");
+                WriteJpeg(competing, 177);
+                if (PanoramaTransaction.FindResult(panorama) is not null)
+                    throw new Exception(
+                        "Ambiguous ExternalEdit exports were automatically accepted.");
+            }
+            finally { PanoramaTransaction.Cleanup(panorama); }
+
             Console.WriteLine(
                 "PASS: Isolated external sessions, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");
         }
