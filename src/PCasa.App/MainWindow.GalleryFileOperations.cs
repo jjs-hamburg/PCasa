@@ -449,6 +449,10 @@ public partial class MainWindow
 
     private bool _manualThumbnailBusy;
     private string? _lastManualThumbnailPath;
+    // Keep the most recent request while an older local image is being
+    // decoded. A completed/recovered UI projection can be absent from the
+    // scheduler snapshot; losing this request would leave its preview blank.
+    private SchedulerJobSnapshot? _pendingManualThumbnailSnapshot;
 
     private void RequestVisibleTagThumbnail(SchedulerJobSnapshot status)
     {
@@ -458,9 +462,17 @@ public partial class MainWindow
             !(status.Key.StartsWith("tags:", StringComparison.Ordinal) ||
               status.Key.StartsWith("catalog:complete-scan:", StringComparison.Ordinal) ||
               status.Key.StartsWith("catalog:scan-all:", StringComparison.Ordinal)) ||
-            status.CurrentPath is not { Length: > 0 } source ||
-            _manualThumbnailBusy ||
-            string.Equals(_lastManualThumbnailPath, source,
+            status.CurrentPath is not { Length: > 0 } source)
+            return;
+
+        if (_manualThumbnailBusy)
+        {
+            // Never drop a newer image while an older preview owns the single
+            // local reader. The last request wins and is replayed on release.
+            _pendingManualThumbnailSnapshot = status;
+            return;
+        }
+        if (string.Equals(_lastManualThumbnailPath, source,
                 StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -527,10 +539,11 @@ public partial class MainWindow
                     if (string.IsNullOrWhiteSpace(localThumbnailPath))
                         return null;
                     var localRoot = Path.GetFullPath(Path.Combine(
-                        Environment.GetFolderPath(
-                            Environment.SpecialFolder.LocalApplicationData),
-                        "PCasa", "thumbnails")) + Path.DirectorySeparatorChar;
-                    var thumbnailPath = Path.GetFullPath(localThumbnailPath);
+                        PcasaDataPaths.SharedDataRoot, "thumbnails")) +
+                        Path.DirectorySeparatorChar;
+                    var thumbnailPath = Path.GetFullPath(
+                        ThumbnailCache.ResolveExistingLocalPath(localThumbnailPath)
+                        ?? localThumbnailPath);
                     if (!thumbnailPath.StartsWith(localRoot,
                             StringComparison.OrdinalIgnoreCase) ||
                         !File.Exists(thumbnailPath))
@@ -552,20 +565,28 @@ public partial class MainWindow
         finally
         {
             _manualThumbnailBusy = false;
-            // A preview from the former package may have occupied the
-            // thumbnail lane while a newer package became visible. Once the
-            // old read exits, request the actual active original's cache
-            // image; no NAS read and no competing progress/scheduler.
+            // A preview from an older visible job must never swallow a new
+            // request. Replay the last actual UI event FIRST: synthetic
+            // progress projections and retired jobs need not be present in
+            // the scheduler snapshot anymore.
+            var pending = _pendingManualThumbnailSnapshot;
+            _pendingManualThumbnailSnapshot = null;
             if (!Dispatcher.HasShutdownStarted &&
                 _visibleManualActiveKey is string activeKey)
             {
-                var current = _scheduler.Snapshot().LastOrDefault(
-                    snapshot => snapshot.Key == activeKey);
-                if (current?.CurrentPath is { Length: > 0 } currentPath &&
-                    (!string.Equals(activeKey, jobKey, StringComparison.Ordinal) ||
-                     !string.Equals(currentPath, source,
-                         StringComparison.OrdinalIgnoreCase)))
-                    RequestVisibleTagThumbnail(current);
+                if (pending is not null &&
+                    string.Equals(pending.Key, activeKey, StringComparison.Ordinal))
+                    RequestVisibleTagThumbnail(pending);
+                else
+                {
+                    var current = _scheduler.Snapshot().LastOrDefault(
+                        snapshot => snapshot.Key == activeKey);
+                    if (current?.CurrentPath is { Length: > 0 } currentPath &&
+                        (!string.Equals(activeKey, jobKey, StringComparison.Ordinal) ||
+                         !string.Equals(currentPath, source,
+                             StringComparison.OrdinalIgnoreCase)))
+                        RequestVisibleTagThumbnail(current);
+                }
             }
         }
     }

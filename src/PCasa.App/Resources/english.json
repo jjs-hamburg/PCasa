@@ -936,5 +936,18 @@
   "Abschluss fortsetzen": "Complete pending save",
   "Ergebnis bereit": "Result ready",
   "Entscheidung offen": "Awaiting your decision",
-  "Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.": "Preview unavailable; external result can still be saved."
+  "Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.": "Preview unavailable; external result can still be saved.",
+  "Ergebnis gespeichert, aber Viewerwechsel fehlgeschlagen: ": "Result saved, but switching the viewer failed: ",
+  "Externe Programme": "External programs",
+  "GPX Import": "GPX import",
+  "Ordnermanager": "Folder manager",
+  "Schreibfehler (GPS/Tags)": "Write errors (GPS/tags)",
+  "Einzelansicht · Maustaste zeigt Original": "Single view · hold mouse button for original",
+  "Original und Bearbeitung nebeneinander": "Original and edited image side by side",
+  "Original und Bearbeitung mit Schieber": "Original and edited image with slider",
+  "Keine bearbeitete und ursprüngliche Version verfügbar.": "No edited and original versions are available.",
+  "Unterschiedliche Bildausschnitte: Vergleich nebeneinander.": "Different image crops: switching to side-by-side comparison.",
+  "Bildvergleich fehlgeschlagen: ": "Image comparison failed: ",
+  "Bild gespeichert, Katalogaktualisierung ausstehend.": "Image saved; catalog refresh pending.",
+  "Überwachte Ordner im Ordnermanager auswählen.": "Choose monitored folders in Folder Manager."
 }

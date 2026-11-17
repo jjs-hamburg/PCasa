@@ -508,14 +508,6 @@
                     <MenuItem Header="{loc:Tr Key='Datei'}" Margin="0,0,12,0" HorizontalAlignment="Left">
                         <MenuItem Header="{loc:Tr Key='Beenden'}" Click="FileExit_Click"/>
                     </MenuItem>
-                    <MenuItem Header="{loc:Tr Key='Ordner'}" Margin="0,0,12,0" HorizontalAlignment="Left">
-                        <MenuItem Header="{loc:Tr Key='Ordner-Manager...'}"
-                                  Click="BrowseFolderManager_Click" />
-                        <Separator />
-                        <MenuItem x:Name="ScanAllMenuItem"
-                                  Header="{loc:Tr Key='Alle überwachten Ordner einlesen'}"
-                                  Click="BrowseScanAll_Click" />
-                    </MenuItem>
                     <MenuItem Header="{loc:Tr Key='Bearbeiten'}" Margin="0,0,12,0"
                               HorizontalAlignment="Left" SubmenuOpened="EditMenu_SubmenuOpened">
                         <MenuItem x:Name="EditRestoreMenuItem"
@@ -529,25 +521,27 @@
                               Margin="0,0,12,0" HorizontalAlignment="Left"
                               Click="AppearanceSettings_Click"/>
                     <MenuItem Header="{loc:Tr Key='Optionen'}" Margin="0,0,12,0" HorizontalAlignment="Left">
+                        <MenuItem Header="{loc:Tr Key='Ordnermanager'}"
+                                  Click="BrowseFolderManager_Click"/>
                         <MenuItem Header="{loc:Tr Key='Sprache'}">
                             <MenuItem x:Name="LanguageGermanMenu" Header="{loc:Tr Key='Deutsch'}" Tag="de"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                             <MenuItem x:Name="LanguageEnglishMenu" Header="{loc:Tr Key='Englisch'}" Tag="en"
                                       IsCheckable="True" Click="AppearanceLanguage_Click"/>
                         </MenuItem>
-                        <MenuItem Header="{loc:Tr Key='GPX-Optionen'}" Click="GpxOptions_Click"/>
                         <MenuItem x:Name="ExternalEditorsOptionsMenuItem"
-                                  Header="{loc:Tr Key='Externe Programme verwalten'}"
+                                  Header="{loc:Tr Key='Externe Programme'}"
                                   Click="ExternalEditorsOptions_Click"/>
+                        <MenuItem Header="{loc:Tr Key='GPX Import'}" Click="GpxOptions_Click"/>
                         <MenuItem x:Name="TaskManagerMenuItem"
                                   Header="{loc:Tr Key='Taskmanager...'}"
                                   Click="TaskManagerMenu_Click"/>
-                        <MenuItem Header="{loc:Tr Key='Schreibfehler'}"
-                                  Click="WriteErrorsMenu_Click"/>
                         <Separator/>
                         <MenuItem x:Name="DatabaseManagementMenuItem"
                                   Header="{loc:Tr Key='Datenbankverwaltung...'}"
                                   Click="DatabaseManagementMenu_Click"/>
+                        <MenuItem Header="{loc:Tr Key='Schreibfehler (GPS/Tags)'}"
+                                  Click="WriteErrorsMenu_Click"/>
                     </MenuItem>
                     <MenuItem Header="{loc:Tr Key='Hilfe'}" Margin="0,0,12,0"
                               HorizontalAlignment="Left">
@@ -786,6 +780,20 @@
                     <StackPanel x:Name="PhotoZoomToolbar" Grid.Column="3"
                                 Orientation="Horizontal" VerticalAlignment="Center"
                                 Visibility="Collapsed">
+                        <!-- Three before/after modes, independent from the
+                             A/B comparison of two distinct gallery photos. -->
+                        <Button x:Name="EditCompareSingleButton" Content="▭"
+                                Width="28" Height="28" Margin="0,0,3,0"
+                                FontSize="16" Click="EditCompareSingle_Click"
+                                ToolTip="{loc:Tr Key='Einzelansicht · Maustaste zeigt Original'}"/>
+                        <Button x:Name="EditCompareSideButton" Content="▥"
+                                Width="28" Height="28" Margin="0,0,3,0"
+                                FontSize="16" Click="EditCompareSide_Click"
+                                ToolTip="{loc:Tr Key='Original und Bearbeitung nebeneinander'}"/>
+                        <Button x:Name="EditCompareSplitButton" Content="◧"
+                                Width="28" Height="28" Margin="0,0,10,0"
+                                FontSize="16" Click="EditCompareSplit_Click"
+                                ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}"/>
                         <Button Content="{loc:Tr Key='An Fenster anpassen'}" MinWidth="103" Height="30"
                                 Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
                         <Button Content="100 %" MinWidth="58" Height="30"
@@ -983,6 +991,15 @@
                                                         <Trigger Property="IsMouseOver" Value="True">
                                                             <Setter TargetName="TabChrome" Property="Background"
                                                                     Value="{DynamicResource PcasaHoverBrush}"/>
+                                                        </Trigger>
+                                                        <!-- The selected tab must not look active when editing
+                                                             is disabled. Disabled appearance wins over selection. -->
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter TargetName="TabChrome" Property="Opacity" Value="0.42"/>
+                                                            <Setter TargetName="TabChrome" Property="Background"
+                                                                    Value="{DynamicResource PcasaPanelBrush}"/>
+                                                            <Setter TargetName="TabChrome" Property="BorderThickness" Value="1"/>
+                                                            <Setter TargetName="TabCaption" Property="FontWeight" Value="Normal"/>
                                                         </Trigger>
                                                     </ControlTemplate.Triggers>
                                                 </ControlTemplate>
@@ -1292,23 +1309,23 @@
                     <!-- Stable single-row commands ABOVE the histogram;
                          no show/hide reflow while editing. -->
                     <Grid x:Name="ViewerCropFooter" Grid.Row="2"
-                          Margin="7,7,7,7">
+                          Margin="5,4,5,4">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="0.9*"/>
                             <ColumnDefinition Width="1.65*"/>
                             <ColumnDefinition Width="0.9*"/>
                         </Grid.ColumnDefinitions>
                         <Button x:Name="CropCancelButton" Grid.Column="0"
-                                Content="{loc:Tr Key='Abbrechen'}" Height="30"
-                                Padding="4,2" FontSize="11" Margin="0,0,5,0"/>
+                                Content="{loc:Tr Key='Abbrechen'}" Height="27"
+                                Padding="3,1" FontSize="11" Margin="0,0,3,0"/>
                         <Button x:Name="CropSaveCopyButton" Grid.Column="1"
                                 Content="{loc:Tr Key='Als Kopie speichern'}"
-                                Height="30" Padding="4,2" FontSize="11"
-                                Margin="0,0,5,0"
+                                Height="27" Padding="3,1" FontSize="11"
+                                Margin="0,0,3,0"
                                 ToolTip="{loc:Tr Key='Bearbeitetes Foto im selben Ordner als Kopie speichern; Original unverändert'}"/>
                         <Button x:Name="CropSaveButton" Grid.Column="2"
-                                Content="{loc:Tr Key='Speichern'}" Height="30"
-                                Padding="4,2" FontSize="11"/>
+                                Content="{loc:Tr Key='Speichern'}" Height="27"
+                                Padding="3,1" FontSize="11"/>
                     </Grid>
                 </Grid>
                 </Grid>
@@ -1519,6 +1536,64 @@
                                         Panel.ZIndex="3" IsHitTestVisible="False"/>
                             </Grid>
                         </ScrollViewer>
+                        <!-- Original/edited comparison of ONE image. The split
+                             clips identical, registered views rather than
+                             stretching two halves into different proportions. -->
+                        <Grid x:Name="EditComparePanel" Visibility="Collapsed"
+                              Background="{Binding Background, ElementName=BrowseScrollViewer}">
+                            <Grid x:Name="EditCompareSidePanel" Visibility="Collapsed" ClipToBounds="True">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="3"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Image x:Name="EditCompareSideOriginal" Grid.Column="0"
+                                       Stretch="Uniform" Margin="3" ClipToBounds="True"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Border Grid.Column="1" Background="{DynamicResource PcasaDividerBrush}"/>
+                                <Image x:Name="EditCompareSideEdited" Grid.Column="2"
+                                       Stretch="Uniform" Margin="3" ClipToBounds="True"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </Grid>
+                            <Grid x:Name="EditCompareSwipePanel" Visibility="Collapsed"
+                                  ClipToBounds="True" SizeChanged="EditCompareSwipe_SizeChanged">
+                                <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Canvas Background="Transparent">
+                                    <primitives:Thumb x:Name="EditCompareSplitHandle"
+                                                      Width="18"
+                                                      Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                                      DragDelta="EditCompareSplit_DragDelta">
+                                        <primitives:Thumb.Template>
+                                            <ControlTemplate TargetType="{x:Type primitives:Thumb}">
+                                                <Grid Background="#01000000">
+                                                    <Border Width="2" HorizontalAlignment="Center"
+                                                            Background="#F0F0F0"/>
+                                                    <Border Width="14" Height="26"
+                                                            CornerRadius="4"
+                                                            HorizontalAlignment="Center"
+                                                            VerticalAlignment="Center"
+                                                            Background="#CC262729"
+                                                            BorderBrush="#F0F0F0"
+                                                            BorderThickness="1">
+                                                        <TextBlock Text="↔" FontSize="11"
+                                                                   Foreground="White"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"/>
+                                                    </Border>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </primitives:Thumb.Template>
+                                    </primitives:Thumb>
+                                </Canvas>
+                            </Grid>
+                        </Grid>
                         <Grid x:Name="ComparisonPanel" Visibility="Collapsed"
                               Background="{Binding Background, ElementName=BrowseScrollViewer}">
                             <Grid.ColumnDefinitions>
@@ -1554,7 +1629,7 @@
                                    FontSize="20"
                                    FontWeight="SemiBold"
                                    HorizontalAlignment="Center" />
-                        <TextBlock x:Name="EmptyPanelDescription" Text="{loc:Tr Key='Ordner im Menü einlesen, um die Galerie zu füllen.'}"
+                        <TextBlock x:Name="EmptyPanelDescription" Text="{loc:Tr Key='Überwachte Ordner im Ordnermanager auswählen.'}"
                                    Foreground="{DynamicResource PcasaMutedTextBrush}"
                                    Margin="0,8,0,0"
                                    HorizontalAlignment="Center" />
@@ -2091,12 +2166,12 @@
                            Text="{loc:Tr Key='0 Bilder'}" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <StackPanel x:Name="ThumbnailSizeToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,11,0">
-                        <Viewbox Width="23" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailgröße'}">
+                        <Viewbox Width="19" Height="19" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailgröße'}">
                             <Canvas Width="24" Height="24">
                                 <Rectangle Canvas.Left="2" Canvas.Top="2" Width="20" Height="20" RadiusX="1"
                                            Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>
                                 <Path Data="M 11,11 L 6,6 M 6,10 L 6,6 L 10,6 M 13,13 L 18,18 M 18,14 L 18,18 L 14,18"
-                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.3"
                                       StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                             </Canvas>
                         </Viewbox>
@@ -2106,7 +2181,7 @@
                                 VerticalAlignment="Center" ToolTip="{loc:Tr Key='Thumbnailgröße'}" />
                     </StackPanel>
                     <StackPanel x:Name="ThumbnailSpacingToolbar" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,13,0">
-                        <Viewbox Width="30" Height="23" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailabstand'}">
+                        <Viewbox Width="25" Height="19" Margin="0,0,4,0" ToolTip="{loc:Tr Key='Thumbnailabstand'}">
                             <Canvas Width="34" Height="24">
                                 <Rectangle Canvas.Left="1.5" Canvas.Top="5" Width="9" Height="14"
                                            Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.5"/>

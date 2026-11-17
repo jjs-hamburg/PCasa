@@ -100,7 +100,29 @@ public static class PanoramaTransaction
         if (results.Length > 1)
             throw new InvalidDataException(
                 "Mehrere Panoramaergebnisse gefunden; keine automatische Zuordnung möglich.");
-        return results.FirstOrDefault();
+        if (results.Length == 1) return results[0];
+
+        // Some editors default to PCasa's established ExternalEdit root
+        // instead of respecting the temporary panorama WorkingDirectory.
+        // This is the ONLY alternative directory we know, not an arbitrary
+        // scan of the user's filesystem. Never import an old export based
+        // merely on its name and never pick between multiple new files.
+        var externalRoot = ExternalEditTransaction.DirectoryPath;
+        if (!System.IO.Directory.Exists(externalRoot)) return null;
+        var sessionCreatedUtc = System.IO.Directory.GetCreationTimeUtc(session.Directory);
+        var earliest = sessionCreatedUtc.AddSeconds(-2);
+        var candidates = System.IO.Directory.EnumerateFiles(externalRoot)
+            .Where(path =>
+            {
+                if (!EditableImageFormats.SupportsExternalResult(path))
+                    return false;
+                var info = new FileInfo(path);
+                return info.Length > 0 &&
+                    (info.LastWriteTimeUtc >= earliest ||
+                     info.CreationTimeUtc >= earliest);
+            })
+            .ToArray();
+        return candidates.Length == 1 ? candidates[0] : null;
     }
 
     // A batch editor may change the working inputs in-place or create new

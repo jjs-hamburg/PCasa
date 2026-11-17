@@ -380,11 +380,23 @@ internal static class CropFlow
             if (File.ReadAllBytes(raw).Length != 4)
                 throw new Exception("RAW source changed.");
 
+            // Alpha.40: a real pixel write must preserve the Windows
+            // creation timestamp but advance the modified timestamp.
+            // Otherwise OneDrive and browse-cache versions can keep showing
+            // stale pixels even after a successful edit and manual refresh.
+            var creationBeforeEdit = File.GetCreationTimeUtc(path);
+            var modifiedBeforeEdit = DateTime.UtcNow.AddHours(-3);
+            File.SetLastWriteTimeUtc(path, modifiedBeforeEdit);
             // Exercise the real scheduler-worker apartment (MTA), not just
             // the WPF test's STA main thread.
             Task.Run(() => JpegCropWriter.Save(path,
                 new Rect(.1, .1, .5, .5), CancellationToken.None))
                 .GetAwaiter().GetResult();
+            if (Math.Abs((File.GetCreationTimeUtc(path) -
+                    creationBeforeEdit).TotalSeconds) > 2 ||
+                File.GetLastWriteTimeUtc(path) <= modifiedBeforeEdit.AddMinutes(1))
+                throw new Exception(
+                    "Internal edit did not preserve creation and advance modification time.");
 
             using (var input = File.OpenRead(path))
             {

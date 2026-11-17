@@ -24,7 +24,7 @@ public partial class MainWindow
     {
         var button = new Button
         {
-            Width = 74, Height = 49, Padding = new Thickness(2),
+            Width = 64, Height = 43, Padding = new Thickness(2),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Top,
             Content = icon
@@ -32,19 +32,19 @@ public partial class MainWindow
         button.Click += (_, _) => action();
         var caption = new TextBlock
         {
-            Width = 82, Height = 31, FontSize = 10,
+            Width = 76, Height = 26, FontSize = 10,
             TextAlignment = TextAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Top,
-            Margin = new Thickness(0, 5, 0, 0)
+            Margin = new Thickness(0, 3, 0, 0)
         };
         // Explicitly bind to the PCasa palette: the inherited foreground
         // can be black on the dark editor background in Light mode.
         caption.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
         var item = new StackPanel
         {
-            Width = 86, Margin = new Thickness(1, 2, 1, 3)
+            Width = 80, Margin = new Thickness(1, 1, 1, 2)
         };
         item.Children.Add(button);
         item.Children.Add(caption);

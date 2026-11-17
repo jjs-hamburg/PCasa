@@ -520,7 +520,10 @@ public partial class MainWindow
     }
 
     private void UpdateManualScanControls()
-        => ScanAllMenuItem.IsEnabled = !_manualScanAllActive;
+    {
+        // Scan-all remains a recovery package; Alpha.40 no longer exposes
+        // the redundant top-level menu item.
+    }
 
     private MonitoredFolder? ResolveMonitoredFolder(string path)
     {

@@ -37,8 +37,8 @@ public partial class MainWindow
             var editor = configured; // Capture immutable program per card.
             var button = new Button
             {
-                Width = 74,
-                Height = 49,
+                Width = 64,
+                Height = 43,
                 Padding = new Thickness(2),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Top,
@@ -49,14 +49,14 @@ public partial class MainWindow
             var caption = new TextBlock
             {
                 Text = editor.Name,
-                Width = 82,
-                Height = 31,
+                Width = 76,
+                Height = 26,
                 FontSize = 10,
                 TextAlignment = TextAlignment.Center,
                 TextWrapping = TextWrapping.Wrap,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 5, 0, 0),
+                Margin = new Thickness(0, 3, 0, 0),
                 ToolTip = editor.Name
             };
             caption.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
@@ -66,8 +66,8 @@ public partial class MainWindow
                 _ = LoadExternalEditorIconAsync(editor.ExecutablePath, button);
             var card = new StackPanel
             {
-                Width = 86,
-                Margin = new Thickness(1, 2, 1, 3)
+                Width = 80,
+                Margin = new Thickness(1, 1, 1, 2)
             };
             card.Children.Add(button);
             card.Children.Add(caption);
@@ -249,6 +249,22 @@ public partial class MainWindow
     {
         try
         {
+            if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } previous)
+            {
+                // Selecting another editor is an explicit switch, without
+                // forcing the user to click the separate Cancel footer.
+                // Never discard an exported result that has not yet been
+                // presented after a focus change.
+                var output = await Task.Run(() =>
+                    ExternalEditTransaction.DetectResult(previous.Snapshot));
+                if (output is not null)
+                {
+                    await PresentExternalResultAsync(previous);
+                    return;
+                }
+                if (!await CompleteExternalReviewAsync(ExternalEditDecision.Cancel))
+                    return;
+            }
             if (_externalEditReview is not null || _externalEditLaunchPending ||
                 _panoramaSession is not null)
                 throw new InvalidOperationException(UiLanguage.T(
@@ -366,6 +382,57 @@ public partial class MainWindow
             ShowFileActionError(ex);
         }
         finally { _externalEditLaunchPending = false; }
+    }
+
+    private bool _unchangedExternalReleasePending;
+
+    private async Task ReleaseUnchangedExternalEditorAsync(
+        ExternalEditReview review, Action continueAfterRelease)
+    {
+        if (_unchangedExternalReleasePending ||
+            !ReferenceEquals(_externalEditReview, review) ||
+            !review.Ready || review.Busy || review.ResultPath is not null)
+            return;
+
+        _unchangedExternalReleasePending = true;
+        try
+        {
+            // A focus change may race a late external export. Never release
+            // an actual result without giving Save/Copy/Cancel priority.
+            var output = await Task.Run(() =>
+                ExternalEditTransaction.DetectResult(review.Snapshot));
+            if (!ReferenceEquals(_externalEditReview, review)) return;
+            if (output is not null)
+            {
+                await PresentExternalResultAsync(review);
+                return;
+            }
+
+            if (await CompleteExternalReviewAsync(ExternalEditDecision.Cancel))
+            {
+                PCasaDiagnostics.WriteMessage("ExternalEdit.UnchangedRelease",
+                    "Unchanged session released by viewer action.");
+                // Resume the actual original click/key action, but only while
+                // its source photo is still the active viewer identity.
+                // Cancel starts a new asynchronous original decode and
+                // clears _viewerImageInfo before this continuation resumes.
+                // The sequence, not transient metadata, owns viewer identity.
+                if (_viewerOpen && _viewerSequence is not null &&
+                    _viewerCurrentIndex >= 0 &&
+                    _viewerCurrentIndex < _viewerSequence.Count &&
+                    _viewerSequence.At(_viewerCurrentIndex).ImageId == review.ImageId)
+                    continueAfterRelease();
+            }
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEdit.UnchangedRelease", ex);
+            StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
+        }
+        finally
+        {
+            _unchangedExternalReleasePending = false;
+        }
     }
 
     private async Task PresentExternalResultAsync(ExternalEditReview review)
@@ -720,6 +787,20 @@ public partial class MainWindow
                             publishCatalogChange: false, forceExifRefresh: true);
                         if (result.Failed > 0 || result.ImageFilesSeen == 0)
                             throw new IOException(UiLanguage.T("Kopie konnte nicht katalogisiert werden."));
+                        // The viewer can activate the copy only after the
+                        // gallery index has real packed thumbnail tiers.
+                        using var lookup = _database.OpenConnection();
+                        using var command = lookup.CreateCommand();
+                        command.CommandText =
+                            "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                        command.Parameters.AddWithValue("$path", copy);
+                        if (command.ExecuteScalar() is not { } found)
+                            throw new IOException(
+                                "Die gespeicherte Kopie fehlt im Katalog.");
+                        new BrowseCacheBuilder(
+                            new BrowseCacheRepository(_database),
+                            new BrowseThumbnailProfileRepository(_database))
+                            .RebuildSingleImage(Convert.ToInt64(found), token);
                     }
                     return Task.CompletedTask;
                 });
@@ -727,6 +808,10 @@ public partial class MainWindow
         finally { EndVisibleManualOperation(key); }
 
         _viewerOriginalCache.Remove(review.ImageId);
+        _ = RefreshRestoreBadgesAsync();
+        if (committed is not null &&
+            committed.Equals(original, StringComparison.OrdinalIgnoreCase))
+            await RefreshThumbnailsAsync([review.ImageId]);
         if (committed is { } copyPath &&
             !copyPath.Equals(original, StringComparison.OrdinalIgnoreCase))
         {

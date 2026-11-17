@@ -384,8 +384,11 @@ public partial class MainWindow
     {
         // External original may already be modified on disk. A normal
         // viewer close/navigate must not discard its recoverable snapshot.
+        // Navigation/close handles a ready unchanged session asynchronously
+        // and resumes the SAME requested action only after output re-check.
+        // A changed result still requires an explicit Save/Copy/Cancel.
         if (_externalEditReview is not null)
-            return false; // Existing footer owns the three user decisions.
+            return false;
         // Saving is a durable manual job, not an editor modal state. The
         // already submitted recipe owns its pixels and continues after
         // closing the viewer; do not ask to discard those saved changes.

@@ -97,11 +97,6 @@
                         Padding="14,7" Margin="0,0,8,0" Click="AddFolder_Click" />
                 <Button x:Name="RemoveFolderButton" Content="{loc:Tr Key='Wurzel entfernen'}"
                         Padding="14,7" Click="RemoveFolder_Click" />
-                <CheckBox x:Name="BackgroundScanCheckBox"
-                          Margin="24,0,0,0" VerticalAlignment="Center"
-                          Content="{loc:Tr Key='Ordneränderungen automatisch erkennen'}"
-                          ToolTip="{loc:Tr Key='Überwachte Ordner werden im Baum ausgewählt. Diese Option schaltet nur die automatische Erkennung neuer und geänderter Dateien ein oder aus. Manuelle Scans bleiben möglich.'}"
-                          Click="BackgroundScan_Click" />
             </StackPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                 <Button x:Name="CancelButton" Content="{loc:Tr Key='Abbruch'}"

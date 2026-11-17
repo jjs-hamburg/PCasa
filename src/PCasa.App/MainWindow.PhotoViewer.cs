@@ -115,6 +115,7 @@ public partial class MainWindow
         ViewerEditingPanel.Visibility = Visibility.Visible;
         InitializeCropTools();
         ThumbnailSizeToolbar.Visibility = Visibility.Collapsed;
+        ThumbnailSpacingToolbar.Visibility = Visibility.Collapsed;
         BrowseToolbar.Visibility = Visibility.Collapsed;
         ViewerToolbar.Visibility = Visibility.Visible;
         PhotoZoomToolbar.Visibility = Visibility.Visible;
@@ -182,6 +183,7 @@ public partial class MainWindow
             _viewerDecodeCancellation is { IsCancellationRequested: false })
             return;
 
+        ResetEditComparison();
         _viewerDecodeCancellation?.Cancel();
         _viewerDecodeCancellation?.Dispose();
         _viewerDecodeCancellation = new CancellationTokenSource();
@@ -825,6 +827,7 @@ public partial class MainWindow
         if (!_viewerOpen) return;
         _viewerFitToScreen = true;
         ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
         ScheduleViewerZoomRefinement();
         Keyboard.Focus(PhotoViewerPanel);
     }
@@ -835,6 +838,7 @@ public partial class MainWindow
         _viewerFitToScreen = false;
         _viewerZoomPercent = 100;
         ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
         ScheduleViewerZoomRefinement();
         Keyboard.Focus(PhotoViewerPanel);
     }
@@ -846,6 +850,7 @@ public partial class MainWindow
         _viewerFitToScreen = false;
         _viewerZoomPercent = TrackToZoom(e.NewValue);
         ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
         ScheduleViewerZoomRefinement();
     }
 
@@ -925,6 +930,14 @@ public partial class MainWindow
 
     private void ViewerNavigate(int direction)
     {
+        if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } unchanged)
+        {
+            // Once the local working copy is confirmed unchanged, perform
+            // the requested NEXT/PREV action, not an unrelated viewer close.
+            _ = ReleaseUnchangedExternalEditorAsync(unchanged,
+                () => ViewerNavigate(direction));
+            return;
+        }
         if (!ConfirmCropExit()) return;
         CancelViewerPendingClose();
         ReleaseViewerPan();
@@ -1179,6 +1192,12 @@ public partial class MainWindow
         {
             return;
         }
+        if (_editCompareMode != EditCompareMode.Single)
+        {
+            TryBeginEditComparisonPan(e);
+            return;
+        }
+        if (TryBeginEditOriginalHold(e)) return;
 
         CancelViewerPendingClose();
         if (e.ClickCount >= 2)
@@ -1213,6 +1232,7 @@ public partial class MainWindow
 
     private void PhotoViewerPan_MouseMove(object sender, MouseEventArgs e)
     {
+        if (MoveEditComparisonPan(e)) return;
         if (_viewerPanSurface is not UIElement surface ||
             !ReferenceEquals(sender, surface))
         {
@@ -1244,6 +1264,7 @@ public partial class MainWindow
 
     private void PhotoViewerPan_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (EndEditComparisonPan(e) || EndEditOriginalHold(e)) return;
         if (!ReferenceEquals(sender, _viewerPanSurface))
         {
             return;
@@ -1381,9 +1402,15 @@ public partial class MainWindow
 
     private void ClosePhotoViewer()
     {
+        if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } unchanged)
+        {
+            _ = ReleaseUnchangedExternalEditorAsync(unchanged, ClosePhotoViewer);
+            return;
+        }
         if (!ConfirmCropExit()) return;
         var comparisonSelection = _comparisonActive ? _comparisonImageIds.Distinct().ToArray() : null;
         HideComparison();
+        ResetEditComparison();
         CancelViewerPendingClose();
         if (!_viewerOpen)
         {
@@ -1434,6 +1461,7 @@ public partial class MainWindow
         FolderTreePanel.Visibility = Visibility.Visible;
         PhotoZoomToolbar.Visibility = Visibility.Collapsed;
         ThumbnailSizeToolbar.Visibility = Visibility.Visible;
+        ThumbnailSpacingToolbar.Visibility = Visibility.Visible;
         // Restore the gallery's own persisted folder-pane preference.
         UpdateWorkspaceLayoutPreservingGallery();
         UpdateComparisonButtons();

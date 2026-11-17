@@ -32,6 +32,7 @@ public partial class MainWindow
     {
         if (!_viewerOpen || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap ||
+            _externalBatchReview is not null || _externalEditReview is not null ||
             _pendingEditImageIds.Contains(info.Id))
             return false;
         if (!EditableImageFormats.Supports(info.LocalPath))
@@ -336,12 +337,18 @@ public partial class MainWindow
         EditorToolTabs.IsEnabled = editable && noExternalEdit;
         foreach (var tool in _editorToolLabels)
             tool.Button.IsEnabled = editable && noExternalEdit;
+        // With no detected external result, a deliberate click on another
+        // editor automatically discards the unchanged working copy.
+        var canChooseAnotherEditor = noExternalEdit ||
+            _externalEditReview is { Ready: true, Busy: false, ResultPath: null };
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
-                button.IsEnabled = noExternalEdit;
+                button.IsEnabled = canChooseAnotherEditor;
         // Sliders must be visibly disabled as well. The editor tab control
         // disables its descendants without disabling GPS, tags or navigation.
         ViewerCropFooter.Visibility = Visibility.Visible;
+        UpdateEditComparisonAvailability();
+        UpdateEditComparisonFromSession();
     }
 
     private bool ApplyEditTool()
@@ -567,6 +574,23 @@ public partial class MainWindow
                 if (result.Failed > 0 || result.ImageFilesSeen == 0)
                     throw new IOException(
                         "Die gespeicherte Bildkopie konnte nicht katalogisiert werden.");
+                // The catalogue row alone cannot enter the viewer sequence:
+                // publish its packed thumbnail tiers in this same P0 step,
+                // matching external Save Copy and panorama import.
+                using (var db = _database.OpenConnection())
+                using (var command = db.CreateCommand())
+                {
+                    command.CommandText =
+                        "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                    command.Parameters.AddWithValue("$path", copy);
+                    if (command.ExecuteScalar() is not { } found)
+                        throw new IOException(
+                            "Die gespeicherte Bildkopie fehlt im Katalog.");
+                    new BrowseCacheBuilder(
+                        new BrowseCacheRepository(_database),
+                        new BrowseThumbnailProfileRepository(_database))
+                        .RebuildSingleImage(Convert.ToInt64(found), token);
+                }
                 _scheduler.ReportProgress(key, UiLanguage.T("Kopie katalogisieren"),
                     2, 2, copy);
                 return Task.CompletedTask;
@@ -575,7 +599,8 @@ public partial class MainWindow
         return package;
     }
 
-    private async Task ActivateSavedCopyAsync(EditWriteRecipe request)
+    private async Task ActivateSavedCopyAsync(EditWriteRecipe request,
+        bool linkToSourceForComparison = true)
     {
         var copy = request.CopyPath
             ?? throw new InvalidOperationException("Kein Kopiepfad vorhanden.");
@@ -595,9 +620,17 @@ public partial class MainWindow
         });
         if (copyId is not long newId)
             throw new InvalidDataException("Die Bildkopie wurde nicht im Katalog gefunden.");
+        if (linkToSourceForComparison && request.ImageId != newId)
+        {
+            if (_editCompareCopySources.Count >= 64)
+                _editCompareCopySources.Remove(_editCompareCopySources.Keys.First());
+            _editCompareCopySources[newId] = request.ImageId;
+        }
 
         await RefreshBrowseGalleryAsync(forceIndexReload: true);
-        if (!_viewerOpen || _viewerImageInfo?.Id != request.ImageId)
+        if (!_viewerOpen || _viewerSequence is null ||
+            _viewerCurrentIndex < 0 ||
+            _viewerSequence.At(_viewerCurrentIndex).ImageId != request.ImageId)
             return; // User already navigated away; never hijack that viewer.
 
         var sequence = PhotoSequence.Create(_displayedBrowseIndex,
@@ -665,13 +698,51 @@ public partial class MainWindow
                 }
                 _viewerOriginalCache.Remove(request.ImageId);
                 _ = RefreshRestoreBadgesAsync();
-                QueueBackgroundChange(new BackgroundFolderChange(
-                    request.FolderId, request.Path,
-                    BackgroundFolderChangeKind.ScanFile,
-                    Recursive: false, ForceExifRefresh: true));
+                // The P0 transaction below owns the immediate re-index.
+                // Do not also enqueue the same file as a redundant P3 scan.
                 if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
                     ShowViewerImage(keepCurrentAsPlaceholder: true);
-                _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
+                // Reconcile catalog size, timestamp and EXIF before packing
+                // the new thumbnail. On-disk edits no longer retain the old
+                // last-write time. A background scan must not race the user.
+                try
+                {
+                    await _scheduler.RunAsync(
+                        "image:postcommit-scan:" + Guid.NewGuid().ToString("N"),
+                        SchedulerPriority.ManualAction,
+                        token =>
+                        {
+                            var root = _folderRepository.GetAll()
+                                .FirstOrDefault(item => item.Id == request.FolderId)
+                                ?? throw new IOException(
+                                    "Überwachungsordner für das gespeicherte Bild fehlt.");
+                            var result = _folderScanner.ScanFile(root, request.Path,
+                                cancellationToken: token,
+                                publishCatalogChange: false, forceExifRefresh: true);
+                            if (result.Failed > 0 || result.ImageFilesSeen == 0)
+                                throw new IOException(
+                                    "Gespeichertes Bild konnte nicht katalogisiert werden.");
+                            return Task.CompletedTask;
+                        }, workKind: SchedulerWorkKind.Catalog);
+                }
+                catch (Exception ex)
+                {
+                    // Never replay an already completed original-file write
+                    // because an independent catalog update failed.
+                    PCasaDiagnostics.Write("Image.Edit.PostCommitScan", ex);
+                    // Only an unsuccessful immediate P0 re-index needs a
+                    // background retry; the file write must never be replayed.
+                    QueueBackgroundChange(new BackgroundFolderChange(
+                        request.FolderId, request.Path,
+                        BackgroundFolderChangeKind.ScanFile,
+                        Recursive: false, ForceExifRefresh: true));
+                    StatusText.Text = UiLanguage.T(
+                        "Bild gespeichert, Katalogaktualisierung ausstehend.");
+                }
+                // A file commit is NOT complete for the user while the
+                // gallery still projects the previous pixel version.
+                await RefreshThumbnailsAsync([request.ImageId]);
+                await RefreshBrowseGalleryAsync(forceIndexReload: true,
                     warmViewport: false);
             }
         }

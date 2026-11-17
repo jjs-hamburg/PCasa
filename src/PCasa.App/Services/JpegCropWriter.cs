@@ -87,6 +87,7 @@ public static class JpegCropWriter
         using var lease = SourceFileLocks.Enter(fullPath, token);
         var original = new FileInfo(fullPath);
         var originalWriteTime = original.LastWriteTimeUtc;
+        var originalCreationTime = original.CreationTimeUtc;
         var staged = Path.Combine(Path.GetDirectoryName(fullPath)!,
             ".pcasa-edit-" + Guid.NewGuid().ToString("N") + extension);
         try
@@ -149,7 +150,18 @@ public static class JpegCropWriter
                         ex, fullPath, staged);
                     throw;
                 }
-                try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
+                // A successful pixel edit is a new file revision. Preserve
+                // creation time, but advance modification time so OneDrive,
+                // FileSystemWatcher and the packed-cache stamp can detect it.
+                // The old timestamp caused a changed image to masquerade as
+                // the previously cached original.
+                try
+                {
+                    File.SetCreationTimeUtc(fullPath, originalCreationTime);
+                    var now = DateTime.UtcNow;
+                    File.SetLastWriteTimeUtc(fullPath, now > originalWriteTime
+                        ? now : originalWriteTime.AddMilliseconds(1));
+                }
                 catch (IOException ex)
                 { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
                 catch (UnauthorizedAccessException ex)
@@ -169,13 +181,35 @@ public static class JpegCropWriter
     // Reuse the SAME fully validated staged image and the SAME Undo snapshot;
     // NEVER re-run edits or create a second durable file write. An actual
     // persistent foreign lock still fails after a bounded, cancelable wait.
-    private static void ReplaceWithSharingRetry(string staged, string original,
+    // Retain the three-argument entry point used by existing Crop callers
+    // and Windows regression tests. Checked metadata commits use the same
+    // implementation, with source-identity validation between retries.
+    internal static void ReplaceWithSharingRetry(string staged, string original,
         CancellationToken token)
+        => ReplaceWithSharingRetryCore(staged, original, token, null, null);
+
+    internal static void ReplaceWithVerifiedSharingRetry(string staged, string original,
+        CancellationToken token, long expectedSize, DateTime expectedWriteUtc)
+        => ReplaceWithSharingRetryCore(staged, original, token,
+            expectedSize, expectedWriteUtc);
+
+    private static void ReplaceWithSharingRetryCore(string staged, string original,
+        CancellationToken token, long? expectedSize, DateTime? expectedWriteUtc)
     {
         const int maxRetries = 16;
         for (var retry = 0; ; retry++)
         {
             token.ThrowIfCancellationRequested();
+            // A foreign writer may alter the source while our validated
+            // candidate waits for Windows to release a transient reader.
+            // Never replace newer bytes with an obsolete candidate.
+            if (expectedSize is long size && expectedWriteUtc is DateTime stamp)
+            {
+                var source = new FileInfo(original);
+                if (source.Length != size || source.LastWriteTimeUtc != stamp)
+                    throw new IOException(
+                        "JPEG-Original während des Wartens auf Dateifreigabe verändert.");
+            }
             try
             {
                 File.Replace(staged, original, null);
@@ -185,7 +219,8 @@ public static class JpegCropWriter
                 return;
             }
             catch (IOException ex) when (
-                (ex.HResult & 0xFFFF) is 32 or 33 && retry < maxRetries)
+                (ex.HResult & 0xFFFF) is 32 or 33 or 1175 or 1176 or 1177 &&
+                retry < maxRetries)
             {
                 var delay = TimeSpan.FromMilliseconds(Math.Min(400, 100 + retry * 35));
                 // The scheduler owns this worker; never delay the WPF UI.

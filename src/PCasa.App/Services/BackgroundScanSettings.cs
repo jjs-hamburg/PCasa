@@ -16,21 +16,9 @@ public sealed class BackgroundScanSettings
 
     public static BackgroundScanSettings Load()
     {
-        try
-        {
-            if (!File.Exists(SettingsPath))
-            {
-                return new BackgroundScanSettings();
-            }
-
-            return JsonSerializer.Deserialize<BackgroundScanSettings>(
-                       File.ReadAllText(SettingsPath))
-                   ?? new BackgroundScanSettings();
-        }
-        catch
-        {
-            return new BackgroundScanSettings();
-        }
+        // Alpha.40: every explicitly selected root is always monitored.
+        // Ignore a persisted "Enabled=false" from earlier versions.
+        return new BackgroundScanSettings { Enabled = true };
     }
 
     public void Save()

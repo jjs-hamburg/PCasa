@@ -31,6 +31,56 @@ internal static class ExternalEditSmokeFlow
             File.SetCreationTimeUtc(photo, originalCreation);
             var original = File.ReadAllBytes(photo);
 
+            // Windows ReplaceFile may return ERROR_UNABLE_TO_REMOVE_REPLACED
+            // while a short-lived image reader lacks FILE_SHARE_DELETE.
+            // Reuse the identical candidate after that reader exits; never
+            // overwrite an original in-place or regenerate metadata.
+            var lockedOriginal = Path.Combine(root, "replace-locked-original.bin");
+            var lockedCandidate = Path.Combine(root, "replace-locked-candidate.bin");
+            File.WriteAllText(lockedOriginal, "old");
+            File.WriteAllText(lockedCandidate, "verified-new");
+            var replaceMethod = typeof(JpegCropWriter).GetMethod(
+                "ReplaceWithSharingRetry",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Shared atomic file-replacement path is missing.");
+            using (var blockedReader = new FileStream(lockedOriginal,
+                FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var release = Task.Run(async () =>
+                {
+                    await Task.Delay(750);
+                    blockedReader.Dispose();
+                });
+                var elapsed = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    replaceMethod.Invoke(null,
+                        [lockedCandidate, lockedOriginal, CancellationToken.None]);
+                }
+                catch (System.Reflection.TargetInvocationException ex)
+                    when (ex.InnerException is not null)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                        .Capture(ex.InnerException).Throw();
+                    throw;
+                }
+                finally
+                {
+                    blockedReader.Dispose();
+                    release.GetAwaiter().GetResult();
+                }
+                if (elapsed.ElapsedMilliseconds < 300)
+                    throw new Exception(
+                        "The file-sharing regression did not exercise the bounded retry.");
+            }
+            if (File.Exists(lockedCandidate) ||
+                File.ReadAllText(lockedOriginal) != "verified-new")
+                throw new Exception(
+                    "Atomic replacement did not publish the validated bytes.");
+            Console.WriteLine(
+                "PASS: Windows transient sharing lock retries the same atomic candidate.");
+
             // One fixed folder, one fixed working name and one durable slot.
             var cancel = ExternalEditTransaction.Begin(photo);
             if (Path.GetFileName(cancel.BackupPath) != "photo.jpg" ||
@@ -289,6 +339,35 @@ internal static class ExternalEditSmokeFlow
                     throw new Exception("Second collision did not allocate -Kopie-2.");
             }
             finally { PanoramaTransaction.Cleanup(batch); }
+
+            // A program may place the panorama in PCasa's already-known
+            // ExternalEdit root, not inside its panorama session directory.
+            // Discover exactly one NEW result there, never a historic file.
+            var panorama = PanoramaTransaction.Begin(
+                [(1L, photo), (2L, other)], [], null, null,
+                workspaceRoot: Path.Combine(root, "PanoramaTests"));
+            try
+            {
+                Directory.CreateDirectory(ExternalEditTransaction.DirectoryPath);
+                var stale = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "historic-export.jpg");
+                WriteJpeg(stale, 21);
+                File.SetCreationTimeUtc(stale, DateTime.UtcNow.AddDays(-1));
+                File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-1));
+                var output = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "topaz-panorama.jpg");
+                WriteJpeg(output, 211);
+                if (PanoramaTransaction.FindResult(panorama) != output)
+                    throw new Exception(
+                        "Fresh panorama in known ExternalEdit root was not found.");
+                var competing = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "second-panorama.jpg");
+                WriteJpeg(competing, 177);
+                if (PanoramaTransaction.FindResult(panorama) is not null)
+                    throw new Exception(
+                        "Ambiguous ExternalEdit exports were automatically accepted.");
+            }
+            finally { PanoramaTransaction.Cleanup(panorama); }
 
             Console.WriteLine(
                 "PASS: Isolated external sessions, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");

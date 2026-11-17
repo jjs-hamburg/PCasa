@@ -3283,37 +3283,54 @@ internal static class TagFlow
                     throw new Exception("Preview regression lacks an existing packed tier.");
             }
             const string legacyPreviewJob = "tags:smoke:legacy-thumbnail";
-            var movedOriginal = firstOriginal + ".offline-for-preview-test";
-            File.Move(firstOriginal, movedOriginal);
-            try
+            // Alpha.40 monitors every registered root automatically.
+            // Renaming the JPEG to simulate an offline original is a real
+            // FileSystemWatcher deletion event and legitimately removes its
+            // catalog row: that no longer tests a temporarily unreadable
+            // original with an existing local thumbnail. An exclusive Windows
+            // handle denies source reads without issuing a filesystem event.
+            // The preview must be loaded entirely from the already committed
+            // local thumbnail, not from the locked original.
+            using (var unavailableOriginal = new FileStream(firstOriginal,
+                FileMode.Open, FileAccess.Read, FileShare.None))
             {
-                beginManual.Invoke(window, [legacyPreviewJob,
-                    "Tags in Originaldateien schreiben", 1]);
-                var missingPackStatus = new SchedulerJobSnapshot(
-                    0, legacyPreviewJob, SchedulerPriority.ManualAction,
-                    SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
+                try
                 {
-                    Phase = "Tags in Originaldateien schreiben",
-                    CurrentPath = firstOriginal,
-                    Total = 1, Processed = 0
-                };
-                reportManual.Invoke(window, [missingPackStatus]);
-                Until(window, () =>
-                    (presenterField.GetValue(window)
-                        as PCasa.App.BrowseCacheProgressWindow)?
-                        .FindName("CurrentThumbnail") is Image preview &&
-                    preview.Source is BitmapSource &&
-                    (presenterField.GetValue(window)
-                        as PCasa.App.BrowseCacheProgressWindow)?
-                        .FindName("CurrentFileText") is TextBlock file &&
-                    file.Text == Path.GetFileName(firstOriginal),
-                    "Tag progress could not load the LOCAL thumbnail when " +
-                    "the packed tier and original were unavailable.");
-            }
-            finally
-            {
-                endManual.Invoke(window, [legacyPreviewJob]);
-                File.Move(movedOriginal, firstOriginal);
+                    try
+                    {
+                        using var prohibitedRead = File.OpenRead(firstOriginal);
+                        throw new Exception(
+                            "Preview regression could still read locked original.");
+                    }
+                    catch (IOException) { /* Expected Windows sharing violation. */ }
+
+                    beginManual.Invoke(window, [legacyPreviewJob,
+                        "Tags in Originaldateien schreiben", 1]);
+                    var missingPackStatus = new SchedulerJobSnapshot(
+                        0, legacyPreviewJob, SchedulerPriority.ManualAction,
+                        SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
+                    {
+                        Phase = "Tags in Originaldateien schreiben",
+                        CurrentPath = firstOriginal,
+                        Total = 1, Processed = 0
+                    };
+                    reportManual.Invoke(window, [missingPackStatus]);
+                    Until(window, () =>
+                        (presenterField.GetValue(window)
+                            as PCasa.App.BrowseCacheProgressWindow)?
+                            .FindName("CurrentThumbnail") is Image preview &&
+                        preview.Source is BitmapSource &&
+                        (presenterField.GetValue(window)
+                            as PCasa.App.BrowseCacheProgressWindow)?
+                            .FindName("CurrentFileText") is TextBlock file &&
+                        file.Text == Path.GetFileName(firstOriginal),
+                        "Tag progress could not load the LOCAL thumbnail when " +
+                        "the packed tier was missing and original was locked.");
+                }
+                finally
+                {
+                    endManual.Invoke(window, [legacyPreviewJob]);
+                }
             }
             Console.WriteLine(
                 "PASS: Tag progress uses local cached picture with no packed tier or accessible original.");
