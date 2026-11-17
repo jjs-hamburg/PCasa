@@ -195,7 +195,7 @@ public static class JpegMetadataOriginalWriter
             // this as sharing violation (32/33) or ReplaceFile error 1175.
             // Use the same bounded, cancelable atomic commit as Crop: no
             // copy-overwrite, no repeated metadata mutation, no new candidate.
-            JpegCropWriter.ReplaceWithSharingRetry(
+            JpegCropWriter.ReplaceWithVerifiedSharingRetry(
                 temp, path, token, originalSize, stamp);
             created = false;
             if (File.GetLastWriteTimeUtc(path) != stamp)
