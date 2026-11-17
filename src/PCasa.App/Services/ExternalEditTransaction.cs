@@ -418,12 +418,19 @@ public static class ExternalEditTransaction
                     // immutable reference below a nested folder, never among
                     // top-level export candidates. The NAS original is read
                     // only once; this duplicate is entirely local.
-                    Directory.CreateDirectory(Path.GetDirectoryName(beforePath)!);
-                    File.Copy(work, beforePath);
-                    if (new FileInfo(beforePath).Length != originalLength ||
-                        !Hash(beforePath).Equals(checksum, StringComparison.Ordinal))
-                        throw new IOException(
-                            "Die Vergleichssicherung stimmt nicht mit der Übergabedatei überein.");
+                    // The video editor has its own review window and no
+                    // still-image before/after control. Do NOT duplicate huge
+                    // multi-gigabyte video files for a comparison they cannot
+                    // display.
+                    if (!VideoFormats.IsVideo(work))
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(beforePath)!);
+                        File.Copy(work, beforePath);
+                        if (new FileInfo(beforePath).Length != originalLength ||
+                            !Hash(beforePath).Equals(checksum, StringComparison.Ordinal))
+                            throw new IOException(
+                                "Die Vergleichssicherung stimmt nicht mit der Übergabedatei überein.");
+                    }
                     // A broken source is rejected before launching an editor.
                     if (!VideoFormats.IsVideo(work) &&
                         !RawImageSource.IsRawPath(work))
