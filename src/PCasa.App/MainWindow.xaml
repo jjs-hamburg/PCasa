@@ -1595,18 +1595,25 @@
                                      differ with decode dimensions and shift the
                                      aligned split unexpectedly. Only the left
                                      original is clipped by the movable divider. -->
-                                <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
-                                       Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
-                                       Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       RenderTransformOrigin="0.5,0.5"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                                <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
-                                       Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
-                                       Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       RenderTransformOrigin="0.5,0.5"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <!-- Canvas pins BOTH full-view image frames to the
+                                     exact same (0,0) origin. Two independently
+                                     center-aligned Image elements in a Grid can
+                                     drift under WPF layout / preview aspect
+                                     rounding despite identical Width bindings. -->
+                                <Canvas ClipToBounds="True">
+                                    <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
+                                           Canvas.Left="0" Canvas.Top="0"
+                                           Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
+                                           Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                           RenderTransformOrigin="0.5,0.5"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                    <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
+                                           Canvas.Left="0" Canvas.Top="0"
+                                           Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
+                                           Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                           RenderTransformOrigin="0.5,0.5"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                </Canvas>
                                 <Canvas Background="Transparent">
                                     <primitives:Thumb x:Name="EditCompareSplitHandle"
                                                       Width="18"
