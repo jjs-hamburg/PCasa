@@ -31,8 +31,9 @@ public sealed class ThumbnailCache
         NativeImageCachePolicy.EnsureConfigured();
         originalSourcePath ??= sourcePath;
         var rawSource = RawImageSource.IsRawPath(originalSourcePath);
+        var psdSource = RawImageSource.IsPsdPath(originalSourcePath);
         var cachePath = GetCachePath(canonicalPath, fileSize, modifiedUtcTicks,
-            rawSource);
+            rawSource, psdSource);
         if (File.Exists(cachePath))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -40,9 +41,13 @@ public sealed class ThumbnailCache
             cancellationToken.ThrowIfCancellationRequested();
             var rotated = rawSource && RawImageSource.GetRawOrientation(originalSourcePath)
                 is 5 or 6 or 7 or 8;
-            return new ThumbnailResult(cachePath,
-                rotated ? header.Height : header.Width,
-                rotated ? header.Width : header.Height);
+            return psdSource
+                ? new ThumbnailResult(cachePath,
+                    PsdCompositePreview.GetDimensions(originalSourcePath).Width,
+                    PsdCompositePreview.GetDimensions(originalSourcePath).Height)
+                : new ThumbnailResult(cachePath,
+                    rotated ? header.Height : header.Width,
+                    rotated ? header.Width : header.Height);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
@@ -57,6 +62,8 @@ public sealed class ThumbnailCache
                 is 5 or 6 or 7 or 8;
             var width = rotated ? header.Height : header.Width;
             var height = rotated ? header.Width : header.Height;
+            if (psdSource)
+                (width, height) = PsdCompositePreview.GetDimensions(originalSourcePath);
 
             using var thumbnail = RawImageSource.LoadDisplayThumbnail(
                 sourcePath, originalSourcePath, ThumbnailSize, ThumbnailSize,
@@ -122,10 +129,11 @@ public sealed class ThumbnailCache
     }
 
     private string GetCachePath(string canonicalPath, long fileSize,
-        long modifiedUtcTicks, bool raw)
+        long modifiedUtcTicks, bool raw, bool psd)
     {
         var identity = $"{canonicalPath}\n{fileSize}\n{modifiedUtcTicks}" +
-            (raw ? "\nraw-orientation-v2" : "");
+            (raw ? "\nraw-orientation-v2" :
+             psd ? "\npsd-merged-composite-v1" : "");
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
         var shard = hash[..2];
         return Path.Combine(_cacheRoot, shard,
