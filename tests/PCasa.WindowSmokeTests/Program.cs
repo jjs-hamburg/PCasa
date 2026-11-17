@@ -431,9 +431,9 @@ internal static class Program
                 var titles = cards.Select(card =>
                     card.Children.OfType<TextBlock>().Single().Text).ToArray();
                 if (!titles.SequenceEqual(new[] { "Topaz Photo", "Topaz Gigapixel" }) ||
-                    cardButtons.Any(btn => btn.Width != 74 || btn.Height != 49 ||
+                    cardButtons.Any(btn => btn.Width != 64 || btn.Height != 43 ||
                         btn.Content is not FrameworkElement) ||
-                    cards.Any(card => card.Width != 86))
+                    cards.Any(card => card.Width != 80))
                     throw new Exception("External editor cards are not icon/caption tools.");
                 refreshCards.Invoke(window, [1002L, "movie.mp4"]);
                 if (externalCards.Children.Count != 1 ||
