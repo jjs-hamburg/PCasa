@@ -354,4 +354,134 @@ public partial class MainWindow
         }
         finally { _panoramaImportRunning = false; }
     }
+
+    private async Task<bool> CompleteExternalBatchReviewAsync(
+        ExternalEditDecision decision)
+    {
+        var review = _externalBatchReview;
+        if (review is null || review.Busy || _panoramaImportRunning)
+            return false;
+        var session = review.Session;
+        if (!ReferenceEquals(_panoramaSession, session)) return false;
+        if (decision != ExternalEditDecision.Cancel && review.Outputs.Length == 0)
+            return false;
+        if (decision == ExternalEditDecision.Save &&
+            !PanoramaTransaction.CanSaveMultiple(session, review.Outputs))
+            return false;
+
+        review.Busy = true;
+        _panoramaImportRunning = true;
+        UpdateEditControls();
+        try
+        {
+            if (decision == ExternalEditDecision.Cancel)
+            {
+                _externalBatchReview = null;
+                _panoramaSession = null;
+                ResumeSchedulerAfterExternalEdit();
+                PanoramaTransaction.Cleanup(session);
+                StatusText.Text = UiLanguage.T("Externe Bearbeitung abgebrochen.");
+                UpdateEditControls();
+                return true;
+            }
+
+            var label = decision == ExternalEditDecision.Save
+                ? UiLanguage.T("Speichern") : UiLanguage.T("Als Kopie speichern");
+            var key = "external:batch-commit:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, label, Math.Max(1, review.Outputs.Length));
+            string[] saved;
+            var catalogWarnings = new List<string>();
+            try
+            {
+                saved = await _scheduler.RunAsync(key,
+                    SchedulerPriority.ManualAction, token =>
+                    {
+                        var staged = review.Outputs.Select(output => output with
+                        {
+                            Path = Path.GetDirectoryName(Path.GetFullPath(output.Path))!
+                                .Equals(session.Directory, StringComparison.OrdinalIgnoreCase)
+                                ? output.Path
+                                : PanoramaTransaction.StageExternalResult(
+                                    session, output.Path, token)
+                        }).ToArray();
+                        string[] files;
+                        if (session.IsPanorama)
+                        {
+                            var output = staged.Single();
+                            files = [PanoramaTransaction.Import(session, output.Path,
+                                token, (completed, total) =>
+                                    _scheduler.ReportProgress(key, label,
+                                        total == 0 ? 100 : (int)(completed * 100 / total),
+                                        100, output.Path))];
+                        }
+                        else
+                        {
+                            files = PanoramaTransaction.ImportMultiple(session,
+                                staged, token, (completed, total) =>
+                                    _scheduler.ReportProgress(key, label,
+                                        total == 0 ? 100 : (int)(completed * 100 / total),
+                                        100, session.Sources[0]),
+                                replaceOriginals: decision == ExternalEditDecision.Save);
+                        }
+                        // File publication is finished: a catalog failure must
+                        // never cause a second physical import on retry.
+                        foreach (var file in files)
+                        {
+                            try
+                            {
+                                token.ThrowIfCancellationRequested();
+                                var root = FolderExclusionRules.FindOwner(file,
+                                    _folderRepository.GetAll()) ??
+                                    throw new IOException(
+                                        "Ausgabeverzeichnis nicht im Katalog: " + file);
+                                var indexed = _folderScanner.ScanFile(root, file,
+                                    cancellationToken: token, publishCatalogChange: false,
+                                    forceExifRefresh: true);
+                                if (indexed.Failed > 0 || indexed.ImageFilesSeen == 0)
+                                    throw new IOException(
+                                        "Gespeichert, aber Katalogisierung fehlgeschlagen: " + file);
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch (Exception ex)
+                            {
+                                PCasaDiagnostics.Write("ExternalBatch.Catalog", ex);
+                                catalogWarnings.Add(Path.GetFileName(file) + ": " +
+                                    ex.Message);
+                            }
+                        }
+                        return files;
+                    }, workKind: SchedulerWorkKind.Catalog);
+            }
+            finally { EndVisibleManualOperation(key); }
+
+            _externalBatchReview = null;
+            _panoramaSession = null;
+            ResumeSchedulerAfterExternalEdit();
+            PanoramaTransaction.Cleanup(session);
+            UpdateEditControls();
+            await RefreshBrowseGalleryAsync(forceIndexReload: true);
+            StatusText.Text = UiLanguage.T(session.IsPanorama
+                ? "Panorama erstellen" : "Mehrfachbearbeitung") +
+                ": " + saved.Length + " " + UiLanguage.T("Bilder gespeichert");
+            if (catalogWarnings.Count > 0)
+                PcasaDialog.Show(this,
+                    string.Join(Environment.NewLine, catalogWarnings.Take(10)),
+                    UiLanguage.T("Externe Bearbeitung"),
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalBatch.Commit", ex);
+            PcasaDialog.Show(this, ex.Message, UiLanguage.T("Externe Bearbeitung"),
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return false;
+        }
+        finally
+        {
+            review.Busy = false;
+            _panoramaImportRunning = false;
+            if (!Dispatcher.HasShutdownStarted) UpdateEditControls();
+        }
+    }
 }
