@@ -27,7 +27,7 @@ public static class PanoramaTransaction
         (long Id, string Path)[] images, string[] tags,
         double? latitude, double? longitude,
         CancellationToken token = default, Action<long, long>? progress = null,
-        bool isPanorama = true)
+        bool isPanorama = true, string? workspaceRoot = null)
     {
         if (images.Length < 2) throw new ArgumentException(
             "Für ein Panorama sind mindestens zwei Bilder erforderlich.");
@@ -35,7 +35,8 @@ public static class PanoramaTransaction
             throw new NotSupportedException("Videos können keine Panoramabilder bilden.");
         token.ThrowIfCancellationRequested();
         var id = Guid.NewGuid();
-        var directory = Path.Combine(SessionRoot, "session-" + id.ToString("N"));
+        var directory = Path.Combine(workspaceRoot ?? SessionRoot,
+            "session-" + id.ToString("N"));
         Directory.CreateDirectory(directory);
         var staged = new List<string>();
         var stagedHashes = new List<string>();
