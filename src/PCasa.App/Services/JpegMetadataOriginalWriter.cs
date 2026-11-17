@@ -190,7 +190,13 @@ public static class JpegMetadataOriginalWriter
             // Both paths are in the SAME directory. File.Replace either
             // atomically publishes the completed candidate or throws.
             // Never fall back to a copy-overwrite of the original.
-            File.Replace(temp, path, destinationBackupFileName: null);
+            // The gallery scanner or a native image reader can briefly
+            // retain a handle without FILE_SHARE_DELETE. Windows reports
+            // this as sharing violation (32/33) or ReplaceFile error 1175.
+            // Use the same bounded, cancelable atomic commit as Crop: no
+            // copy-overwrite, no repeated metadata mutation, no new candidate.
+            JpegCropWriter.ReplaceWithSharingRetry(
+                temp, path, token, originalSize, stamp);
             created = false;
             if (File.GetLastWriteTimeUtc(path) != stamp)
                 File.SetLastWriteTimeUtc(path, stamp);
