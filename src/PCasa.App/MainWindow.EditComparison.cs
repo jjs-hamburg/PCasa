@@ -43,6 +43,7 @@ public partial class MainWindow
         long ResultSize, DateTime ResultWriteUtc,
         BitmapSource Before, BitmapSource After);
     private ExternalComparisonSnapshot? _latestExternalComparison;
+    private long? _externalComparisonUnavailableImageId;
 
     private async Task<ExternalComparisonSnapshot?> CaptureExternalComparisonAsync(
         ExternalEditReview review)
@@ -104,8 +105,9 @@ public partial class MainWindow
              (_externalEditReview is { ResultPath: not null } external &&
               external.ImageId == id) ||
              (_latestExternalComparison?.ImageId == id) ||
-             _restoreBadgeImageIds.Contains(id) ||
-             _editCompareCopySources.ContainsKey(id));
+             (_externalComparisonUnavailableImageId != id &&
+              (_restoreBadgeImageIds.Contains(id) ||
+               _editCompareCopySources.ContainsKey(id))));
         EditCompareSingleButton.IsEnabled = _viewerOpen && !_comparisonActive;
         EditCompareSideButton.IsEnabled = eligible;
         EditCompareSplitButton.IsEnabled = eligible;
@@ -157,6 +159,10 @@ public partial class MainWindow
         // Its exact session-bound pixels take priority over Undo history.
         if (_latestExternalComparison is { } last && last.ImageId == imageId)
             return (last.Before, last.After);
+        // A failed snapshot is not permission to compare an arbitrary
+        // previous Undo version and falsely label it the external input.
+        if (_externalComparisonUnavailableImageId == imageId)
+            return null;
         var info = _viewerImageInfo;
         if (info is null || info.Id != imageId) return null;
         if (_editCompareCopySources.TryGetValue(imageId, out var sourceId))
