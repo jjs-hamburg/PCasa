@@ -2755,6 +2755,77 @@ internal static class Program
                 Console.WriteLine(
                     "PASS: Save-as-copy does not block viewer-to-gallery navigation.");
                 Flush(window);
+
+                // Real WPF layout regression: the split action MUST stay split
+                // even with slightly different decoded pixel ratios, and BOTH
+                // bitmaps must occupy identical panel geometry. A mere
+                // presence check of the third toolbar icon missed Alpha.40.
+                var compareType = viewerType.GetNestedType("ExternalComparisonSnapshot",
+                    System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new Exception("Missing session-specific before/after identity.");
+                var comparisonField = viewerType.GetField(
+                    "_latestExternalComparison", reflectFlags)!;
+                var previousComparison = comparisonField.GetValue(window);
+                var oldViewerInfo = viewerInfoField.GetValue(window);
+                var originalPixels = BitmapSource.Create(120, 80, 96, 96,
+                    PixelFormats.Bgra32, null, new byte[120 * 80 * 4], 120 * 4);
+                var editedPixels = BitmapSource.Create(121, 81, 96, 96,
+                    PixelFormats.Bgra32, null, new byte[121 * 81 * 4], 121 * 4);
+                var compareCtor = compareType.GetConstructors(
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance).Single();
+                var compareMode = viewerType.GetNestedType("EditCompareMode",
+                    System.Reflection.BindingFlags.NonPublic)!;
+                var showComparison = viewerType.GetMethod(
+                    "ShowEditComparisonAsync", reflectFlags)!;
+                var resetComparison = viewerType.GetMethod(
+                    "ResetEditComparison", reflectFlags)!;
+                var side = (Grid)window.FindName("EditCompareSidePanel")!;
+                var swipe = (Grid)window.FindName("EditCompareSwipePanel")!;
+                var beforeImage = (Image)window.FindName("EditCompareSwipeOriginal")!;
+                var afterImage = (Image)window.FindName("EditCompareSwipeEdited")!;
+                try
+                {
+                    comparisonField.SetValue(window, compareCtor.Invoke([
+                        Guid.NewGuid(), 999L, @"C:\synthetic\result.jpg",
+                        100L, DateTime.UtcNow, originalPixels, editedPixels
+                    ]));
+                    ((Task)showComparison.Invoke(window,
+                        [Enum.Parse(compareMode, "Split")])!)
+                        .GetAwaiter().GetResult();
+                    Flush(window);
+                    if (side.Visibility != Visibility.Collapsed ||
+                        swipe.Visibility != Visibility.Visible ||
+                        swipe.ActualWidth < 50 ||
+                        beforeImage.Source != originalPixels ||
+                        afterImage.Source != editedPixels)
+                        throw new Exception(
+                            "Split mode silently switched to side-by-side or loaded incorrect pixels.");
+                    var firstBounds = beforeImage.TransformToAncestor(swipe)
+                        .TransformBounds(new Rect(new Point(0, 0), beforeImage.RenderSize));
+                    var secondBounds = afterImage.TransformToAncestor(swipe)
+                        .TransformBounds(new Rect(new Point(0, 0), afterImage.RenderSize));
+                    if (Math.Abs(firstBounds.Left - secondBounds.Left) > 0.5 ||
+                        Math.Abs(firstBounds.Top - secondBounds.Top) > 0.5 ||
+                        Math.Abs(firstBounds.Width - secondBounds.Width) > 0.5 ||
+                        Math.Abs(firstBounds.Height - secondBounds.Height) > 0.5)
+                        throw new Exception(
+                            "Split compared two image frames that were not exactly overlaid.");
+                    if (beforeImage.Clip is not RectangleGeometry clip ||
+                        clip.Rect.Width <= 0 ||
+                        clip.Rect.Width >= swipe.ActualWidth)
+                        throw new Exception(
+                            "Split did not expose a clipped left-side original with a divider.");
+                    Console.WriteLine(
+                        "PASS: Real WPF split overlays identical image frames for slightly different decoded ratios.");
+                }
+                finally
+                {
+                    resetComparison.Invoke(window, null);
+                    comparisonField.SetValue(window, previousComparison);
+                    viewerInfoField.SetValue(window, oldViewerInfo);
+                }
                 fitField.SetValue(window, true);
                 zoomField.SetValue(window, 100d);
                 applyLayout.Invoke(window, null);
