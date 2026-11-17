@@ -604,7 +604,9 @@ public partial class MainWindow
             throw new InvalidDataException("Die Bildkopie wurde nicht im Katalog gefunden.");
 
         await RefreshBrowseGalleryAsync(forceIndexReload: true);
-        if (!_viewerOpen || _viewerImageInfo?.Id != request.ImageId)
+        if (!_viewerOpen || _viewerSequence is null ||
+            _viewerCurrentIndex < 0 ||
+            _viewerSequence.At(_viewerCurrentIndex).ImageId != request.ImageId)
             return; // User already navigated away; never hijack that viewer.
 
         var sequence = PhotoSequence.Create(_displayedBrowseIndex,
@@ -678,6 +680,37 @@ public partial class MainWindow
                     Recursive: false, ForceExifRefresh: true));
                 if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
                     ShowViewerImage(keepCurrentAsPlaceholder: true);
+                // Reconcile catalog size, timestamp and EXIF before packing
+                // the new thumbnail. On-disk edits no longer retain the old
+                // last-write time. A background scan must not race the user.
+                try
+                {
+                    await _scheduler.RunAsync(
+                        "image:postcommit-scan:" + Guid.NewGuid().ToString("N"),
+                        SchedulerPriority.ManualAction,
+                        token =>
+                        {
+                            var root = _folderRepository.GetAll()
+                                .FirstOrDefault(item => item.Id == request.FolderId)
+                                ?? throw new IOException(
+                                    "Überwachungsordner für das gespeicherte Bild fehlt.");
+                            var result = _folderScanner.ScanFile(root, request.Path,
+                                cancellationToken: token,
+                                publishCatalogChange: false, forceExifRefresh: true);
+                            if (result.Failed > 0 || result.ImageFilesSeen == 0)
+                                throw new IOException(
+                                    "Gespeichertes Bild konnte nicht katalogisiert werden.");
+                            return Task.CompletedTask;
+                        }, workKind: SchedulerWorkKind.Catalog);
+                }
+                catch (Exception ex)
+                {
+                    // Never replay an already completed original-file write
+                    // because an independent catalog update failed.
+                    PCasaDiagnostics.Write("Image.Edit.PostCommitScan", ex);
+                    StatusText.Text = UiLanguage.T(
+                        "Bild gespeichert, Katalogaktualisierung ausstehend.");
+                }
                 // A file commit is NOT complete for the user while the
                 // gallery still projects the previous pixel version.
                 await RefreshThumbnailsAsync([request.ImageId]);

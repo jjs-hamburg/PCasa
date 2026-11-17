@@ -87,6 +87,7 @@ public static class JpegCropWriter
         using var lease = SourceFileLocks.Enter(fullPath, token);
         var original = new FileInfo(fullPath);
         var originalWriteTime = original.LastWriteTimeUtc;
+        var originalCreationTime = original.CreationTimeUtc;
         var staged = Path.Combine(Path.GetDirectoryName(fullPath)!,
             ".pcasa-edit-" + Guid.NewGuid().ToString("N") + extension);
         try
@@ -149,7 +150,18 @@ public static class JpegCropWriter
                         ex, fullPath, staged);
                     throw;
                 }
-                try { File.SetLastWriteTimeUtc(fullPath, originalWriteTime); }
+                // A successful pixel edit is a new file revision. Preserve
+                // creation time, but advance modification time so OneDrive,
+                // FileSystemWatcher and the packed-cache stamp can detect it.
+                // The old timestamp caused a changed image to masquerade as
+                // the previously cached original.
+                try
+                {
+                    File.SetCreationTimeUtc(fullPath, originalCreationTime);
+                    var now = DateTime.UtcNow;
+                    File.SetLastWriteTimeUtc(fullPath, now > originalWriteTime
+                        ? now : originalWriteTime.AddMilliseconds(1));
+                }
                 catch (IOException ex)
                 { PCasaDiagnostics.Write("Image.Edit.Timestamp", ex); }
                 catch (UnauthorizedAccessException ex)

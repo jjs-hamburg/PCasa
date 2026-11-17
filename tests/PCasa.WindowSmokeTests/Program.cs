@@ -185,7 +185,7 @@ internal static class Program
             var items = menu.Items.OfType<MenuItem>().ToArray();
             var labels = items.Select(item => item.Header?.ToString()).ToArray();
             if (!labels.SequenceEqual(new[] {
-                    "Datei", "Ordner", "Bearbeiten", "Darstellung", "Optionen", "Hilfe" }))
+                    "Datei", "Bearbeiten", "Darstellung", "Optionen", "Hilfe" }))
                 throw new Exception("Unexpected top-level menu labels: " +
                     string.Join(", ", labels));
             var fileMenu = items.Single(item => Equals(item.Header, "Datei"));
@@ -193,10 +193,23 @@ internal static class Program
                 !Equals(fileMenu.Items.OfType<MenuItem>().Single().Header, "Beenden"))
                 throw new Exception("File menu must contain only Exit.");
             var optionsMenu = items.Single(item => Equals(item.Header, "Optionen"));
-            if (!optionsMenu.Items.OfType<MenuItem>().Any(item =>
-                    Equals(item.Header, "Schreibfehler")) ||
-                items.Any(item => Equals(item.Header, "Extras")))
-                throw new Exception("Write errors belong under Options; Extras is not present.");
+            var options = optionsMenu.Items.OfType<MenuItem>()
+                .Select(item => item.Header?.ToString()).ToArray();
+            if (!options.SequenceEqual(new[]
+                {
+                    "Ordnermanager", "Sprache", "Externe Programme",
+                    "GPX Import", "Taskmanager...", "Datenbankverwaltung...",
+                    "Schreibfehler (GPS/Tags)"
+                }))
+                throw new Exception("Incorrect Options menu order: " +
+                    string.Join(", ", options));
+            if (items.Any(item => Equals(item.Header, "Ordner") ||
+                Equals(item.Header, "Extras")))
+                throw new Exception("Obsolete top-level menu remains.");
+            if (window.FindName("EditCompareSingleButton") is not Button ||
+                window.FindName("EditCompareSideButton") is not Button ||
+                window.FindName("EditCompareSplitButton") is not Button)
+                throw new Exception("Original/edit comparison mode buttons missing.");
             var editMenu = items.Single(item => Equals(item.Header, "Bearbeiten"));
             var restoreMenu = editMenu.Items.OfType<MenuItem>().Single(item =>
                 Equals(item.Header, "Bild wiederherstellen"));
