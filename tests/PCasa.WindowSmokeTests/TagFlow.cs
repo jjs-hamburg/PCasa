@@ -3283,6 +3283,24 @@ internal static class TagFlow
                     throw new Exception("Preview regression lacks an existing packed tier.");
             }
             const string legacyPreviewJob = "tags:smoke:legacy-thumbnail";
+            // Preview reads are P0 child steps of the ACTUAL running writer.
+            // Do not fake a Running snapshot without a matching scheduler
+            // owner: such an orphan becomes an unrelated P1 read and may
+            // legitimately wait behind other durable P0 work indefinitely.
+            var legacyPreviewStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseLegacyPreview = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var legacyPreviewWork = actualScheduler.EnqueueAsync(
+                legacyPreviewJob, SchedulerPriority.ManualAction, async token =>
+                {
+                    legacyPreviewStarted.TrySetResult();
+                    await releaseLegacyPreview.Task.WaitAsync(token);
+                });
+            try
+            {
+                Until(window, () => legacyPreviewStarted.Task.IsCompleted,
+                    "The real tag job never reached its P0 scheduler worker.");
             // Alpha.40 monitors every registered root automatically.
             // Renaming the JPEG to simulate an offline original is a real
             // FileSystemWatcher deletion event and legitimately removes its
@@ -3306,15 +3324,10 @@ internal static class TagFlow
 
                     beginManual.Invoke(window, [legacyPreviewJob,
                         "Tags in Originaldateien schreiben", 1]);
-                    var missingPackStatus = new SchedulerJobSnapshot(
-                        0, legacyPreviewJob, SchedulerPriority.ManualAction,
-                        SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
-                    {
-                        Phase = "Tags in Originaldateien schreiben",
-                        CurrentPath = firstOriginal,
-                        Total = 1, Processed = 0
-                    };
-                    reportManual.Invoke(window, [missingPackStatus]);
+                    // Use the REAL scheduler progress event: the associated
+                    // thumbnail task can now inherit this P0 owner's rank.
+                    actualScheduler.ReportProgress(legacyPreviewJob,
+                        "Tags in Originaldateien schreiben", 0, 1, firstOriginal);
                     Until(window, () =>
                         (presenterField.GetValue(window)
                             as PCasa.App.BrowseCacheProgressWindow)?
@@ -3331,6 +3344,14 @@ internal static class TagFlow
                 {
                     endManual.Invoke(window, [legacyPreviewJob]);
                 }
+            }
+            }
+            finally
+            {
+                releaseLegacyPreview.TrySetResult();
+                Until(window, () => legacyPreviewWork.IsCompleted,
+                    "Real preview test job did not release its scheduler lane.");
+                legacyPreviewWork.GetAwaiter().GetResult();
             }
             Console.WriteLine(
                 "PASS: Tag progress uses local cached picture with no packed tier or accessible original.");
