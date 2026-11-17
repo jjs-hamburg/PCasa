@@ -295,6 +295,16 @@ public partial class MainWindow
         var height = Math.Max(1, panel.ActualHeight);
         var fit = Math.Min(width / _editCompareEdited.PixelWidth,
             height / _editCompareEdited.PixelHeight);
+        if (_editCompareMode == EditCompareMode.Split)
+        {
+            // WPF Image.Stretch=Uniform independently fits the two decoded
+            // aspect ratios, so even adjacent JPG pixel-rounding differences
+            // make the comparison drift. Size ONE centered frame using the
+            // edited image's aspect; both images then fill that identical
+            // frame without distorting the edited result.
+            EditCompareImageFrame.Width = _editCompareEdited.PixelWidth * fit;
+            EditCompareImageFrame.Height = _editCompareEdited.PixelHeight * fit;
+        }
         _editCompareZoomFactor = _viewerFitToScreen ? 1 :
             Math.Clamp(_viewerZoomPercent / Math.Max(1, 100 * fit), 0.25, 12);
         ApplyEditComparisonTransforms();
@@ -409,13 +419,18 @@ public partial class MainWindow
         var height = EditCompareSwipePanel.ActualHeight;
         if (width <= 0 || height <= 0) return;
         var x = width * _editCompareSplitFraction;
-        // RenderTransform scales about the center of the image. Compute the
-        // unscaled clipping edge corresponding to the visible divider.
-        var localEdge = width / 2 +
+        var frameWidth = EditCompareImageFrame.Width;
+        var frameHeight = EditCompareImageFrame.Height;
+        if (!(frameWidth > 0) || !(frameHeight > 0)) return;
+        // The visible image frame is centered inside the full swipe panel.
+        // The thumb stays at the panel coordinate, whereas the clip must
+        // use the image's OWN unscaled local coordinates. Pan/zoom modify
+        // the mapping without ever modifying either image's frame geometry.
+        var localEdge = frameWidth / 2 +
             (x - width / 2 - _editComparePanX) /
             Math.Max(0.01, _editCompareZoomFactor);
         EditCompareSwipeOriginal.Clip = new RectangleGeometry(
-            new Rect(0, 0, Math.Clamp(localEdge, 0, width), height));
+            new Rect(0, 0, Math.Clamp(localEdge, 0, frameWidth), frameHeight));
         Canvas.SetLeft(EditCompareSplitHandle, x - EditCompareSplitHandle.Width / 2);
     }
 
