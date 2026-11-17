@@ -33,11 +33,6 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        // Only the interactive image window needs native libvips. In
-        // particular, Chromium license generation and offline database
-        // maintenance must not load libvips before the DLLs are installed.
-        // A cached native loader may hold the photo open across File.Replace.
-        NetVips.Cache.MaxFiles = 0;
         ExifToolProcessRegistry.BeginSession();
         InitializeComponent();
         Closing += MainWindow_Closing;
