@@ -788,8 +788,8 @@
                         <Button x:Name="EditCompareSingleButton"
                                 Width="34" Height="30" Margin="0,0,3,0"
                                 Click="EditCompareSingle_Click"
-                                ToolTip="{loc:Tr Key='Einzelansicht'}"
-                                AutomationProperties.Name="Einzelansicht">
+                                ToolTip="{loc:Tr Key='Einzelansicht · kurzer Klick: Galerie · halten: Original'}"
+                                AutomationProperties.Name="{loc:Tr Key='Einzelansicht'}">
                             <Viewbox Width="22" Height="19">
                                 <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="1.8" StrokeLineJoin="Round"
@@ -800,7 +800,7 @@
                                 Width="34" Height="30" Margin="0,0,3,0"
                                 Click="EditCompareSide_Click"
                                 ToolTip="{loc:Tr Key='Original und Bearbeitung nebeneinander'}"
-                                AutomationProperties.Name="Vorher Nachher nebeneinander">
+                                AutomationProperties.Name="{loc:Tr Key='Original und Bearbeitung nebeneinander'}">
                             <Viewbox Width="22" Height="19">
                                 <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="1.8" StrokeLineJoin="Round"
@@ -811,7 +811,7 @@
                                 Width="34" Height="30" Margin="0,0,10,0"
                                 Click="EditCompareSplit_Click"
                                 ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}"
-                                AutomationProperties.Name="Vorher Nachher Schieber">
+                                AutomationProperties.Name="{loc:Tr Key='Original und Bearbeitung mit Schieber'}">
                             <Viewbox Width="22" Height="19">
                                 <Grid Width="24" Height="20">
                                     <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
