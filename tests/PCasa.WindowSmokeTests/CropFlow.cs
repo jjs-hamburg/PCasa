@@ -113,7 +113,9 @@ internal static class CropFlow
             // Alpha.37: libvips must release native source handles when a
             // thumbnail has finished. Otherwise the viewer may keep Windows
             // File.Replace blocked even after the result was decoded.
-            NetVips.Cache.MaxFiles = 0;
+            NativeImageCachePolicy.EnsureConfigured();
+            if (NetVips.Cache.MaxFiles != 0)
+                throw new Exception("libvips image reader did not disable cached native file handles.");
             using (var thumb = NetVips.Image.Thumbnail(path, 96))
                 _ = thumb.JpegsaveBuffer();
             using (var exclusive = File.Open(path, FileMode.Open,
