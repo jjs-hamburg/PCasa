@@ -1590,10 +1590,21 @@
                             </Grid>
                             <Grid x:Name="EditCompareSwipePanel" Visibility="Collapsed"
                                   ClipToBounds="True" SizeChanged="EditCompareSwipe_SizeChanged">
+                                <!-- Both images occupy the SAME measured viewport.
+                                     Otherwise WPF's natural Image desired size can
+                                     differ with decode dimensions and shift the
+                                     aligned split unexpectedly. Only the left
+                                     original is clipped by the movable divider. -->
                                 <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
+                                       Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
+                                       Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                        RenderTransformOrigin="0.5,0.5"
                                        RenderOptions.BitmapScalingMode="HighQuality"/>
                                 <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
+                                       Width="{Binding ActualWidth, ElementName=EditCompareSwipePanel}"
+                                       Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                        RenderTransformOrigin="0.5,0.5"
                                        RenderOptions.BitmapScalingMode="HighQuality"/>
                                 <Canvas Background="Transparent">
