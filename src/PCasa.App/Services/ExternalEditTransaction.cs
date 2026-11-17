@@ -413,7 +413,7 @@ public static class ExternalEditTransaction
     // Never trust a RAW filename alone. ExifTool reads the container bytes,
     // not the suffix; this rejects a JPEG renamed to .ARW before an atomic
     // replacement could destroy the original camera negative.
-    private static void ValidateExternalRawResult(string path,
+    internal static void ValidateExternalRawResult(string path,
         CancellationToken token)
     {
         using var reader = new ImageExifReader();
@@ -447,19 +447,9 @@ public static class ExternalEditTransaction
 
     private static string UniqueCopyDestination(string source, string original)
     {
-        var folder = Path.GetDirectoryName(original)!;
-        var basename = Path.GetFileNameWithoutExtension(original);
-        var extension = Path.GetExtension(source);
-        // First try the original stem with the actual output extension.
-        // On collision use the gallery duplicate convention, regardless of
-        // whether the external editor changed the container format.
-        for (var i = 0; i < 100000; i++)
-        {
-            var suffix = i == 0 ? "" : i == 1 ? "-Kopie" : "-Kopie-" + i;
-            var destination = Path.Combine(folder, basename + suffix + extension);
-            if (!File.Exists(destination)) return destination;
-        }
-        throw new IOException(UiLanguage.T("Kein freier Dateiname für die Kopie."));
+        var desired = Path.Combine(Path.GetDirectoryName(original)!,
+            Path.GetFileNameWithoutExtension(original) + Path.GetExtension(source));
+        return ExternalCopyNames.NextAvailable(desired);
     }
 
     private static void CopyAtomic(string source, string target,
