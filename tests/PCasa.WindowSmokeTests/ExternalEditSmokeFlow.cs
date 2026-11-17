@@ -96,8 +96,15 @@ internal static class ExternalEditSmokeFlow
             if (!File.Exists(cancel.BackupPath))
                 throw new Exception("Blocked second editor destroyed the first session.");
 
+            // The working input can be edited IN PLACE. Before must remain
+            // the byte-for-byte version handed to the external application;
+            // it must never be selected as an export candidate.
+            if (!File.Exists(cancel.BeforePath) ||
+                !File.ReadAllBytes(cancel.BeforePath).SequenceEqual(original))
+                throw new Exception("External before snapshot does not match handed-off bytes.");
             WriteJpeg(cancel.BackupPath, 175);
-            if (!File.ReadAllBytes(photo).SequenceEqual(original) ||
+            if (!File.ReadAllBytes(cancel.BeforePath).SequenceEqual(original) ||
+                !File.ReadAllBytes(photo).SequenceEqual(original) ||
                 ExternalEditTransaction.DetectResult(cancel) != cancel.BackupPath)
                 throw new Exception("External edit changed the original or lost its working result.");
             if (ExternalEditTransaction.Commit(cancel, cancel.BackupPath,
@@ -175,6 +182,30 @@ internal static class ExternalEditSmokeFlow
                 ExternalEditDecision.Cancel);
             if (Directory.Exists(unchanged.DirectoryPath))
                 throw new Exception("Unchanged workspace was not cleaned.");
+
+            // Configurable exchange roots isolate every edit under a
+            // PCasa-owned session directory. An unrelated user directory,
+            // even if called session-*, must never be removed by cleanup.
+            var exchangeRoot = Path.Combine(root, "User-exchange");
+            Directory.CreateDirectory(exchangeRoot);
+            var unowned = Path.Combine(exchangeRoot, "session-unowned-user-data");
+            Directory.CreateDirectory(unowned);
+            var sentinel = Path.Combine(unowned, "important.txt");
+            File.WriteAllText(sentinel, "keep me");
+            var custom = ExternalEditTransaction.Begin(photo,
+                workspaceRoot: exchangeRoot);
+            if (!string.Equals(Path.GetDirectoryName(custom.DirectoryPath),
+                    exchangeRoot, StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(custom.BeforePath) ||
+                ExternalEditTransaction.FindPending()?.Id != custom.Id)
+                throw new Exception("Custom exchange workspace was not properly isolated.");
+            ExternalEditTransaction.Commit(custom, null, ExternalEditDecision.Cancel);
+            ExternalEditTransaction.CleanupCompletedWorkspaces();
+            if (Directory.Exists(custom.DirectoryPath) ||
+                !File.Exists(sentinel) || !Directory.Exists(exchangeRoot))
+                throw new Exception("Custom exchange cleanup damaged unrelated user files.");
+            Console.WriteLine(
+                "PASS: Exact immutable external before bytes and isolated optional exchange workspace.");
 
             var orphan = ExternalEditTransaction.DirectoryPath;
             Directory.CreateDirectory(orphan);
