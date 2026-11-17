@@ -317,6 +317,12 @@ public partial class MainWindow
 
             var review = new ExternalEditReview(snapshot, id, editor.Name,
                 VideoFormats.IsVideo(source)) { Ready = true };
+            // A fresh external session always supersedes the earlier session's
+            // before/after comparison for this viewer identity.
+            if (_latestExternalComparison?.ImageId == id)
+                _latestExternalComparison = null;
+            if (_externalComparisonUnavailableImageId == id)
+                _externalComparisonUnavailableImageId = null;
             _externalEditReview = review;
             UpdateEditControls();
 
@@ -614,6 +620,12 @@ public partial class MainWindow
         UpdateEditControls();
         try
         {
+            // Capture the two EXACT session images while both still exist.
+            // Commit removes its isolated workspace; a post-commit lookup of
+            // the most recent Undo snapshot can select a different edit.
+            // Preview failures must never block Save or Cancel.
+            var savedComparison = decision == ExternalEditDecision.Cancel
+                ? null : await CaptureExternalComparisonAsync(review);
             // Re-evaluate the local working folder at commit time:
             // an export may have finished AFTER the last window activation.
             var saveKey = "external:commit:" + Guid.NewGuid().ToString("N");
@@ -650,6 +662,14 @@ public partial class MainWindow
             // The file transaction is now complete, even if a subsequent
             // catalog refresh fails. It must not be submitted a second time.
             _externalEditReview = null;
+            if (decision != ExternalEditDecision.Cancel)
+            {
+                _latestExternalComparison = savedComparison;
+                _externalComparisonUnavailableImageId =
+                    savedComparison is null ? review.ImageId : null;
+            }
+            else if (_latestExternalComparison?.SessionId == review.Snapshot.Id)
+                _latestExternalComparison = null;
             _externalVideoReviewDialog?.Close();
             _externalVideoReviewDialog = null;
             UpdateEditControls();
