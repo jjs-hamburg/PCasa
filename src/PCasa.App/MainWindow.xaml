@@ -780,6 +780,20 @@
                     <StackPanel x:Name="PhotoZoomToolbar" Grid.Column="3"
                                 Orientation="Horizontal" VerticalAlignment="Center"
                                 Visibility="Collapsed">
+                        <!-- Three before/after modes, independent from the
+                             A/B comparison of two distinct gallery photos. -->
+                        <Button x:Name="EditCompareSingleButton" Content="▭"
+                                Width="28" Height="28" Margin="0,0,3,0"
+                                FontSize="16" Click="EditCompareSingle_Click"
+                                ToolTip="{loc:Tr Key='Einzelansicht · Maustaste zeigt Original'}"/>
+                        <Button x:Name="EditCompareSideButton" Content="▥"
+                                Width="28" Height="28" Margin="0,0,3,0"
+                                FontSize="16" Click="EditCompareSide_Click"
+                                ToolTip="{loc:Tr Key='Original und Bearbeitung nebeneinander'}"/>
+                        <Button x:Name="EditCompareSplitButton" Content="◧"
+                                Width="28" Height="28" Margin="0,0,10,0"
+                                FontSize="16" Click="EditCompareSplit_Click"
+                                ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}"/>
                         <Button Content="{loc:Tr Key='An Fenster anpassen'}" MinWidth="103" Height="30"
                                 Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
                         <Button Content="100 %" MinWidth="58" Height="30"
@@ -1522,6 +1536,64 @@
                                         Panel.ZIndex="3" IsHitTestVisible="False"/>
                             </Grid>
                         </ScrollViewer>
+                        <!-- Original/edited comparison of ONE image. The split
+                             clips identical, registered views rather than
+                             stretching two halves into different proportions. -->
+                        <Grid x:Name="EditComparePanel" Visibility="Collapsed"
+                              Background="{Binding Background, ElementName=BrowseScrollViewer}">
+                            <Grid x:Name="EditCompareSidePanel" Visibility="Collapsed" ClipToBounds="True">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="3"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Image x:Name="EditCompareSideOriginal" Grid.Column="0"
+                                       Stretch="Uniform" Margin="3" ClipToBounds="True"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Border Grid.Column="1" Background="{DynamicResource PcasaDividerBrush}"/>
+                                <Image x:Name="EditCompareSideEdited" Grid.Column="2"
+                                       Stretch="Uniform" Margin="3" ClipToBounds="True"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                            </Grid>
+                            <Grid x:Name="EditCompareSwipePanel" Visibility="Collapsed"
+                                  ClipToBounds="True" SizeChanged="EditCompareSwipe_SizeChanged">
+                                <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
+                                       RenderTransformOrigin="0.5,0.5"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Canvas Background="Transparent">
+                                    <primitives:Thumb x:Name="EditCompareSplitHandle"
+                                                      Width="18"
+                                                      Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                                      DragDelta="EditCompareSplit_DragDelta">
+                                        <primitives:Thumb.Template>
+                                            <ControlTemplate TargetType="{x:Type primitives:Thumb}">
+                                                <Grid Background="#01000000">
+                                                    <Border Width="2" HorizontalAlignment="Center"
+                                                            Background="#F0F0F0"/>
+                                                    <Border Width="14" Height="26"
+                                                            CornerRadius="4"
+                                                            HorizontalAlignment="Center"
+                                                            VerticalAlignment="Center"
+                                                            Background="#CC262729"
+                                                            BorderBrush="#F0F0F0"
+                                                            BorderThickness="1">
+                                                        <TextBlock Text="↔" FontSize="11"
+                                                                   Foreground="White"
+                                                                   HorizontalAlignment="Center"
+                                                                   VerticalAlignment="Center"/>
+                                                    </Border>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </primitives:Thumb.Template>
+                                    </primitives:Thumb>
+                                </Canvas>
+                            </Grid>
+                        </Grid>
                         <Grid x:Name="ComparisonPanel" Visibility="Collapsed"
                               Background="{Binding Background, ElementName=BrowseScrollViewer}">
                             <Grid.ColumnDefinitions>

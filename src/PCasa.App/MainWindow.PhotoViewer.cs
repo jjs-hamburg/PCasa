@@ -183,6 +183,7 @@ public partial class MainWindow
             _viewerDecodeCancellation is { IsCancellationRequested: false })
             return;
 
+        ResetEditComparison();
         _viewerDecodeCancellation?.Cancel();
         _viewerDecodeCancellation?.Dispose();
         _viewerDecodeCancellation = new CancellationTokenSource();
@@ -826,6 +827,7 @@ public partial class MainWindow
         if (!_viewerOpen) return;
         _viewerFitToScreen = true;
         ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
         ScheduleViewerZoomRefinement();
         Keyboard.Focus(PhotoViewerPanel);
     }
@@ -836,6 +838,7 @@ public partial class MainWindow
         _viewerFitToScreen = false;
         _viewerZoomPercent = 100;
         ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
         ScheduleViewerZoomRefinement();
         Keyboard.Focus(PhotoViewerPanel);
     }
@@ -847,6 +850,7 @@ public partial class MainWindow
         _viewerFitToScreen = false;
         _viewerZoomPercent = TrackToZoom(e.NewValue);
         ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
         ScheduleViewerZoomRefinement();
     }
 
@@ -1180,6 +1184,8 @@ public partial class MainWindow
         {
             return;
         }
+        if (_editCompareMode != EditCompareMode.Single) return;
+        if (TryBeginEditOriginalHold(e)) return;
 
         CancelViewerPendingClose();
         if (e.ClickCount >= 2)
@@ -1245,6 +1251,7 @@ public partial class MainWindow
 
     private void PhotoViewerPan_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (EndEditOriginalHold(e)) return;
         if (!ReferenceEquals(sender, _viewerPanSurface))
         {
             return;
@@ -1385,6 +1392,7 @@ public partial class MainWindow
         if (!ConfirmCropExit()) return;
         var comparisonSelection = _comparisonActive ? _comparisonImageIds.Distinct().ToArray() : null;
         HideComparison();
+        ResetEditComparison();
         CancelViewerPendingClose();
         if (!_viewerOpen)
         {

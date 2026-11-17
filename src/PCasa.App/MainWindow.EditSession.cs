@@ -347,6 +347,8 @@ public partial class MainWindow
         // Sliders must be visibly disabled as well. The editor tab control
         // disables its descendants without disabling GPS, tags or navigation.
         ViewerCropFooter.Visibility = Visibility.Visible;
+        UpdateEditComparisonAvailability();
+        UpdateEditComparisonFromSession();
     }
 
     private bool ApplyEditTool()
