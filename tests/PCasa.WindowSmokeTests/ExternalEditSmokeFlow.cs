@@ -240,6 +240,25 @@ internal static class ExternalEditSmokeFlow
                     detected.Count(x => x.SourceIndex == 1 &&
                         x.Path == secondExport) != 1)
                     throw new Exception("Multiple-edit output mapping lost a changed input/export.");
+                if (PanoramaTransaction.CanSaveMultiple(batch, detected))
+                    throw new Exception("Format-changing batch result was allowed to overwrite an original.");
+                var sameFormat = new[]
+                {
+                    new ExternalBatchOutput(0, batch.Inputs[0]),
+                    new ExternalBatchOutput(1, batch.Inputs[1])
+                };
+                if (!PanoramaTransaction.CanSaveMultiple(batch, sameFormat))
+                    throw new Exception("Same-format one-to-one batch cannot use Save.");
+                var ambiguous = new[]
+                {
+                    new ExternalBatchOutput(0, batch.Inputs[0]),
+                    new ExternalBatchOutput(0, batch.Inputs[0])
+                };
+                if (PanoramaTransaction.CanSaveMultiple(batch, ambiguous))
+                    throw new Exception("Two results for one original enabled destructive Save.");
+                if (PanoramaTransaction.CanSaveMultiple(batch with
+                    { IsPanorama = true }, sameFormat))
+                    throw new Exception("Panorama was offered in-place Save.");
                 try
                 {
                     PanoramaTransaction.MatchSourceIndex(batch, "unrelated.png");
