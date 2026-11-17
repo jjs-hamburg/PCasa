@@ -928,6 +928,7 @@
   "Panoramaergebnis auswählen": "Select panorama output",
   "Mehrfachbearbeitung": "Edit multiple images",
   "Ergebnisse der Mehrfachbearbeitung auswählen": "Select edited images",
+  "Externe Mehrfachbearbeitung abbrechen? Originalbilder bleiben unverändert.": "Cancel external batch editing? Original images will remain unchanged.",
   "Bilder gespeichert": "images saved",
   "Bilder": "Images",
   "Alle Dateien": "All files",
