@@ -177,9 +177,7 @@ public static class ExternalEditTransaction
         if (pending.Id == Guid.Empty || !(legacy || isolated) ||
             !Path.GetFileName(pending.BackupPath).StartsWith(
                 VideoFormats.IsVideo(pending.OriginalPath) ? "video." : "photo.",
-                StringComparison.OrdinalIgnoreCase) ||
-            pending.ConfiguredWorkspaceRoot is { Length: > 0 } &&
-                !File.Exists(Path.Combine(pending.DirectoryPath, OwnedWorkspaceMarker)))
+                StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("ExternalEdit: ungültiger Sitzungsstatus.");
         return pending;
     }
