@@ -177,6 +177,24 @@ public partial class MainWindow
         return (tags, latitude, longitude);
     }
 
+    // A dismissed output chooser is not an implicit successful edit.
+    // Let users explicitly cancel the whole session; stale local copies
+    // are best-effort cleaned without touching any original or foreign export.
+    private bool OfferCancelMultipleSession(PanoramaSession session)
+    {
+        var answer = MessageBox.Show(this,
+            UiLanguage.T("Externe Mehrfachbearbeitung abbrechen? Originalbilder bleiben unverändert."),
+            UiLanguage.T(session.IsPanorama ? "Panorama erstellen" : "Mehrfachbearbeitung"),
+            MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return false;
+        if (!ReferenceEquals(_panoramaSession, session)) return false;
+        _panoramaSession = null;
+        ResumeSchedulerAfterExternalEdit();
+        PanoramaTransaction.Cleanup(session);
+        StatusText.Text = UiLanguage.T("Externe Bearbeitung abgebrochen.");
+        return true;
+    }
+
     private async Task TryImportPanoramaAsync(PanoramaSession session)
     {
         if (!session.IsPanorama)
@@ -211,7 +229,11 @@ public partial class MainWindow
                 };
                 try
                 {
-                    if (picker.ShowDialog(this) != true) return;
+                    if (picker.ShowDialog(this) != true)
+                    {
+                        OfferCancelMultipleSession(session);
+                        return;
+                    }
                     resultPath = picker.FileName;
                 }
                 finally { _panoramaLastResultDialogUtc = DateTime.UtcNow; }
@@ -287,7 +309,11 @@ public partial class MainWindow
                 };
                 try
                 {
-                    if (picker.ShowDialog(this) != true) return;
+                    if (picker.ShowDialog(this) != true)
+                    {
+                        OfferCancelMultipleSession(session);
+                        return;
+                    }
                     outputs = picker.FileNames.Select(path =>
                         new ExternalBatchOutput(
                             PanoramaTransaction.MatchSourceIndex(session, path),
