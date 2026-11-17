@@ -181,9 +181,20 @@ public static class JpegCropWriter
     // Reuse the SAME fully validated staged image and the SAME Undo snapshot;
     // NEVER re-run edits or create a second durable file write. An actual
     // persistent foreign lock still fails after a bounded, cancelable wait.
+    // Retain the three-argument entry point used by existing Crop callers
+    // and Windows regression tests. Checked metadata commits use the same
+    // implementation, with source-identity validation between retries.
     internal static void ReplaceWithSharingRetry(string staged, string original,
-        CancellationToken token, long? expectedSize = null,
-        DateTime? expectedWriteUtc = null)
+        CancellationToken token)
+        => ReplaceWithSharingRetryCore(staged, original, token, null, null);
+
+    internal static void ReplaceWithVerifiedSharingRetry(string staged, string original,
+        CancellationToken token, long expectedSize, DateTime expectedWriteUtc)
+        => ReplaceWithSharingRetryCore(staged, original, token,
+            expectedSize, expectedWriteUtc);
+
+    private static void ReplaceWithSharingRetryCore(string staged, string original,
+        CancellationToken token, long? expectedSize, DateTime? expectedWriteUtc)
     {
         const int maxRetries = 16;
         for (var retry = 0; ; retry++)
