@@ -384,16 +384,11 @@ public partial class MainWindow
     {
         // External original may already be modified on disk. A normal
         // viewer close/navigate must not discard its recoverable snapshot.
-        if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } unchanged)
-        {
-            // Navigation is an explicit decision to leave an unchanged
-            // external session. Re-check local output before canceling:
-            // the editor may have exported just before focus changed.
-            _ = ReleaseUnchangedExternalEditorAsync(unchanged, closeViewer: true);
-            return false;
-        }
+        // Navigation/close handles a ready unchanged session asynchronously
+        // and resumes the SAME requested action only after output re-check.
+        // A changed result still requires an explicit Save/Copy/Cancel.
         if (_externalEditReview is not null)
-            return false; // A changed result still requires Save/Copy/Cancel.
+            return false;
         // Saving is a durable manual job, not an editor modal state. The
         // already submitted recipe owns its pixels and continues after
         // closing the viewer; do not ask to discard those saved changes.
