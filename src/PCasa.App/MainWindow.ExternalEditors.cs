@@ -249,7 +249,8 @@ public partial class MainWindow
     {
         try
         {
-            if (_externalEditReview is not null || _externalEditLaunchPending)
+            if (_externalEditReview is not null || _externalEditLaunchPending ||
+                _panoramaSession is not null)
                 throw new InvalidOperationException(UiLanguage.T(
                     "Bitte die laufende externe Bearbeitung zuerst abschließen."));
             _externalEditLaunchPending = true;
