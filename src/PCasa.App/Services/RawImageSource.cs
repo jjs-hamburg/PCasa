@@ -8,6 +8,32 @@ using NetVips;
 namespace PCasa.App.Services;
 
 /// <summary>
+/// Configure native file-handle caching at the first REAL libvips image
+/// operation, not at application/window construction. Headless maintenance,
+/// installer/license probes and Chromium credit extraction must not require
+/// libvips-42.dll until they actually decode an image.
+/// </summary>
+public static class NativeImageCachePolicy
+{
+    private static readonly object Gate = new();
+    private static int _configured;
+
+    public static void EnsureConfigured()
+    {
+        if (Volatile.Read(ref _configured) != 0) return;
+        lock (Gate)
+        {
+            if (_configured != 0) return;
+            // libvips must not retain an original's file handle in its
+            // operation cache after a thumbnail load. WPF/SQLite bitmap
+            // caches remain independent and unchanged.
+            NetVips.Cache.MaxFiles = 0;
+            Volatile.Write(ref _configured, 1);
+        }
+    }
+}
+
+/// <summary>
 /// One source resolver for RAW images used by the existing scan, browse-cache
 /// and viewer pipelines. Prefer native libvips/LibRaw demosaicing; if the
 /// packaged native build has no RAW decoder, extract an embedded JPEG preview
@@ -31,6 +57,7 @@ public static class RawImageSource
     {
         if (!IsRawPath(path) && !IsPsdPath(path)) return path;
         cancellationToken.ThrowIfCancellationRequested();
+        NativeImageCachePolicy.EnsureConfigured();
 
         // Native libvips 8.18+ has a libraw loader when the native build
         // includes libraw. Probe the file once; this does not decode or alter
@@ -65,6 +92,7 @@ public static class RawImageSource
         int width, int height, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        NativeImageCachePolicy.EnsureConfigured();
         if (!IsRawPath(originalPath))
             return Image.Thumbnail(renderedPath, width, height: height,
                 size: Enums.Size.Down);
