@@ -25,7 +25,7 @@ internal static class GalleryFileOperationFlow
         var original = Path.Combine(first, "test.jpg");
         var copied = Path.Combine(second, "test.jpg");
         var moved = Path.Combine(third, "test.jpg");
-        var duplicate = Path.Combine(first, "test - Kopie.jpg");
+        var duplicate = Path.Combine(first, "test-Kopie.jpg");
         WriteJpeg(original);
         PCasa.App.MainWindow? window = null;
         try
@@ -185,7 +185,7 @@ internal static class GalleryFileOperationFlow
             Until(window, () =>
                 !File.Exists(original) && !File.Exists(moved) &&
                 File.Exists(Path.Combine(batch, "test.jpg")) &&
-                File.Exists(Path.Combine(batch, "test - Kopie.jpg")) &&
+                File.Exists(Path.Combine(batch, "test-Kopie.jpg")) &&
                 CountInRoot(db, root) == 3,
                 "Two same-name sources did not survive a single batch move.");
             Console.WriteLine("PASS: Batch move preserves both same-name source photos.");
@@ -556,7 +556,7 @@ internal static class GalleryFileOperationFlow
             var midFlightTarget = Path.Combine(root, "MidFlight");
             Directory.CreateDirectory(midFlightTarget);
             var firstMidFlight = renamed;
-            var secondMidFlight = Path.Combine(batch, "test - Kopie.jpg");
+            var secondMidFlight = Path.Combine(batch, "test-Kopie.jpg");
             var firstMovingImageId = CatalogIdAt(db, firstMidFlight);
             var sourceMovingFolderId = new ImageCatalogRepository(db)
                 .GetPhotoFolders().Single(folder =>
