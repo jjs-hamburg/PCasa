@@ -860,13 +860,33 @@ public sealed class TaskManagerWindow : Window
         {
             _acting = false;
             UpdateActions();
+            // A task-view query may already have been in flight when a
+            // reordering action committed. Its snapshot can predate that
+            // commit. Do not drop the follow-up refresh just because the
+            // older query finished while the action was still active.
+            if (_refreshRequested && IsLoaded && !Dispatcher.HasShutdownStarted)
+            {
+                _refreshRequested = false;
+                RequestRefresh();
+            }
         }
     }
 
     private async Task RefreshAsyncAfterAction()
     {
         _acting = false;
-        try { await RefreshAsync(); }
+        try
+        {
+            if (_reading)
+            {
+                // RefreshAsync would otherwise return without scheduling
+                // anything. The in-flight snapshot might be stale, so ask
+                // its completion (or PerformAsync finally) to read again.
+                _refreshRequested = true;
+                return;
+            }
+            await RefreshAsync();
+        }
         finally { _acting = true; }
     }
 }
