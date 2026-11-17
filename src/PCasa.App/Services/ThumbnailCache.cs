@@ -41,13 +41,15 @@ public sealed class ThumbnailCache
             cancellationToken.ThrowIfCancellationRequested();
             var rotated = rawSource && RawImageSource.GetRawOrientation(originalSourcePath)
                 is 5 or 6 or 7 or 8;
-            return psdSource
-                ? new ThumbnailResult(cachePath,
-                    PsdCompositePreview.GetDimensions(originalSourcePath).Width,
-                    PsdCompositePreview.GetDimensions(originalSourcePath).Height)
-                : new ThumbnailResult(cachePath,
-                    rotated ? header.Height : header.Width,
-                    rotated ? header.Width : header.Height);
+            if (psdSource)
+            {
+                var (sourceWidth, sourceHeight) =
+                    PsdCompositePreview.GetDimensions(originalSourcePath);
+                return new ThumbnailResult(cachePath, sourceWidth, sourceHeight);
+            }
+            return new ThumbnailResult(cachePath,
+                rotated ? header.Height : header.Width,
+                rotated ? header.Width : header.Height);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
