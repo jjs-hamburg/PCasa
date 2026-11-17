@@ -371,6 +371,34 @@ public partial class MainWindow
     {
         if (!ReferenceEquals(_externalEditReview, review) ||
             review.Busy || _externalReviewRefreshing) return;
+        // session.json, not the external process lifetime, owns the decision.
+        // Resume a durably chosen Save/Copy/Cancel rather than offering an
+        // invalid new Cancel after the commit has already started.
+        ExternalEditSnapshot? persisted;
+        try
+        {
+            persisted = await Task.Run(() =>
+                ExternalEditTransaction.FindPending(review.Snapshot.OriginalPath));
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEdit.Manifest", ex);
+            StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
+            return;
+        }
+        if (!ReferenceEquals(_externalEditReview, review) || review.Busy) return;
+        if (persisted is null)
+        {
+            _externalEditReview = null;
+            ResumeSchedulerAfterExternalEdit();
+            UpdateEditControls();
+            return;
+        }
+        if (persisted.Finalizing is { } pendingDecision)
+        {
+            await CompleteExternalReviewAsync(pendingDecision);
+            return;
+        }
         _externalReviewRefreshing = true;
         try
         {
