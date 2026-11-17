@@ -17,6 +17,7 @@ public sealed class ExternalEditorsWindow : Window
     private readonly TextBox _formats = new();
     private readonly CheckBox _panorama = new() { Margin = new Thickness(0, 7, 0, 3) };
     private readonly CheckBox _psd = new() { Margin = new Thickness(0, 4, 0, 3) };
+    private readonly CheckBox _raw = new() { Content = "RAW", Margin = new Thickness(0, 4, 0, 3) };
     private int _editingIndex = -1;
     private bool _changing;
     public ExternalEditorSettings? SavedSettings { get; private set; }
@@ -72,6 +73,7 @@ public sealed class ExternalEditorsWindow : Window
         _psd.Content = "PSD";
         right.Children.Add(_panorama);
         right.Children.Add(_psd);
+        right.Children.Add(_raw);
 
         var footer = new StackPanel {
             Orientation = Orientation.Horizontal,
@@ -126,7 +128,8 @@ public sealed class ExternalEditorsWindow : Window
         if (_changing || _editingIndex < 0 || _editingIndex >= _programs.Count) return;
         _programs[_editingIndex] = new ExternalEditorProgram(
             _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim(),
-            _panorama.IsChecked == true, _psd.IsChecked == true);
+            _panorama.IsChecked == true, _psd.IsChecked == true,
+            _raw.IsChecked == true);
     }
 
     private void RefreshList(int selected)
@@ -151,8 +154,9 @@ public sealed class ExternalEditorsWindow : Window
         _formats.Text = entry.Formats;
         _panorama.IsChecked = entry.Panorama;
         _psd.IsChecked = entry.Psd;
+        _raw.IsChecked = entry.Raw;
         _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled =
-            _panorama.IsEnabled = _psd.IsEnabled = index >= 0;
+            _panorama.IsEnabled = _psd.IsEnabled = _raw.IsEnabled = index >= 0;
         _changing = false;
     }
 
