@@ -52,7 +52,8 @@ public partial class MainWindow
     private async Task<ExternalComparisonSnapshot?> CaptureExternalComparisonAsync(
         ExternalEditReview review)
     {
-        if (review.ResultPath is not { Length: > 0 } output) return null;
+        if (review.IsVideo || review.ResultPath is not { Length: > 0 } output)
+            return null;
         var originalSnapshot = review.Snapshot.BeforePath;
         if (!File.Exists(originalSnapshot))
         {
