@@ -230,10 +230,23 @@ public partial class MainWindow
         // The same three buttons already used by single-image external
         // editing belong to the viewer. Open its first source, not a new
         // dialog. No file is committed until a footer choice is clicked.
-        if (!_viewerOpen || _viewerImageInfo?.Id != session.ImageIds[0])
+        if (!_viewerOpen)
             BrowseSurface_ImageOpened(BrowseSurface,
                 new PCasa.App.Controls.BrowseImageClickedEventArgs(
                     session.ImageIds[0], System.Windows.Input.ModifierKeys.None));
+        // BrowseSurface_ImageOpened deliberately ignores requests while the
+        // viewer is already open. Do not paint a panorama on an unrelated
+        // viewer image: its Save would otherwise target the wrong original.
+        // The pending result remains available in the same review session.
+        if (!_viewerOpen || _viewerSequence is null ||
+            _viewerCurrentIndex < 0 ||
+            _viewerSequence.At(_viewerCurrentIndex).ImageId != session.ImageIds[0])
+        {
+            PCasaDiagnostics.WriteMessage("Panorama.PreviewIdentity",
+                "Batch result ready but first source is not the active viewer.");
+            UpdateEditControls();
+            return;
+        }
         StatusText.Text = UiLanguage.T(session.IsPanorama
             ? "Panorama erstellen" : "Mehrfachbearbeitung") + " · " +
             outputs.Length + " " + UiLanguage.T("Ergebnis bereit");
