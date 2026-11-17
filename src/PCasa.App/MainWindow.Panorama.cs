@@ -210,6 +210,9 @@ public partial class MainWindow
         _externalBatchReview = null;
         ResumeSchedulerAfterExternalEdit();
         PanoramaTransaction.Cleanup(session);
+        // Never leave a batch preview displayed under the first source's name.
+        if (_viewerOpen && _viewerImageInfo?.Id == session.ImageIds[0])
+            ShowViewerImage();
         UpdateEditControls();
         StatusText.Text = UiLanguage.T("Externe Bearbeitung abgebrochen.");
         return true;
@@ -293,7 +296,8 @@ public partial class MainWindow
                         "|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd|" +
                         UiLanguage.T("Alle Dateien") + "|*.*",
                     CheckFileExists = true,
-                    Multiselect = false
+                    Multiselect = false,
+                    InitialDirectory = session.Directory
                 };
                 try
                 {
@@ -336,7 +340,8 @@ public partial class MainWindow
                         "|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd;*.dng|" +
                         UiLanguage.T("Alle Dateien") + "|*.*",
                     CheckFileExists = true,
-                    Multiselect = true
+                    Multiselect = true,
+                    InitialDirectory = session.Directory
                 };
                 try
                 {
@@ -382,6 +387,8 @@ public partial class MainWindow
                 _panoramaSession = null;
                 ResumeSchedulerAfterExternalEdit();
                 PanoramaTransaction.Cleanup(session);
+                if (_viewerOpen && _viewerImageInfo?.Id == session.ImageIds[0])
+                    ShowViewerImage();
                 StatusText.Text = UiLanguage.T("Externe Bearbeitung abgebrochen.");
                 UpdateEditControls();
                 return true;
@@ -442,6 +449,18 @@ public partial class MainWindow
                                 if (indexed.Failed > 0 || indexed.ImageFilesSeen == 0)
                                     throw new IOException(
                                         "Gespeichert, aber Katalogisierung fehlgeschlagen: " + file);
+                                // The result's packed thumbnail belongs to this
+                                // SAME P0 transaction, never a later P4 scan.
+                                using var lookup = _database.OpenConnection();
+                                using var command = lookup.CreateCommand();
+                                command.CommandText =
+                                    "SELECT id FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+                                command.Parameters.AddWithValue("$path", file);
+                                if (command.ExecuteScalar() is { } found)
+                                    new BrowseCacheBuilder(
+                                        new BrowseCacheRepository(_database),
+                                        new BrowseThumbnailProfileRepository(_database))
+                                        .RebuildSingleImage(Convert.ToInt64(found), token);
                             }
                             catch (OperationCanceledException) { throw; }
                             catch (Exception ex)
@@ -456,11 +475,33 @@ public partial class MainWindow
             }
             finally { EndVisibleManualOperation(key); }
 
+            // A preview has the FIRST INPUT's identity until the result is
+            // indexed. Keep edit tools disabled while switching to the real
+            // panorama image ID; otherwise Crop could write the first source.
+            if (session.IsPanorama && saved.Length == 1)
+            {
+                try
+                {
+                    await ActivateSavedCopyAsync(new EditWriteRecipe(
+                        session.ImageIds[0], 0, session.Sources[0], [], saved[0]));
+                }
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("Panorama.ActivateResult", ex);
+                    catalogWarnings.Add(Path.GetFileName(saved[0]) + ": " +
+                        UiLanguage.T("Ergebnis gespeichert, aber Viewerwechsel fehlgeschlagen: ") +
+                        ex.Message);
+                }
+            }
             _externalBatchReview = null;
             _panoramaSession = null;
             ResumeSchedulerAfterExternalEdit();
             PanoramaTransaction.Cleanup(session);
             UpdateEditControls();
+            // If the activation failed, discard the misleading preview.
+            if (session.IsPanorama && _viewerOpen &&
+                _viewerImageInfo?.Id == session.ImageIds[0])
+                ShowViewerImage();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);
             StatusText.Text = UiLanguage.T(session.IsPanorama
                 ? "Panorama erstellen" : "Mehrfachbearbeitung") +

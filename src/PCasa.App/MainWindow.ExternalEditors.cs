@@ -727,6 +727,9 @@ public partial class MainWindow
         finally { EndVisibleManualOperation(key); }
 
         _viewerOriginalCache.Remove(review.ImageId);
+        if (committed is not null &&
+            committed.Equals(original, StringComparison.OrdinalIgnoreCase))
+            await RefreshThumbnailsAsync([review.ImageId]);
         if (committed is { } copyPath &&
             !copyPath.Equals(original, StringComparison.OrdinalIgnoreCase))
         {

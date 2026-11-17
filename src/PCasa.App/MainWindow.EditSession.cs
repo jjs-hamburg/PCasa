@@ -32,6 +32,7 @@ public partial class MainWindow
     {
         if (!_viewerOpen || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap ||
+            _externalBatchReview is not null || _externalEditReview is not null ||
             _pendingEditImageIds.Contains(info.Id))
             return false;
         if (!EditableImageFormats.Supports(info.LocalPath))
@@ -671,7 +672,10 @@ public partial class MainWindow
                     Recursive: false, ForceExifRefresh: true));
                 if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
                     ShowViewerImage(keepCurrentAsPlaceholder: true);
-                _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
+                // A file commit is NOT complete for the user while the
+                // gallery still projects the previous pixel version.
+                await RefreshThumbnailsAsync([request.ImageId]);
+                await RefreshBrowseGalleryAsync(forceIndexReload: true,
                     warmViewport: false);
             }
         }
