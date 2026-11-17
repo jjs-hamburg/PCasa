@@ -69,6 +69,8 @@ public static class PanoramaTransaction
                     destination.Flush(true);
                     stagedHashes.Add(Convert.ToHexString(hasher.GetHashAndReset()));
                 }
+                File.SetCreationTimeUtc(input, File.GetCreationTimeUtc(original));
+                File.SetLastWriteTimeUtc(input, File.GetLastWriteTimeUtc(original));
                 staged.Add(input);
             }
             return new PanoramaSession(id, images.Select(x => x.Id).ToArray(),
@@ -174,9 +176,10 @@ public static class PanoramaTransaction
                     StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException(
                 "Ein Ausgangsbild darf nicht als Panoramaergebnis übernommen werden.");
-        if (!EditableImageFormats.SupportsExternalResult(source))
+        if (!(EditableImageFormats.SupportsExternalResult(source) ||
+              !session.IsPanorama && RawImageSource.IsRawPath(source)))
             throw new NotSupportedException(
-                "Dieses Panorama-Ausgabeformat kann PCasa nicht übernehmen.");
+                "Dieses externe Ausgabeformat kann PCasa nicht übernehmen.");
         if (!File.Exists(source))
             throw new FileNotFoundException("Panoramaergebnis nicht gefunden.", source);
         var extension = Path.GetExtension(source).ToLowerInvariant();
@@ -216,7 +219,10 @@ public static class PanoramaTransaction
                     "Das Panoramaprogramm schreibt noch am Ergebnis. Bitte nach Abschluss erneut auswählen.");
             if (new FileInfo(destination).Length != originalLength)
                 throw new IOException("Die Panorama-Arbeitskopie ist unvollständig.");
-            EditableImageFormats.ValidateStillImage(destination);
+            if (!RawImageSource.IsRawPath(destination))
+                EditableImageFormats.ValidateStillImage(destination);
+            File.SetLastWriteTimeUtc(destination,
+                new DateTime(originalWriteTicks, DateTimeKind.Utc));
             return destination;
         }
         catch
@@ -239,6 +245,8 @@ public static class PanoramaTransaction
                 StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Panoramaergebnis liegt nicht im Sitzungsordner.");
         EditableImageFormats.ValidateStillImage(fullResult);
+        var externalModifiedUtc = File.GetLastWriteTimeUtc(fullResult);
+        var originalCreatedUtc = File.GetCreationTimeUtc(session.Sources[0]);
         // Transfer complete capture metadata from the FIRST image. Then use
         // independent first-with-tags and first-with-GPS selections.
         ExternalResultMetadata.CopyAll(session.Sources[0], fullResult, token);
@@ -282,10 +290,12 @@ public static class PanoramaTransaction
                 destination.Flush(true);
             }
             token.ThrowIfCancellationRequested();
-            for (var i = 1; i < 10000; i++)
+            File.SetCreationTimeUtc(temp, originalCreatedUtc);
+            File.SetLastWriteTimeUtc(temp, externalModifiedUtc);
+            var desired = Path.Combine(folder, stem + extension);
+            for (var i = 0; i < 10000; i++)
             {
-                var filename = stem + (i == 1 ? "" : "-" + i) + extension;
-                var target = Path.Combine(folder, filename);
+                var target = ExternalCopyNames.Candidate(desired, i);
                 try
                 {
                     File.Move(temp, target);
