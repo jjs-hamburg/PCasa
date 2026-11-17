@@ -198,8 +198,71 @@ internal static class ExternalEditSmokeFlow
             if (!File.ReadAllBytes(cameraRaw).SequenceEqual(cameraBytes) ||
                 ExternalEditTransaction.FindPending() is not null)
                 throw new Exception("Cancel modified camera RAW or left active session.");
+
+            // Panorama and batch-edit program capabilities are independent.
+            var panoramic = new ExternalEditorProgram("Pano", "pano.exe",
+                "photo", Panorama: true);
+            var batchEditor = new ExternalEditorProgram("Batch", "batch.exe",
+                "photo", MultiEdit: true);
+            var combined = new ExternalEditorProgram("Both", "both.exe",
+                "photo", Panorama: true, MultiEdit: true);
+            var selection = new[] { photo, other };
+            var editorSettings = new ExternalEditorSettings
+            {
+                Programs = [panoramic, batchEditor, combined]
+            };
+            if (panoramic.MatchesMultiple(selection) ||
+                !batchEditor.MatchesMultiple(selection) ||
+                !combined.MatchesMultiple(selection) ||
+                editorSettings.ForMultiple(selection).Count != 2 ||
+                editorSettings.ForPanorama().Count != 2)
+                throw new Exception("Panorama/multiple-edit program flags are conflated.");
+
+            // Two staged images may have different output extensions or
+            // editors may overwrite a staged file in place. Never map by
+            // directory enumeration order; use staged/source identities.
+            var batchRoot = Path.Combine(root, "Batch");
+            var originals = new[] { File.ReadAllBytes(photo), File.ReadAllBytes(other) };
+            var batch = PanoramaTransaction.Begin(
+                [(1L, photo), (2L, other)], [], null, null,
+                isPanorama: false, workspaceRoot: batchRoot);
+            try
+            {
+                WriteJpeg(batch.Inputs[0], 205);
+                var secondExport = Path.Combine(batch.Directory,
+                    Path.GetFileNameWithoutExtension(batch.Inputs[1]) +
+                    "-Enhanced.png");
+                WritePng(secondExport, 120);
+                var detected = PanoramaTransaction.FindMultipleResults(batch);
+                if (detected.Length != 2 ||
+                    detected.Count(x => x.SourceIndex == 0 &&
+                        x.Path == batch.Inputs[0]) != 1 ||
+                    detected.Count(x => x.SourceIndex == 1 &&
+                        x.Path == secondExport) != 1)
+                    throw new Exception("Multiple-edit output mapping lost a changed input/export.");
+                try
+                {
+                    PanoramaTransaction.MatchSourceIndex(batch, "unrelated.png");
+                    throw new Exception("Unrelated result was assigned to an input.");
+                }
+                catch (InvalidDataException) { }
+                if (!File.ReadAllBytes(photo).SequenceEqual(originals[0]) ||
+                    !File.ReadAllBytes(other).SequenceEqual(originals[1]))
+                    throw new Exception("Batch staging altered an original.");
+
+                var intended = Path.Combine(root, "test-photo.jpg");
+                if (ExternalCopyNames.NextAvailable(intended) !=
+                    Path.Combine(root, "test-photo-Kopie.jpg"))
+                    throw new Exception("Gallery and batch copy names diverged.");
+                File.WriteAllText(Path.Combine(root, "test-photo-Kopie.jpg"), "reserved");
+                if (ExternalCopyNames.NextAvailable(intended) !=
+                    Path.Combine(root, "test-photo-Kopie-2.jpg"))
+                    throw new Exception("Second collision did not allocate -Kopie-2.");
+            }
+            finally { PanoramaTransaction.Cleanup(batch); }
+
             Console.WriteLine(
-                "PASS: Isolated external sessions, locked Cancel/Save, recovery, Undo, RAW staging and Cancel.");
+                "PASS: Isolated external sessions, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");
         }
         finally
         {
