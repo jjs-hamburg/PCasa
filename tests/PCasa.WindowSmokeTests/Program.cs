@@ -80,6 +80,28 @@ internal static class Program
             window.Width = 1500;
             Flush(window);
 
+            // A submenu arrow is not sufficient: the application-wide WPF
+            // template must contain a working PART_Popup for child programs.
+            {
+                var submenu = new MenuItem { Header = "Topaz" };
+                var parentMenu = new MenuItem { Header = "Bearbeiten mit …" };
+                parentMenu.Items.Add(submenu);
+                var context = new ContextMenu { PlacementTarget = window };
+                context.Items.Add(parentMenu);
+                try
+                {
+                    context.IsOpen = true;
+                    Flush(window);
+                    parentMenu.IsSubmenuOpen = true;
+                    Flush(window);
+                    if (parentMenu.Template.FindName("PART_Popup", parentMenu)
+                        is not Popup { IsOpen: true })
+                        throw new Exception(
+                            "The application's context-menu template does not open its child popup.");
+                }
+                finally { context.IsOpen = false; }
+            }
+
             // The external batch and panorama decisions must use the SAME
             // existing three-button viewer footer as a single external edit.
             // Verify that Save cannot replace mismatched formats or panoramas.

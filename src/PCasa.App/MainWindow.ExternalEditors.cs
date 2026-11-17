@@ -773,6 +773,7 @@ public partial class MainWindow
         finally { EndVisibleManualOperation(key); }
 
         _viewerOriginalCache.Remove(review.ImageId);
+        _ = RefreshRestoreBadgesAsync();
         if (committed is not null &&
             committed.Equals(original, StringComparison.OrdinalIgnoreCase))
             await RefreshThumbnailsAsync([review.ImageId]);
