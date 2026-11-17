@@ -337,9 +337,13 @@ public partial class MainWindow
         EditorToolTabs.IsEnabled = editable && noExternalEdit;
         foreach (var tool in _editorToolLabels)
             tool.Button.IsEnabled = editable && noExternalEdit;
+        // With no detected external result, a deliberate click on another
+        // editor automatically discards the unchanged working copy.
+        var canChooseAnotherEditor = noExternalEdit ||
+            _externalEditReview is { Ready: true, Busy: false, ResultPath: null };
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
-                button.IsEnabled = noExternalEdit;
+                button.IsEnabled = canChooseAnotherEditor;
         // Sliders must be visibly disabled as well. The editor tab control
         // disables its descendants without disabling GPS, tags or navigation.
         ViewerCropFooter.Visibility = Visibility.Visible;

@@ -249,6 +249,22 @@ public partial class MainWindow
     {
         try
         {
+            if (_externalEditReview is { Ready: true, Busy: false, ResultPath: null } previous)
+            {
+                // Selecting another editor is an explicit switch, without
+                // forcing the user to click the separate Cancel footer.
+                // Never discard an exported result that has not yet been
+                // presented after a focus change.
+                var output = await Task.Run(() =>
+                    ExternalEditTransaction.DetectResult(previous.Snapshot));
+                if (output is not null)
+                {
+                    await PresentExternalResultAsync(previous);
+                    return;
+                }
+                if (!await CompleteExternalReviewAsync(ExternalEditDecision.Cancel))
+                    return;
+            }
             if (_externalEditReview is not null || _externalEditLaunchPending ||
                 _panoramaSession is not null)
                 throw new InvalidOperationException(UiLanguage.T(
@@ -366,6 +382,36 @@ public partial class MainWindow
             ShowFileActionError(ex);
         }
         finally { _externalEditLaunchPending = false; }
+    }
+
+    private async Task ReleaseUnchangedExternalEditorAsync(
+        ExternalEditReview review, bool closeViewer)
+    {
+        if (!ReferenceEquals(_externalEditReview, review) ||
+            !review.Ready || review.Busy || review.ResultPath is not null)
+            return;
+        try
+        {
+            var output = await Task.Run(() =>
+                ExternalEditTransaction.DetectResult(review.Snapshot));
+            if (!ReferenceEquals(_externalEditReview, review)) return;
+            if (output is not null)
+            {
+                await PresentExternalResultAsync(review);
+                return;
+            }
+            if (await CompleteExternalReviewAsync(ExternalEditDecision.Cancel))
+            {
+                PCasaDiagnostics.WriteMessage("ExternalEdit.UnchangedRelease",
+                    "Unchanged session released by navigation.");
+                if (closeViewer && _viewerOpen) ClosePhotoViewer();
+            }
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("ExternalEdit.UnchangedRelease", ex);
+            StatusText.Text = UiLanguage.T("Externe Bearbeitung: ") + ex.Message;
+        }
     }
 
     private async Task PresentExternalResultAsync(ExternalEditReview review)
