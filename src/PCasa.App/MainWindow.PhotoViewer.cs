@@ -1184,7 +1184,11 @@ public partial class MainWindow
         {
             return;
         }
-        if (_editCompareMode != EditCompareMode.Single) return;
+        if (_editCompareMode != EditCompareMode.Single)
+        {
+            TryBeginEditComparisonPan(e);
+            return;
+        }
         if (TryBeginEditOriginalHold(e)) return;
 
         CancelViewerPendingClose();
@@ -1220,6 +1224,7 @@ public partial class MainWindow
 
     private void PhotoViewerPan_MouseMove(object sender, MouseEventArgs e)
     {
+        if (MoveEditComparisonPan(e)) return;
         if (_viewerPanSurface is not UIElement surface ||
             !ReferenceEquals(sender, surface))
         {
@@ -1251,7 +1256,7 @@ public partial class MainWindow
 
     private void PhotoViewerPan_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (EndEditOriginalHold(e)) return;
+        if (EndEditComparisonPan(e) || EndEditOriginalHold(e)) return;
         if (!ReferenceEquals(sender, _viewerPanSurface))
         {
             return;

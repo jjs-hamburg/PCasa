@@ -22,6 +22,12 @@ public partial class MainWindow
     private double _editCompareSplitFraction = 0.5;
     private bool _editCompareHoldingOriginal;
     private double _editCompareZoomFactor = 1;
+    private bool _editComparePanActive;
+    private Point _editComparePanStart;
+    private double _editComparePanStartX;
+    private double _editComparePanStartY;
+    private double _editComparePanX;
+    private double _editComparePanY;
 
     private void UpdateEditComparisonAvailability()
     {
@@ -186,14 +192,80 @@ public partial class MainWindow
             height / _editCompareEdited.PixelHeight);
         _editCompareZoomFactor = _viewerFitToScreen ? 1 :
             Math.Clamp(_viewerZoomPercent / Math.Max(1, 100 * fit), 0.25, 12);
+        ApplyEditComparisonTransforms();
+    }
+
+    private void ApplyEditComparisonTransforms()
+    {
         foreach (var image in new[]
         {
             EditCompareSideOriginal, EditCompareSideEdited,
             EditCompareSwipeOriginal, EditCompareSwipeEdited
         })
-            image.RenderTransform = new ScaleTransform(
-                _editCompareZoomFactor, _editCompareZoomFactor);
+        {
+            var transform = new TransformGroup();
+            transform.Children.Add(new ScaleTransform(
+                _editCompareZoomFactor, _editCompareZoomFactor));
+            transform.Children.Add(new TranslateTransform(
+                _editComparePanX, _editComparePanY));
+            image.RenderTransform = transform;
+        }
         UpdateEditCompareClip();
+    }
+
+    private bool TryBeginEditComparisonPan(MouseButtonEventArgs e)
+    {
+        // The draggable split handle must retain the normal Thumb input route.
+        for (DependencyObject? source = e.OriginalSource as DependencyObject;
+             source is not null;)
+        {
+            if (ReferenceEquals(source, EditCompareSplitHandle)) return false;
+            try { source = VisualTreeHelper.GetParent(source); }
+            catch (InvalidOperationException) { break; }
+        }
+        e.Handled = true;
+        if (_editCompareZoomFactor <= 1.001) return true;
+        _editComparePanActive = true;
+        _editComparePanStart = e.GetPosition(PhotoViewerPanel);
+        _editComparePanStartX = _editComparePanX;
+        _editComparePanStartY = _editComparePanY;
+        PhotoViewerPanel.CaptureMouse();
+        return true;
+    }
+
+    private bool MoveEditComparisonPan(MouseEventArgs e)
+    {
+        if (!_editComparePanActive) return false;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _editComparePanActive = false;
+            PhotoViewerPanel.ReleaseMouseCapture();
+            return true;
+        }
+        var point = e.GetPosition(PhotoViewerPanel);
+        var maxX = Math.Max(0,
+            (_editCompareZoomFactor - 1) * EditComparePanel.ActualWidth /
+            (_editCompareMode == EditCompareMode.SideBySide ? 4 : 2));
+        var maxY = Math.Max(0,
+            (_editCompareZoomFactor - 1) * EditComparePanel.ActualHeight / 2);
+        _editComparePanX = Math.Clamp(
+            _editComparePanStartX + point.X - _editComparePanStart.X,
+            -maxX, maxX);
+        _editComparePanY = Math.Clamp(
+            _editComparePanStartY + point.Y - _editComparePanStart.Y,
+            -maxY, maxY);
+        ApplyEditComparisonTransforms();
+        e.Handled = true;
+        return true;
+    }
+
+    private bool EndEditComparisonPan(MouseButtonEventArgs e)
+    {
+        if (!_editComparePanActive) return false;
+        _editComparePanActive = false;
+        PhotoViewerPanel.ReleaseMouseCapture();
+        e.Handled = true;
+        return true;
     }
 
     private void EditCompareSwipe_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -221,7 +293,8 @@ public partial class MainWindow
         // RenderTransform scales about the center of the image. Compute the
         // unscaled clipping edge corresponding to the visible divider.
         var localEdge = width / 2 +
-            (x - width / 2) / Math.Max(0.01, _editCompareZoomFactor);
+            (x - width / 2 - _editComparePanX) /
+            Math.Max(0.01, _editCompareZoomFactor);
         EditCompareSwipeOriginal.Clip = new RectangleGeometry(
             new Rect(0, 0, Math.Clamp(localEdge, 0, width), height));
         Canvas.SetLeft(EditCompareSplitHandle, x - EditCompareSplitHandle.Width / 2);
@@ -291,6 +364,12 @@ public partial class MainWindow
     private void ResetEditComparison()
     {
         ++_editCompareRequest;
+        if (_editComparePanActive)
+        {
+            _editComparePanActive = false;
+            PhotoViewerPanel.ReleaseMouseCapture();
+        }
+        _editComparePanX = _editComparePanY = 0;
         _editCompareMode = EditCompareMode.Single;
         _editCompareHoldingOriginal = false;
         _editCompareOriginal = _editCompareEdited = _editCompareHeldEdited = null;
