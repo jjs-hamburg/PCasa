@@ -54,6 +54,7 @@ internal static class Program
         try
         {
             ExternalEditSmokeFlow.Run();
+            PsdCompositeSmokeFlow.Run();
             LocalizationFlow.Run();
             var canDeletePermanently = typeof(PCasa.App.MainWindow).GetMethod(
                 "MayDeletePermanently",
