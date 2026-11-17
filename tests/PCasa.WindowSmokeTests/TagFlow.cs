@@ -3328,17 +3328,54 @@ internal static class TagFlow
                     // thumbnail task can now inherit this P0 owner's rank.
                     actualScheduler.ReportProgress(legacyPreviewJob,
                         "Tags in Originaldateien schreiben", 0, 1, firstOriginal);
-                    Until(window, () =>
-                        (presenterField.GetValue(window)
-                            as PCasa.App.BrowseCacheProgressWindow)?
-                            .FindName("CurrentThumbnail") is Image preview &&
-                        preview.Source is BitmapSource &&
-                        (presenterField.GetValue(window)
-                            as PCasa.App.BrowseCacheProgressWindow)?
-                            .FindName("CurrentFileText") is TextBlock file &&
-                        file.Text == Path.GetFileName(firstOriginal),
-                        "Tag progress could not load the LOCAL thumbnail when " +
-                        "the packed tier was missing and original was locked.");
+                    try
+                    {
+                        Until(window, () =>
+                            (presenterField.GetValue(window)
+                                as PCasa.App.BrowseCacheProgressWindow)?
+                                .FindName("CurrentThumbnail") is Image preview &&
+                            preview.Source is BitmapSource &&
+                            (presenterField.GetValue(window)
+                                as PCasa.App.BrowseCacheProgressWindow)?
+                                .FindName("CurrentFileText") is TextBlock file &&
+                            file.Text == Path.GetFileName(firstOriginal),
+                            "Tag progress could not load the LOCAL thumbnail when " +
+                            "the packed tier was missing and original was locked.");
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        // If this ever fails again, expose the actual OWNER,
+                        // displayed file and outstanding preview task. Do not
+                        // hide a real failure by extending the timeout.
+                        const System.Reflection.BindingFlags flags =
+                            System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.NonPublic;
+                        var activeKey = typeof(PCasa.App.MainWindow)
+                            .GetField("_visibleManualActiveKey", flags)!
+                            .GetValue(window);
+                        var busy = typeof(PCasa.App.MainWindow)
+                            .GetField("_manualThumbnailBusy", flags)!
+                            .GetValue(window);
+                        var requested = typeof(PCasa.App.MainWindow)
+                            .GetField("_lastManualThumbnailPath", flags)!
+                            .GetValue(window);
+                        var presenter = presenterField.GetValue(window)
+                            as PCasa.App.BrowseCacheProgressWindow;
+                        var visibleFile = (presenter?.FindName("CurrentFileText")
+                            as TextBlock)?.Text;
+                        var hasPreview = (presenter?.FindName("CurrentThumbnail")
+                            as Image)?.Source is BitmapSource;
+                        var jobs = string.Join(", ", actualScheduler.Snapshot()
+                            .Where(job => job.Key.StartsWith("tags:", StringComparison.Ordinal) ||
+                                          job.Key.StartsWith("ui:tag-progress-preview:",
+                                              StringComparison.Ordinal))
+                            .TakeLast(10)
+                            .Select(job => $"{job.Key}:{job.State}"));
+                        throw new TimeoutException(
+                            $"{ex.Message} Owner={activeKey}; File={visibleFile}; " +
+                            $"Preview={hasPreview}; Busy={busy}; LastPath={requested}; " +
+                            $"Jobs={jobs}", ex);
+                    }
                 }
                 finally
                 {
