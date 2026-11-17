@@ -437,6 +437,7 @@ public partial class MainWindow
             review.ResultSize = metadata.Length;
             review.ResultWriteUtc = metadata.Time;
             review.Ready = true;
+            var previewFailed = false;
 
             if (review.IsVideo)
             {
@@ -499,13 +500,14 @@ public partial class MainWindow
                         // actions; commit will validate the file independently.
                         // Cancel remains available until finalization begins.
                         PCasaDiagnostics.Write("ExternalEdit.Preview", ex);
-                        StatusText.Text = UiLanguage.T(
-                            "Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
-                            " · " + Path.GetFileName(result);
+                        previewFailed = true;
                     }
                 }
             }
-            StatusText.Text = result is null
+            StatusText.Text = previewFailed
+                ? UiLanguage.T("Vorschau nicht verfügbar; externes Ergebnis kann gespeichert werden.") +
+                    " · " + Path.GetFileName(result)
+                : result is null
                 ? UiLanguage.T("Externe Bearbeitung: warte auf Ergebnis oder Abbrechen · ") +
                     Path.GetFileName(review.Snapshot.OriginalPath)
                 : UiLanguage.T("Externes Ergebnis erkannt: Speichern, Kopie oder Abbrechen · ") +
