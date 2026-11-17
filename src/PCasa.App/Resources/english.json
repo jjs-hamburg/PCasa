@@ -949,5 +949,9 @@
   "Unterschiedliche Bildausschnitte: Vergleich nebeneinander.": "Different image crops: switching to side-by-side comparison.",
   "Bildvergleich fehlgeschlagen: ": "Image comparison failed: ",
   "Bild gespeichert, Katalogaktualisierung ausstehend.": "Image saved; catalog refresh pending.",
-  "Überwachte Ordner im Ordnermanager auswählen.": "Choose monitored folders in Folder Manager."
+  "Überwachte Ordner im Ordnermanager auswählen.": "Choose monitored folders in Folder Manager.",
+  "Einzelansicht": "Single view",
+  "Austauschverzeichnis (optional)": "Exchange directory (optional)",
+  "Austauschverzeichnis auswählen": "Select exchange directory",
+  "Leer: lokaler PCasa-Standardordner. Sonst eigener Sitzungsordner im gewählten Verzeichnis.": "Empty: use the default local PCasa workspace. Otherwise use an isolated session folder in the selected directory."
 }
