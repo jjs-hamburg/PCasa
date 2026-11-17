@@ -24,6 +24,15 @@ public partial class MainWindow
         await StartPanoramaAsync(imageIds, program);
     }
 
+    // The same local batch transaction handles panorama assembly and ordinary
+    // multiple-image editing. These are independent program capabilities.
+    private Task StartMultipleEditorAsync(long[] imageIds, ExternalEditorProgram program)
+    {
+        if (imageIds.Length < 2 || !program.MultiEdit)
+            return Task.CompletedTask;
+        return StartPanoramaAsync(imageIds, program, isPanorama: false);
+    }
+
     private void HookPanoramaActivation()
     {
         if (_panoramaActivationHooked) return;
@@ -44,7 +53,8 @@ public partial class MainWindow
     }
 
     private async Task StartPanoramaAsync(
-        long[] imageIds, ExternalEditorProgram program)
+        long[] imageIds, ExternalEditorProgram program,
+        bool isPanorama = true)
     {
         if (_panoramaLaunchPending || _panoramaSession is not null ||
             _externalEditReview is not null || _externalEditLaunchPending)
@@ -65,7 +75,10 @@ public partial class MainWindow
             var selectedById = sources.ToDictionary(x => x.Id, x => x.Path);
             var inputs = imageIds.Select(id => (Id: id, Path: selectedById[id])).ToArray();
             if (inputs.Any(input => VideoFormats.IsVideo(input.Path)))
-                throw new NotSupportedException("Panorama nur für Bilder.");
+                throw new NotSupportedException("Mehrfachbearbeitung nur für Bilder.");
+            if (!isPanorama && !program.MatchesMultiple(inputs.Select(x => x.Path).ToArray()))
+                throw new InvalidOperationException(
+                    "Dieses Programm unterstützt nicht alle ausgewählten Bildformate.");
 
             var key = "panorama:stage:" + Guid.NewGuid().ToString("N");
             BeginVisibleManualOperation(key, UiLanguage.T("Panorama erstellen"), 100);
@@ -80,9 +93,10 @@ public partial class MainWindow
                         var (tags, lat, lon) = ReadPanoramaMetadata(imageIds, token);
                         return PanoramaTransaction.Begin(inputs, tags, lat, lon,
                             token, (completed, total) => _scheduler.ReportProgress(
-                                key, UiLanguage.T("Panorama erstellen"),
+                                key, UiLanguage.T(isPanorama
+                                    ? "Panorama erstellen" : "Mehrfachbearbeitung"),
                                 total > 0 ? (int)(100.0 * completed / total) : 100,
-                                100, inputs[0].Path));
+                                100, inputs[0].Path), isPanorama);
                     }, workKind: SchedulerWorkKind.Catalog);
             }
             finally { EndVisibleManualOperation(key); }
@@ -107,7 +121,8 @@ public partial class MainWindow
                     using var launched = Process.Start(start)
                         ?? throw new IOException("Panoramaprogramm konnte nicht gestartet werden.");
                 });
-                StatusText.Text = UiLanguage.T("Panorama erstellen") + " · " +
+                StatusText.Text = UiLanguage.T(isPanorama
+                    ? "Panorama erstellen" : "Mehrfachbearbeitung") + " · " +
                     program.Name;
             }
             catch
@@ -164,6 +179,11 @@ public partial class MainWindow
 
     private async Task TryImportPanoramaAsync(PanoramaSession session)
     {
+        if (!session.IsPanorama)
+        {
+            await TryImportMultipleAsync(session);
+            return;
+        }
         if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session))
             return;
         _panoramaImportRunning = true;
@@ -236,6 +256,93 @@ public partial class MainWindow
             await RefreshBrowseGalleryAsync(forceIndexReload: true);
             StatusText.Text = UiLanguage.T("Panorama erstellen") + ": " +
                 Path.GetFileName(target);
+        }
+        finally { _panoramaImportRunning = false; }
+    }
+
+    private async Task TryImportMultipleAsync(PanoramaSession session)
+    {
+        if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session))
+            return;
+        _panoramaImportRunning = true;
+        try
+        {
+            var outputs = await Task.Run(() =>
+                PanoramaTransaction.FindMultipleResults(session));
+            if (!ReferenceEquals(_panoramaSession, session)) return;
+            if (outputs.Length == 0)
+            {
+                // Some editors export into a user-selected folder. Ask for
+                // every output, but never assign files to inputs by list order.
+                if (DateTime.UtcNow - _panoramaLastResultDialogUtc <
+                    TimeSpan.FromSeconds(2)) return;
+                var picker = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = UiLanguage.T("Ergebnisse der Mehrfachbearbeitung auswählen"),
+                    Filter = UiLanguage.T("Bilder") +
+                        "|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd;*.dng|" +
+                        UiLanguage.T("Alle Dateien") + "|*.*",
+                    CheckFileExists = true,
+                    Multiselect = true
+                };
+                try
+                {
+                    if (picker.ShowDialog(this) != true) return;
+                    outputs = picker.FileNames.Select(path =>
+                        new ExternalBatchOutput(
+                            PanoramaTransaction.MatchSourceIndex(session, path),
+                            path)).ToArray();
+                }
+                finally { _panoramaLastResultDialogUtc = DateTime.UtcNow; }
+            }
+            var key = "external:multi-import:" + Guid.NewGuid().ToString("N");
+            BeginVisibleManualOperation(key, UiLanguage.T("Mehrfachbearbeitung"),
+                Math.Max(1, outputs.Length));
+            string[] saved;
+            try
+            {
+                saved = await _scheduler.RunAsync(key,
+                    SchedulerPriority.ManualAction, token =>
+                    {
+                        // Exports outside PCasa's local session are read-only;
+                        // stage them before metadata changes and publishing.
+                        var staged = outputs.Select(output => output with
+                        {
+                            Path = Path.GetDirectoryName(output.Path)!.Equals(
+                                    session.Directory, StringComparison.OrdinalIgnoreCase)
+                                ? output.Path
+                                : PanoramaTransaction.StageExternalResult(session,
+                                    output.Path, token)
+                        }).ToArray();
+                        var files = PanoramaTransaction.ImportMultiple(
+                            session, staged, token, (completed, total) =>
+                                _scheduler.ReportProgress(key,
+                                    UiLanguage.T("Mehrfachbearbeitung"),
+                                    total == 0 ? 100 : (int)(completed * 100 / total),
+                                    100, session.Sources[0]));
+                        foreach (var file in files)
+                        {
+                            var root = FolderExclusionRules.FindOwner(file,
+                                _folderRepository.GetAll());
+                            if (root is null)
+                                throw new IOException("Ausgabeverzeichnis nicht im Katalog: " + file);
+                            var indexed = _folderScanner.ScanFile(root, file,
+                                cancellationToken: token, publishCatalogChange: false,
+                                forceExifRefresh: true);
+                            if (indexed.Failed > 0 || indexed.ImageFilesSeen == 0)
+                                throw new IOException(
+                                    "Mehrfachergebnis gespeichert, aber nicht katalogisiert: " + file);
+                        }
+                        return files;
+                    }, workKind: SchedulerWorkKind.Catalog);
+            }
+            finally { EndVisibleManualOperation(key); }
+            _panoramaSession = null;
+            ResumeSchedulerAfterExternalEdit();
+            PanoramaTransaction.Cleanup(session);
+            await RefreshBrowseGalleryAsync(forceIndexReload: true);
+            StatusText.Text = UiLanguage.T("Mehrfachbearbeitung") +
+                ": " + saved.Length + " " + UiLanguage.T("Bilder gespeichert");
         }
         finally { _panoramaImportRunning = false; }
     }
