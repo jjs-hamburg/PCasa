@@ -77,6 +77,15 @@ internal static class ExternalEditSmokeFlow
             var png = Path.Combine(changedFormat.DirectoryPath, "photo.png");
             WritePng(png, 92);
             File.SetLastWriteTimeUtc(png, externalEditTime);
+            try
+            {
+                ExternalEditTransaction.Commit(changedFormat, png,
+                    ExternalEditDecision.Save, undoOptions: undoOptions);
+                throw new Exception("Format change was silently treated as Save Copy.");
+            }
+            catch (NotSupportedException) { }
+            if (ExternalEditTransaction.FindPending()?.Id != changedFormat.Id)
+                throw new Exception("Rejected Save destroyed the editing session.");
             var firstPng = ExternalEditTransaction.Commit(changedFormat, png,
                 ExternalEditDecision.SaveCopy, undoOptions: undoOptions);
             if (firstPng is null ||
