@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -21,6 +22,9 @@ public partial class MainWindow
     private int _editCompareRequest;
     private double _editCompareSplitFraction = 0.5;
     private bool _editCompareHoldingOriginal;
+    private DispatcherTimer? _editCompareHoldTimer;
+    private bool _editCompareHoldArmed;
+    private long _editCompareHoldArmedImageId = -1;
     private double _editCompareZoomFactor = 1;
     private bool _editComparePanActive;
     private bool _editComparePanMoved;
@@ -405,15 +409,20 @@ public partial class MainWindow
         Canvas.SetLeft(EditCompareSplitHandle, x - EditCompareSplitHandle.Width / 2);
     }
 
+    private void CancelPendingOriginalHold()
+    {
+        _editCompareHoldTimer?.Stop();
+        _editCompareHoldTimer = null;
+        _editCompareHoldArmed = false;
+        _editCompareHoldArmedImageId = -1;
+    }
+
     private bool TryBeginEditOriginalHold(MouseButtonEventArgs e)
     {
-        // The ordinary image click belongs to Gallery navigation. Showing
-        // Before on mouse-down requires an explicit Shift gesture, otherwise
-        // any Undo/Copy history silently makes the viewer impossible to exit.
-        if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0 ||
-            _editCompareMode != EditCompareMode.Single ||
+        if (e.ClickCount != 1 || _editCompareMode != EditCompareMode.Single ||
             _externalBatchReview is not null || _comparisonActive ||
-            _cropActive || _straightenActive || _viewerImageInfo is not { } info)
+            _cropActive || _straightenActive || _viewerImageInfo is not { } info ||
+            _externalEditReview is { ResultPath: null })
             return false;
         var session = _photoEditSession;
         var live = session is { HasChanges: true } && session.ImageId == info.Id;
@@ -422,22 +431,41 @@ public partial class MainWindow
             !_editCompareCopySources.ContainsKey(info.Id) &&
             _externalEditReview?.ResultPath is null)
             return false;
-        _editCompareHoldingOriginal = true;
-        _editCompareHeldEdited = PhotoViewerImage.Source as BitmapSource;
-        e.Handled = true;
-        if (live)
-        {
-            SetViewerBitmap(session!.Original);
-            ApplyViewerImageLayout();
-        }
-        else if (_editCompareOriginal is not null && _editCompareImageId == info.Id)
-        {
-            SetViewerBitmap(_editCompareOriginal);
-            ApplyViewerImageLayout();
-        }
-        else
-            _ = ShowSavedOriginalWhileHeldAsync(info.Id);
-        return true;
+
+        // A short click ALWAYS retains the normal Gallery return. Once the
+        // button is deliberately held for 280 ms, show Before until release.
+        // This preserves the original agreed hold gesture without stealing
+        // quick clicks or requiring a new keyboard modifier.
+        CancelPendingOriginalHold();
+        _editCompareHoldArmed = true;
+        _editCompareHoldArmedImageId = info.Id;
+        var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(280),
+            DispatcherPriority.Input, (_, _) =>
+            {
+                CancelPendingOriginalHold();
+                if (!_viewerOpen || _viewerImageInfo?.Id != info.Id ||
+                    Mouse.LeftButton != MouseButtonState.Pressed ||
+                    _viewerDragMoved || _editCompareMode != EditCompareMode.Single)
+                    return;
+                _editCompareHoldingOriginal = true;
+                _editCompareHeldEdited = PhotoViewerImage.Source as BitmapSource;
+                if (live && _photoEditSession?.ImageId == info.Id)
+                {
+                    SetViewerBitmap(_photoEditSession.Original);
+                    ApplyViewerImageLayout();
+                }
+                else if (_editCompareOriginal is not null &&
+                    _editCompareImageId == info.Id)
+                {
+                    SetViewerBitmap(_editCompareOriginal);
+                    ApplyViewerImageLayout();
+                }
+                else
+                    _ = ShowSavedOriginalWhileHeldAsync(info.Id);
+            }, Dispatcher);
+        _editCompareHoldTimer = timer;
+        timer.Start();
+        return false; // Let the ordinary click/pan path run until hold matures.
     }
 
     private async Task ShowSavedOriginalWhileHeldAsync(long imageId)
@@ -460,8 +488,12 @@ public partial class MainWindow
 
     private bool EndEditOriginalHold(MouseButtonEventArgs e)
     {
+        // On a short click this returns false and the ordinary viewer code
+        // closes to the gallery. On a long hold it restores After instead.
+        CancelPendingOriginalHold();
         if (!_editCompareHoldingOriginal) return false;
         _editCompareHoldingOriginal = false;
+        ReleaseViewerPan();
         if (_editCompareHeldEdited is not null)
         {
             SetViewerBitmap(_editCompareHeldEdited);
@@ -474,6 +506,7 @@ public partial class MainWindow
 
     private void ResetEditComparison()
     {
+        CancelPendingOriginalHold();
         ++_editCompareRequest;
         if (_editComparePanActive)
         {
