@@ -300,8 +300,10 @@ public partial class MainWindow
             // Never permit another tool to start while the original is in
             // an unresolved external-editor transaction.
             var ready = external.Ready && !external.Busy;
-            CropSaveButton.IsEnabled = ready && external.ResultPath is not null;
-            CropSaveCopyButton.IsEnabled = CropSaveButton.IsEnabled;
+            CropSaveCopyButton.IsEnabled = ready && external.ResultPath is not null;
+            CropSaveButton.IsEnabled = CropSaveCopyButton.IsEnabled &&
+                !ExternalEditTransaction.RequiresNewFile(
+                    external.Snapshot.OriginalPath, external.ResultPath!);
             CropCancelButton.IsEnabled = ready;
             CropApplyButton.IsEnabled = false;
             ViewerToolCancelButton.IsEnabled = false;
