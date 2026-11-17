@@ -384,7 +384,8 @@ public static class ExternalEditTransaction
                         StringComparison.OrdinalIgnoreCase) &&
                     (VideoFormats.IsVideo(session.OriginalPath)
                         ? VideoFormats.IsVideo(path)
-                        : EditableImageFormats.SupportsExternalResult(path)))
+                        : EditableImageFormats.SupportsExternalResult(path) ||
+                          RawImageSource.IsRawPath(path)))
                 .Where(path => new FileInfo(path).Length > 0)
                 .ToArray();
             if (candidates.Length > 1)
@@ -449,13 +450,12 @@ public static class ExternalEditTransaction
         var folder = Path.GetDirectoryName(original)!;
         var basename = Path.GetFileNameWithoutExtension(original);
         var extension = Path.GetExtension(source);
-        for (var i = 1; i < 100000; i++)
+        // First try the original stem with the actual output extension.
+        // On collision use the gallery duplicate convention, regardless of
+        // whether the external editor changed the container format.
+        for (var i = 0; i < 100000; i++)
         {
-            var formatChanged = !Path.GetExtension(source).Equals(
-                Path.GetExtension(original), StringComparison.OrdinalIgnoreCase);
-            var suffix = formatChanged
-                ? (i == 1 ? "" : "-" + i)
-                : (i == 1 ? "-Kopie" : "-Kopie-" + i);
+            var suffix = i == 0 ? "" : i == 1 ? "-Kopie" : "-Kopie-" + i;
             var destination = Path.Combine(folder, basename + suffix + extension);
             if (!File.Exists(destination)) return destination;
         }
@@ -464,7 +464,8 @@ public static class ExternalEditTransaction
 
     private static void CopyAtomic(string source, string target,
         bool replace, CancellationToken token,
-        Action<long, long>? progress = null)
+        Action<long, long>? progress = null,
+        DateTime? creationUtc = null, DateTime? modifiedUtc = null)
     {
         // Stage on the TARGET volume, then rename. A crashed copy never
         // writes half an image directly over a photo (also over SMB).
@@ -495,6 +496,13 @@ public static class ExternalEditTransaction
                     throw new IOException(UiLanguage.T("Kopie ist unvollständig."));
             }
             token.ThrowIfCancellationRequested();
+            // Apply dates to the staged file BEFORE the atomic publication.
+            // The result's editing timestamp was captured before ExifTool
+            // touched its metadata, and Windows creation follows the source.
+            if (creationUtc is DateTime created)
+                File.SetCreationTimeUtc(temp, created);
+            if (modifiedUtc is DateTime modified)
+                File.SetLastWriteTimeUtc(temp, modified);
             try { File.Move(temp, target, overwrite: replace); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -537,6 +545,8 @@ public static class ExternalEditTransaction
                 throw new FileNotFoundException(UiLanguage.T(
                     "Das externe Programm hat kein Ergebnis gespeichert."), source);
             source = Path.GetFullPath(source);
+            var sourceModifiedUtc = File.GetLastWriteTimeUtc(source);
+            var originalCreatedUtc = File.GetCreationTimeUtc(session.OriginalPath);
             // A layered PSD exported from a JPEG is always a NEW photo. Never
             // replace the JPEG, even if the user clicked ordinary Save.
             if (decision == ExternalEditDecision.Save &&
@@ -593,7 +603,8 @@ public static class ExternalEditTransaction
                         // Save uses exactly the central undo/recycle mechanism.
                         new UndoHistoryService(undoOptions ?? UndoOptions.Load())
                             .CaptureBeforeSave(session.OriginalPath, token);
-                        CopyAtomic(source, session.OriginalPath, replace: true, token, progress);
+                        CopyAtomic(source, session.OriginalPath, replace: true, token,
+                            progress, originalCreatedUtc, sourceModifiedUtc);
                     }
                     if (Hash(session.OriginalPath) != Hash(source))
                         throw new IOException("ExternalEdit: Speichern nicht überprüfbar.");
@@ -617,7 +628,8 @@ public static class ExternalEditTransaction
                 };
                 if (session.Finalizing is null) WritePending(copying);
                 if (!File.Exists(destination))
-                    CopyAtomic(source, destination, replace: false, token, progress);
+                    CopyAtomic(source, destination, replace: false, token,
+                        progress, originalCreatedUtc, sourceModifiedUtc);
                 else if (Hash(destination) != Hash(source))
                     throw new IOException("ExternalEdit: Kopie besitzt einen anderen Inhalt.");
                 Finish(session);
