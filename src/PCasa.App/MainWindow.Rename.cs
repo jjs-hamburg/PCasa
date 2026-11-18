@@ -222,6 +222,16 @@ public partial class MainWindow
                 }, workKind: SchedulerWorkKind.Catalog);
             RebaseRenamedTreePreferences(source, destination,
                 oldCanonical, newCanonical);
+            // The current WPF nodes still carry OLD paths. The new tree must
+            // use the just-rebased persisted expansion set rather than taking
+            // an obsolete snapshot of those old UI node identities.
+            if (FoldersTree.SelectedItem is TreeViewItem selected &&
+                selected.Tag is FolderTreeTag selectedTag &&
+                FolderExclusionRules.IsAtOrBelow(selectedTag.FullPath, source))
+                selected.Tag = CreateFolderTreeTag(
+                    destination + selectedTag.FullPath[source.Length..],
+                    selectedTag.PhotoFolderId);
+            _folderTreeInitialized = false;
             _dropTargetProjection = await _scheduler.RunAsync(
                 "folder:rename:configuration:" + Guid.NewGuid().ToString("N"),
                 SchedulerPriority.Interactive,
