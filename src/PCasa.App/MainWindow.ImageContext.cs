@@ -106,9 +106,26 @@ public partial class MainWindow
         menu.Items.Add(restore);
         _ = UpdateRestoreContextAsync(restore, id);
         menu.Items.Add(new Separator());
+        if (thumbnailIds.Length == 1)
+        {
+            var rename = new MenuItem {
+                Header = UiLanguage.T("Umbenennen"), IsEnabled = false };
+            rename.Click += (_, _) => _ = RenameImageAsync(id);
+            menu.Items.Add(rename);
+            _ = EnableImageRenameIfAvailableAsync(menu, rename, id);
+        }
         AddContextAction(menu, "Duplizieren", () => DuplicateImage(id));
         AddContextAction(menu, "Löschen", () => _ = DeleteSelectedImagesAsync());
         menu.IsOpen = true;
+    }
+
+    private async Task EnableImageRenameIfAvailableAsync(
+        ContextMenu parent, MenuItem item, long id)
+    {
+        var available = await ImageRenameAvailableAsync(id);
+        if (!Dispatcher.HasShutdownStarted &&
+            parent.Items.Contains(item) && !_viewerOpen)
+            item.IsEnabled = available;
     }
 
     internal static long[] SelectThumbnailIds(long clickedId,
