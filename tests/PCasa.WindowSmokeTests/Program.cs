@@ -2792,6 +2792,24 @@ internal static class Program
                         throw new Exception(
                             "A saved image with Undo history enabled comparison outside an edit.");
                     var edit = new PhotoEditSession(999, originalPixels);
+                    // PhotoEditSession intentionally DECOUPLES its original
+                    // pixels from the source BitmapSource/decoder. The split
+                    // must use that immutable session source, not the same
+                    // object reference that created the session.
+                    var actualBefore = edit.Original;
+                    var originalBytes = new byte[originalPixels.PixelWidth *
+                        originalPixels.PixelHeight * 4];
+                    var beforeBytes = new byte[actualBefore.PixelWidth *
+                        actualBefore.PixelHeight * 4];
+                    originalPixels.CopyPixels(originalBytes,
+                        originalPixels.PixelWidth * 4, 0);
+                    actualBefore.CopyPixels(beforeBytes,
+                        actualBefore.PixelWidth * 4, 0);
+                    if (actualBefore.PixelWidth != originalPixels.PixelWidth ||
+                        actualBefore.PixelHeight != originalPixels.PixelHeight ||
+                        !originalBytes.SequenceEqual(beforeBytes))
+                        throw new Exception(
+                            "Edit session detached the wrong original pixels.");
                     edit.Apply(new PhotoEditStep("contrast", Amount: 0.25));
                     editStateFixture.SetValue(window, edit);
                     viewerImage.Source = editedPixels;
@@ -2805,8 +2823,8 @@ internal static class Program
                     if (side.Visibility != Visibility.Collapsed ||
                         swipe.Visibility != Visibility.Visible ||
                         swipe.ActualWidth < 50 ||
-                        beforeImage.Source != originalPixels ||
-                        afterImage.Source != editedPixels)
+                        !ReferenceEquals(beforeImage.Source, actualBefore) ||
+                        !ReferenceEquals(afterImage.Source, editedPixels))
                         throw new Exception(
                             "Split mode silently switched to side-by-side or loaded incorrect pixels.");
                     var firstBounds = beforeImage.TransformToAncestor(swipe)
