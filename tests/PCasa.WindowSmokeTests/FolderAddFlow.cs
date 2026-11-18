@@ -365,7 +365,20 @@ internal static class FolderAddFlow
                 SamePath(PathOf(item), initialRoot));
             if (collapsedMonitoredRoot.Items.Count == 0)
                 throw new Exception("Expansion regression requires a populated monitored root.");
+
+            // First persist the OPEN state through the normal WPF event.
+            // Then suppress the event exactly as an internal tree operation
+            // can do, and close it. Only Closing's explicit snapshot can now
+            // save the true final CLOSED state across the restart.
             collapsedMonitoredRoot.IsExpanded = false;
+            collapsedMonitoredRoot.IsExpanded = true;
+            var bulkFlag = typeof(PCasa.App.MainWindow).GetField(
+                "_bulkFolderExpansion", BindingFlags.NonPublic |
+                BindingFlags.Instance)
+                ?? throw new Exception("Tree event suppression state missing.");
+            bulkFlag.SetValue(window, true);
+            try { collapsedMonitoredRoot.IsExpanded = false; }
+            finally { bulkFlag.SetValue(window, false); }
             if (collapsedMonitoredRoot.IsExpanded)
                 throw new Exception("Could not collapse the root before restart.");
 
