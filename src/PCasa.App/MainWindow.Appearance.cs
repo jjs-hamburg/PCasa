@@ -648,7 +648,15 @@ public partial class MainWindow
         // a different folder). Persist its current selection even when the
         // optional gallery-position restoration is disabled.
         if (FoldersTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag tag })
-            _appearance.SelectedTreePath = tag.FullPath;
+        {
+            // Explorer Ansicht can temporarily insert uncatalogued folders.
+            // Never save one of those transient nodes as the startup focus.
+            _appearance.SelectedTreePath =
+                _allFolderProjectionRootPath is not null &&
+                _explorerInsertedPaths.Contains(tag.FullPath) &&
+                _explorerOriginalSelectionPath is { } originalSelection
+                    ? originalSelection : tag.FullPath;
+        }
         // Do not overwrite a valid saved anchor with the initial zero
         // position if PCasa is closed before the catalog becomes visible.
         if (_appearance.RestoreGalleryPosition && _browseIndex.Count > 0 &&
