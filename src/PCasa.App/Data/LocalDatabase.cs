@@ -612,6 +612,28 @@ public sealed class LocalDatabase
             intents.ExecuteNonQuery();
         }
 
+        // A same-parent DIRECTORY rename spans a filesystem operation and
+        // one SQLite transaction. An intent recorded BEFORE Directory.Move
+        // lets startup reconcile a crash without rescanning/losing the
+        // stable image IDs and their packed thumbnails. Keep the receipt
+        // until Undo and UI folder preferences have also been rebased.
+        using (var folderRenameIntents = connection.CreateCommand())
+        {
+            folderRenameIntents.CommandText = """
+                CREATE TABLE IF NOT EXISTS folder_rename_intents (
+                    operation_id TEXT PRIMARY KEY,
+                    source_path TEXT NOT NULL COLLATE NOCASE,
+                    target_path TEXT NOT NULL COLLATE NOCASE,
+                    canonical_source TEXT NOT NULL COLLATE NOCASE,
+                    canonical_target TEXT NOT NULL COLLATE NOCASE,
+                    catalog_applied INTEGER NOT NULL DEFAULT 0
+                        CHECK(catalog_applied IN (0,1)),
+                    created_utc TEXT NOT NULL
+                );
+                """;
+            folderRenameIntents.ExecuteNonQuery();
+        }
+
         // One-time adoption of existing catalogs: only incomplete tier sets
         // are queued. A changed tier profile invalidates the old completion
         // assumption; it is not a reason to delete cached pack files.
