@@ -369,6 +369,23 @@ internal static class FolderAddFlow
             if (collapsedMonitoredRoot.IsExpanded)
                 throw new Exception("Could not collapse the root before restart.");
 
+            // Simulate the scanner's committed-folder UI notification while
+            // the parent is collapsed. It may append a child, but must NOT
+            // expand that parent behind the user's back.
+            var discoveredPath = Path.Combine(initialRoot, "DiscoveredWhileClosed");
+            var discover = typeof(PCasa.App.MainWindow).GetMethod(
+                "ShowScannedPhotoFolder", BindingFlags.NonPublic |
+                BindingFlags.Instance)
+                ?? throw new Exception("Scanner folder publication handler missing.");
+            discover.Invoke(window, [new ScanProgress(1, 1, 0, 0,
+                Path.Combine(discoveredPath, "synthetic.jpg"),
+                DiscoveredPhotoFolderId: long.MaxValue - 17,
+                DiscoveredPhotoFolderPath: discoveredPath)]);
+            if (collapsedMonitoredRoot.IsExpanded ||
+                !Walk(tree).Any(item => SamePath(PathOf(item), discoveredPath)))
+                throw new Exception(
+                    "Incremental scanner discovery reopened or lost a collapsed branch.");
+
             var firstWindow = window;
             firstWindow.Close();
             Until(firstWindow, () => !firstWindow.IsVisible,
