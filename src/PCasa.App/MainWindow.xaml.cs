@@ -68,6 +68,7 @@ public partial class MainWindow : Window
         // activates the background scanner.
         RecoverExternalEditSchedulerLease();
         ScheduleExternalCleanup();
+        _ = WarmExternalEditorIconsAsync();
     }
 
     private bool _folderRemovalPending;
