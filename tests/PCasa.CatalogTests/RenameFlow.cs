@@ -64,13 +64,23 @@ internal static class RenameFlow
                 cmd.Parameters.AddWithValue("$path", photo);
                 id = Convert.ToInt64(cmd.ExecuteScalar());
             }
-            // The physical directory rename and its DB rebase are independent
-            // steps; every descendant path change is one SQLite transaction.
+            // Simulate a process crash after Directory.Move but BEFORE the
+            // SQLite catalog rebase: the new startup recovery must finish
+            // exactly that interrupted transaction without reimporting files.
             var renamedAlbums = Path.Combine(pictures, "Renamed");
             var rename = new CatalogRenameService(database);
-            rename.InvalidateScans(albums);
+            var firstIntent = Guid.NewGuid().ToString("N");
+            rename.PrepareDirectoryRename(firstIntent, albums, renamedAlbums,
+                albums, renamedAlbums);
             Directory.Move(albums, renamedAlbums);
-            rename.RebaseDirectory(albums, renamedAlbums, albums, renamedAlbums);
+            var afterCrashRecovery = new CatalogRenameService(database)
+                .RecoverPendingRenames();
+            if (afterCrashRecovery.Applied.Count != 1 ||
+                afterCrashRecovery.Applied[0].Id != firstIntent ||
+                afterCrashRecovery.Unresolved.Count != 0)
+                throw new Exception(
+                    "Crash after physical directory move was not recovered.");
+            rename.CompleteDirectoryRename(firstIntent);
             var renamedImage = Path.Combine(renamedAlbums, "2018", "old.jpg");
             VerifySameImage(database, id, renamedImage, thumbnail, pack);
             using (var db = database.OpenConnection())
@@ -85,15 +95,68 @@ internal static class RenameFlow
             // Rename the MONITORED ROOT too, preserving its root ID and
             // every cached thumbnail without re-indexing.
             var rootRenamed = Path.Combine(sandbox, "MyPictures");
-            rename.InvalidateScans(pictures);
+            var rootIntent = Guid.NewGuid().ToString("N");
+            rename.PrepareDirectoryRename(rootIntent, pictures, rootRenamed,
+                pictures, rootRenamed);
             Directory.Move(pictures, rootRenamed);
-            rename.RebaseDirectory(pictures, rootRenamed, pictures, rootRenamed);
+            rename.RebaseDirectory(pictures, rootRenamed, pictures, rootRenamed,
+                rootIntent);
+            // Simulate a crash AFTER the SQLite commit but BEFORE Undo /
+            // appearance bookkeeping and final receipt deletion.
+            var afterCatalogCrash = new CatalogRenameService(database)
+                .RecoverPendingRenames();
+            if (afterCatalogCrash.Applied.Count != 1 ||
+                afterCatalogCrash.Applied[0].Id != rootIntent ||
+                afterCatalogCrash.Unresolved.Count != 0)
+                throw new Exception(
+                    "Crash after DB commit lost the remaining rename receipt.");
+            rename.CompleteDirectoryRename(rootIntent);
             if (roots.GetAll().Single().Id != root.Id ||
                 !string.Equals(roots.GetAll().Single().LocalPath, rootRenamed,
                     StringComparison.OrdinalIgnoreCase))
                 throw new Exception("Monitored root identity did not survive rename.");
             renamedImage = Path.Combine(rootRenamed, "Renamed", "2018", "old.jpg");
             VerifySameImage(database, id, renamedImage, thumbnail, pack);
+
+            // A crash BEFORE Directory.Move must leave the filesystem and
+            // existing catalog paths intact; the orphan intent is removed.
+            var neverMoved = Path.Combine(rootRenamed, "BeforeMove");
+            var notRenamed = Path.Combine(rootRenamed, "AfterMove");
+            Directory.CreateDirectory(neverMoved);
+            var abortIntent = Guid.NewGuid().ToString("N");
+            rename.PrepareDirectoryRename(abortIntent, neverMoved, notRenamed,
+                neverMoved, notRenamed);
+            var beforeMoveRecovery = new CatalogRenameService(database)
+                .RecoverPendingRenames();
+            if (beforeMoveRecovery.Applied.Count != 0 ||
+                beforeMoveRecovery.Unresolved.Count != 0 ||
+                rename.PendingRenames().Count != 0 ||
+                !Directory.Exists(neverMoved))
+                throw new Exception(
+                    "Crash before physical rename did not safely discard the pending receipt.");
+
+            // An offline/unverified pair of paths MUST retain its receipt.
+            var unreachableSource = Path.Combine(sandbox, "MissingSource");
+            var unreachableTarget = Path.Combine(sandbox, "MissingTarget");
+            var unresolvedIntent = Guid.NewGuid().ToString("N");
+            rename.PrepareDirectoryRename(unresolvedIntent, unreachableSource,
+                unreachableTarget, unreachableSource, unreachableTarget);
+            var unresolvedRecovery = new CatalogRenameService(database)
+                .RecoverPendingRenames();
+            if (unresolvedRecovery.Unresolved.Count != 1 ||
+                unresolvedRecovery.Unresolved[0].Id != unresolvedIntent ||
+                rename.PendingRenames().Count != 1)
+                throw new Exception(
+                    "Unreachable rename endpoints were silently forgotten.");
+            // Simulate restored source access: the operation was never moved,
+            // so a subsequent startup should now safely clear the receipt.
+            Directory.CreateDirectory(unreachableSource);
+            var restoredRecovery = new CatalogRenameService(database)
+                .RecoverPendingRenames();
+            if (restoredRecovery.Unresolved.Count != 0 ||
+                rename.PendingRenames().Count != 0)
+                throw new Exception(
+                    "Restored source was not recognized as an unexecuted rename.");
 
             // A file rename reuses the production relocation journal and
             // catalog scan session; the same image ID and cache survive it.
@@ -110,7 +173,7 @@ internal static class RenameFlow
                 throw new Exception("Completed file rename left an unresolved move intent.");
 
             Console.WriteLine(
-                "PASS: Image, subtree and monitored-root Rename preserve image IDs, tags, photo folders and packed thumbnail tiers.");
+                "PASS: Image/subtree/root Rename retains cache and crash recovery handles before/after disk move, committed catalog and offline paths.");
         }
         finally
         {
