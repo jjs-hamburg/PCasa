@@ -39,6 +39,11 @@ public partial class MainWindow : Window
 
         _database = new LocalDatabase();
         _database.Initialize();
+        // Directory.Move and SQLite cannot commit atomically. Reconcile any
+        // interrupted rename BEFORE durable jobs, the first gallery projection
+        // or the background monitor can read stale directory paths.
+        var renameService = new CatalogRenameService(_database);
+        var renameRecovery = renameService.RecoverPendingRenames();
         // Prepare the shared write-error ledger and migrate older GPS errors
         // before scheduler recovery can start any original-file write.
         _originalWriteFailures = new OriginalWriteFailureRepository(_database);
@@ -64,6 +69,29 @@ public partial class MainWindow : Window
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
         InitializeAppearance();
+        foreach (var recovered in renameRecovery.Applied)
+        {
+            try
+            {
+                RebaseRenamedTreePreferences(recovered.Source, recovered.Target,
+                    recovered.CanonicalSource, recovered.CanonicalTarget);
+                new UndoHistoryService(UndoOptions.Load())
+                    .RebaseSourcePaths(recovered.Source, recovered.Target,
+                        subtree: true);
+                renameService.CompleteDirectoryRename(recovered.Id);
+                PCasaDiagnostics.WriteMessage("Rename.FolderRecovered",
+                    $"Completed interrupted folder rename {recovered.Source} -> {recovered.Target}");
+            }
+            catch (Exception ex)
+            {
+                // Retain the durable receipt, so recovery remains retryable.
+                PCasaDiagnostics.Write("Rename.FolderRecoveryFollowup", ex);
+            }
+        }
+        foreach (var unresolved in renameRecovery.Unresolved)
+            PCasaDiagnostics.WriteMessage("Rename.FolderNeedsReview",
+                $"Rename from {unresolved.Source} to {unresolved.Target} " +
+                "could not be verified. The durable receipt is retained.");
         // Recovery must own the scheduler pause before the Loaded handler
         // activates the background scanner.
         RecoverExternalEditSchedulerLease();
