@@ -103,6 +103,42 @@ public sealed class UndoHistoryService
     // Identical availability policy for Edit, context menus and gallery icons.
     // Only the local Undo archive is read; source images, including SMB/NAS,
     // are never opened for an availability check.
+    /// <summary>
+    /// A physical rename does not invalidate a saved before-image. Keep its
+    /// stored original-path identity in sync, without copying the snapshot
+    /// bytes or creating a new Undo state.
+    /// </summary>
+    public int RebaseSourcePaths(string oldPath, string newPath, bool subtree)
+    {
+        var source = Path.GetFullPath(oldPath);
+        var target = Path.GetFullPath(newPath);
+        var changed = 0;
+        Directory.CreateDirectory(ArchiveRoot);
+        foreach (var version in EnumerateVersions())
+        {
+            var oldVersionPath = version.SourcePath;
+            var matches = subtree
+                ? FolderExclusionRules.IsAtOrBelow(oldVersionPath, source)
+                : string.Equals(oldVersionPath, source,
+                    StringComparison.OrdinalIgnoreCase);
+            if (!matches) continue;
+            var resolved = subtree
+                ? target + oldVersionPath[source.Length..] : target;
+            var metadataPath = Path.Combine(ArchiveRoot,
+                version.Id.ToString("N") + ".json");
+            var temp = metadataPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, JsonSerializer.Serialize(
+                    version with { SourcePath = resolved }));
+                File.Move(temp, metadataPath, overwrite: true);
+                changed++;
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+        return changed;
+    }
+
     public bool HasRestorableVersion(string sourcePath)
     {
         return GetVersions(sourcePath).Any(version =>
