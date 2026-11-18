@@ -323,11 +323,18 @@ public partial class MainWindow : Window
                 // E.g. C: > Pictures > _a, _Christina, Himmel ...
                 // The monitored node stays expanded so its siblings are visible.
                 var monitoredItem = CreateFolderTreeItem(monitoredNode, pathsToExpand);
-                monitoredItem.IsExpanded = true;
+                // First launch opens monitored roots for discoverability.
+                // Once the user has saved tree state, never force-open the
+                // root after a scan rebuild or PCasa restart.
+                if (useDefaultExpansion && !_appearance.FolderExpansionsSaved)
+                    monitoredItem.IsExpanded = true;
                 driveItem.Items.Add(monitoredItem);
             }
 
-            driveItem.IsExpanded = true;
+            // Same policy for the drive/share node. An explicitly collapsed
+            // drive stays collapsed on every subsequent launch.
+            if (useDefaultExpansion && !_appearance.FolderExpansionsSaved)
+                driveItem.IsExpanded = true;
             FoldersTree.Items.Add(driveItem);
         }
 
@@ -412,9 +419,28 @@ public partial class MainWindow : Window
 
     private void SaveFolderTreeState()
     {
-        if (_rebuildingFolderTree) return;
+        // Do not replace a valid previous snapshot with an empty startup
+        // tree before the catalog projection has been initialized.
+        if (_rebuildingFolderTree || !_folderTreeInitialized) return;
+
+        var expanded = CaptureExpandedFolderPaths();
+        if (_allFolderProjectionRootPath is not null)
+        {
+            // Explorer Ansicht adds temporary, non-catalogued nodes and
+            // temporarily expands its selected root. Neither is a user's
+            // permanent catalog tree preference. Unrelated real branches
+            // still retain their latest open/closed states.
+            expanded.ExceptWith(_explorerInsertedPaths);
+            if (_explorerOriginalSelectionPath is { } originalPath)
+            {
+                if (_explorerOriginalExpanded) expanded.Add(originalPath);
+                else expanded.Remove(originalPath);
+            }
+        }
+
         _appearance.FolderExpansionsSaved = true;
-        _appearance.ExpandedTreePaths = CaptureExpandedFolderPaths().ToArray();
+        _appearance.ExpandedTreePaths = expanded
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
         SaveAppearance();
     }
 
