@@ -111,18 +111,19 @@ public partial class MainWindow
     {
         if (EditCompareSingleButton is null) return;
         var imageId = _viewerImageInfo?.Id;
+        // A before/after decision exists ONLY while an unsaved changed edit
+        // is active. Recycle/Undo versions are NOT editing sessions and
+        // finishing Save/Cancel revokes this mode immediately.
         var eligible = _viewerOpen && !_comparisonActive &&
             _externalBatchReview is null &&
             imageId is long id &&
             EditableImageFormats.Supports(_viewerImageInfo!.LocalPath) &&
             ((_photoEditSession is { HasChanges: true } live && live.ImageId == id) ||
-             (_externalEditReview is { ResultPath: not null } external &&
-              external.ImageId == id) ||
-             (_latestExternalComparison?.ImageId == id) ||
-             (_externalComparisonUnavailableImageId != id &&
-              (_restoreBadgeImageIds.Contains(id) ||
-               _editCompareCopySources.ContainsKey(id))));
-        EditCompareSingleButton.IsEnabled = _viewerOpen && !_comparisonActive;
+             (_externalEditReview is { Ready: true, Busy: false,
+                 ResultPath: not null } external && external.ImageId == id));
+        if (!eligible && _editCompareMode != EditCompareMode.Single)
+            ResetEditComparison();
+        EditCompareSingleButton.IsEnabled = eligible;
         EditCompareSideButton.IsEnabled = eligible;
         EditCompareSplitButton.IsEnabled = eligible;
         // The icons are vector geometry, not text: FontWeight does NOTHING
@@ -174,55 +175,17 @@ public partial class MainWindow
             return captured is not null
                 ? (captured.Before, captured.After) : null;
         }
-        // After Save/Save Copy the isolated workspace no longer exists.
-        // Its exact session-bound pixels take priority over Undo history.
-        if (_latestExternalComparison is { } last && last.ImageId == imageId)
-            return (last.Before, last.After);
-        // A failed snapshot is not permission to compare an arbitrary
-        // previous Undo version and falsely label it the external input.
-        if (_externalComparisonUnavailableImageId == imageId)
-            return null;
-        var info = _viewerImageInfo;
-        if (info is null || info.Id != imageId) return null;
-        if (_editCompareCopySources.TryGetValue(imageId, out var sourceId))
-        {
-            var images = await Task.WhenAll(new[] { sourceId, imageId }
-                .Select(id => _scheduler.RunAsync(
-                    "viewer:edit-copy-before:" + Guid.NewGuid().ToString("N"),
-                    SchedulerPriority.Interactive,
-                    token => LoadComparisonBitmap(id, token),
-                    workKind: SchedulerWorkKind.ViewerRead)));
-            return images[0] is { } original && images[1] is { } edited
-                ? (original, edited) : null;
-        }
-        var version = await Task.Run(() =>
-            new UndoHistoryService(UndoOptions.Load())
-                .GetVersions(info.LocalPath).FirstOrDefault());
-        if (version is null) return null;
-
-        var bitmaps = await _scheduler.RunAsync(
-            "viewer:edit-before:" + Guid.NewGuid().ToString("N"),
-            SchedulerPriority.Interactive,
-            token =>
-            {
-                token.ThrowIfCancellationRequested();
-                var dims = EditableImageFormats.Dimensions(version.SnapshotPath);
-                var original = PhotoViewerImageLoader.Load(
-                    new PhotoViewerImageInfo(imageId, version.SnapshotPath,
-                        Path.GetFileName(version.SnapshotPath),
-                        dims.Width, dims.Height),
-                    2400, token);
-                var edited = LoadComparisonBitmap(imageId, token);
-                return (Original: original, Edited: edited);
-            }, workKind: SchedulerWorkKind.ViewerRead);
-        return bitmaps.Original is not null && bitmaps.Edited is not null
-            ? (bitmaps.Original, bitmaps.Edited) : null;
+        // Save/Cancel ends the decision. Neither the latest Undo snapshot
+        // nor a previous external session may masquerade as a fresh edit.
+        // Restore has its OWN comparison dialog and explicit version pairing.
+        return null;
     }
 
     private async Task ShowEditComparisonAsync(EditCompareMode requested)
     {
         if (!_viewerOpen || _comparisonActive || _externalBatchReview is not null ||
-            _viewerImageInfo is not { } info) return;
+            _viewerImageInfo is not { } info ||
+            !EditCompareSideButton.IsEnabled) return;
         var id = info.Id;
         var generation = ++_editCompareRequest;
         try
@@ -451,10 +414,8 @@ public partial class MainWindow
             return false;
         var session = _photoEditSession;
         var live = session is { HasChanges: true } && session.ImageId == info.Id;
-        if (!live && !_restoreBadgeImageIds.Contains(info.Id) &&
-            _latestExternalComparison?.ImageId != info.Id &&
-            !_editCompareCopySources.ContainsKey(info.Id) &&
-            _externalEditReview?.ResultPath is null)
+        if (!live && (_externalEditReview is not { ResultPath: not null } review ||
+                     review.ImageId != info.Id))
             return false;
 
         // A short click ALWAYS retains the normal Gallery return. Once the
