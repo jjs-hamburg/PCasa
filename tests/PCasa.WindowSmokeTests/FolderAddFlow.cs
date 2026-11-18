@@ -358,6 +358,17 @@ internal static class FolderAddFlow
                     "Held manual source-probe never finished.");
             }
 
+            // Persist the ACTUAL closed state of a monitored root before
+            // the first real shutdown. Earlier compressed-tree rebuilding
+            // forced monitored nodes open unconditionally on the next launch.
+            var collapsedMonitoredRoot = Walk(tree).Single(item =>
+                SamePath(PathOf(item), initialRoot));
+            if (collapsedMonitoredRoot.Items.Count == 0)
+                throw new Exception("Expansion regression requires a populated monitored root.");
+            collapsedMonitoredRoot.IsExpanded = false;
+            if (collapsedMonitoredRoot.IsExpanded)
+                throw new Exception("Could not collapse the root before restart.");
+
             var firstWindow = window;
             firstWindow.Close();
             Until(firstWindow, () => !firstWindow.IsVisible,
@@ -404,6 +415,21 @@ internal static class FolderAddFlow
             window.Show();
             tree = (TreeView)window.FindName("FoldersTree");
             surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
+
+            Until(window, () =>
+                Walk(tree).Any(item => SamePath(PathOf(item), initialRoot)),
+                "Persisted monitored root did not load in the restarted folder tree.");
+            var afterRestartRoot = Walk(tree).Single(item =>
+                SamePath(PathOf(item), initialRoot));
+            if (afterRestartRoot.IsExpanded)
+                throw new Exception(
+                    "Restart forced an explicitly collapsed monitored root open.");
+            // Other integration checks need to access the root's children.
+            // This is a real user expansion and must save as usual.
+            afterRestartRoot.IsExpanded = true;
+            Console.WriteLine(
+                "PASS: Collapsed monitored folder survives actual PCasa shutdown and restart.");
+
             try
             {
                 Until(window, () =>
