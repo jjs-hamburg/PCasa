@@ -301,7 +301,7 @@ public sealed class ExternalEditorsWindow : Window
             {
                 foreach (var exe in executables)
                 {
-                    try { ExternalEditorIconStore.Capture(exe); }
+                    try { ExternalEditorIconStore.EnsureCaptured(exe); }
                     catch (Exception ex)
                     { PCasaDiagnostics.Write("ExternalEditor.ConfigureIcon", ex); }
                 }
