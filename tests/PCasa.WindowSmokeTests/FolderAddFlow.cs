@@ -941,9 +941,24 @@ internal static class FolderAddFlow
             var savedTree = (TreeView)window.FindName("FoldersTree");
             var rememberedItem = Walk(savedTree).First(item =>
                 SamePath(PathOf(item), initialRoot));
+            // Alpha.42 respects collapsed drive/monitored ancestors instead
+            // of force-expanding them at every tree rebuild. This fixture
+            // must model a REAL user selecting a visible folder: expand the
+            // ancestors first. Assigning IsSelected on a WPF item hidden
+            // under a collapsed ancestor need not reach TreeView.SelectedItem.
+            // A separate restart test above explicitly requires a collapsed
+            // monitored root to remain collapsed until user interaction.
+            FolderTreeNavigation.ExpandAncestors(rememberedItem);
+            window.UpdateLayout();
+            rememberedItem.BringIntoView();
+            // A previously selected item can retain IsSelected=true even
+            // when its old visual container was detached in Explorer mode.
+            // Reapply an explicit selection event for the live TreeView.
+            if (!ReferenceEquals(savedTree.SelectedItem, rememberedItem))
+                rememberedItem.IsSelected = false;
             rememberedItem.IsSelected = true;
             Until(window, () => ReferenceEquals(savedTree.SelectedItem, rememberedItem),
-                "Could not set remembered tree focus before restart.");
+                "Could not set remembered tree focus after explicitly revealing ancestors.");
             var sessionFlags = BindingFlags.Instance | BindingFlags.NonPublic;
             var appearanceObject = typeof(PCasa.App.MainWindow)
                 .GetField("_appearance", sessionFlags)!.GetValue(window)!;
