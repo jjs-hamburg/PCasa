@@ -2756,42 +2756,48 @@ internal static class Program
                     "PASS: Save-as-copy does not block viewer-to-gallery navigation.");
                 Flush(window);
 
-                // Real WPF layout regression: the split action MUST stay split
-                // even with slightly different decoded pixel ratios, and BOTH
-                // bitmaps must occupy identical panel geometry. A mere
-                // presence check of the third toolbar icon missed Alpha.40.
-                var compareType = viewerType.GetNestedType("ExternalComparisonSnapshot",
-                    System.Reflection.BindingFlags.NonPublic)
-                    ?? throw new Exception("Missing session-specific before/after identity.");
-                var comparisonField = viewerType.GetField(
-                    "_latestExternalComparison", reflectFlags)!;
-                var previousComparison = comparisonField.GetValue(window);
+                // A real before/after is allowed only for an UNSAVED
+                // changed editing session. An Undo badge or a previous
+                // external session must never enable this toolbar.
+                var editStateFixture = viewerType.GetField(
+                    "_photoEditSession", reflectFlags)!;
+                var oldEditSessionFixture = editStateFixture.GetValue(window);
                 var oldViewerInfo = viewerInfoField.GetValue(window);
+                var oldViewerPixels = viewerImage.Source;
                 var originalPixels = BitmapSource.Create(120, 80, 96, 96,
                     PixelFormats.Bgra32, null, new byte[120 * 80 * 4], 120 * 4);
                 var editedPixels = BitmapSource.Create(121, 81, 96, 96,
                     PixelFormats.Bgra32, null, new byte[121 * 81 * 4], 121 * 4);
-                var compareCtor = compareType.GetConstructors(
-                    System.Reflection.BindingFlags.Public |
-                    System.Reflection.BindingFlags.NonPublic |
-                    System.Reflection.BindingFlags.Instance)
-                    .Single(ctor => ctor.GetParameters().Length == 7);
-                var compareMode = viewerType.GetNestedType("EditCompareMode",
-                    System.Reflection.BindingFlags.NonPublic)!;
                 var showComparison = viewerType.GetMethod(
                     "ShowEditComparisonAsync", reflectFlags)!;
                 var resetComparison = viewerType.GetMethod(
                     "ResetEditComparison", reflectFlags)!;
+                var updateComparison = viewerType.GetMethod(
+                    "UpdateEditComparisonAvailability", reflectFlags)!;
+                var compareMode = viewerType.GetNestedType("EditCompareMode",
+                    System.Reflection.BindingFlags.NonPublic)!;
                 var side = (Grid)window.FindName("EditCompareSidePanel")!;
                 var swipe = (Grid)window.FindName("EditCompareSwipePanel")!;
                 var beforeImage = (Image)window.FindName("EditCompareSwipeOriginal")!;
                 var afterImage = (Image)window.FindName("EditCompareSwipeEdited")!;
+                var compareSide = (Button)window.FindName("EditCompareSideButton")!;
+                var compareSplit = (Button)window.FindName("EditCompareSplitButton")!;
+                var compareSingle = (Button)window.FindName("EditCompareSingleButton")!;
                 try
                 {
-                    comparisonField.SetValue(window, compareCtor.Invoke([
-                        Guid.NewGuid(), 999L, @"C:\synthetic\result.jpg",
-                        100L, DateTime.UtcNow, originalPixels, editedPixels
-                    ]));
+                    editStateFixture.SetValue(window, null);
+                    updateComparison.Invoke(window, null);
+                    if (compareSingle.IsEnabled || compareSide.IsEnabled ||
+                        compareSplit.IsEnabled)
+                        throw new Exception(
+                            "A saved image with Undo history enabled comparison outside an edit.");
+                    var edit = new PhotoEditSession(999, originalPixels);
+                    edit.Apply(new PhotoEditStep("contrast", Amount: 0.25));
+                    editStateFixture.SetValue(window, edit);
+                    viewerImage.Source = editedPixels;
+                    updateComparison.Invoke(window, null);
+                    if (!compareSide.IsEnabled || !compareSplit.IsEnabled)
+                        throw new Exception("Actual unsaved edit did not enable comparison.");
                     ((Task)showComparison.Invoke(window,
                         [Enum.Parse(compareMode, "Split")])!)
                         .GetAwaiter().GetResult();
@@ -2815,18 +2821,24 @@ internal static class Program
                             $"Split frames diverged in WPF layout: before={firstBounds}; " +
                             $"after={secondBounds}; viewport={swipe.ActualWidth}x{swipe.ActualHeight}.");
                     if (beforeImage.Clip is not RectangleGeometry clip ||
-                        clip.Rect.Width <= 0 ||
-                        clip.Rect.Width >= swipe.ActualWidth)
+                        clip.Rect.Width <= 0 || clip.Rect.Width >= swipe.ActualWidth)
                         throw new Exception(
-                            "Split did not expose a clipped left-side original with a divider.");
+                            "Split did not expose the original with a clipped divider.");
+                    editStateFixture.SetValue(window, null); // Save/Cancel completion.
+                    updateComparison.Invoke(window, null);
+                    if (compareSingle.IsEnabled || compareSide.IsEnabled ||
+                        compareSplit.IsEnabled || swipe.Visibility != Visibility.Collapsed)
+                        throw new Exception(
+                            "Save/Cancel failed to disable all compare icons and restore single view.");
                     Console.WriteLine(
-                        "PASS: Real WPF split overlays identical image frames for slightly different decoded ratios.");
+                        "PASS: True WPF split alignment, active-only comparison, disabled after Save.");
                 }
                 finally
                 {
                     resetComparison.Invoke(window, null);
-                    comparisonField.SetValue(window, previousComparison);
+                    editStateFixture.SetValue(window, oldEditSessionFixture);
                     viewerInfoField.SetValue(window, oldViewerInfo);
+                    viewerImage.Source = oldViewerPixels;
                 }
                 fitField.SetValue(window, true);
                 zoomField.SetValue(window, 100d);
