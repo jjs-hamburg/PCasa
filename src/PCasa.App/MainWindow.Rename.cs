@@ -175,7 +175,8 @@ public partial class MainWindow
         BeginVisibleManualOperation(key, UiLanguage.T("Ordner umbenennen"), 1);
         try
         {
-            var (oldCanonical, newCanonical) = await _scheduler.RunAsync(
+            var (oldCanonical, newCanonical, renameReceiptId) =
+                await _scheduler.RunAsync(
                 key, SchedulerPriority.ManualAction, token =>
                 {
                     token.ThrowIfCancellationRequested();
@@ -194,34 +195,51 @@ public partial class MainWindow
                     var canonicalTarget = CatalogRenameService.CanonicalTarget(
                         owner, source, destination);
                     var rename = new CatalogRenameService(_database);
-                    rename.InvalidateScans(source);
-                    token.ThrowIfCancellationRequested();
-                    Directory.Move(source, destination);
+                    var receiptId = Guid.NewGuid().ToString("N");
+                    // A durable receipt is written BEFORE Directory.Move.
+                    // A process crash after moving the folder but before
+                    // the SQLite commit is reconciled at next startup.
+                    rename.PrepareDirectoryRename(receiptId, source, destination,
+                        canonicalSource, canonicalTarget);
                     try
                     {
-                        // A single transaction rewrites all descendant paths
-                        // while retaining all stable image and thumbnail IDs.
+                        token.ThrowIfCancellationRequested();
+                        Directory.Move(source, destination);
+                        // A single SQLite commit rebases all descendant
+                        // paths and marks the receipt catalog-applied.
                         rename.RebaseDirectory(source, destination,
-                            canonicalSource, canonicalTarget);
+                            canonicalSource, canonicalTarget, receiptId);
                     }
                     catch
                     {
-                        try { Directory.Move(destination, source); }
+                        try
+                        {
+                            // If the physical move completed but SQLite
+                            // failed, attempt to put the directory back.
+                            // If rollback ALSO fails, retain the receipt:
+                            // next startup will reconcile the moved tree.
+                            if (!Directory.Exists(source) &&
+                                Directory.Exists(destination))
+                                Directory.Move(destination, source);
+                            if (Directory.Exists(source) &&
+                                !Directory.Exists(destination))
+                                rename.AbortDirectoryRename(receiptId);
+                        }
                         catch (Exception rollback)
                         { PCasaDiagnostics.Write("Rename.FolderRollback", rollback); }
                         throw;
                     }
-                    try
-                    {
-                        new UndoHistoryService(UndoOptions.Load())
-                            .RebaseSourcePaths(source, destination, subtree: true);
-                    }
-                    catch (Exception ex)
-                    { PCasaDiagnostics.Write("Rename.FolderUndo", ex); }
-                    return (canonicalSource, canonicalTarget);
+                    return (canonicalSource, canonicalTarget, receiptId);
                 }, workKind: SchedulerWorkKind.Catalog);
             RebaseRenamedTreePreferences(source, destination,
                 oldCanonical, newCanonical);
+            // Keep the receipt until the central Undo metadata has also been
+            // moved. This path runs only once; interrupted completion is
+            // replayed on next startup without touching thumbnail bytes.
+            await Task.Run(() => new UndoHistoryService(UndoOptions.Load())
+                .RebaseSourcePaths(source, destination, subtree: true));
+            new CatalogRenameService(_database)
+                .CompleteDirectoryRename(renameReceiptId);
             // The current WPF nodes still carry OLD paths. The new tree must
             // use the just-rebased persisted expansion set rather than taking
             // an obsolete snapshot of those old UI node identities.
