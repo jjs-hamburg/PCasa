@@ -70,8 +70,12 @@ internal static class FolderAddFlow
                 lock (SourceFileLocks.ForPath(delayedPhoto))
                 {
                     gateReady.Set();
-                    if (!releaseDelayedPhoto.Wait(TimeSpan.FromSeconds(25)))
-                        throw new TimeoutException("The delayed source was never released.");
+                    // The assertion below may wait longer than 25 seconds
+                    // on a loaded Windows runner. Releasing this source
+                    // automatically would end the initial scan and invalidate
+                    // the very condition under test. The enclosing finally
+                    // ALWAYS releases the gate, including on failure.
+                    releaseDelayedPhoto.Wait();
                 }
             });
             if (!gateReady.Wait(TimeSpan.FromSeconds(5)))
@@ -100,10 +104,38 @@ internal static class FolderAddFlow
                 "The initial JPEG was not committed before the later image.");
             var firstFolder = new ImageCatalogRepository(db).GetPhotoFolders()
                 .Single(folder => SamePath(folder.LocalPath, initialRoot));
-            Until(window, () =>
-                    surface.GetFolderOffset(firstFolder.Id).HasValue &&
-                    roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, initialRoot)),
-                "Gallery stayed empty while first JPEG was committed and the scan remained active.");
+            try
+            {
+                Until(window, () =>
+                        surface.GetFolderOffset(firstFolder.Id).HasValue &&
+                        roots.GetPendingInitialScans().Any(root => SamePath(root.LocalPath, initialRoot)),
+                    "Gallery stayed empty while first JPEG was committed and the scan remained active.");
+            }
+            catch (TimeoutException ex)
+            {
+                // Do not weaken the real end-to-end assertion. Explain
+                // WHICH part failed: catalog indexing, gallery projection,
+                // pending first import or a prematurely released lock.
+                var count = new ImageCatalogRepository(db).CountAll();
+                var visibleOffset = surface.GetFolderOffset(firstFolder.Id);
+                var pendingRoot = roots.GetPendingInitialScans()
+                    .Any(root => SamePath(root.LocalPath, initialRoot));
+                var gateReleased = releaseDelayedPhoto.IsSet;
+                var gateTaskEnded = blockedFile?.IsCompleted;
+                var scanScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                    .GetField("_scheduler", BindingFlags.NonPublic |
+                        BindingFlags.Instance)!.GetValue(window)!;
+                var activeJobs = string.Join("; ", scanScheduler.Snapshot()
+                    .Where(job => job.State is SchedulerJobState.Running or
+                        SchedulerJobState.Queued or SchedulerJobState.YieldRequested)
+                    .TakeLast(12)
+                    .Select(job => $"{job.Key}:{job.State}:{job.Phase}"));
+                throw new TimeoutException(
+                    $"{ex.Message} Catalog={count}; Folder={firstFolder.Id}; " +
+                    $"Offset={visibleOffset?.ToString() ?? "null"}; " +
+                    $"PendingInitial={pendingRoot}; GateReleased={gateReleased}; " +
+                    $"GateTaskCompleted={gateTaskEnded}; Jobs={activeJobs}", ex);
+            }
             Until(window, () =>
                     (initialTreeRoot.Header as string)?.Contains("(1)") == true,
                 "The folder counter did not increment while the second image was blocked.");
@@ -344,8 +376,10 @@ internal static class FolderAddFlow
                 lock (SourceFileLocks.ForPath(Path.Combine(afterRestart, "second.jpg")))
                 {
                     restartGateReady.Set();
-                    if (!releaseRestartPhoto.Wait(TimeSpan.FromSeconds(25)))
-                        throw new TimeoutException("Restart source lock not released.");
+                    // Do not auto-release a deliberate offline source while
+                    // the restart/gallery assertions are still running.
+                    // The test's outer finally releases this gate.
+                    releaseRestartPhoto.Wait();
                 }
             });
             if (!restartGateReady.Wait(TimeSpan.FromSeconds(5)))
