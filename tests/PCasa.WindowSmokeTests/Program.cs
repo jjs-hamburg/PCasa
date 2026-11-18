@@ -3124,13 +3124,20 @@ internal static class Program
                         throw new Exception("Synthetic filmstrip selection was replaced before double-click.");
                     var filmstripDblClick = viewerType.GetMethod(
                         "GpsFilmstrip_MouseDoubleClick", reflectFlags)!;
+                    // This is a SYNCHRONOUS MouseDoubleClick handler.
+                    // Assert its immediate visible result BEFORE pumping
+                    // unrelated dispatcher work. The synthetic ID 999 is
+                    // deliberately absent from SQLite: a pending real GPS
+                    // catalog refresh can (correctly) remove that phantom
+                    // selection and its point during Flush(window). That
+                    // would test a background catalog reconciliation rather
+                    // than filmstrip double-click behavior.
                     filmstripDblClick.Invoke(window, new object[] {
                         filmstripList,
                         new System.Windows.Input.MouseButtonEventArgs(
                             System.Windows.Input.Mouse.PrimaryDevice, 0,
                             System.Windows.Input.MouseButton.Left)
                     });
-                    Flush(window);
                     if (!(bool)gpsFullscreenFlag.GetValue(window)! ||
                         gpsOverlay.Visibility != Visibility.Visible ||
                         gpsOverlay.Tag is not long shownId || shownId != 999L)
