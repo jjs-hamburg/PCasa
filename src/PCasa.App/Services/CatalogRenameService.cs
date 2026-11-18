@@ -49,8 +49,130 @@ public sealed class CatalogRenameService(LocalDatabase database)
         tx.Commit();
     }
 
+    public sealed record PendingRename(string Id, string Source, string Target,
+        string CanonicalSource, string CanonicalTarget, bool CatalogApplied);
+
+    /// <summary>
+    /// Durable receipt precedes the physical Directory.Move. It is preserved
+    /// until all path-dependent state (SQLite, Undo, appearance) is updated.
+    /// If the process exits at any point, RecoverPendingRenames can distinguish
+    /// an unexecuted operation from a moved directory and finish the latter.
+    /// </summary>
+    public void PrepareDirectoryRename(string operationId, string source,
+        string target, string canonicalSource, string canonicalTarget)
+    {
+        InvalidateScans(source);
+        using var db = database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            INSERT INTO folder_rename_intents
+                (operation_id,source_path,target_path,canonical_source,
+                 canonical_target,catalog_applied,created_utc)
+            VALUES ($id,$source,$target,$cs,$ct,0,$now);
+            """;
+        command.Parameters.AddWithValue("$id", operationId);
+        command.Parameters.AddWithValue("$source", source);
+        command.Parameters.AddWithValue("$target", target);
+        command.Parameters.AddWithValue("$cs", canonicalSource);
+        command.Parameters.AddWithValue("$ct", canonicalTarget);
+        command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<PendingRename> PendingRenames()
+    {
+        var result = new List<PendingRename>();
+        using var db = database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            SELECT operation_id,source_path,target_path,canonical_source,
+                   canonical_target,catalog_applied
+            FROM folder_rename_intents ORDER BY created_utc,operation_id;
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            result.Add(new PendingRename(reader.GetString(0), reader.GetString(1),
+                reader.GetString(2), reader.GetString(3), reader.GetString(4),
+                reader.GetInt64(5) != 0));
+        return result;
+    }
+
+    /// <summary>
+    /// Do not guess when both paths exist or neither can be reached (NAS
+    /// offline). Such intents remain durable and inspectable; startup must
+    /// never erase the identity of an unverified rename.
+    /// </summary>
+    public (IReadOnlyList<PendingRename> Applied,
+        IReadOnlyList<PendingRename> Unresolved) RecoverPendingRenames()
+    {
+        var applied = new List<PendingRename>();
+        var unresolved = new List<PendingRename>();
+        foreach (var receipt in PendingRenames())
+        {
+            try
+            {
+                var sourceExists = Directory.Exists(receipt.Source);
+                var targetExists = Directory.Exists(receipt.Target);
+                if (targetExists && !sourceExists)
+                {
+                    if (!receipt.CatalogApplied)
+                        RebaseDirectory(receipt.Source, receipt.Target,
+                            receipt.CanonicalSource, receipt.CanonicalTarget,
+                            receipt.Id);
+                    applied.Add(receipt with { CatalogApplied = true });
+                }
+                else if (sourceExists && !targetExists && !receipt.CatalogApplied)
+                {
+                    // Power loss before Directory.Move, or a successful
+                    // filesystem rollback after a failed database operation.
+                    AbortDirectoryRename(receipt.Id);
+                }
+                else
+                {
+                    // Both paths present, both missing, or a previously
+                    // committed rename apparently reverted outside PCasa.
+                    unresolved.Add(receipt);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or
+                UnauthorizedAccessException or SqliteException)
+            {
+                PCasaDiagnostics.Write("Rename.FolderRecovery", ex);
+                unresolved.Add(receipt);
+            }
+        }
+        return (applied, unresolved);
+    }
+
+    public void CompleteDirectoryRename(string operationId)
+    {
+        using var db = database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            DELETE FROM folder_rename_intents
+            WHERE operation_id=$id AND catalog_applied=1;
+            """;
+        command.Parameters.AddWithValue("$id", operationId);
+        if (command.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException(
+                "Completed folder rename receipt not found.");
+    }
+
+    public void AbortDirectoryRename(string operationId)
+    {
+        using var db = database.OpenConnection();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            DELETE FROM folder_rename_intents
+            WHERE operation_id=$id AND catalog_applied=0;
+            """;
+        command.Parameters.AddWithValue("$id", operationId);
+        command.ExecuteNonQuery();
+    }
+
     public void RebaseDirectory(string sourcePath, string targetPath,
-        string canonicalSource, string canonicalTarget)
+        string canonicalSource, string canonicalTarget,
+        string? operationId = null)
     {
         using var db = database.OpenConnection();
         using var tx = db.BeginTransaction();
@@ -75,6 +197,8 @@ public sealed class CatalogRenameService(LocalDatabase database)
             ("scan_directory_first_pass", "local_directory", false),
             ("scan_directory_verified", "local_directory", false),
             ("original_write_failures", "file_path", false),
+            ("file_transfer_intents", "source_path", false),
+            ("file_transfer_intents", "destination_path", false),
             ("scheduler_sources", "canonical_path", true)
         })
         {
@@ -105,6 +229,22 @@ public sealed class CatalogRenameService(LocalDatabase database)
             folderName.Parameters.AddWithValue("$name",
                 Path.GetFileName(Path.TrimEndingDirectorySeparator(targetPath)));
             folderName.ExecuteNonQuery();
+        }
+        // Mark the SQLite part complete IN THE SAME transaction as every
+        // path rewrite. Recovery can then finish Undo / appearance without
+        // mistakenly replaying a previously committed path change.
+        if (operationId is not null)
+        {
+            using var receipt = db.CreateCommand();
+            receipt.Transaction = tx;
+            receipt.CommandText = """
+                UPDATE folder_rename_intents SET catalog_applied=1
+                WHERE operation_id=$id AND catalog_applied=0;
+                """;
+            receipt.Parameters.AddWithValue("$id", operationId);
+            if (receipt.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException(
+                    "Folder rename receipt disappeared before commit.");
         }
         // Reuse the same primary keys. Neither image_tags, image_exif,
         // raw_gps_overrides, image thumbnails nor packs need touching.
