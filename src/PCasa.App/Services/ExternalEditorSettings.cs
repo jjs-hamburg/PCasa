@@ -12,7 +12,7 @@ namespace PCasa.App.Services;
 public sealed record ExternalEditorProgram(
     string Name, string ExecutablePath, string Formats = "photo",
     bool Panorama = false, bool Psd = false, bool Raw = false,
-    bool MultiEdit = false)
+    bool MultiEdit = false, string? ExchangeDirectory = null)
 {
     public bool Matches(string sourcePath)
     {
@@ -80,7 +80,11 @@ public sealed class ExternalEditorSettings
         Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
         if (Programs.Any(p => string.IsNullOrWhiteSpace(p.Name) ||
             p.Name.Length > 100 || p.ExecutablePath.Length > 1024 ||
-            p.Formats.Length > 512))
+            p.Formats.Length > 512 ||
+            (!string.IsNullOrWhiteSpace(p.ExchangeDirectory) &&
+             (!Path.IsPathFullyQualified(p.ExchangeDirectory) ||
+              p.ExchangeDirectory.Length > 1024 ||
+              !Directory.Exists(p.ExchangeDirectory)))))
             throw new InvalidDataException("Ungültiger externer Bildeditor.");
         var temporary = ConfigPath + ".tmp";
         try

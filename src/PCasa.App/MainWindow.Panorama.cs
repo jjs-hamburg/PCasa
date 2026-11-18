@@ -111,7 +111,8 @@ public partial class MainWindow
                                 key, UiLanguage.T(isPanorama
                                     ? "Panorama erstellen" : "Mehrfachbearbeitung"),
                                 total > 0 ? (int)(100.0 * completed / total) : 100,
-                                100, inputs[0].Path), isPanorama);
+                                100, inputs[0].Path), isPanorama,
+                            workspaceRoot: program.ExchangeDirectory);
                     }, workKind: SchedulerWorkKind.Catalog);
             }
             finally { EndVisibleManualOperation(key); }

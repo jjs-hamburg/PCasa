@@ -3283,6 +3283,24 @@ internal static class TagFlow
                     throw new Exception("Preview regression lacks an existing packed tier.");
             }
             const string legacyPreviewJob = "tags:smoke:legacy-thumbnail";
+            // Preview reads are P0 child steps of the ACTUAL running writer.
+            // Do not fake a Running snapshot without a matching scheduler
+            // owner: such an orphan becomes an unrelated P1 read and may
+            // legitimately wait behind other durable P0 work indefinitely.
+            var legacyPreviewStarted = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseLegacyPreview = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var legacyPreviewWork = actualScheduler.EnqueueAsync(
+                legacyPreviewJob, SchedulerPriority.ManualAction, async token =>
+                {
+                    legacyPreviewStarted.TrySetResult();
+                    await releaseLegacyPreview.Task.WaitAsync(token);
+                });
+            try
+            {
+                Until(window, () => legacyPreviewStarted.Task.IsCompleted,
+                    "The real tag job never reached its P0 scheduler worker.");
             // Alpha.40 monitors every registered root automatically.
             // Renaming the JPEG to simulate an offline original is a real
             // FileSystemWatcher deletion event and legitimately removes its
@@ -3306,31 +3324,71 @@ internal static class TagFlow
 
                     beginManual.Invoke(window, [legacyPreviewJob,
                         "Tags in Originaldateien schreiben", 1]);
-                    var missingPackStatus = new SchedulerJobSnapshot(
-                        0, legacyPreviewJob, SchedulerPriority.ManualAction,
-                        SchedulerJobState.Running, DateTimeOffset.UtcNow, null)
+                    // Use the REAL scheduler progress event: the associated
+                    // thumbnail task can now inherit this P0 owner's rank.
+                    actualScheduler.ReportProgress(legacyPreviewJob,
+                        "Tags in Originaldateien schreiben", 0, 1, firstOriginal);
+                    try
                     {
-                        Phase = "Tags in Originaldateien schreiben",
-                        CurrentPath = firstOriginal,
-                        Total = 1, Processed = 0
-                    };
-                    reportManual.Invoke(window, [missingPackStatus]);
-                    Until(window, () =>
-                        (presenterField.GetValue(window)
-                            as PCasa.App.BrowseCacheProgressWindow)?
-                            .FindName("CurrentThumbnail") is Image preview &&
-                        preview.Source is BitmapSource &&
-                        (presenterField.GetValue(window)
-                            as PCasa.App.BrowseCacheProgressWindow)?
-                            .FindName("CurrentFileText") is TextBlock file &&
-                        file.Text == Path.GetFileName(firstOriginal),
-                        "Tag progress could not load the LOCAL thumbnail when " +
-                        "the packed tier was missing and original was locked.");
+                        Until(window, () =>
+                            (presenterField.GetValue(window)
+                                as PCasa.App.BrowseCacheProgressWindow)?
+                                .FindName("CurrentThumbnail") is Image preview &&
+                            preview.Source is BitmapSource &&
+                            (presenterField.GetValue(window)
+                                as PCasa.App.BrowseCacheProgressWindow)?
+                                .FindName("CurrentFileText") is TextBlock file &&
+                            file.Text == Path.GetFileName(firstOriginal),
+                            "Tag progress could not load the LOCAL thumbnail when " +
+                            "the packed tier was missing and original was locked.");
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        // If this ever fails again, expose the actual OWNER,
+                        // displayed file and outstanding preview task. Do not
+                        // hide a real failure by extending the timeout.
+                        const System.Reflection.BindingFlags flags =
+                            System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.NonPublic;
+                        var activeKey = typeof(PCasa.App.MainWindow)
+                            .GetField("_visibleManualActiveKey", flags)!
+                            .GetValue(window);
+                        var busy = typeof(PCasa.App.MainWindow)
+                            .GetField("_manualThumbnailBusy", flags)!
+                            .GetValue(window);
+                        var requested = typeof(PCasa.App.MainWindow)
+                            .GetField("_lastManualThumbnailPath", flags)!
+                            .GetValue(window);
+                        var presenter = presenterField.GetValue(window)
+                            as PCasa.App.BrowseCacheProgressWindow;
+                        var visibleFile = (presenter?.FindName("CurrentFileText")
+                            as TextBlock)?.Text;
+                        var hasPreview = (presenter?.FindName("CurrentThumbnail")
+                            as Image)?.Source is BitmapSource;
+                        var jobs = string.Join(", ", actualScheduler.Snapshot()
+                            .Where(job => job.Key.StartsWith("tags:", StringComparison.Ordinal) ||
+                                          job.Key.StartsWith("ui:tag-progress-preview:",
+                                              StringComparison.Ordinal))
+                            .TakeLast(10)
+                            .Select(job => $"{job.Key}:{job.State}"));
+                        throw new TimeoutException(
+                            $"{ex.Message} Owner={activeKey}; File={visibleFile}; " +
+                            $"Preview={hasPreview}; Busy={busy}; LastPath={requested}; " +
+                            $"Jobs={jobs}", ex);
+                    }
                 }
                 finally
                 {
                     endManual.Invoke(window, [legacyPreviewJob]);
                 }
+            }
+            }
+            finally
+            {
+                releaseLegacyPreview.TrySetResult();
+                Until(window, () => legacyPreviewWork.IsCompleted,
+                    "Real preview test job did not release its scheduler lane.");
+                legacyPreviewWork.GetAwaiter().GetResult();
             }
             Console.WriteLine(
                 "PASS: Tag progress uses local cached picture with no packed tier or accessible original.");

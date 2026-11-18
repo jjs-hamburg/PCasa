@@ -418,7 +418,11 @@ public partial class MainWindow
         }
         if (_externalEditReview is not null)
         {
-            _ = CompleteExternalReviewAsync(ExternalEditDecision.Cancel);
+            // Explicit Cancel is a complete user action: discard the isolated
+            // workspace and return to the gallery. An unchanged click or a
+            // switch to another editor uses a different continuation instead.
+            _ = CompleteExternalReviewAsync(ExternalEditDecision.Cancel,
+                returnToGalleryAfterCancel: true);
             return;
         }
         // An already submitted immutable P0 recipe is independent of the
@@ -625,6 +629,14 @@ public partial class MainWindow
             if (_editCompareCopySources.Count >= 64)
                 _editCompareCopySources.Remove(_editCompareCopySources.Keys.First());
             _editCompareCopySources[newId] = request.ImageId;
+            // The externally produced pixels were captured before the editor
+            // workspace was removed. Rebind only their VIEW identity, never
+            // reconstruct a comparison using the current gallery original.
+            if (_latestExternalComparison is { } external &&
+                external.ImageId == request.ImageId)
+                _latestExternalComparison = external with { ImageId = newId };
+            if (_externalComparisonUnavailableImageId == request.ImageId)
+                _externalComparisonUnavailableImageId = newId;
         }
 
         await RefreshBrowseGalleryAsync(forceIndexReload: true);

@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -21,8 +22,12 @@ public partial class MainWindow
     private int _editCompareRequest;
     private double _editCompareSplitFraction = 0.5;
     private bool _editCompareHoldingOriginal;
+    private DispatcherTimer? _editCompareHoldTimer;
+    private bool _editCompareHoldArmed;
+    private long _editCompareHoldArmedImageId = -1;
     private double _editCompareZoomFactor = 1;
     private bool _editComparePanActive;
+    private bool _editComparePanMoved;
     private Point _editComparePanStart;
     private double _editComparePanStartX;
     private double _editComparePanStartY;
@@ -32,6 +37,75 @@ public partial class MainWindow
     // without extra files, sidecars, catalog relationships or sorting rules.
     // A newly generated panorama does NOT get such a link.
     private readonly Dictionary<long, long> _editCompareCopySources = new();
+
+    // The last external comparison belongs to ONE immutable editor session,
+    // not the newest Undo entry or whatever bitmap happens to be in the
+    // viewer. Retain decoded, bounded (2400px) pixels after the temporary
+    // exchange workspace is cleaned; never try to reopen its deleted file.
+    private sealed record ExternalComparisonSnapshot(
+        Guid SessionId, long ImageId, string ResultPath,
+        long ResultSize, DateTime ResultWriteUtc,
+        BitmapSource Before, BitmapSource After);
+    private ExternalComparisonSnapshot? _latestExternalComparison;
+    private long? _externalComparisonUnavailableImageId;
+
+    private async Task<ExternalComparisonSnapshot?> CaptureExternalComparisonAsync(
+        ExternalEditReview review)
+    {
+        if (review.IsVideo || review.ResultPath is not { Length: > 0 } output)
+            return null;
+        var originalSnapshot = review.Snapshot.BeforePath;
+        if (!File.Exists(originalSnapshot))
+        {
+            // Pre-Alpha.41 sessions do not have an immutable input. Use the
+            // gallery source ONLY if its bytes are still the sent version.
+            // If that original is offline, do not stall Save/Cancel or display
+            // a misleading comparison.
+            try
+            {
+                if (ExternalEditTransaction.OriginalChanged(review.Snapshot))
+                    return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                PCasaDiagnostics.Write("EditComparison.LegacyOriginal", ex);
+                return null;
+            }
+            originalSnapshot = review.Snapshot.OriginalPath;
+        }
+        var sessionId = review.Snapshot.Id;
+        var resultSize = review.ResultSize;
+        var resultWriteUtc = review.ResultWriteUtc;
+        try
+        {
+            var pair = await Task.Run(() =>
+            {
+                BitmapSource LoadLocal(string path)
+                {
+                    var dimensions = EditableImageFormats.Dimensions(path);
+                    return PhotoViewerImageLoader.Load(
+                        new PhotoViewerImageInfo(review.ImageId, path,
+                            Path.GetFileName(path), dimensions.Width,
+                            dimensions.Height), 2400, CancellationToken.None);
+                }
+                return (Before: LoadLocal(originalSnapshot), After: LoadLocal(output));
+            });
+            // If an editor exported again while we decoded, never label a
+            // stale preview as the result of that new export.
+            var resultNow = new FileInfo(output);
+            if (!resultNow.Exists || resultNow.Length != resultSize ||
+                resultNow.LastWriteTimeUtc != resultWriteUtc)
+                return null;
+            return new ExternalComparisonSnapshot(sessionId, review.ImageId,
+                output, resultSize, resultWriteUtc, pair.Before, pair.After);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidDataException or NotSupportedException)
+        {
+            PCasaDiagnostics.Write("EditComparison.ExternalSnapshot", ex);
+            return null; // Save/Cancel must remain available without a preview.
+        }
+    }
 
     private void UpdateEditComparisonAvailability()
     {
@@ -44,17 +118,24 @@ public partial class MainWindow
             ((_photoEditSession is { HasChanges: true } live && live.ImageId == id) ||
              (_externalEditReview is { ResultPath: not null } external &&
               external.ImageId == id) ||
-             _restoreBadgeImageIds.Contains(id) ||
-             _editCompareCopySources.ContainsKey(id));
+             (_latestExternalComparison?.ImageId == id) ||
+             (_externalComparisonUnavailableImageId != id &&
+              (_restoreBadgeImageIds.Contains(id) ||
+               _editCompareCopySources.ContainsKey(id))));
         EditCompareSingleButton.IsEnabled = _viewerOpen && !_comparisonActive;
         EditCompareSideButton.IsEnabled = eligible;
         EditCompareSplitButton.IsEnabled = eligible;
-        EditCompareSingleButton.FontWeight = _editCompareMode == EditCompareMode.Single
-            ? FontWeights.Bold : FontWeights.Normal;
-        EditCompareSideButton.FontWeight = _editCompareMode == EditCompareMode.SideBySide
-            ? FontWeights.Bold : FontWeights.Normal;
-        EditCompareSplitButton.FontWeight = _editCompareMode == EditCompareMode.Split
-            ? FontWeights.Bold : FontWeights.Normal;
+        // The icons are vector geometry, not text: FontWeight does NOTHING
+        // to their visual selection. Use a thick outlined active button and
+        // full opacity; do not rely on hue (color-blind accessibility).
+        void Mark(Button button, bool active)
+        {
+            button.BorderThickness = active ? new Thickness(3) : new Thickness(1);
+            button.Opacity = active ? 1 : 0.76;
+        }
+        Mark(EditCompareSingleButton, _editCompareMode == EditCompareMode.Single);
+        Mark(EditCompareSideButton, _editCompareMode == EditCompareMode.SideBySide);
+        Mark(EditCompareSplitButton, _editCompareMode == EditCompareMode.Split);
     }
 
     private void EditCompareSingle_Click(object sender, RoutedEventArgs e)
@@ -78,15 +159,29 @@ public partial class MainWindow
         var external = _externalEditReview;
         if (external is { ResultPath: not null } && external.ImageId == imageId)
         {
-            var preview = PhotoViewerImage.Source as BitmapSource;
-            if (preview is null) return null;
-            var before = await _scheduler.RunAsync(
-                "viewer:edit-before:" + Guid.NewGuid().ToString("N"),
-                SchedulerPriority.Interactive,
-                token => LoadComparisonBitmap(imageId, token),
-                workKind: SchedulerWorkKind.ViewerRead);
-            return before is null ? null : (before, preview);
+            var captured = _latestExternalComparison;
+            if (captured is null || captured.SessionId != external.Snapshot.Id ||
+                !string.Equals(captured.ResultPath, external.ResultPath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                captured.ResultSize != external.ResultSize ||
+                captured.ResultWriteUtc != external.ResultWriteUtc)
+            {
+                captured = await CaptureExternalComparisonAsync(external);
+                if (captured is not null &&
+                    ReferenceEquals(_externalEditReview, external))
+                    _latestExternalComparison = captured;
+            }
+            return captured is not null
+                ? (captured.Before, captured.After) : null;
         }
+        // After Save/Save Copy the isolated workspace no longer exists.
+        // Its exact session-bound pixels take priority over Undo history.
+        if (_latestExternalComparison is { } last && last.ImageId == imageId)
+            return (last.Before, last.After);
+        // A failed snapshot is not permission to compare an arbitrary
+        // previous Undo version and falsely label it the external input.
+        if (_externalComparisonUnavailableImageId == imageId)
+            return null;
         var info = _viewerImageInfo;
         if (info is null || info.Id != imageId) return null;
         if (_editCompareCopySources.TryGetValue(imageId, out var sourceId))
@@ -143,16 +238,10 @@ public partial class MainWindow
             _editCompareOriginal = pair.Value.Original;
             _editCompareEdited = pair.Value.Edited;
             _editCompareImageId = id;
-            if (requested == EditCompareMode.Split &&
-                (long)_editCompareOriginal.PixelWidth * _editCompareEdited.PixelHeight !=
-                (long)_editCompareEdited.PixelWidth * _editCompareOriginal.PixelHeight)
-            {
-                // A crop changes image geometry. A split line would falsely
-                // align unrelated pixel coordinates; side-by-side is honest.
-                requested = EditCompareMode.SideBySide;
-                StatusText.Text = UiLanguage.T(
-                    "Unterschiedliche Bildausschnitte: Vergleich nebeneinander.");
-            }
+            // Never silently switch the requested split into side-by-side.
+            // JPEG/RAW decoders often round preview pixel sizes differently
+            // even when their source aspect ratios are visually identical.
+            // Two uniformly fitted images share the same full-size viewport.
             _editCompareMode = requested;
             EditCompareSideOriginal.Source = _editCompareOriginal;
             EditCompareSideEdited.Source = _editCompareEdited;
@@ -206,6 +295,16 @@ public partial class MainWindow
         var height = Math.Max(1, panel.ActualHeight);
         var fit = Math.Min(width / _editCompareEdited.PixelWidth,
             height / _editCompareEdited.PixelHeight);
+        if (_editCompareMode == EditCompareMode.Split)
+        {
+            // WPF Image.Stretch=Uniform independently fits the two decoded
+            // aspect ratios, so even adjacent JPG pixel-rounding differences
+            // make the comparison drift. Size ONE centered frame using the
+            // edited image's aspect; both images then fill that identical
+            // frame without distorting the edited result.
+            EditCompareImageFrame.Width = _editCompareEdited.PixelWidth * fit;
+            EditCompareImageFrame.Height = _editCompareEdited.PixelHeight * fit;
+        }
         _editCompareZoomFactor = _viewerFitToScreen ? 1 :
             Math.Clamp(_viewerZoomPercent / Math.Max(1, 100 * fit), 0.25, 12);
         ApplyEditComparisonTransforms();
@@ -240,8 +339,8 @@ public partial class MainWindow
             catch (InvalidOperationException) { break; }
         }
         e.Handled = true;
-        if (_editCompareZoomFactor <= 1.001) return true;
         _editComparePanActive = true;
+        _editComparePanMoved = false;
         _editComparePanStart = e.GetPosition(PhotoViewerPanel);
         _editComparePanStartX = _editComparePanX;
         _editComparePanStartY = _editComparePanY;
@@ -259,6 +358,16 @@ public partial class MainWindow
             return true;
         }
         var point = e.GetPosition(PhotoViewerPanel);
+        if (Math.Abs(point.X - _editComparePanStart.X) >=
+                SystemParameters.MinimumHorizontalDragDistance ||
+            Math.Abs(point.Y - _editComparePanStart.Y) >=
+                SystemParameters.MinimumVerticalDragDistance)
+            _editComparePanMoved = true;
+        if (!_editComparePanMoved || _editCompareZoomFactor <= 1.001)
+        {
+            e.Handled = true;
+            return true;
+        }
         var maxX = Math.Max(0,
             (_editCompareZoomFactor - 1) * EditComparePanel.ActualWidth /
             (_editCompareMode == EditCompareMode.SideBySide ? 4 : 2));
@@ -281,6 +390,10 @@ public partial class MainWindow
         _editComparePanActive = false;
         PhotoViewerPanel.ReleaseMouseCapture();
         e.Handled = true;
+        // A regular click must still leave the viewer, including after
+        // a successful external Save. Only a real drag pans the comparison.
+        if (!_editComparePanMoved) ClosePhotoViewer();
+        _editComparePanMoved = false;
         return true;
     }
 
@@ -306,44 +419,78 @@ public partial class MainWindow
         var height = EditCompareSwipePanel.ActualHeight;
         if (width <= 0 || height <= 0) return;
         var x = width * _editCompareSplitFraction;
-        // RenderTransform scales about the center of the image. Compute the
-        // unscaled clipping edge corresponding to the visible divider.
-        var localEdge = width / 2 +
+        var frameWidth = EditCompareImageFrame.Width;
+        var frameHeight = EditCompareImageFrame.Height;
+        if (!(frameWidth > 0) || !(frameHeight > 0)) return;
+        // The visible image frame is centered inside the full swipe panel.
+        // The thumb stays at the panel coordinate, whereas the clip must
+        // use the image's OWN unscaled local coordinates. Pan/zoom modify
+        // the mapping without ever modifying either image's frame geometry.
+        var localEdge = frameWidth / 2 +
             (x - width / 2 - _editComparePanX) /
             Math.Max(0.01, _editCompareZoomFactor);
         EditCompareSwipeOriginal.Clip = new RectangleGeometry(
-            new Rect(0, 0, Math.Clamp(localEdge, 0, width), height));
+            new Rect(0, 0, Math.Clamp(localEdge, 0, frameWidth), frameHeight));
         Canvas.SetLeft(EditCompareSplitHandle, x - EditCompareSplitHandle.Width / 2);
+    }
+
+    private void CancelPendingOriginalHold()
+    {
+        _editCompareHoldTimer?.Stop();
+        _editCompareHoldTimer = null;
+        _editCompareHoldArmed = false;
+        _editCompareHoldArmedImageId = -1;
     }
 
     private bool TryBeginEditOriginalHold(MouseButtonEventArgs e)
     {
-        if (_editCompareMode != EditCompareMode.Single ||
+        if (e.ClickCount != 1 || _editCompareMode != EditCompareMode.Single ||
             _externalBatchReview is not null || _comparisonActive ||
-            _cropActive || _straightenActive || _viewerImageInfo is not { } info)
+            _cropActive || _straightenActive || _viewerImageInfo is not { } info ||
+            _externalEditReview is { ResultPath: null })
             return false;
         var session = _photoEditSession;
         var live = session is { HasChanges: true } && session.ImageId == info.Id;
         if (!live && !_restoreBadgeImageIds.Contains(info.Id) &&
+            _latestExternalComparison?.ImageId != info.Id &&
             !_editCompareCopySources.ContainsKey(info.Id) &&
             _externalEditReview?.ResultPath is null)
             return false;
-        _editCompareHoldingOriginal = true;
-        _editCompareHeldEdited = PhotoViewerImage.Source as BitmapSource;
-        e.Handled = true;
-        if (live)
-        {
-            SetViewerBitmap(session!.Original);
-            ApplyViewerImageLayout();
-        }
-        else if (_editCompareOriginal is not null && _editCompareImageId == info.Id)
-        {
-            SetViewerBitmap(_editCompareOriginal);
-            ApplyViewerImageLayout();
-        }
-        else
-            _ = ShowSavedOriginalWhileHeldAsync(info.Id);
-        return true;
+
+        // A short click ALWAYS retains the normal Gallery return. Once the
+        // button is deliberately held for 280 ms, show Before until release.
+        // This preserves the original agreed hold gesture without stealing
+        // quick clicks or requiring a new keyboard modifier.
+        CancelPendingOriginalHold();
+        _editCompareHoldArmed = true;
+        _editCompareHoldArmedImageId = info.Id;
+        var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(280),
+            DispatcherPriority.Input, (_, _) =>
+            {
+                CancelPendingOriginalHold();
+                if (!_viewerOpen || _viewerImageInfo?.Id != info.Id ||
+                    Mouse.LeftButton != MouseButtonState.Pressed ||
+                    _viewerDragMoved || _editCompareMode != EditCompareMode.Single)
+                    return;
+                _editCompareHoldingOriginal = true;
+                _editCompareHeldEdited = PhotoViewerImage.Source as BitmapSource;
+                if (live && _photoEditSession?.ImageId == info.Id)
+                {
+                    SetViewerBitmap(_photoEditSession.Original);
+                    ApplyViewerImageLayout();
+                }
+                else if (_editCompareOriginal is not null &&
+                    _editCompareImageId == info.Id)
+                {
+                    SetViewerBitmap(_editCompareOriginal);
+                    ApplyViewerImageLayout();
+                }
+                else
+                    _ = ShowSavedOriginalWhileHeldAsync(info.Id);
+            }, Dispatcher);
+        _editCompareHoldTimer = timer;
+        timer.Start();
+        return false; // Let the ordinary click/pan path run until hold matures.
     }
 
     private async Task ShowSavedOriginalWhileHeldAsync(long imageId)
@@ -366,8 +513,12 @@ public partial class MainWindow
 
     private bool EndEditOriginalHold(MouseButtonEventArgs e)
     {
+        // On a short click this returns false and the ordinary viewer code
+        // closes to the gallery. On a long hold it restores After instead.
+        CancelPendingOriginalHold();
         if (!_editCompareHoldingOriginal) return false;
         _editCompareHoldingOriginal = false;
+        ReleaseViewerPan();
         if (_editCompareHeldEdited is not null)
         {
             SetViewerBitmap(_editCompareHeldEdited);
@@ -380,6 +531,7 @@ public partial class MainWindow
 
     private void ResetEditComparison()
     {
+        CancelPendingOriginalHold();
         ++_editCompareRequest;
         if (_editComparePanActive)
         {

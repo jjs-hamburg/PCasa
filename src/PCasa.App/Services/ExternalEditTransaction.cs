@@ -21,6 +21,12 @@ public sealed record ExternalEditSnapshot(
     ExternalEditDecision? Finalizing = null, string? FinalTarget = null)
 {
     public string DirectoryPath => Path.GetDirectoryName(BackupPath)!;
+    // The editor may replace BackupPath in place. This nested local copy
+    // never goes to the editor or the result enumerator, and is the exact
+    // input state that Before/After must display.
+    public string BeforePath => Path.Combine(
+        DirectoryPath, ".pcasa-before", Path.GetFileName(BackupPath));
+    public string? ConfiguredWorkspaceRoot { get; init; }
 }
 
 public static class ExternalEditTransaction
@@ -29,6 +35,7 @@ public static class ExternalEditTransaction
     private static string? _testDirectory;
     private static Guid? _currentProcessSessionId;
     private const string RetiredWorkspaceMarker = ".pcasa-retired-session";
+    private const string OwnedWorkspaceMarker = ".pcasa-owned-session";
     private const string RetiredLegacyMarker = ".pcasa-retired-legacy";
     public static string DirectoryPath => _testDirectory ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -157,11 +164,14 @@ public static class ExternalEditTransaction
         // accepting that manifest so upgrades never discard a recoverable edit.
         // New sessions have their own directory; a locked old photo must not
         // prevent the next independent session from starting.
-        var legacy = Path.GetFullPath(pending.DirectoryPath).Equals(
-            Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase);
+        var legacy = pending.ConfiguredWorkspaceRoot is null &&
+            Path.GetFullPath(pending.DirectoryPath).Equals(
+                Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase);
+        var sessionRoot = pending.ConfiguredWorkspaceRoot is { Length: > 0 } chosen
+            ? Path.GetFullPath(chosen) : Path.GetFullPath(DirectoryPath);
         var isolated = Path.GetFullPath(
                 Path.GetDirectoryName(pending.DirectoryPath) ?? string.Empty).Equals(
-                Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase) &&
+                sessionRoot, StringComparison.OrdinalIgnoreCase) &&
             Path.GetFileName(pending.DirectoryPath).Equals(
                 "session-" + pending.Id.ToString("N"), StringComparison.OrdinalIgnoreCase);
         if (pending.Id == Guid.Empty || !(legacy || isolated) ||
@@ -200,6 +210,45 @@ public static class ExternalEditTransaction
     // Files from a committed session can remain open in Topaz/PhotoCraft.
     // They are garbage to collect, not an active editing transaction. Never
     // delete an active manifest or reuse an old editor's fixed filename.
+    private static IEnumerable<string> CustomOwnedWorkspaceDirectories()
+    {
+        // Only folders carrying PCasa's own marker may ever be recursively
+        // deleted from a USER-CHOSEN exchange root. Other user files,
+        // including arbitrarily named session-* directories, are untouchable.
+        foreach (var root in ExternalEditorSettings.Load().Programs
+            .Select(p => p.ExchangeDirectory)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (root is null || !Directory.Exists(root)) continue;
+            string[] candidates;
+            try { candidates = Directory.GetDirectories(root, "session-*"); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                PCasaDiagnostics.Write("ExternalEdit.CustomCleanupList", ex);
+                continue;
+            }
+            foreach (var candidate in candidates)
+            {
+                var name = Path.GetFileName(candidate);
+                if (!name.StartsWith("session-", StringComparison.OrdinalIgnoreCase) ||
+                    !Guid.TryParseExact(name["session-".Length..], "N", out var expected))
+                    continue;
+                var marker = Path.Combine(candidate, OwnedWorkspaceMarker);
+                bool owned = false;
+                try
+                {
+                    owned = File.Exists(marker) &&
+                        string.Equals(File.ReadAllText(marker).Trim(),
+                            expected.ToString("N"), StringComparison.OrdinalIgnoreCase);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { PCasaDiagnostics.Write("ExternalEdit.CustomCleanupMarker", ex); }
+                if (owned) yield return candidate;
+            }
+        }
+    }
+
     public static int PendingCleanupCount()
     {
         lock (Gate)
@@ -220,7 +269,11 @@ public static class ExternalEditTransaction
             // task/cleanup row should be created for its data.
             var hasLegacyArchive = File.Exists(
                 Path.Combine(DirectoryPath, RetiredLegacyMarker));
-            return unprotectedDirectories +
+            var customPending = CustomOwnedWorkspaceDirectories().Count(dir =>
+                !dir.Equals(active?.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase) &&
+                !File.Exists(Path.Combine(dir, RetiredWorkspaceMarker)));
+            return unprotectedDirectories + customPending +
                 (legacy || hasLegacyArchive ? 0 :
                     Directory.EnumerateFiles(DirectoryPath).Count(file =>
                         Path.GetFileName(file) is not
@@ -234,6 +287,14 @@ public static class ExternalEditTransaction
         {
             if (!Directory.Exists(DirectoryPath)) return 0;
             var active = ReadPending();
+            foreach (var custom in CustomOwnedWorkspaceDirectories())
+            {
+                if (custom.Equals(active?.DirectoryPath,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    File.Exists(Path.Combine(custom, RetiredWorkspaceMarker)))
+                    continue;
+                TryCleanupFolder(custom);
+            }
             foreach (var folder in Directory.EnumerateDirectories(DirectoryPath, "session-*"))
             {
                 if (folder.Equals(active?.DirectoryPath, StringComparison.OrdinalIgnoreCase) ||
@@ -283,7 +344,7 @@ public static class ExternalEditTransaction
     }
 
     public static ExternalEditSnapshot Begin(string original, CancellationToken token = default,
-        Action<long, long>? progress = null)
+        Action<long, long>? progress = null, string? workspaceRoot = null)
     {
         var path = Path.GetFullPath(original);
         lock (Gate)
@@ -296,12 +357,21 @@ public static class ExternalEditTransaction
             // Cleanup is a separate P4 scheduler job and each session has
             // its own unique work directory, so no collision is possible.
             Directory.CreateDirectory(DirectoryPath);
+            var root = string.IsNullOrWhiteSpace(workspaceRoot)
+                ? DirectoryPath : Path.GetFullPath(workspaceRoot);
+            if (root.Length == 0 || Path.GetPathRoot(root) == root)
+                throw new ArgumentException("Ein Laufwerksstamm ist kein Austauschverzeichnis.");
+            Directory.CreateDirectory(root);
             var id = Guid.NewGuid();
-            var sessionDirectory = Path.Combine(DirectoryPath, "session-" + id.ToString("N"));
+            var sessionDirectory = Path.Combine(root, "session-" + id.ToString("N"));
             Directory.CreateDirectory(sessionDirectory);
+            File.WriteAllText(Path.Combine(sessionDirectory, OwnedWorkspaceMarker),
+                id.ToString("N"));
             var inputName = (VideoFormats.IsVideo(path) ? "video" : "photo") +
                 Path.GetExtension(path).ToLowerInvariant();
             var work = Path.Combine(sessionDirectory, inputName);
+            var beforePath = Path.Combine(sessionDirectory,
+                ".pcasa-before", inputName);
             try
             {
                 using (SourceFileLocks.Enter(path, token))
@@ -343,6 +413,24 @@ public static class ExternalEditTransaction
                         new FileInfo(path).Length != originalLength)
                         throw new IOException(UiLanguage.T(
                             "Das Original wurde während der Sicherung verändert."));
+                    // Preserve the exact handed-off bytes before the external
+                    // editor can overwrite photo.jpg IN PLACE. Keep this
+                    // immutable reference below a nested folder, never among
+                    // top-level export candidates. The NAS original is read
+                    // only once; this duplicate is entirely local.
+                    // The video editor has its own review window and no
+                    // still-image before/after control. Do NOT duplicate huge
+                    // multi-gigabyte video files for a comparison they cannot
+                    // display.
+                    if (!VideoFormats.IsVideo(work))
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(beforePath)!);
+                        File.Copy(work, beforePath);
+                        if (new FileInfo(beforePath).Length != originalLength ||
+                            !Hash(beforePath).Equals(checksum, StringComparison.Ordinal))
+                            throw new IOException(
+                                "Die Vergleichssicherung stimmt nicht mit der Übergabedatei überein.");
+                    }
                     // A broken source is rejected before launching an editor.
                     if (!VideoFormats.IsVideo(work) &&
                         !RawImageSource.IsRawPath(work))
@@ -351,7 +439,11 @@ public static class ExternalEditTransaction
                     // process or rewrite the original or working input.
                     var session = new ExternalEditSnapshot(id, path,
                         work, checksum, originalLength, originalWrite,
-                        DateTime.UtcNow, []);
+                        DateTime.UtcNow, [])
+                    {
+                        ConfiguredWorkspaceRoot = string.IsNullOrWhiteSpace(workspaceRoot)
+                            ? null : root
+                    };
                     WritePending(session);
                     _currentProcessSessionId = session.Id;
                     return session;

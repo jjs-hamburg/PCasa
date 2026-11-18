@@ -782,18 +782,49 @@
                                 Visibility="Collapsed">
                         <!-- Three before/after modes, independent from the
                              A/B comparison of two distinct gallery photos. -->
-                        <Button x:Name="EditCompareSingleButton" Content="▭"
-                                Width="28" Height="28" Margin="0,0,3,0"
-                                FontSize="16" Click="EditCompareSingle_Click"
-                                ToolTip="{loc:Tr Key='Einzelansicht · Maustaste zeigt Original'}"/>
-                        <Button x:Name="EditCompareSideButton" Content="▥"
-                                Width="28" Height="28" Margin="0,0,3,0"
-                                FontSize="16" Click="EditCompareSide_Click"
-                                ToolTip="{loc:Tr Key='Original und Bearbeitung nebeneinander'}"/>
-                        <Button x:Name="EditCompareSplitButton" Content="◧"
-                                Width="28" Height="28" Margin="0,0,10,0"
-                                FontSize="16" Click="EditCompareSplit_Click"
-                                ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}"/>
+                        <!-- Geometric outlines, not nearly identical font glyphs.
+                             The selected command has a heavier BUTTON border
+                             in UpdateEditComparisonAvailability (not color only). -->
+                        <Button x:Name="EditCompareSingleButton"
+                                Width="34" Height="30" Margin="0,0,3,0"
+                                Click="EditCompareSingle_Click"
+                                ToolTip="{loc:Tr Key='Einzelansicht · kurzer Klick: Galerie · halten: Original'}"
+                                AutomationProperties.Name="{loc:Tr Key='Einzelansicht'}">
+                            <Viewbox Width="22" Height="19">
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.8" StrokeLineJoin="Round"
+                                      Data="M2,2 L22,2 L22,18 L2,18 Z M5,14 L10,9 L14,12 L18,7 L21,12"/>
+                            </Viewbox>
+                        </Button>
+                        <Button x:Name="EditCompareSideButton"
+                                Width="34" Height="30" Margin="0,0,3,0"
+                                Click="EditCompareSide_Click"
+                                ToolTip="{loc:Tr Key='Original und Bearbeitung nebeneinander'}"
+                                AutomationProperties.Name="{loc:Tr Key='Original und Bearbeitung nebeneinander'}">
+                            <Viewbox Width="22" Height="19">
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.8" StrokeLineJoin="Round"
+                                      Data="M1,2 L10,2 L10,18 L1,18 Z M14,2 L23,2 L23,18 L14,18 Z"/>
+                            </Viewbox>
+                        </Button>
+                        <Button x:Name="EditCompareSplitButton"
+                                Width="34" Height="30" Margin="0,0,10,0"
+                                Click="EditCompareSplit_Click"
+                                ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}"
+                                AutomationProperties.Name="{loc:Tr Key='Original und Bearbeitung mit Schieber'}">
+                            <Viewbox Width="22" Height="19">
+                                <Grid Width="24" Height="20">
+                                    <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                          StrokeThickness="1.8" StrokeLineJoin="Round"
+                                          Data="M2,2 L22,2 L22,18 L2,18 Z M12,2 L12,18"/>
+                                    <Rectangle Width="6" Height="9" HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Fill="{DynamicResource PcasaPanelBrush}"
+                                               Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                               StrokeThickness="1.5" RadiusX="1"/>
+                                </Grid>
+                            </Viewbox>
+                        </Button>
                         <Button Content="{loc:Tr Key='An Fenster anpassen'}" MinWidth="103" Height="30"
                                 Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
                         <Button Content="100 %" MinWidth="58" Height="30"
@@ -1559,12 +1590,26 @@
                             </Grid>
                             <Grid x:Name="EditCompareSwipePanel" Visibility="Collapsed"
                                   ClipToBounds="True" SizeChanged="EditCompareSwipe_SizeChanged">
-                                <Image x:Name="EditCompareSwipeEdited" Stretch="Uniform"
-                                       RenderTransformOrigin="0.5,0.5"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                                <Image x:Name="EditCompareSwipeOriginal" Stretch="Uniform"
-                                       RenderTransformOrigin="0.5,0.5"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <!-- One centered image frame. Its geometry is computed
+                                     ONCE from the edited pixels; both images fill this
+                                     exact frame, so independently rounded decoder
+                                     dimensions cannot create different visible bounds.
+                                     Stretch=Fill is intentional INSIDE the common
+                                     image-ratio frame, never across the entire panel. -->
+                                <Grid x:Name="EditCompareImageFrame"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      ClipToBounds="False">
+                                    <Image x:Name="EditCompareSwipeEdited" Stretch="Fill"
+                                           Width="{Binding ActualWidth, ElementName=EditCompareImageFrame}"
+                                           Height="{Binding ActualHeight, ElementName=EditCompareImageFrame}"
+                                           RenderTransformOrigin="0.5,0.5"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                    <Image x:Name="EditCompareSwipeOriginal" Stretch="Fill"
+                                           Width="{Binding ActualWidth, ElementName=EditCompareImageFrame}"
+                                           Height="{Binding ActualHeight, ElementName=EditCompareImageFrame}"
+                                           RenderTransformOrigin="0.5,0.5"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                </Grid>
                                 <Canvas Background="Transparent">
                                     <primitives:Thumb x:Name="EditCompareSplitHandle"
                                                       Width="18"
