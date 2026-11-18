@@ -929,6 +929,10 @@
                                           Click="BrowseScanCurrentFolder_Click" />
                                 <MenuItem Header="{loc:Tr Key='Ordnerinformationen'}"
                                           Click="FolderContext_Info_Click" />
+                                <MenuItem x:Name="ContextRenameFolderMenuItem"
+                                          Header="{loc:Tr Key='Umbenennen'}"
+                                          IsEnabled="False"
+                                          Click="FolderContext_Rename_Click" />
                                 <MenuItem x:Name="ContextRemoveFromPcasaMenuItem" Header="{loc:Tr Key='Aus PCasa entfernen'}"
                                           Click="FolderContext_Exclude_Click" />
                                 <Separator />
