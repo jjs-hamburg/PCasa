@@ -2840,6 +2840,70 @@ internal static class Program
                     viewerInfoField.SetValue(window, oldViewerInfo);
                     viewerImage.Source = oldViewerPixels;
                 }
+                // Restore has its OWN pair of photos, independent of any
+                // editing/Undo marker in the main viewer. Exercise all
+                // comparison modes as actual measured WPF layouts.
+                var restoreFolder = Path.Combine(Path.GetTempPath(),
+                    "PCasa-RestoreSplit-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(restoreFolder);
+                try
+                {
+                    var currentFile = Path.Combine(restoreFolder, "current.jpg");
+                    var restoreFile = Path.Combine(restoreFolder, "saved.jpg");
+                    void SaveFixture(string file, byte channel)
+                    {
+                        var pixels = new byte[96 * 64 * 4];
+                        for (var pixel = 0; pixel < pixels.Length; pixel += 4)
+                        { pixels[pixel] = channel; pixels[pixel+3] = 255; }
+                        var image = BitmapSource.Create(96, 64, 96, 96,
+                            PixelFormats.Bgra32, null, pixels, 96 * 4);
+                        var encoder = new JpegBitmapEncoder();
+                        encoder.Frames.Add(BitmapFrame.Create(image));
+                        using var output = File.Create(file);
+                        encoder.Save(output);
+                    }
+                    SaveFixture(currentFile, 60);
+                    SaveFixture(restoreFile, 200);
+                    var version = new UndoVersion(Guid.NewGuid(), currentFile,
+                        restoreFile, DateTimeOffset.UtcNow, 1, "synthetic");
+                    var restoreType = typeof(PCasa.App.MainWindow).Assembly
+                        .GetType("PCasa.App.UndoCompareWindow")
+                        ?? throw new Exception("Restore comparison dialog missing.");
+                    var constructor = restoreType.GetConstructors(
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance)
+                        .Single();
+                    var dialog = (Window)constructor.Invoke([
+                        window, currentFile, new UndoVersion[] { version }]);
+                    try
+                    {
+                        dialog.Show();
+                        var setMode = restoreType.GetMethod("SetCompareMode", reflectFlags)!;
+                        var splitPanel = (Grid)restoreType.GetField(
+                            "_splitPanel", reflectFlags)!.GetValue(dialog)!;
+                        var candidateImage = (Image)restoreType.GetField(
+                            "_splitCandidate", reflectFlags)!.GetValue(dialog)!;
+                        setMode.Invoke(dialog, [2]);
+                        Flush(window);
+                        if (splitPanel.Visibility != Visibility.Visible ||
+                            candidateImage.Source is null ||
+                            candidateImage.Clip is not RectangleGeometry section ||
+                            section.Rect.Width <= 0 ||
+                            section.Rect.Width >= splitPanel.ActualWidth)
+                            throw new Exception(
+                                "Restore split did not display a clipped candidate on the current image.");
+                        setMode.Invoke(dialog, [0]);
+                        Flush(window);
+                        setMode.Invoke(dialog, [1]);
+                        Flush(window);
+                        Console.WriteLine(
+                            "PASS: Restore dialog has independently selectable Single/Side/Split modes.");
+                    }
+                    finally { dialog.Close(); }
+                }
+                finally { Directory.Delete(restoreFolder, true); }
+
                 fitField.SetValue(window, true);
                 zoomField.SetValue(window, 100d);
                 applyLayout.Invoke(window, null);
