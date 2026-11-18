@@ -60,10 +60,6 @@ public partial class MainWindow
                 ToolTip = editor.Name
             };
             caption.SetResourceReference(TextBlock.ForegroundProperty, "PcasaTextBrush");
-            // Win32 executable icon extraction can stall on antivirus or a
-            // network shortcut. Never perform it synchronously in ShowViewerImage.
-            if (!_externalEditorIconCache.ContainsKey(editor.ExecutablePath))
-                _ = LoadExternalEditorIconAsync(editor.ExecutablePath, button);
             var card = new StackPanel
             {
                 Width = 80,
@@ -77,12 +73,18 @@ public partial class MainWindow
 
     private UIElement CreateExternalEditorIcon(string executable)
     {
-        if (_externalEditorIconCache.TryGetValue(executable, out var image))
-            return new Image {
-                Source = image, Width = 30, Height = 30,
-                Stretch = Stretch.Uniform,
-                IsHitTestVisible = false
-            };
+        // Every editor icon is captured at configuration (or once during
+        // migration for an existing profile). Viewer navigation must NEVER
+        // touch the executable; only a 32px PNG from PCasa's user profile.
+        if (!_externalEditorIconCache.TryGetValue(executable, out var image))
+        {
+            image = ExternalEditorIconStore.Load(executable)!;
+            if (image is not null)
+                _externalEditorIconCache[executable] = image;
+        }
+        if (image is not null)
+            return new Image { Source = image, Width = 30, Height = 30,
+                Stretch = Stretch.Uniform, IsHitTestVisible = false };
         var fallback = new TextBlock {
             Text = "↗", FontSize = 24,
             HorizontalAlignment = HorizontalAlignment.Center,
@@ -92,29 +94,26 @@ public partial class MainWindow
         return fallback;
     }
 
-    private async Task LoadExternalEditorIconAsync(string executable, Button button)
+    private async Task WarmExternalEditorIconsAsync()
     {
-        try
+        // One-time migration of programs configured before Alpha.42.
+        // Runs off the UI thread, never at every image/Editor dialog opening.
+        var entries = _externalEditors.Programs.Select(p => p.ExecutablePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        await Task.Run(() =>
         {
-            var image = await Task.Run(() =>
+            foreach (var executable in entries)
             {
-                using var icon = System.Drawing.Icon.ExtractAssociatedIcon(executable);
-                if (icon is null) return null;
-                var pixels = Imaging.CreateBitmapSourceFromHIcon(icon.Handle,
-                    Int32Rect.Empty, BitmapSizeOptions.FromWidthAndHeight(30, 30));
-                pixels.Freeze();
-                return (ImageSource)pixels;
-            });
-            if (image is null || Dispatcher.HasShutdownStarted) return;
-            _externalEditorIconCache[executable] = image;
-            if (!ExternalEditorToolsList.Children.OfType<StackPanel>()
-                    .Any(card => card.Children.Contains(button))) return;
-            button.Content = CreateExternalEditorIcon(executable);
-        }
-        catch (Exception ex)
-        {
-            PCasaDiagnostics.Write("ExternalEditor.Icon", ex);
-        }
+                try { ExternalEditorIconStore.EnsureCaptured(executable); }
+                catch (Exception ex)
+                { PCasaDiagnostics.Write("ExternalEditor.IconMigration", ex); }
+            }
+        });
+        if (Dispatcher.HasShutdownStarted) return;
+        _externalEditorIconCache.Clear();
+        if (_viewerOpen && _externalEditorDisplayedImageId > 0 &&
+            _externalEditorDisplayedFileName is { } file)
+            RefreshExternalEditorToolButtons(_externalEditorDisplayedImageId, file);
     }
 
     private string? CachedExternalEditorSource(long id)
@@ -624,8 +623,10 @@ public partial class MainWindow
             // Commit removes its isolated workspace; a post-commit lookup of
             // the most recent Undo snapshot can select a different edit.
             // Preview failures must never block Save or Cancel.
-            var savedComparison = decision == ExternalEditDecision.Cancel
-                ? null : await CaptureExternalComparisonAsync(review);
+            // Before/After exists ONLY for a pending editing decision.
+            // Never retain a completed comparison as a reusable gallery or
+            // Restore source. The active preview captured it on demand.
+            // (The previous Alpha.41 post-Save snapshot is intentionally gone.)
             // Re-evaluate the local working folder at commit time:
             // an export may have finished AFTER the last window activation.
             var saveKey = "external:commit:" + Guid.NewGuid().ToString("N");
@@ -662,14 +663,9 @@ public partial class MainWindow
             // The file transaction is now complete, even if a subsequent
             // catalog refresh fails. It must not be submitted a second time.
             _externalEditReview = null;
-            if (decision != ExternalEditDecision.Cancel)
-            {
-                _latestExternalComparison = savedComparison;
-                _externalComparisonUnavailableImageId =
-                    savedComparison is null ? review.ImageId : null;
-            }
-            else if (_latestExternalComparison?.SessionId == review.Snapshot.Id)
-                _latestExternalComparison = null;
+            _latestExternalComparison = null;
+            _externalComparisonUnavailableImageId = null;
+            ResetEditComparison();
             _externalVideoReviewDialog?.Close();
             _externalVideoReviewDialog = null;
             UpdateEditControls();

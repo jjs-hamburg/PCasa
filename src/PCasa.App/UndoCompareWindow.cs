@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -14,6 +15,18 @@ internal sealed class UndoCompareWindow : Window
     private readonly IReadOnlyList<UndoVersion> _versions;
     private readonly Image _candidate = new() { Stretch = Stretch.Uniform };
     private readonly Image _current = new() { Stretch = Stretch.Uniform };
+    private readonly Image _splitCandidate = new() { Stretch = Stretch.Fill };
+    private readonly Image _splitCurrent = new() { Stretch = Stretch.Fill };
+    private readonly Grid _splitPanel = new() { Visibility = Visibility.Collapsed,
+        ClipToBounds = true };
+    private readonly Grid _splitFrame = new() {
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center };
+    private readonly Thumb _divider = new() { Width = 18 };
+    private readonly Grid _sidePanel = new();
+    private readonly Button _singleMode = new(), _sideMode = new(), _splitMode = new();
+    private int _mode = 1; // Existing restore dialog opens side by side.
+    private double _splitFraction = 0.5;
     private readonly ScrollViewer _leftScroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     private readonly ScrollViewer _rightScroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -50,15 +63,27 @@ internal sealed class UndoCompareWindow : Window
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         Content = root;
 
-        var heading = new TextBlock {
-            Text = english ? "Restore candidate                         Current image" :
-                "Wiederherstellungsversion                         Aktuelles Bild",
-            FontSize = 16,FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(4,2,0,10)
-        };
-        root.Children.Add(heading);
+        var titleBar = new DockPanel { Margin = new Thickness(4,2,0,10) };
+        root.Children.Add(titleBar);
+        var modes = new StackPanel { Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right };
+        DockPanel.SetDock(modes, Dock.Right);
+        titleBar.Children.Add(modes);
+        AddCompareButton(modes, _singleMode, "M3.5,3.5 L20.5,3.5 L20.5,16.5 L3.5,16.5 Z",
+            english ? "Single" : "Einzelansicht", 0);
+        AddCompareButton(modes, _sideMode,
+            "M2.5,3.5 L10,3.5 L10,16.5 L2.5,16.5 Z M14,3.5 L21.5,3.5 L21.5,16.5 L14,16.5 Z",
+            english ? "Side by side" : "Nebeneinander", 1);
+        AddCompareButton(modes, _splitMode,
+            "M3.5,3.5 L20.5,3.5 L20.5,16.5 L3.5,16.5 Z M12,3.5 L12,16.5",
+            english ? "Split" : "Schieber", 2);
+        titleBar.Children.Add(new TextBlock {
+            Text = english ? "Choose restore version" : "Wiederherstellungsversion wählen",
+            FontSize = 13, FontWeight = FontWeights.Normal,
+            VerticalAlignment = VerticalAlignment.Center
+        });
 
-        var panes = new Grid();
+        var panes = _sidePanel;
         panes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1,GridUnitType.Star) });
         panes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(7) });
         panes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1,GridUnitType.Star) });
@@ -77,6 +102,47 @@ internal sealed class UndoCompareWindow : Window
         _rightScroll.SizeChanged += (_, _) => FitImagesToPanes();
         _leftScroll.ScrollChanged += (_, e) => Synchronize(_leftScroll,_rightScroll,e);
         _rightScroll.ScrollChanged += (_, e) => Synchronize(_rightScroll,_leftScroll,e);
+        // Version/current labels are deliberately small and light, just
+        // like in the editor comparison; they are not dialog headings.
+        panes.Children.Add(MakeLabel(
+            english ? "Restore version" : "Wiederherstellung", 0));
+        panes.Children.Add(MakeLabel(
+            english ? "Current image" : "Aktuelles Bild", 2));
+        _splitPanel.SizeChanged += (_, _) => UpdateSplitGeometry();
+        _splitPanel.Children.Add(_splitFrame);
+        _splitFrame.Children.Add(_splitCurrent);
+        _splitFrame.Children.Add(_splitCandidate);
+        var sliderCanvas = new Canvas { Background = Brushes.Transparent };
+        _splitPanel.Children.Add(sliderCanvas);
+        _divider.Height = double.NaN;
+        _divider.SetBinding(HeightProperty, new System.Windows.Data.Binding(
+            "ActualHeight") { Source = _splitPanel });
+        var dividerVisual = new FrameworkElementFactory(typeof(Grid));
+        dividerVisual.SetValue(Panel.BackgroundProperty,
+            new SolidColorBrush(Color.FromArgb(1,0,0,0)));
+        var lineVisual = new FrameworkElementFactory(typeof(Border));
+        lineVisual.SetValue(WidthProperty, 2d);
+        lineVisual.SetValue(HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        lineVisual.SetValue(Border.BackgroundProperty, Brushes.WhiteSmoke);
+        dividerVisual.AppendChild(lineVisual);
+        _divider.Template = new ControlTemplate(typeof(Thumb)) { VisualTree = dividerVisual };
+        _divider.DragDelta += (_, e) =>
+        {
+            if (_splitPanel.ActualWidth <= 0) return;
+            _splitFraction = Math.Clamp(_splitFraction +
+                e.HorizontalChange / _splitPanel.ActualWidth, 0.02, 0.98);
+            UpdateSplitGeometry();
+        };
+        sliderCanvas.Children.Add(_divider);
+        _splitPanel.Children.Add(MakeOverlayLabel(
+            english ? "Restore version" : "Wiederherstellung", HorizontalAlignment.Left));
+        _splitPanel.Children.Add(MakeOverlayLabel(
+            english ? "Current image" : "Aktuelles Bild", HorizontalAlignment.Right));
+        // The split is a SIBLING of the side-by-side grid. Otherwise
+        // hiding the side grid would also hide its split child.
+        Grid.SetRow(_splitPanel,1);
+        root.Children.Add(_splitPanel);
+        SetCompareMode(1);
 
         var footer = new DockPanel { Margin = new Thickness(0,10,0,0) };
         Grid.SetRow(footer,2);
@@ -121,6 +187,7 @@ internal sealed class UndoCompareWindow : Window
             else if (e.Key == Key.Right) { Navigate(1); e.Handled = true; }
         };
         _current.Source = Load(originalPath);
+        _splitCurrent.Source = _current.Source;
         ShowVersion();
     }
 
@@ -149,6 +216,8 @@ internal sealed class UndoCompareWindow : Window
     private void ShowVersion()
     {
         _candidate.Source = Load(_versions[_index].SnapshotPath);
+        _splitCandidate.Source = _candidate.Source;
+        UpdateSplitGeometry();
         var version = _versions[_index];
         _description.Text = $"{_index+1} / {_versions.Count}  " +
             version.SavedAtUtc.LocalDateTime.ToString("g");
@@ -169,6 +238,81 @@ internal sealed class UndoCompareWindow : Window
         _zoom = scale;
         _scaleLeft.ScaleX = _scaleLeft.ScaleY = _zoom;
         _scaleRight.ScaleX = _scaleRight.ScaleY = _zoom;
+        _splitFrame.RenderTransformOrigin = new Point(0.5,0.5);
+        _splitFrame.RenderTransform = new ScaleTransform(_zoom,_zoom);
+        UpdateSplitGeometry();
+    }
+
+    private void AddCompareButton(Panel parent, Button button,
+        string geometry, string caption, int mode)
+    {
+        button.Width = 37;
+        button.Height = 29;
+        button.Margin = new Thickness(2,0,0,0);
+        button.ToolTip = caption;
+        var canvas = new Canvas { Width = 24, Height = 20 };
+        canvas.Children.Add(new System.Windows.Shapes.Path {
+            Data = Geometry.Parse(geometry),
+            Stroke = Brushes.LightGray,
+            StrokeThickness = 1.7,
+            StrokeLineJoin = PenLineJoin.Round
+        });
+        button.Content = canvas;
+        button.Click += (_, _) => SetCompareMode(mode);
+        parent.Children.Add(button);
+    }
+
+    private static TextBlock MakeLabel(string caption, int column)
+    {
+        var label = MakeOverlayLabel(caption, HorizontalAlignment.Left);
+        Grid.SetColumn(label, column);
+        return label;
+    }
+
+    private static TextBlock MakeOverlayLabel(string caption, HorizontalAlignment side)
+        => new() {
+            Text = caption, FontSize = 11, FontWeight = FontWeights.Light,
+            Foreground = Brushes.WhiteSmoke, IsHitTestVisible = false,
+            HorizontalAlignment = side, VerticalAlignment = VerticalAlignment.Top,
+            Margin = side == HorizontalAlignment.Right
+                ? new Thickness(0,8,11,0) : new Thickness(11,8,0,0)
+        };
+
+    private void SetCompareMode(int mode)
+    {
+        _mode = mode;
+        _sidePanel.Visibility = mode == 2 ? Visibility.Collapsed : Visibility.Visible;
+        _splitPanel.Visibility = mode == 2 ? Visibility.Visible : Visibility.Collapsed;
+        _leftScroll.Visibility = mode == 0 ? Visibility.Collapsed : Visibility.Visible;
+        _rightScroll.Visibility = mode == 2 ? Visibility.Collapsed : Visibility.Visible;
+        Grid.SetColumn(_rightScroll, mode == 0 ? 0 : 2);
+        Grid.SetColumnSpan(_rightScroll, mode == 0 ? 3 : 1);
+        _singleMode.BorderThickness = mode == 0 ? new Thickness(3) : new Thickness(1);
+        _sideMode.BorderThickness = mode == 1 ? new Thickness(3) : new Thickness(1);
+        _splitMode.BorderThickness = mode == 2 ? new Thickness(3) : new Thickness(1);
+        UpdateSplitGeometry();
+    }
+
+    private void UpdateSplitGeometry()
+    {
+        if (_splitCurrent.Source is not BitmapSource edited ||
+            _splitPanel.ActualWidth <= 0 || _splitPanel.ActualHeight <= 0)
+            return;
+        var width = _splitPanel.ActualWidth;
+        var height = _splitPanel.ActualHeight;
+        var fit = Math.Min(width / edited.PixelWidth, height / edited.PixelHeight);
+        var frameWidth = Math.Max(1, edited.PixelWidth * fit);
+        var frameHeight = Math.Max(1, edited.PixelHeight * fit);
+        _splitFrame.Width = frameWidth;
+        _splitFrame.Height = frameHeight;
+        _splitCandidate.Width = _splitCurrent.Width = frameWidth;
+        _splitCandidate.Height = _splitCurrent.Height = frameHeight;
+        var marker = _splitFraction * width;
+        var clipEdge = frameWidth / 2 +
+            (marker - width / 2) / Math.Max(0.01, _zoom);
+        _splitCandidate.Clip = new RectangleGeometry(
+            new Rect(0, 0, Math.Clamp(clipEdge,0,frameWidth),frameHeight));
+        Canvas.SetLeft(_divider, marker - _divider.Width / 2);
     }
 
     private void Synchronize(ScrollViewer from,ScrollViewer to,ScrollChangedEventArgs e)

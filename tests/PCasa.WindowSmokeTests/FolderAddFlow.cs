@@ -358,6 +358,47 @@ internal static class FolderAddFlow
                     "Held manual source-probe never finished.");
             }
 
+            // Persist the ACTUAL closed state of a monitored root before
+            // the first real shutdown. Earlier compressed-tree rebuilding
+            // forced monitored nodes open unconditionally on the next launch.
+            var collapsedMonitoredRoot = Walk(tree).Single(item =>
+                SamePath(PathOf(item), initialRoot));
+            if (collapsedMonitoredRoot.Items.Count == 0)
+                throw new Exception("Expansion regression requires a populated monitored root.");
+
+            // First persist the OPEN state through the normal WPF event.
+            // Then suppress the event exactly as an internal tree operation
+            // can do, and close it. Only Closing's explicit snapshot can now
+            // save the true final CLOSED state across the restart.
+            collapsedMonitoredRoot.IsExpanded = false;
+            collapsedMonitoredRoot.IsExpanded = true;
+            var bulkFlag = typeof(PCasa.App.MainWindow).GetField(
+                "_bulkFolderExpansion", BindingFlags.NonPublic |
+                BindingFlags.Instance)
+                ?? throw new Exception("Tree event suppression state missing.");
+            bulkFlag.SetValue(window, true);
+            try { collapsedMonitoredRoot.IsExpanded = false; }
+            finally { bulkFlag.SetValue(window, false); }
+            if (collapsedMonitoredRoot.IsExpanded)
+                throw new Exception("Could not collapse the root before restart.");
+
+            // Simulate the scanner's committed-folder UI notification while
+            // the parent is collapsed. It may append a child, but must NOT
+            // expand that parent behind the user's back.
+            var discoveredPath = Path.Combine(initialRoot, "DiscoveredWhileClosed");
+            var discover = typeof(PCasa.App.MainWindow).GetMethod(
+                "ShowScannedPhotoFolder", BindingFlags.NonPublic |
+                BindingFlags.Instance)
+                ?? throw new Exception("Scanner folder publication handler missing.");
+            discover.Invoke(window, [new ScanProgress(1, 1, 0, 0,
+                Path.Combine(discoveredPath, "synthetic.jpg"),
+                DiscoveredPhotoFolderId: long.MaxValue - 17,
+                DiscoveredPhotoFolderPath: discoveredPath)]);
+            if (collapsedMonitoredRoot.IsExpanded ||
+                !Walk(tree).Any(item => SamePath(PathOf(item), discoveredPath)))
+                throw new Exception(
+                    "Incremental scanner discovery reopened or lost a collapsed branch.");
+
             var firstWindow = window;
             firstWindow.Close();
             Until(firstWindow, () => !firstWindow.IsVisible,
@@ -404,6 +445,21 @@ internal static class FolderAddFlow
             window.Show();
             tree = (TreeView)window.FindName("FoldersTree");
             surface = (BrowseGallerySurface)window.FindName("BrowseSurface");
+
+            Until(window, () =>
+                Walk(tree).Any(item => SamePath(PathOf(item), initialRoot)),
+                "Persisted monitored root did not load in the restarted folder tree.");
+            var afterRestartRoot = Walk(tree).Single(item =>
+                SamePath(PathOf(item), initialRoot));
+            if (afterRestartRoot.IsExpanded)
+                throw new Exception(
+                    "Restart forced an explicitly collapsed monitored root open.");
+            // Other integration checks need to access the root's children.
+            // This is a real user expansion and must save as usual.
+            afterRestartRoot.IsExpanded = true;
+            Console.WriteLine(
+                "PASS: Collapsed monitored folder survives actual PCasa shutdown and restart.");
+
             try
             {
                 Until(window, () =>
@@ -885,9 +941,24 @@ internal static class FolderAddFlow
             var savedTree = (TreeView)window.FindName("FoldersTree");
             var rememberedItem = Walk(savedTree).First(item =>
                 SamePath(PathOf(item), initialRoot));
+            // Alpha.42 respects collapsed drive/monitored ancestors instead
+            // of force-expanding them at every tree rebuild. This fixture
+            // must model a REAL user selecting a visible folder: expand the
+            // ancestors first. Assigning IsSelected on a WPF item hidden
+            // under a collapsed ancestor need not reach TreeView.SelectedItem.
+            // A separate restart test above explicitly requires a collapsed
+            // monitored root to remain collapsed until user interaction.
+            FolderTreeNavigation.ExpandAncestors(rememberedItem);
+            window.UpdateLayout();
+            rememberedItem.BringIntoView();
+            // A previously selected item can retain IsSelected=true even
+            // when its old visual container was detached in Explorer mode.
+            // Reapply an explicit selection event for the live TreeView.
+            if (!ReferenceEquals(savedTree.SelectedItem, rememberedItem))
+                rememberedItem.IsSelected = false;
             rememberedItem.IsSelected = true;
             Until(window, () => ReferenceEquals(savedTree.SelectedItem, rememberedItem),
-                "Could not set remembered tree focus before restart.");
+                "Could not set remembered tree focus after explicitly revealing ancestors.");
             var sessionFlags = BindingFlags.Instance | BindingFlags.NonPublic;
             var appearanceObject = typeof(PCasa.App.MainWindow)
                 .GetField("_appearance", sessionFlags)!.GetValue(window)!;

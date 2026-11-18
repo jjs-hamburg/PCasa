@@ -79,7 +79,11 @@ public partial class MainWindow
                     position++;
                 }
                 item.Items.Insert(position, next);
-                item.IsExpanded = true;
+                // An initial import can expose new folders automatically,
+                // but after the user has saved a tree state, a background
+                // scan must never reopen a deliberately collapsed ancestor.
+                if (!_appearance.FolderExpansionsSaved)
+                    item.IsExpanded = true;
             }
             else if (atImageFolder)
             {

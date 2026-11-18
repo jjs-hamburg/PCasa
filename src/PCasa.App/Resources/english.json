@@ -954,5 +954,17 @@
   "Einzelansicht · kurzer Klick: Galerie · halten: Original": "Single view · short click: gallery · hold: original",
   "Austauschverzeichnis (optional)": "Exchange directory (optional)",
   "Austauschverzeichnis auswählen": "Select exchange directory",
-  "Leer: lokaler PCasa-Standardordner. Sonst eigener Sitzungsordner im gewählten Verzeichnis.": "Empty: use the default local PCasa workspace. Otherwise use an isolated session folder in the selected directory."
+  "Leer: lokaler PCasa-Standardordner. Sonst eigener Sitzungsordner im gewählten Verzeichnis.": "Empty: use the default local PCasa workspace. Otherwise use an isolated session folder in the selected directory.",
+  "Bearbeitung": "Edited",
+  "Standard": "Default",
+  "Austauschverzeichnis": "Exchange directory",
+  "Bei Standard wird der PCasa-Sitzungsordner verwendet. Andernfalls ein eigener Ordner unter dem angegebenen Pfad.": "Default uses PCasa's workspace. Otherwise a session folder is created under the selected directory.",
+  "Bild umbenennen": "Rename image",
+  "Dateiendung bleibt unverändert: ": "File extension remains unchanged: ",
+  "Neuer Name": "New name",
+  "Ordner umbenannt: ": "Folder renamed: ",
+  "Ordner umbenennen": "Rename folder",
+  "Umbenannt: ": "Renamed: ",
+  "Umbenennen": "Rename",
+  "Ungültiger Name.": "Invalid name."
 }

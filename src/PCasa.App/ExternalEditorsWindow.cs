@@ -16,6 +16,8 @@ public sealed class ExternalEditorsWindow : Window
     private readonly TextBox _exe = new();
     private readonly TextBox _formats = new();
     private readonly TextBox _exchange = new();
+    private readonly CheckBox _standardExchange = new()
+    { Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly CheckBox _panorama = new() { Margin = new Thickness(0, 7, 0, 3) };
     private readonly CheckBox _psd = new() { Margin = new Thickness(0, 4, 0, 3) };
     private readonly CheckBox _raw = new() { Content = "RAW", Margin = new Thickness(0, 4, 0, 3) };
@@ -71,7 +73,18 @@ public sealed class ExternalEditorsWindow : Window
         AddField(right, "Name im Menü", _name);
         AddField(right, "Programmdatei (*.exe)", MakeBrowseRow());
         AddField(right, "Dateiformate", _formats);
-        AddField(right, "Austauschverzeichnis (optional)", MakeExchangeRow());
+        var exchangeHeader = new StackPanel { Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 8, 0, 4) };
+        exchangeHeader.Children.Add(new TextBlock {
+            Text = UiLanguage.T("Austauschverzeichnis"),
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        _standardExchange.Content = UiLanguage.T("Standard");
+        _standardExchange.Checked += (_, _) => UpdateExchangeControls();
+        _standardExchange.Unchecked += (_, _) => UpdateExchangeControls();
+        exchangeHeader.Children.Add(_standardExchange);
+        right.Children.Add(exchangeHeader);
+        right.Children.Add(MakeExchangeRow());
         _panorama.Content = UiLanguage.T("Panorama");
         _psd.Content = "PSD";
         right.Children.Add(_panorama);
@@ -107,14 +120,30 @@ public sealed class ExternalEditorsWindow : Window
     {
         var row = new DockPanel();
         var browse = MakeButton(UiLanguage.T("Durchsuchen …"), BrowseExchange);
+        _browseExchangeButton = browse;
         DockPanel.SetDock(browse, Dock.Right);
         row.Children.Add(browse);
         _exchange.Margin = new Thickness(0, 0, 7, 0);
         _exchange.ToolTip = UiLanguage.T(
-            "Leer: lokaler PCasa-Standardordner. Sonst eigener Sitzungsordner im gewählten Verzeichnis.");
+            "Bei Standard wird der PCasa-Sitzungsordner verwendet. Andernfalls ein eigener Ordner unter dem angegebenen Pfad.");
         row.Children.Add(_exchange);
         return row;
     }
+
+    private void UpdateExchangeControls()
+    {
+        if (_changing) return;
+        var isStandard = _standardExchange.IsChecked == true;
+        if (isStandard)
+            _exchange.Text = ExternalEditTransaction.DirectoryPath;
+        _exchange.IsReadOnly = isStandard;
+        _exchange.IsEnabled = _editingIndex >= 0;
+        _exchange.Opacity = isStandard ? 0.7 : 1;
+        _browseExchangeButton?.SetCurrentValue(IsEnabledProperty,
+            _editingIndex >= 0 && !isStandard);
+    }
+
+    private Button? _browseExchangeButton;
 
     private static void AddField(Panel parent, string label, UIElement editor)
     {
@@ -148,8 +177,8 @@ public sealed class ExternalEditorsWindow : Window
             _name.Text.Trim(), _exe.Text.Trim().Trim('"'), _formats.Text.Trim(),
             _panorama.IsChecked == true, _psd.IsChecked == true,
             _raw.IsChecked == true, _multi.IsChecked == true,
-            string.IsNullOrWhiteSpace(_exchange.Text)
-                ? null : _exchange.Text.Trim().Trim('"'));
+            _standardExchange.IsChecked == true ? null
+                : _exchange.Text.Trim().Trim('"'));
     }
 
     private void RefreshList(int selected)
@@ -172,7 +201,9 @@ public sealed class ExternalEditorsWindow : Window
         _name.Text = entry.Name;
         _exe.Text = entry.ExecutablePath;
         _formats.Text = entry.Formats;
-        _exchange.Text = entry.ExchangeDirectory ?? string.Empty;
+        _exchange.Text = entry.ExchangeDirectory ??
+            ExternalEditTransaction.DirectoryPath;
+        _standardExchange.IsChecked = entry.ExchangeDirectory is null;
         _panorama.IsChecked = entry.Panorama;
         _psd.IsChecked = entry.Psd;
         _raw.IsChecked = entry.Raw;
@@ -180,8 +211,9 @@ public sealed class ExternalEditorsWindow : Window
         _name.IsEnabled = _exe.IsEnabled = _formats.IsEnabled =
             _exchange.IsEnabled =
             _panorama.IsEnabled = _psd.IsEnabled = _raw.IsEnabled =
-            _multi.IsEnabled = index >= 0;
+            _multi.IsEnabled = _standardExchange.IsEnabled = index >= 0;
         _changing = false;
+        UpdateExchangeControls();
     }
 
     private void SelectProgram()
@@ -231,7 +263,7 @@ public sealed class ExternalEditorsWindow : Window
 
     private void BrowseExchange()
     {
-        if (_editingIndex < 0) return;
+        if (_editingIndex < 0 || _standardExchange.IsChecked == true) return;
         var picker = new OpenFolderDialog
         {
             Title = UiLanguage.T("Austauschverzeichnis auswählen"),
@@ -243,7 +275,7 @@ public sealed class ExternalEditorsWindow : Window
             _exchange.Text = picker.FolderName;
     }
 
-    private void Save()
+    private async void Save()
     {
         try
         {
@@ -261,6 +293,22 @@ public sealed class ExternalEditorsWindow : Window
             var settings = new ExternalEditorSettings {
                 Programs = _programs.ToList() };
             settings.Save();
+            // EXE icon extraction occurs ONLY when editor definitions are
+            // explicitly saved. Viewer/card opening never extracts them.
+            var executables = settings.Programs.Select(p => p.ExecutablePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            await Task.Run(() =>
+            {
+                foreach (var exe in executables)
+                {
+                    try { ExternalEditorIconStore.EnsureCaptured(exe); }
+                    catch (Exception ex)
+                    { PCasaDiagnostics.Write("ExternalEditor.ConfigureIcon", ex); }
+                }
+                try { ExternalEditorIconStore.RemoveUnused(settings.Programs); }
+                catch (Exception ex)
+                { PCasaDiagnostics.Write("ExternalEditor.PruneIconCache", ex); }
+            });
             SavedSettings = settings;
             DialogResult = true;
             Close();

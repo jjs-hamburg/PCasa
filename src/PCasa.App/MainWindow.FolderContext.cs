@@ -351,6 +351,24 @@ public partial class MainWindow
         }
     }
 
+    private async void FolderContext_Rename_Click(object sender, RoutedEventArgs e)
+    {
+        if (ContextFolder() is not { } folder) return;
+        await RenameFolderAsync(folder.FullPath);
+    }
+
+    private async Task EnableFolderRenameIfAvailableAsync(
+        ContextMenu parent, MenuItem item, string path)
+    {
+        var available = await FolderRenameAvailableAsync(path);
+        if (!Dispatcher.HasShutdownStarted &&
+            parent.Items.Contains(item) &&
+            ContextFolder() is { } current &&
+            string.Equals(current.FullPath, path,
+                StringComparison.OrdinalIgnoreCase))
+            item.IsEnabled = available;
+    }
+
     // Context menu contents reflect the currently selected physical folder;
     // never display an action that cannot apply to that folder.
     private void FoldersTree_ContextMenuOpened(object sender, RoutedEventArgs e)
@@ -361,11 +379,15 @@ public partial class MainWindow
             item.Name == "ContextAddToPcasaMenuItem");
         var remove = menu.Items.OfType<MenuItem>().FirstOrDefault(item =>
             item.Name == "ContextRemoveFromPcasaMenuItem");
-        if (add is null || remove is null) return;
+        var rename = menu.Items.OfType<MenuItem>().FirstOrDefault(item =>
+            item.Name == "ContextRenameFolderMenuItem");
+        if (add is null || remove is null || rename is null) return;
+        rename.IsEnabled = false;
         if (tag is null)
         {
             add.Visibility = Visibility.Collapsed;
             remove.Visibility = Visibility.Collapsed;
+            rename.Visibility = Visibility.Collapsed;
             return;
         }
         var root = DisplayedMonitoredRoot(tag.FullPath);
@@ -374,5 +396,8 @@ public partial class MainWindow
                 DisplayedExcludedPaths(root.Id));
         add.Visibility = covered ? Visibility.Collapsed : Visibility.Visible;
         remove.Visibility = covered ? Visibility.Visible : Visibility.Collapsed;
+        rename.Visibility = covered ? Visibility.Visible : Visibility.Collapsed;
+        if (covered)
+            _ = EnableFolderRenameIfAvailableAsync(menu, rename, tag.FullPath);
     }
 }

@@ -780,50 +780,37 @@
                     <StackPanel x:Name="PhotoZoomToolbar" Grid.Column="3"
                                 Orientation="Horizontal" VerticalAlignment="Center"
                                 Visibility="Collapsed">
-                        <!-- Three before/after modes, independent from the
-                             A/B comparison of two distinct gallery photos. -->
-                        <!-- Geometric outlines, not nearly identical font glyphs.
-                             The selected command has a heavier BUTTON border
-                             in UpdateEditComparisonAvailability (not color only). -->
-                        <Button x:Name="EditCompareSingleButton"
-                                Width="34" Height="30" Margin="0,0,3,0"
-                                Click="EditCompareSingle_Click"
+                        <!-- Topaz-style single, side-by-side and split glyphs.
+                             All paths stay inside their 24x20 canvases. -->
+                        <Button x:Name="EditCompareSingleButton" Width="34" Height="30"
+                                Padding="0" Margin="0,0,3,0" Click="EditCompareSingle_Click"
                                 ToolTip="{loc:Tr Key='Einzelansicht · kurzer Klick: Galerie · halten: Original'}"
                                 AutomationProperties.Name="{loc:Tr Key='Einzelansicht'}">
-                            <Viewbox Width="22" Height="19">
+                            <Canvas Width="24" Height="20" ClipToBounds="False">
                                 <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.8" StrokeLineJoin="Round"
-                                      Data="M2,2 L22,2 L22,18 L2,18 Z M5,14 L10,9 L14,12 L18,7 L21,12"/>
-                            </Viewbox>
+                                      StrokeThickness="1.7" StrokeLineJoin="Round"
+                                      Data="M3.5,3.5 L20.5,3.5 L20.5,16.5 L3.5,16.5 Z"/>
+                            </Canvas>
                         </Button>
-                        <Button x:Name="EditCompareSideButton"
-                                Width="34" Height="30" Margin="0,0,3,0"
-                                Click="EditCompareSide_Click"
+                        <Button x:Name="EditCompareSideButton" Width="34" Height="30"
+                                Padding="0" Margin="0,0,3,0" Click="EditCompareSide_Click"
                                 ToolTip="{loc:Tr Key='Original und Bearbeitung nebeneinander'}"
                                 AutomationProperties.Name="{loc:Tr Key='Original und Bearbeitung nebeneinander'}">
-                            <Viewbox Width="22" Height="19">
+                            <Canvas Width="24" Height="20" ClipToBounds="False">
                                 <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                      StrokeThickness="1.8" StrokeLineJoin="Round"
-                                      Data="M1,2 L10,2 L10,18 L1,18 Z M14,2 L23,2 L23,18 L14,18 Z"/>
-                            </Viewbox>
+                                      StrokeThickness="1.7" StrokeLineJoin="Round"
+                                      Data="M2.5,3.5 L10,3.5 L10,16.5 L2.5,16.5 Z M14,3.5 L21.5,3.5 L21.5,16.5 L14,16.5 Z"/>
+                            </Canvas>
                         </Button>
-                        <Button x:Name="EditCompareSplitButton"
-                                Width="34" Height="30" Margin="0,0,10,0"
-                                Click="EditCompareSplit_Click"
+                        <Button x:Name="EditCompareSplitButton" Width="34" Height="30"
+                                Padding="0" Margin="0,0,10,0" Click="EditCompareSplit_Click"
                                 ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}"
                                 AutomationProperties.Name="{loc:Tr Key='Original und Bearbeitung mit Schieber'}">
-                            <Viewbox Width="22" Height="19">
-                                <Grid Width="24" Height="20">
-                                    <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                          StrokeThickness="1.8" StrokeLineJoin="Round"
-                                          Data="M2,2 L22,2 L22,18 L2,18 Z M12,2 L12,18"/>
-                                    <Rectangle Width="6" Height="9" HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"
-                                               Fill="{DynamicResource PcasaPanelBrush}"
-                                               Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                               StrokeThickness="1.5" RadiusX="1"/>
-                                </Grid>
-                            </Viewbox>
+                            <Canvas Width="24" Height="20" ClipToBounds="False">
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1.7" StrokeLineJoin="Round"
+                                      Data="M3.5,3.5 L20.5,3.5 L20.5,16.5 L3.5,16.5 Z M12,3.5 L12,16.5"/>
+                            </Canvas>
                         </Button>
                         <Button Content="{loc:Tr Key='An Fenster anpassen'}" MinWidth="103" Height="30"
                                 Margin="0,0,6,0" Click="PhotoViewerFit_Click" />
@@ -942,6 +929,10 @@
                                           Click="BrowseScanCurrentFolder_Click" />
                                 <MenuItem Header="{loc:Tr Key='Ordnerinformationen'}"
                                           Click="FolderContext_Info_Click" />
+                                <MenuItem x:Name="ContextRenameFolderMenuItem"
+                                          Header="{loc:Tr Key='Umbenennen'}"
+                                          IsEnabled="False"
+                                          Click="FolderContext_Rename_Click" />
                                 <MenuItem x:Name="ContextRemoveFromPcasaMenuItem" Header="{loc:Tr Key='Aus PCasa entfernen'}"
                                           Click="FolderContext_Exclude_Click" />
                                 <Separator />
@@ -1587,6 +1578,14 @@
                                        Stretch="Uniform" Margin="3" ClipToBounds="True"
                                        RenderTransformOrigin="0.5,0.5"
                                        RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <TextBlock Grid.Column="0" Text="{loc:Tr Key='Original'}"
+                                           FontSize="11" FontWeight="Light" Foreground="#E4FFFFFF"
+                                           Margin="11,8,0,0" HorizontalAlignment="Left"
+                                           VerticalAlignment="Top" IsHitTestVisible="False"/>
+                                <TextBlock Grid.Column="2" Text="{loc:Tr Key='Bearbeitung'}"
+                                           FontSize="11" FontWeight="Light" Foreground="#E4FFFFFF"
+                                           Margin="11,8,0,0" HorizontalAlignment="Left"
+                                           VerticalAlignment="Top" IsHitTestVisible="False"/>
                             </Grid>
                             <Grid x:Name="EditCompareSwipePanel" Visibility="Collapsed"
                                   ClipToBounds="True" SizeChanged="EditCompareSwipe_SizeChanged">
@@ -1620,23 +1619,20 @@
                                                 <Grid Background="#01000000">
                                                     <Border Width="2" HorizontalAlignment="Center"
                                                             Background="#F0F0F0"/>
-                                                    <Border Width="14" Height="26"
-                                                            CornerRadius="4"
-                                                            HorizontalAlignment="Center"
-                                                            VerticalAlignment="Center"
-                                                            Background="#CC262729"
-                                                            BorderBrush="#F0F0F0"
-                                                            BorderThickness="1">
-                                                        <TextBlock Text="↔" FontSize="11"
-                                                                   Foreground="White"
-                                                                   HorizontalAlignment="Center"
-                                                                   VerticalAlignment="Center"/>
-                                                    </Border>
+                                                    
                                                 </Grid>
                                             </ControlTemplate>
                                         </primitives:Thumb.Template>
                                     </primitives:Thumb>
                                 </Canvas>
+                                <TextBlock Text="{loc:Tr Key='Original'}" FontSize="11"
+                                           FontWeight="Light" Foreground="#E4FFFFFF"
+                                           HorizontalAlignment="Left" VerticalAlignment="Top"
+                                           Margin="11,8,0,0" IsHitTestVisible="False"/>
+                                <TextBlock Text="{loc:Tr Key='Bearbeitung'}" FontSize="11"
+                                           FontWeight="Light" Foreground="#E4FFFFFF"
+                                           HorizontalAlignment="Right" VerticalAlignment="Top"
+                                           Margin="0,8,11,0" IsHitTestVisible="False"/>
                             </Grid>
                         </Grid>
                         <Grid x:Name="ComparisonPanel" Visibility="Collapsed"
