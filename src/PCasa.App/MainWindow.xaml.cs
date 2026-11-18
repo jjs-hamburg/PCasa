@@ -421,7 +421,8 @@ public partial class MainWindow : Window
     {
         // Do not replace a valid previous snapshot with an empty startup
         // tree before the catalog projection has been initialized.
-        if (_rebuildingFolderTree || !_folderTreeInitialized) return;
+        if (_rebuildingFolderTree || !_folderTreeInitialized ||
+            FoldersTree.Items.Count == 0) return;
 
         var expanded = CaptureExpandedFolderPaths();
         if (_allFolderProjectionRootPath is not null)
