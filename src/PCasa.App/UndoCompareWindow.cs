@@ -2,7 +2,6 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Shapes;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -139,8 +138,10 @@ internal sealed class UndoCompareWindow : Window
             english ? "Restore version" : "Wiederherstellung", HorizontalAlignment.Left));
         _splitPanel.Children.Add(MakeOverlayLabel(
             english ? "Current image" : "Aktuelles Bild", HorizontalAlignment.Right));
-        Grid.SetColumnSpan(_splitPanel,3);
-        panes.Children.Add(_splitPanel);
+        // The split is a SIBLING of the side-by-side grid. Otherwise
+        // hiding the side grid would also hide its split child.
+        Grid.SetRow(_splitPanel,1);
+        root.Children.Add(_splitPanel);
         SetCompareMode(1);
 
         var footer = new DockPanel { Margin = new Thickness(0,10,0,0) };
@@ -250,7 +251,7 @@ internal sealed class UndoCompareWindow : Window
         button.Margin = new Thickness(2,0,0,0);
         button.ToolTip = caption;
         var canvas = new Canvas { Width = 24, Height = 20 };
-        canvas.Children.Add(new Path {
+        canvas.Children.Add(new System.Windows.Shapes.Path {
             Data = Geometry.Parse(geometry),
             Stroke = Brushes.LightGray,
             StrokeThickness = 1.7,
