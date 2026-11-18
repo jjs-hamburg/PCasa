@@ -10,7 +10,7 @@ namespace PCasa.App.Services;
 /// photo folders. Metadata, tags, embedded GPS and packed thumbnails are keyed
 /// by image ID and therefore must not be recreated or reread.
 /// </summary>
-internal sealed class CatalogRenameService(LocalDatabase database)
+public sealed class CatalogRenameService(LocalDatabase database)
 {
     private static bool Under(string path, string root) =>
         FolderExclusionRules.IsAtOrBelow(path, root);
