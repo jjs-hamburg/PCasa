@@ -192,6 +192,11 @@ public partial class MainWindow
         }
         _tagDraft.Clear();
         if (_photoEditSession is { HasChanges: true }) CancelEditSession();
+        // Save the ACTUAL visible folder expansion before shutdown begins.
+        // Event-driven saves alone can miss programmatic changes or be
+        // overwritten by late scan/tree rebuilds during asynchronous disposal.
+        // This is independent of the optional gallery-position preference.
+        SaveFolderTreeState();
         // The user's gallery/tree focus belongs to the moment they close
         // PCasa, NOT the later Closed event after asynchronous worker cleanup.
         // A running import may still publish/reflow the gallery while waiting.
