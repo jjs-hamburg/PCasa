@@ -122,10 +122,10 @@ internal static class FolderAddFlow
                     .Any(root => SamePath(root.LocalPath, initialRoot));
                 var gateReleased = releaseDelayedPhoto.IsSet;
                 var gateTaskEnded = blockedFile?.IsCompleted;
-                var scanScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
+                var diagnosticScheduler = (PCasaScheduler)typeof(PCasa.App.MainWindow)
                     .GetField("_scheduler", BindingFlags.NonPublic |
                         BindingFlags.Instance)!.GetValue(window)!;
-                var activeJobs = string.Join("; ", scanScheduler.Snapshot()
+                var activeJobs = string.Join("; ", diagnosticScheduler.Snapshot()
                     .Where(job => job.State is SchedulerJobState.Running or
                         SchedulerJobState.Queued or SchedulerJobState.YieldRequested)
                     .TakeLast(12)
