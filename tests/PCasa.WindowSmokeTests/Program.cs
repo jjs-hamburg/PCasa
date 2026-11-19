@@ -2783,8 +2783,44 @@ internal static class Program
                 var compareSide = (Button)window.FindName("EditCompareSideButton")!;
                 var compareSplit = (Button)window.FindName("EditCompareSplitButton")!;
                 var compareSingle = (Button)window.FindName("EditCompareSingleButton")!;
+                var editControls = viewerType.GetMethod("UpdateEditControls", reflectFlags)!;
+                var internalTabs = (TabControl)window.FindName("EditorToolTabs")!;
+                var internalTools = (WrapPanel)window.FindName("ViewerToolsList")!;
+                var internalAuto = (StackPanel)window.FindName("ViewerAutoToolsList")!;
+                var externalTools = (WrapPanel)window.FindName("ExternalEditorToolsList")!;
                 try
                 {
+                    // Noneditable PSD still offers configured external apps,
+                    // but NO ghosted internal tools. Switching back to an
+                    // editable JPEG restores them without restarting PCasa.
+                    viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
+                        999, @"C:\synthetic\portrait.psd", "portrait.psd", 120, 180));
+                    editControls.Invoke(window, null);
+                    if (internalTabs.Visibility != Visibility.Collapsed ||
+                        internalTools.Visibility != Visibility.Collapsed ||
+                        internalAuto.Visibility != Visibility.Collapsed ||
+                        externalTools.Visibility == Visibility.Collapsed)
+                        throw new Exception(
+                            "Unsupported PSD displayed disabled internal editor tools.");
+                    viewerInfoField.SetValue(window, oldViewerInfo);
+                    editControls.Invoke(window, null);
+                    if (internalTabs.Visibility != Visibility.Visible ||
+                        internalTools.Visibility != Visibility.Visible ||
+                        internalAuto.Visibility != Visibility.Visible)
+                        throw new Exception(
+                            "Editable JPEG failed to show internal editor tools again.");
+                    Console.WriteLine(
+                        "PASS: Internal edit tools vanish for PSD and return for editable JPEG.");
+
+                    // The splitter's vertical marker extends ABOVE and
+                    // BELOW its enclosing rectangle, unlike the adjacent
+                    // two-pane symbol. WPF path bounds are checked directly.
+                    var splitCanvas = (Canvas)compareSplit.Content;
+                    var glyph = splitCanvas.Children.OfType<System.Windows.Shapes.Path>().Single();
+                    if (glyph.Data.Bounds.Top >= 3.5 ||
+                        glyph.Data.Bounds.Bottom <= 16.5)
+                        throw new Exception(
+                            "Slider icon divider does not extend outside its frame.");
                     editStateFixture.SetValue(window, null);
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||
