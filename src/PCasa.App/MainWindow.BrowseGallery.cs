@@ -30,6 +30,11 @@ public partial class MainWindow
     // The first catalog publication must never paint the first folder
     // before the user's saved thumbnail anchor has been restored.
     private bool _startupGalleryPublished;
+    // The first catalog pass already read these immutable folder summaries
+    // and total before the first gallery projection. Reuse them ONCE rather
+    // than repeating the same grouping/count query on a 500K-photo SQLite DB.
+    private (IReadOnlyList<PhotoFolderSummary> Folders, int ImageCount)?
+        _startupFolderSnapshot;
     private bool _browseCacheBuilding;
     private bool _folderManagerOpen;
     private bool _folderManagerCommitPending;
@@ -361,6 +366,8 @@ public partial class MainWindow
             });
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
+        if (initialProjectionOnly)
+            _startupFolderSnapshot = (initialFolders, imageCount);
         _dropTargetProjection = initialConfiguration;
         foreach (var (root, _) in initialConfiguration)
         {
@@ -627,18 +634,33 @@ public partial class MainWindow
         QueueGalleryAnchorRestore();
         IReadOnlyList<PhotoFolderSummary> freshFolders = Array.Empty<PhotoFolderSummary>();
         var imageCount = 0;
-        try
+        var startupSnapshot = _startupFolderSnapshot;
+        _startupFolderSnapshot = null;
+        if (!_startupGalleryPublished && startupSnapshot is { } snapshot &&
+            !fromScanner)
         {
-            await _galleryCatalogReader.ReadAsync(
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    freshFolders = _imageCatalog.GetPhotoFolders();
-                    imageCount = _imageCatalog.CountAll();
-                    return Task.CompletedTask;
-                }, () => _browseRefreshRequests.IsCurrent(refresh));
+            // This is the first projection immediately after loading the
+            // initial tree. No scanner has started yet. Reusing the SAME
+            // immutable read avoids the second expensive photo-folder SQL
+            // aggregation while preserving all existing refresh semantics.
+            freshFolders = snapshot.Folders;
+            imageCount = snapshot.ImageCount;
         }
-        catch (OperationCanceledException) { return; }
+        else
+        {
+            try
+            {
+                await _galleryCatalogReader.ReadAsync(
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        freshFolders = _imageCatalog.GetPhotoFolders();
+                        imageCount = _imageCatalog.CountAll();
+                        return Task.CompletedTask;
+                    }, () => _browseRefreshRequests.IsCurrent(refresh));
+            }
+            catch (OperationCanceledException) { return; }
+        }
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
         // Do not publish a new folder summary while the corresponding
         // thumbnail index is still queued behind SQLite/network work.
