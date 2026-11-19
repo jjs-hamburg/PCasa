@@ -133,8 +133,14 @@ public sealed class BrowseCacheBuilder
         {
             // Video placeholders stored in the legacy JPEG cache must not
             // override a newly regenerated Windows video frame.
+            // A PSD's historical JPEG thumbnail can be an embedded
+            // preview with the WRONG crop/orientation, even when the PSD's
+            // merged composite is correctly portrait. Never bootstrap any
+            // packed tier from that legacy JPEG. Decode the same full merged
+            // composite that the viewer displays instead.
             var available = !forceOriginal &&
                 !VideoFormats.IsVideo(candidate.LocalPath) &&
+                !RawImageSource.IsPsdPath(candidate.LocalPath) &&
                 File.Exists(candidate.ThumbnailPath);
             var legacyTiers = available
                 ? missing.Where(tier => tier <= LegacyThumbnailMaximumTier).ToArray()

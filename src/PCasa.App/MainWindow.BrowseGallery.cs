@@ -27,6 +27,14 @@ public partial class MainWindow
     private int? _activeBrowseTier;
     private readonly LatestViewRequest _browseRefreshRequests = new();
     private bool _browseInitialized;
+    // The first catalog publication must never paint the first folder
+    // before the user's saved thumbnail anchor has been restored.
+    private bool _startupGalleryPublished;
+    // The first catalog pass already read these immutable folder summaries
+    // and total before the first gallery projection. Reuse them ONCE rather
+    // than repeating the same grouping/count query on a 500K-photo SQLite DB.
+    private (IReadOnlyList<PhotoFolderSummary> Folders, int ImageCount)?
+        _startupFolderSnapshot;
     private bool _browseCacheBuilding;
     private bool _folderManagerOpen;
     private bool _folderManagerCommitPending;
@@ -358,6 +366,8 @@ public partial class MainWindow
             });
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
+        if (initialProjectionOnly)
+            _startupFolderSnapshot = (initialFolders, imageCount);
         _dropTargetProjection = initialConfiguration;
         foreach (var (root, _) in initialConfiguration)
         {
@@ -379,7 +389,9 @@ public partial class MainWindow
         // scan indefinitely. Neither the folder tree nor the initial image
         // index may depend on that background job finishing.
         await RefreshBrowseGalleryAsync(forceIndexReload: true,
-            warmViewport: false);
+            // Warm only the restored initial viewport from the LOCAL packed
+            // cache. No NAS probe, no scheduler admission, no global decode.
+            warmViewport: initialProjectionOnly);
         if (!_browseInitialized || _folderRemovalPending || initialProjectionOnly) return;
 
         // A manual foreground scan already owns source/cache work. It must
@@ -622,18 +634,33 @@ public partial class MainWindow
         QueueGalleryAnchorRestore();
         IReadOnlyList<PhotoFolderSummary> freshFolders = Array.Empty<PhotoFolderSummary>();
         var imageCount = 0;
-        try
+        var startupSnapshot = _startupFolderSnapshot;
+        _startupFolderSnapshot = null;
+        if (!_startupGalleryPublished && startupSnapshot is { } snapshot &&
+            !fromScanner)
         {
-            await _galleryCatalogReader.ReadAsync(
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    freshFolders = _imageCatalog.GetPhotoFolders();
-                    imageCount = _imageCatalog.CountAll();
-                    return Task.CompletedTask;
-                }, () => _browseRefreshRequests.IsCurrent(refresh));
+            // This is the first projection immediately after loading the
+            // initial tree. No scanner has started yet. Reusing the SAME
+            // immutable read avoids the second expensive photo-folder SQL
+            // aggregation while preserving all existing refresh semantics.
+            freshFolders = snapshot.Folders;
+            imageCount = snapshot.ImageCount;
         }
-        catch (OperationCanceledException) { return; }
+        else
+        {
+            try
+            {
+                await _galleryCatalogReader.ReadAsync(
+                    token =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        freshFolders = _imageCatalog.GetPhotoFolders();
+                        imageCount = _imageCatalog.CountAll();
+                        return Task.CompletedTask;
+                    }, () => _browseRefreshRequests.IsCurrent(refresh));
+            }
+            catch (OperationCanceledException) { return; }
+        }
         if (!_browseRefreshRequests.IsCurrent(refresh)) return;
         // Do not publish a new folder summary while the corresponding
         // thumbnail index is still queued behind SQLite/network work.
@@ -661,6 +688,7 @@ public partial class MainWindow
             EmptyPanel.Visibility = Visibility.Visible;
             StatusText.Text = UiLanguage.T("0 Bilder");
             RestorePendingGalleryAnchor();
+            PublishStartupGalleryOnce();
             return;
         }
 
@@ -799,6 +827,22 @@ public partial class MainWindow
         if (!_browseRefreshRequests.IsCurrent(refresh))
             return;
 
+        if (warmViewport && !_startupGalleryPublished)
+        {
+            // A Loaded priority callback can still precede the final
+            // ScrollViewer extent measurement. Run one layout/anchor pass
+            // at Render before deciding which actual packed pages to warm.
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (!_browseRefreshRequests.IsCurrent(refresh)) return;
+                BrowseScrollViewer.UpdateLayout();
+                RestoreGalleryPositionOnce();
+                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            }, DispatcherPriority.Render);
+            if (!_browseRefreshRequests.IsCurrent(refresh)) return;
+        }
+
         if (warmViewport)
         {
             // The visible area can contain multiple disjoint index ranges
@@ -809,10 +853,20 @@ public partial class MainWindow
             BrowseSurface.InvalidateVisual();
         }
 
+        PublishStartupGalleryOnce();
+
         if (string.IsNullOrWhiteSpace(TagSearchBox.Text))
             if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
             StatusText.Text = UiLanguage.Format("{0:N0} Bilder", imageCount);
         SelectionText.Text = UiLanguage.Format("Auswahl: {0:N0}", _selectedImageIds.Count);
+    }
+
+    private void PublishStartupGalleryOnce()
+    {
+        if (_startupGalleryPublished || Dispatcher.HasShutdownStarted) return;
+        _startupGalleryPublished = true;
+        BrowseScrollViewer.Opacity = 1;
+        BrowseScrollViewer.IsHitTestVisible = true;
     }
 
     // Called only on Dispatcher, with a complete paired gallery snapshot.

@@ -131,7 +131,11 @@ public sealed class BrowseCacheRepository
                 x.date_time_original,
                 i.width,
                 i.height,
-                CASE WHEN te.image_id IS NULL THEN i.thumbnail_path ELSE NULL END
+                -- Legacy JPEG fallbacks are unsafe for PSD: they may
+                -- represent an embedded crop in the wrong orientation.
+                -- Show no fallback until the merged-composite tier is ready.
+                CASE WHEN te.image_id IS NULL AND LOWER(i.extension) <> '.psd'
+                     THEN i.thumbnail_path ELSE NULL END
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
             """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """

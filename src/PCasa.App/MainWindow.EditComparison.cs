@@ -123,6 +123,13 @@ public partial class MainWindow
                  ResultPath: not null } external && external.ImageId == id));
         if (!eligible && _editCompareMode != EditCompareMode.Single)
             ResetEditComparison();
+        // When there is no unsaved before/after decision, remove the
+        // entire group. A greyed-out icon cannot convey availability to
+        // every user (and steals space from the zoom controls).
+        var visibility = eligible ? Visibility.Visible : Visibility.Collapsed;
+        EditCompareSingleButton.Visibility = visibility;
+        EditCompareSideButton.Visibility = visibility;
+        EditCompareSplitButton.Visibility = visibility;
         EditCompareSingleButton.IsEnabled = eligible;
         EditCompareSideButton.IsEnabled = eligible;
         EditCompareSplitButton.IsEnabled = eligible;

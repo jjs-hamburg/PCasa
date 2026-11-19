@@ -79,6 +79,25 @@ internal static class Program
             window.WindowState = WindowState.Normal;
             window.Width = 1500;
             Flush(window);
+            // Alpha.43 deliberately keeps the initial gallery layout
+            // invisible while restoring the saved anchor and warming the
+            // visible packed pages. Tests that inject SYNTHETIC gallery rows
+            // later must not race with this real asynchronous startup read.
+            // Verify the production startup contract before testing the
+            // unrelated live-edge navigation with fake rows.
+            Until(window, () =>
+                typeof(PCasa.App.MainWindow).GetField(
+                    "_startupGalleryPublished",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!
+                    .GetValue(window) is true,
+                "Initial gallery startup never published its restored viewport.");
+            if (window.FindName("BrowseScrollViewer") is not ScrollViewer startupScroller ||
+                startupScroller.Opacity != 1 || !startupScroller.IsHitTestVisible)
+                throw new Exception(
+                    "Startup gallery was not visible after the startup page warm completed.");
+            Console.WriteLine(
+                "PASS: Real gallery startup completes before synthetic WPF navigation fixtures.");
 
             // A submenu arrow is not sufficient: the application-wide WPF
             // template must contain a working PART_Popup for child programs.
@@ -1932,6 +1951,18 @@ internal static class Program
                 // test harness would replace its own synthetic index with
                 // the (empty) real test catalog on reaching this live edge.
                 scanDirtyField.SetValue(window, false);
+                // The preceding twelve fake scanner notifications schedule
+                // the REAL 750ms catalog-publication timer. Its SQLite
+                // catalog is empty and must not overwrite this synthetic
+                // 480-photo viewport while checking the LIVE second-folder
+                // edge. Quiesce only that fixture-generated publication;
+                // the ScrollViewer and DeferScanGalleryPublication code
+                // under test are unchanged.
+                var syntheticTimer = (DispatcherTimer?)scrollType.GetField(
+                    "_catalogPublicationTimer", scrollFlags)!.GetValue(window);
+                syntheticTimer?.Stop();
+                scrollType.GetField("_catalogPublicationPending", scrollFlags)!
+                    .SetValue(window, 0);
                 scroller.ScrollToVerticalOffset(secondStart - 60);
                 Flush(window);
                 if (scroller.VerticalOffset <= 2 ||
@@ -2783,14 +2814,53 @@ internal static class Program
                 var compareSide = (Button)window.FindName("EditCompareSideButton")!;
                 var compareSplit = (Button)window.FindName("EditCompareSplitButton")!;
                 var compareSingle = (Button)window.FindName("EditCompareSingleButton")!;
+                var editControls = viewerType.GetMethod("UpdateEditControls", reflectFlags)!;
+                var internalTabs = (TabControl)window.FindName("EditorToolTabs")!;
+                var internalTools = (WrapPanel)window.FindName("ViewerToolsList")!;
+                var internalAuto = (StackPanel)window.FindName("ViewerAutoToolsList")!;
+                var externalTools = (WrapPanel)window.FindName("ExternalEditorToolsList")!;
                 try
                 {
+                    // Noneditable PSD still offers configured external apps,
+                    // but NO ghosted internal tools. Switching back to an
+                    // editable JPEG restores them without restarting PCasa.
+                    viewerInfoField.SetValue(window, new PhotoViewerImageInfo(
+                        999, @"C:\synthetic\portrait.psd", "portrait.psd", 120, 180));
+                    editControls.Invoke(window, null);
+                    if (internalTabs.Visibility != Visibility.Collapsed ||
+                        internalTools.Visibility != Visibility.Collapsed ||
+                        internalAuto.Visibility != Visibility.Collapsed ||
+                        externalTools.Visibility == Visibility.Collapsed)
+                        throw new Exception(
+                            "Unsupported PSD displayed disabled internal editor tools.");
+                    viewerInfoField.SetValue(window, oldViewerInfo);
+                    editControls.Invoke(window, null);
+                    if (internalTabs.Visibility != Visibility.Visible ||
+                        internalTools.Visibility != Visibility.Visible ||
+                        internalAuto.Visibility != Visibility.Visible)
+                        throw new Exception(
+                            "Editable JPEG failed to show internal editor tools again.");
+                    Console.WriteLine(
+                        "PASS: Internal edit tools vanish for PSD and return for editable JPEG.");
+
+                    // The splitter's vertical marker extends ABOVE and
+                    // BELOW its enclosing rectangle, unlike the adjacent
+                    // two-pane symbol. WPF path bounds are checked directly.
+                    var splitCanvas = (Canvas)compareSplit.Content;
+                    var glyph = splitCanvas.Children.OfType<System.Windows.Shapes.Path>().Single();
+                    if (glyph.Data.Bounds.Top >= 3.5 ||
+                        glyph.Data.Bounds.Bottom <= 16.5)
+                        throw new Exception(
+                            "Slider icon divider does not extend outside its frame.");
                     editStateFixture.SetValue(window, null);
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||
-                        compareSplit.IsEnabled)
+                        compareSplit.IsEnabled ||
+                        compareSingle.Visibility != Visibility.Collapsed ||
+                        compareSide.Visibility != Visibility.Collapsed ||
+                        compareSplit.Visibility != Visibility.Collapsed)
                         throw new Exception(
-                            "A saved image with Undo history enabled comparison outside an edit.");
+                            "A saved image must HIDE every comparison icon outside a pending edit.");
                     var edit = new PhotoEditSession(999, originalPixels);
                     // PhotoEditSession intentionally DECOUPLES its original
                     // pixels from the source BitmapSource/decoder. The split
@@ -2814,8 +2884,11 @@ internal static class Program
                     editStateFixture.SetValue(window, edit);
                     viewerImage.Source = editedPixels;
                     updateComparison.Invoke(window, null);
-                    if (!compareSide.IsEnabled || !compareSplit.IsEnabled)
-                        throw new Exception("Actual unsaved edit did not enable comparison.");
+                    if (!compareSide.IsEnabled || !compareSplit.IsEnabled ||
+                        compareSingle.Visibility != Visibility.Visible ||
+                        compareSide.Visibility != Visibility.Visible ||
+                        compareSplit.Visibility != Visibility.Visible)
+                        throw new Exception("Actual unsaved edit did not SHOW comparison icons.");
                     ((Task)showComparison.Invoke(window,
                         [Enum.Parse(compareMode, "Split")])!)
                         .GetAwaiter().GetResult();
@@ -2845,9 +2918,12 @@ internal static class Program
                     editStateFixture.SetValue(window, null); // Save/Cancel completion.
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||
-                        compareSplit.IsEnabled || swipe.Visibility != Visibility.Collapsed)
+                        compareSplit.IsEnabled || swipe.Visibility != Visibility.Collapsed ||
+                        compareSingle.Visibility != Visibility.Collapsed ||
+                        compareSide.Visibility != Visibility.Collapsed ||
+                        compareSplit.Visibility != Visibility.Collapsed)
                         throw new Exception(
-                            "Save/Cancel failed to disable all compare icons and restore single view.");
+                            "Save/Cancel failed to HIDE all compare icons and restore single view.");
                     Console.WriteLine(
                         "PASS: True WPF split alignment, active-only comparison, disabled after Save.");
                 }
@@ -3576,6 +3652,21 @@ internal static class Program
                     Console.Error.WriteLine("Window close: " + closeError);
                 }
             }
+        }
+    }
+
+    // Pump the real WPF dispatcher while waiting for async startup to
+    // publish the gallery. A bounded wait makes a broken startup fail the
+    // smoke test rather than hanging a GitHub Actions runner indefinitely.
+    private static void Until(Window window, Func<bool> condition, string failureMessage)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new Exception(failureMessage);
+            Flush(window);
+            System.Threading.Thread.Sleep(20);
         }
     }
 
