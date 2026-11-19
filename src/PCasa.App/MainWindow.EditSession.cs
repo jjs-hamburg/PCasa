@@ -361,8 +361,15 @@ public partial class MainWindow
         foreach (var card in ExternalEditorToolsList.Children.OfType<StackPanel>())
             foreach (var button in card.Children.OfType<Button>())
                 button.IsEnabled = canChooseAnotherEditor;
-        // Sliders must be visibly disabled as well. The editor tab control
-        // disables its descendants without disabling GPS, tags or navigation.
+        // Undo/Redo are internal actions too: show each only when it can
+        // actually operate. Low-contrast disabled arrow glyphs are not a
+        // usable availability cue for everyone.
+        CropUndoButton.Visibility = CropUndoButton.IsEnabled
+            ? Visibility.Visible : Visibility.Collapsed;
+        CropRedoButton.Visibility = CropRedoButton.IsEnabled
+            ? Visibility.Visible : Visibility.Collapsed;
+        // Footer Save/Cancel remains stable at the bottom of the panel;
+        // hiding these would move the user's primary decision controls.
         ViewerCropFooter.Visibility = Visibility.Visible;
         UpdateEditComparisonAvailability();
         UpdateEditComparisonFromSession();
