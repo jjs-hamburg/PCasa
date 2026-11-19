@@ -39,6 +39,7 @@ public partial class MainWindow : Window
 
         _database = new LocalDatabase();
         _database.Initialize();
+        LogStartupStage("database-initialized");
         // Directory.Move and SQLite cannot commit atomically. Reconcile any
         // interrupted rename BEFORE durable jobs, the first gallery projection
         // or the background monitor can read stale directory paths.
@@ -97,6 +98,7 @@ public partial class MainWindow : Window
         RecoverExternalEditSchedulerLease();
         ScheduleExternalCleanup();
         _ = WarmExternalEditorIconsAsync();
+        LogStartupStage("window-constructed");
     }
 
     private bool _folderRemovalPending;

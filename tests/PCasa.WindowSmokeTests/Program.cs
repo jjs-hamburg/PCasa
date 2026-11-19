@@ -96,8 +96,29 @@ internal static class Program
                 startupScroller.Opacity != 1 || !startupScroller.IsHitTestVisible)
                 throw new Exception(
                     "Startup gallery was not visible after the startup page warm completed.");
+            // First frame is also the release fence for speculative pages and
+            // background monitoring. A gallery that stays deferred forever
+            // would appear initially but stop loading pages after navigation.
+            Flush(window);
+            if (window.FindName("BrowseSurface") is not BrowseGallerySurface startupSurface ||
+                startupSurface.ViewportPageRequestsDeferred)
+                throw new Exception(
+                    "Viewport page requests remained suspended after first paint.");
+            var startupFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            if (typeof(PCasa.App.MainWindow).GetField(
+                    "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
+                throw new Exception("First gallery frame was not presented.");
+            var deferredSurface = new BrowseGallerySurface();
+            deferredSurface.DeferViewportPageRequests(true);
+            deferredSurface.SetViewport(1000, 600);
+            if (!deferredSurface.ViewportPageRequestsDeferred)
+                throw new Exception("Provisional thumbnail loads were not suspended.");
+            deferredSurface.DeferViewportPageRequests(false);
+            if (deferredSurface.ViewportPageRequestsDeferred)
+                throw new Exception("Provisional thumbnail loads cannot be released.");
             Console.WriteLine(
-                "PASS: Real gallery startup completes before synthetic WPF navigation fixtures.");
+                "PASS: Startup warms the restored viewport before releasing background thumbnails.");
 
             // A submenu arrow is not sufficient: the application-wide WPF
             // template must contain a working PART_Popup for child programs.
