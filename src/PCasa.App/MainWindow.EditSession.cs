@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 using Path = System.IO.Path;
 using System.Windows.Threading;
 using PCasa.App.Data;
@@ -87,7 +86,6 @@ public partial class MainWindow
             StraightenAngleSlider.Minimum = -10;
             StraightenAngleSlider.Maximum = 10;
         };
-        ViewerStraightenGrid.SizeChanged += (_, _) => DrawStraightenGrid();
         UpdateEditControls();
     }
 
@@ -152,7 +150,6 @@ public partial class MainWindow
                 SetViewerBitmap(source);
                 ApplyViewerImageLayout();
                 _straightenPreviewQuarterTurns = _straightenQuarterTurns;
-                DrawStraightenGrid();
             }
 
             // The same centered, auto-inscribed rectangle as the durable
@@ -184,37 +181,6 @@ public partial class MainWindow
         }
     }
 
-    private void DrawStraightenGrid()
-    {
-        ViewerStraightenGrid.Children.Clear();
-        if (!_straightenActive) return;
-        var width = ViewerStraightenGrid.ActualWidth;
-        var height = ViewerStraightenGrid.ActualHeight;
-        if (width <= 0 || height <= 0) return;
-        var pen = new SolidColorBrush(Color.FromArgb(155, 245, 245, 245));
-        pen.Freeze();
-        const int divisions = 12;
-        for (var n = 1; n < divisions; n++)
-        {
-            var x = n * width / divisions;
-            var y = n * height / divisions;
-            ViewerStraightenGrid.Children.Add(new Line
-            {
-                X1 = x, X2 = x, Y1 = 0, Y2 = height,
-                Stroke = pen, StrokeThickness = .7,
-                StrokeDashArray = new DoubleCollection { 2, 4 },
-                IsHitTestVisible = false
-            });
-            ViewerStraightenGrid.Children.Add(new Line
-            {
-                X1 = 0, X2 = width, Y1 = y, Y2 = y,
-                Stroke = pen, StrokeThickness = .7,
-                StrokeDashArray = new DoubleCollection { 2, 4 },
-                IsHitTestVisible = false
-            });
-        }
-    }
-
     private void LeaveStraighten()
     {
         ResetStraightenPreviewTransform();
@@ -222,7 +188,6 @@ public partial class MainWindow
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = false;
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
-        ViewerStraightenGrid.Children.Clear();
         ViewerStraightenOptions.Visibility = Visibility.Collapsed;
         ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;

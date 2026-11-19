@@ -1556,7 +1556,7 @@
                                     <Line x:Name="ViewerCropThirdH1" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                     <Line x:Name="ViewerCropThirdH2" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                 </Canvas>
-                                <Canvas x:Name="ViewerStraightenGrid" Visibility="Collapsed"
+                                <controls:StraightenGridOverlay x:Name="ViewerStraightenGrid" Visibility="Collapsed"
                                         Width="{Binding ActualWidth, ElementName=PhotoViewerImage}"
                                         Height="{Binding ActualHeight, ElementName=PhotoViewerImage}"
                                         HorizontalAlignment="Center" VerticalAlignment="Center"

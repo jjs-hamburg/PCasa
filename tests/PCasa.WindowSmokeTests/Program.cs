@@ -294,6 +294,38 @@ internal static class Program
                 System.Reflection.BindingFlags.NonPublic)!;
             initEditing.Invoke(window, null);
             Flush(window);
+            // Rendering is size-driven, not an initial imperative draw.
+            if (window.FindName("ViewerStraightenGrid") is not StraightenGridOverlay)
+                throw new Exception("Straighten grid uses the old Canvas painter.");
+            if (StraightenGridOverlay.Divisions != 24)
+                throw new Exception("Straighten grid spacing was not halved.");
+            var gridProbe = new StraightenGridOverlay { Width = 480, Height = 320 };
+            void AssertGridPaint(int width, int height)
+            {
+                gridProbe.Width = width;
+                gridProbe.Height = height;
+                gridProbe.Measure(new Size(width, height));
+                gridProbe.Arrange(new Rect(0, 0, width, height));
+                var bitmap = new RenderTargetBitmap(width, height, 96, 96,
+                    PixelFormats.Pbgra32);
+                bitmap.Render(gridProbe);
+                var bytes = new byte[width * height * 4];
+                bitmap.CopyPixels(bytes, width * 4, 0);
+                var x = width / 24; // A new line absent in the 12-part grid.
+                var painted = 0;
+                for (var y = 4; y < height - 4; y++)
+                    for (var dx = -1; dx <= 1; dx++)
+                        if (bytes[(y * width + x + dx) * 4 + 3] > 0)
+                            painted++;
+                if (painted < 5)
+                    throw new Exception("Straighten grid missing after WPF layout.");
+            }
+            AssertGridPaint(480, 320);
+            gridProbe.Visibility = Visibility.Collapsed;
+            gridProbe.Visibility = Visibility.Visible;
+            AssertGridPaint(240, 160);
+            Console.WriteLine("PASS: Fine straighten grid is rendered and survives layout changes.");
+
             var manualTools = (WrapPanel)window.FindName("ViewerToolsList")!;
             var automaticTools = (StackPanel)window.FindName("ViewerAutoToolsList")!;
             if (manualTools.Children.Count != 2 ||
