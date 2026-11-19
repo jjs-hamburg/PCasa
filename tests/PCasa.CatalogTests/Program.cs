@@ -60,6 +60,8 @@ internal static class Program
             VideoCatalogAndPreviewSmoke, failures);
         Run("Image and folder rename retain stable catalog IDs and thumbnails",
             RenameFlow.Run, failures);
+        Run("PSD gallery uses full merged portrait, invalidates only stale PSD tiers",
+            PsdPreviewCacheRegression.Run, failures);
         Run("GPX gaps, improbable jumps and signed camera correction",
             GpxRegressionTests.GapSpeedAndClockOffset, failures);
         Run("GPX interpolation respects original track segment boundaries",
