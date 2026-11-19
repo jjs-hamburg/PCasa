@@ -238,8 +238,8 @@ internal static class Program
             if (!optionLabels.SequenceEqual(new[]
                 {
                     "Ordnermanager", "Sprache", "Externe Programme",
-                    "GPX Import", "Taskmanager...", "Datenbankverwaltung...",
-                    "Schreibfehler (GPS/Tags)"
+                    "GPX Import", "Slideshow", "Taskmanager...",
+                    "Datenbankverwaltung...", "Schreibfehler (GPS/Tags)"
                 }))
                 throw new Exception("Incorrect Options menu order: " +
                     string.Join(", ", optionLabels));
