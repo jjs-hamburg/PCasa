@@ -79,6 +79,25 @@ internal static class Program
             window.WindowState = WindowState.Normal;
             window.Width = 1500;
             Flush(window);
+            // Alpha.43 deliberately keeps the initial gallery layout
+            // invisible while restoring the saved anchor and warming the
+            // visible packed pages. Tests that inject SYNTHETIC gallery rows
+            // later must not race with this real asynchronous startup read.
+            // Verify the production startup contract before testing the
+            // unrelated live-edge navigation with fake rows.
+            Until(window, () =>
+                typeof(PCasa.App.MainWindow).GetField(
+                    "_startupGalleryPublished",
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!
+                    .GetValue(window) is true,
+                "Initial gallery startup never published its restored viewport.");
+            if (window.FindName("BrowseScrollViewer") is not ScrollViewer startupScroller ||
+                startupScroller.Opacity != 1 || !startupScroller.IsHitTestVisible)
+                throw new Exception(
+                    "Startup gallery was not visible after the startup page warm completed.");
+            Console.WriteLine(
+                "PASS: Real gallery startup completes before synthetic WPF navigation fixtures.");
 
             // A submenu arrow is not sufficient: the application-wide WPF
             // template must contain a working PART_Popup for child programs.
@@ -1932,6 +1951,18 @@ internal static class Program
                 // test harness would replace its own synthetic index with
                 // the (empty) real test catalog on reaching this live edge.
                 scanDirtyField.SetValue(window, false);
+                // The preceding twelve fake scanner notifications schedule
+                // the REAL 750ms catalog-publication timer. Its SQLite
+                // catalog is empty and must not overwrite this synthetic
+                // 480-photo viewport while checking the LIVE second-folder
+                // edge. Quiesce only that fixture-generated publication;
+                // the ScrollViewer and DeferScanGalleryPublication code
+                // under test are unchanged.
+                var syntheticTimer = (DispatcherTimer?)scrollType.GetField(
+                    "_catalogPublicationTimer", scrollFlags)!.GetValue(window);
+                syntheticTimer?.Stop();
+                scrollType.GetField("_catalogPublicationPending", scrollFlags)!
+                    .SetValue(window, 0);
                 scroller.ScrollToVerticalOffset(secondStart - 60);
                 Flush(window);
                 if (scroller.VerticalOffset <= 2 ||
