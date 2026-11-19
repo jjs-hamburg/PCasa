@@ -417,6 +417,47 @@ internal static class Program
                 optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
                 throw new Exception("Undo or editor program configuration is in the wrong menu.");
+            // Slideshow Play belongs permanently at the LEFT edge of the
+            // search toolbar; horizontal search scrolling may not displace it.
+            var slideshowPlay = window.FindName("SlideshowStartButton") as Button
+                ?? throw new Exception("Slideshow Play button missing.");
+            var searchScroller = (ScrollViewer)window.FindName(
+                "SearchToolbarScrollViewer")!;
+            for (DependencyObject? ancestor = slideshowPlay;
+                 ancestor is not null; ancestor = VisualTreeHelper.GetParent(ancestor))
+                if (ReferenceEquals(ancestor, searchScroller))
+                    throw new Exception("Slideshow Play scrolls away with search controls.");
+            var slideshowOptions = window.FindName("SlideshowOptionsMenuItem") as MenuItem
+                ?? throw new Exception("Slideshow options menu missing.");
+            var slideshowMenuItems = optionsMenu.Items.Cast<object>().ToList();
+            var slideshowMenuPosition = slideshowMenuItems.IndexOf(slideshowOptions);
+            var taskMenuPosition = slideshowMenuItems.IndexOf(
+                window.FindName("TaskManagerMenuItem"));
+            var separatorPosition = slideshowMenuItems.FindIndex(x => x is Separator);
+            if (slideshowMenuPosition < 0 || separatorPosition <= slideshowMenuPosition ||
+                taskMenuPosition <= separatorPosition)
+                throw new Exception("Slideshow and Task Manager options have wrong menu grouping.");
+            var slideshowDefaults = new SlideshowSettings();
+            if (slideshowDefaults.BackgroundMode != "gallery" ||
+                slideshowDefaults.DisplayMode != "gallery" ||
+                slideshowDefaults.Transition != "projector" ||
+                slideshowDefaults.IntervalSeconds != 5 ||
+                slideshowDefaults.TransitionMilliseconds != 700 ||
+                !slideshowDefaults.PreloadNext)
+                throw new Exception("Kodi-like slideshow defaults or inherited gallery texture changed.");
+            var normalizedSlideshow = new SlideshowSettings
+            {
+                IntervalSeconds = -42,
+                Transition = "unknown",
+                BackgroundMode = "invalid"
+            }.Normalize();
+            if (normalizedSlideshow.IntervalSeconds != 1 ||
+                normalizedSlideshow.Transition != "projector" ||
+                normalizedSlideshow.BackgroundMode != "gallery")
+                throw new Exception("Slideshow settings normalization is unsafe.");
+            Console.WriteLine(
+                "PASS: Left-anchored slideshow Play, grouped options and inherited gallery texture.");
+
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;
             if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
@@ -1696,6 +1737,63 @@ internal static class Program
                 filteredSequence.IndexOfImage(synthetic[1].ImageId) >= 0)
                 throw new Exception("Filtered gallery sequence added images not shown.");
             Console.WriteLine("PASS: Viewer sequences use gallery order, search, collapsed folders and cyclic limits.");
+            // The slideshow reuses the very same filtered PhotoSequence,
+            // skipping movies without creating a second index or filesystem
+            // traversal. Arrows must work without waiting for its timer.
+            var slideItems = new[]
+            {
+                synthetic[0] with { FileName = "first.jpg" },
+                synthetic[1] with { FileName = "movie.mp4" },
+                synthetic[2] with { FileName = "third.jpg" }
+            };
+            var slideshowSequence = PhotoSequence.Create(slideItems,
+                new HashSet<long>(), slideItems[0].ImageId, PhotoSequenceScope.Gallery);
+            if (SlideshowWindow.NextStillIndex(slideshowSequence, 0, +1) != 2 ||
+                SlideshowWindow.NextStillIndex(slideshowSequence, 2, -1) != 0 ||
+                SlideshowWindow.NextStillIndex(slideshowSequence, 2, +1) != 0)
+                throw new Exception("Slideshow movie skipping/wrapping disagrees with gallery sequence.");
+            var previewPixels = new byte[64 * 48 * 4];
+            for (var j = 3; j < previewPixels.Length; j += 4)
+                previewPixels[j] = 255;
+            var slideshowPreview = BitmapSource.Create(64, 48, 96, 96,
+                PixelFormats.Bgra32, null, previewPixels, 64 * 4);
+            slideshowPreview.Freeze();
+            var galleryBrush = new SolidColorBrush(Colors.SlateGray);
+            var slideshowDatabase = (PCasa.App.Data.LocalDatabase)
+                typeof(PCasa.App.MainWindow).GetField("_database",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+            var slideshow = new SlideshowWindow(window, slideshowSequence, 0,
+                slideshowDatabase, galleryBrush, new SlideshowSettings
+                {
+                    IntervalSeconds = 3600,
+                    PreloadNext = false,
+                    Transition = "none"
+                }, _ => slideshowPreview)
+            {
+                WindowState = WindowState.Normal,
+                Width = 640, Height = 480
+            };
+            try
+            {
+                slideshow.Show();
+                Flush(slideshow);
+                if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
+                    slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
+                    throw new Exception("Slideshow failed to show the gallery-texture default.");
+                typeof(SlideshowWindow).GetMethod("Navigate",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(slideshow, [1]);
+                Flush(slideshow);
+                if (slideshow.CurrentImageIndex != 2)
+                    throw new Exception("Manual slideshow Right did not skip video instantly.");
+            }
+            finally { slideshow.Close(); }
+            Console.WriteLine(
+                "PASS: WPF slideshow displays local pixels, uses gallery brush and changes image immediately.");
+
+
 
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
