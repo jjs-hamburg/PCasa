@@ -2788,9 +2788,12 @@ internal static class Program
                     editStateFixture.SetValue(window, null);
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||
-                        compareSplit.IsEnabled)
+                        compareSplit.IsEnabled ||
+                        compareSingle.Visibility != Visibility.Collapsed ||
+                        compareSide.Visibility != Visibility.Collapsed ||
+                        compareSplit.Visibility != Visibility.Collapsed)
                         throw new Exception(
-                            "A saved image with Undo history enabled comparison outside an edit.");
+                            "A saved image must HIDE every comparison icon outside a pending edit.");
                     var edit = new PhotoEditSession(999, originalPixels);
                     // PhotoEditSession intentionally DECOUPLES its original
                     // pixels from the source BitmapSource/decoder. The split
@@ -2814,8 +2817,11 @@ internal static class Program
                     editStateFixture.SetValue(window, edit);
                     viewerImage.Source = editedPixels;
                     updateComparison.Invoke(window, null);
-                    if (!compareSide.IsEnabled || !compareSplit.IsEnabled)
-                        throw new Exception("Actual unsaved edit did not enable comparison.");
+                    if (!compareSide.IsEnabled || !compareSplit.IsEnabled ||
+                        compareSingle.Visibility != Visibility.Visible ||
+                        compareSide.Visibility != Visibility.Visible ||
+                        compareSplit.Visibility != Visibility.Visible)
+                        throw new Exception("Actual unsaved edit did not SHOW comparison icons.");
                     ((Task)showComparison.Invoke(window,
                         [Enum.Parse(compareMode, "Split")])!)
                         .GetAwaiter().GetResult();
@@ -2845,9 +2851,12 @@ internal static class Program
                     editStateFixture.SetValue(window, null); // Save/Cancel completion.
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||
-                        compareSplit.IsEnabled || swipe.Visibility != Visibility.Collapsed)
+                        compareSplit.IsEnabled || swipe.Visibility != Visibility.Collapsed ||
+                        compareSingle.Visibility != Visibility.Collapsed ||
+                        compareSide.Visibility != Visibility.Collapsed ||
+                        compareSplit.Visibility != Visibility.Collapsed)
                         throw new Exception(
-                            "Save/Cancel failed to disable all compare icons and restore single view.");
+                            "Save/Cancel failed to HIDE all compare icons and restore single view.");
                     Console.WriteLine(
                         "PASS: True WPF split alignment, active-only comparison, disabled after Save.");
                 }
