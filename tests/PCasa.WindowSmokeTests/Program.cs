@@ -3655,6 +3655,21 @@ internal static class Program
         }
     }
 
+    // Pump the real WPF dispatcher while waiting for async startup to
+    // publish the gallery. A bounded wait makes a broken startup fail the
+    // smoke test rather than hanging a GitHub Actions runner indefinitely.
+    private static void Until(Window window, Func<bool> condition, string failureMessage)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new Exception(failureMessage);
+            Flush(window);
+            System.Threading.Thread.Sleep(20);
+        }
+    }
+
     private static void Flush(Window window)
     {
         window.UpdateLayout();
