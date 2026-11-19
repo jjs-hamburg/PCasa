@@ -991,6 +991,11 @@ internal static class FolderAddFlow
                 throw new Exception("Startup scan regression fixture still has unfinished inventory.");
             new BackgroundScanSettings { Enabled = true }.Save();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
+            var startupGallery = (ScrollViewer)window.FindName(
+                "BrowseScrollViewer");
+            if (startupGallery.Opacity != 0 || startupGallery.IsHitTestVisible)
+                throw new Exception(
+                    "Startup gallery was visible BEFORE saved anchor restoration.");
             window.Show();
             var scanFlags = BindingFlags.Instance | BindingFlags.NonPublic;
             var firstSnapshotField = typeof(PCasa.App.MainWindow).GetField(
@@ -1018,12 +1023,16 @@ internal static class FolderAddFlow
                 typeof(PCasa.App.MainWindow).GetField("_galleryPositionRestored",
                     scanFlags)!.GetValue(window) is true,
                 "Saved gallery position was never restored after startup.");
+            Until(window, () =>
+                startupGallery.Opacity == 1 && startupGallery.IsHitTestVisible,
+                "Restored gallery never became visible after warming saved viewport.");
             if (!SamePath(PathOf(restoredTree.SelectedItem as TreeViewItem), initialRoot) ||
                 restoredSelection.FocusedId != rememberedImageId ||
                 !restoredIds.Contains(rememberedImageId))
                 throw new Exception(
                     "Gallery/tree focus or single-image selection was lost after PCasa restart.");
-            Console.WriteLine("PASS: Real restart restores tree focus and selected photo identity.");
+            Console.WriteLine(
+                "PASS: Initial thumbnails stay hidden until saved gallery anchor is restored and visible pages warmed.");
 
             // A fresh PCasa window must still reopen the manager with the
             // Explorer registration persisted from the previous process view.
