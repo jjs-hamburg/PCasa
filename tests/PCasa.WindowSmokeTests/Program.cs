@@ -1421,14 +1421,23 @@ internal static class Program
                 throw new Exception("The main menu is not in its own top header row.");
             var searchScroll = window.FindName("SearchToolbarScrollViewer") as ScrollViewer
                 ?? throw new Exception("Search row needs a separate horizontal scroller.");
-            if (searchScroll.Parent is not Border searchBorder ||
+            // Alpha.44: the slideshow Play button stays visible to the LEFT
+            // while only the unchanged filter/sort/search controls scroll.
+            // Both sit together in the permanent second menu row.
+            if (searchScroll.Parent is not Grid searchShell ||
+                searchShell.Parent is not Border searchBorder ||
                 !ReferenceEquals(searchBorder.Parent, twoRowHeader) ||
                 Grid.GetRow(searchBorder) != 1 ||
+                searchShell.ColumnDefinitions.Count != 2 ||
+                !ReferenceEquals(slideshowPlay.Parent, searchShell) ||
+                Grid.GetColumn(slideshowPlay) != 0 ||
+                Grid.GetColumn(searchScroll) != 1 ||
                 searchScroll.HorizontalScrollBarVisibility != ScrollBarVisibility.Auto ||
                 searchScroll.VerticalScrollBarVisibility != ScrollBarVisibility.Disabled ||
                 searchScroll.Content is not StackPanel searchRow ||
                 searchRow.Orientation != Orientation.Horizontal)
-                throw new Exception("Search is not in a permanent horizontal row under menu.");
+                throw new Exception(
+                    "Permanent search row must contain fixed left slideshow Play and right scrolling filters.");
             if (sortFrame.Child is not StackPanel sortGroup ||
                 searchFrame.Child is not StackPanel searchGroup ||
                 !ReferenceEquals(sortButton.Parent, sortGroup) ||
