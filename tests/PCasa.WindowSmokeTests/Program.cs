@@ -1858,6 +1858,24 @@ internal static class Program
             if (scroller.VerticalOffset > 3)
                 throw new Exception("Gallery start button did not land at global beginning.");
             Console.WriteLine("PASS: Six icon navigation commands retain exact gallery/folder destinations.");
+            // Regression guard: these handlers must never await SQLite or a
+            // scheduler-backed refresh before applying a virtual jump.
+            foreach (var name in new[]
+            {
+                "GalleryNavigate_Click", "GalleryReturnToRemembered_Click",
+                "GalleryReturnToDeparture_Click"
+            })
+            {
+                var handler = typeof(PCasa.App.MainWindow).GetMethod(name,
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!;
+                if (handler.GetCustomAttributes(
+                        typeof(System.Runtime.CompilerServices.AsyncStateMachineAttribute),
+                        inherit: false).Length != 0)
+                    throw new Exception(
+                        name + " awaited background catalog work before navigation.");
+            }
+            Console.WriteLine("PASS: Gallery and bookmark jumps do not await catalog refresh.");
             scroller.ScrollToVerticalOffset(2800);
             Flush(window);
             surface.SetViewport(scroller.VerticalOffset,

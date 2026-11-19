@@ -192,22 +192,15 @@ public partial class MainWindow
 
     // Navigation uses ONLY the visible folder sections from the SAME
     // virtual surface; it never selects a photo or expands the tree.
-    private async void GalleryNavigate_Click(object sender, RoutedEventArgs e)
+    private void GalleryNavigate_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string action } ||
             !_browseInitialized) return;
         try
         {
             MarkExplicitGalleryNavigation();
-            if (_scanGalleryPublicationDeferred)
-            {
-                _scanGalleryPublicationDeferred = false;
-                await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
-                if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
-            }
-
-            BrowseScrollViewer.UpdateLayout();
+            // Navigate the already-published virtual gallery immediately.
+            // Pending scanner edits are never a prerequisite for a user jump.
             double? destination = null;
             var folderId = BrowseSurface.GetFolderIdAtOffset(
                 BrowseScrollViewer.VerticalOffset + 4);
@@ -238,13 +231,23 @@ public partial class MainWindow
                     break;
             }
             if (destination is not double top) return;
-            BrowseScrollViewer.ScrollToVerticalOffset(
-                Math.Clamp(top, 0, BrowseScrollViewer.ScrollableHeight));
-            BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
-                Math.Max(1, BrowseScrollViewer.ViewportHeight));
-            if (BrowseSurface.GetFolderIdAtOffset(
-                BrowseScrollViewer.VerticalOffset + 4) is long targetFolder)
+            var bounded = Math.Clamp(top, 0, BrowseScrollViewer.ScrollableHeight);
+            // Treat a programmatic jump as explicit folder intent. A delayed
+            // ScrollChanged or reflow must not steal the destination.
+            if (BrowseSurface.GetFolderIdAtOffset(bounded + 4) is long targetFolder)
+            {
+                ScrollToExplicitGalleryFolder(targetFolder, bounded);
                 UpdateActiveFolderDisplay(targetFolder, updateTreeSelection: false);
+            }
+            else
+            {
+                BrowseScrollViewer.ScrollToVerticalOffset(bounded);
+                BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                    Math.Max(1, BrowseScrollViewer.ViewportHeight));
+            }
+            // Preserve the existing live-edge publication policy, but only
+            // after the viewport has jumped; this never awaits SQLite.
+            if (GalleryAtLiveEdge()) PublishDeferredScanGallery();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { PCasaDiagnostics.Write("Gallery.Navigate", ex); }
