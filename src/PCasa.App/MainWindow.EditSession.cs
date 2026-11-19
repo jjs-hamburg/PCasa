@@ -334,9 +334,26 @@ public partial class MainWindow
             EditableImageFormats.Supports(currentFile);
         var noExternalEdit = _externalEditReview is null &&
             _externalBatchReview is null;
-        EditorToolTabs.IsEnabled = editable && noExternalEdit;
+        // The user must not have to decode low-contrast disabled icons.
+        // Internal tools follow the same visibility rule as configured
+        // external editors: if this format/session cannot use them, they
+        // simply are not present. Keep the Quick panel itself: it contains
+        // the independently filtered external-program cards.
+        var internalToolsAvailable = editable && noExternalEdit;
+        EditorToolTabs.Visibility = internalToolsAvailable
+            ? Visibility.Visible : Visibility.Collapsed;
+        EditorToolTabs.IsEnabled = internalToolsAvailable;
+        ViewerToolsList.Visibility = internalToolsAvailable
+            ? Visibility.Visible : Visibility.Collapsed;
+        ViewerAutoToolsList.Visibility = internalToolsAvailable
+            ? Visibility.Visible : Visibility.Collapsed;
         foreach (var tool in _editorToolLabels)
-            tool.Button.IsEnabled = editable && noExternalEdit;
+            tool.Button.IsEnabled = internalToolsAvailable;
+        // If the user navigates from an editable JPG while the Light/Color/
+        // Detail tab is open to a PSD/RAW/video, the external editor cards
+        // must not be hidden behind a now-unavailable internal tab.
+        if (!internalToolsAvailable)
+            SwitchEditorPanel("Quick");
         // With no detected external result, a deliberate click on another
         // editor automatically discards the unchanged working copy.
         var canChooseAnotherEditor = noExternalEdit ||
