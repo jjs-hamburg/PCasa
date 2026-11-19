@@ -591,6 +591,64 @@ public sealed class LocalDatabase
             jobs.ExecuteNonQuery();
         }
 
+        // Alpha.43: older PSD gallery tiers may have been built from the
+        // wrong embedded Photoshop JPEG (cropped and/or unrotated), while
+        // the viewer already uses our correct merged-composite decoder.
+        // Invalidate ONLY existing PSD packed tiers ONCE per catalog, and
+        // let the normal background cache builder repopulate them from the
+        // original composite. No source files, photo IDs, tags, or other
+        // thumbnails are modified. The migration marker and invalidation
+        // commit atomically so a crash cannot lose the rebuild request.
+        using (var migration = connection.CreateCommand())
+        {
+            migration.CommandText = """
+                CREATE TABLE IF NOT EXISTS preview_cache_migrations (
+                    name TEXT PRIMARY KEY,
+                    completed_utc TEXT NOT NULL
+                );
+                """;
+            migration.ExecuteNonQuery();
+        }
+        using (var check = connection.CreateCommand())
+        {
+            check.CommandText = """
+                SELECT COUNT(*) FROM preview_cache_migrations
+                WHERE name='psd-merged-thumbnail-v2';
+                """;
+            var alreadyApplied = Convert.ToInt32(check.ExecuteScalar()) > 0;
+            if (!alreadyApplied)
+            {
+                using var tx = connection.BeginTransaction();
+                using var invalidate = connection.CreateCommand();
+                invalidate.Transaction = tx;
+                invalidate.CommandText = """
+                    DELETE FROM thumbnail_entries WHERE image_id IN (
+                        SELECT id FROM images WHERE extension='.psd' COLLATE NOCASE
+                    );
+                    """;
+                invalidate.ExecuteNonQuery();
+                using var queue = connection.CreateCommand();
+                queue.Transaction = tx;
+                queue.CommandText = """
+                    INSERT INTO browse_cache_jobs(image_id,state,updated_utc)
+                    SELECT id,'PENDING',strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                    FROM images WHERE extension='.psd' COLLATE NOCASE
+                    ON CONFLICT(image_id) DO UPDATE SET
+                        state='PENDING',updated_utc=excluded.updated_utc;
+                    """;
+                queue.ExecuteNonQuery();
+                using var stamp = connection.CreateCommand();
+                stamp.Transaction = tx;
+                stamp.CommandText = """
+                    INSERT INTO preview_cache_migrations(name,completed_utc)
+                    VALUES('psd-merged-thumbnail-v2',
+                        strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+                    """;
+                stamp.ExecuteNonQuery();
+                tx.Commit();
+            }
+        }
+
         // The filesystem and SQLite cannot share an atomic transaction.
         // Keep a durable intent BEFORE an original is physically moved.
         // The catalog relocation clears it in the SAME SQLite commit.
