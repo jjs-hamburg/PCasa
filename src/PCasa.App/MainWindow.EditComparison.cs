@@ -118,7 +118,12 @@ public partial class MainWindow
             _externalBatchReview is null &&
             imageId is long id &&
             EditableImageFormats.Supports(_viewerImageInfo!.LocalPath) &&
-            ((_photoEditSession is { HasChanges: true } live && live.ImageId == id) ||
+            ((_photoEditSession is { } live && live.ImageId == id &&
+                 (live.HasChanges || GetPendingLiveEditStep() is not null ||
+                  // An Undo to the original must not leave a comparison
+                  // which the user explicitly selected. Redo is still valid.
+                  (live.CanRedo && _editCompareMode != EditCompareMode.Single &&
+                   _editCompareImageId == id))) ||
              (_externalEditReview is { Ready: true, Busy: false,
                  ResultPath: not null } external && external.ImageId == id));
         if (!eligible && _editCompareMode != EditCompareMode.Single)
@@ -159,10 +164,25 @@ public partial class MainWindow
         LoadEditComparisonPairAsync(long imageId)
     {
         var live = _photoEditSession;
-        if (live is { HasChanges: true } && live.ImageId == imageId)
+        if (live is not null && live.ImageId == imageId)
         {
-            var edited = PhotoViewerImage.Source as BitmapSource ?? live.Render();
-            return (live.Original, edited);
+            var pending = GetPendingLiveEditStep();
+            if (pending is not null)
+            {
+                // Crop/straighten are visual overlays in the main viewer.
+                // Render their actual output from the very same pending
+                // recipe that Save will apply, without accessing the NAS.
+                var accepted = live.Render();
+                var edited = await Task.Run(() =>
+                    PhotoEditSession.Render(accepted, [pending]));
+                return (live.Original, edited);
+            }
+            if (live.HasChanges || (live.CanRedo &&
+                _editCompareMode != EditCompareMode.Single))
+            {
+                var edited = PhotoViewerImage.Source as BitmapSource ?? live.Render();
+                return (live.Original, edited);
+            }
         }
         var external = _externalEditReview;
         if (external is { ResultPath: not null } && external.ImageId == imageId)
@@ -242,8 +262,10 @@ public partial class MainWindow
         if (_editCompareMode == EditCompareMode.Single ||
             _editCompareHoldingOriginal ||
             _editCompareImageId != _viewerImageInfo?.Id ||
-            _photoEditSession is not { HasChanges: true } session ||
-            session.ImageId != _editCompareImageId)
+            _photoEditSession is not { } session ||
+            session.ImageId != _editCompareImageId ||
+            (!session.HasChanges && GetPendingLiveEditStep() is null &&
+             !session.CanRedo))
             return;
         _editCompareOriginal = session.Original;
         _editCompareEdited = PhotoViewerImage.Source as BitmapSource ?? session.Render();
@@ -251,7 +273,9 @@ public partial class MainWindow
         EditCompareSideEdited.Source = _editCompareEdited;
         EditCompareSwipeOriginal.Source = _editCompareOriginal;
         EditCompareSwipeEdited.Source = _editCompareEdited;
-        UpdateEditCompareClip();
+        // Recalculate transforms from the user's unchanged Fit/zoom setting.
+        // Undo replaces only pixels, never mode, split position or scale.
+        UpdateEditComparisonZoom();
     }
 
     private void UpdateEditComparisonZoom()
@@ -420,7 +444,9 @@ public partial class MainWindow
             _externalEditReview is { ResultPath: null })
             return false;
         var session = _photoEditSession;
-        var live = session is { HasChanges: true } && session.ImageId == info.Id;
+        var live = session is not null && session.ImageId == info.Id &&
+            (session.HasChanges || GetPendingLiveEditStep() is not null ||
+             (session.CanRedo && _editCompareImageId == info.Id));
         if (!live && (_externalEditReview is not { ResultPath: not null } review ||
                      review.ImageId != info.Id))
             return false;

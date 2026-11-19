@@ -2951,6 +2951,52 @@ internal static class Program
                         !originalBytes.SequenceEqual(beforeBytes))
                         throw new Exception(
                             "Edit session detached the wrong original pixels.");
+                    // A real-time adjustment is already comparable before
+                    // it is accepted into Undo history or saved to disk.
+                    var advancedActive = viewerType.GetField(
+                        "_advancedToneActive", reflectFlags)!;
+                    var advancedKind = viewerType.GetField(
+                        "_advancedToneKind", reflectFlags)!;
+                    var advancedAmount = viewerType.GetField(
+                        "_advancedToneAmount", reflectFlags)!;
+                    var oldAdvancedActive = advancedActive.GetValue(window);
+                    var oldAdvancedKind = advancedKind.GetValue(window);
+                    var oldAdvancedAmount = advancedAmount.GetValue(window);
+                    try
+                    {
+                        editStateFixture.SetValue(window, edit);
+                        viewerImage.Source = originalPixels;
+                        advancedActive.SetValue(window, true);
+                        advancedKind.SetValue(window, "denoise-luma");
+                        advancedAmount.SetValue(window, .35d);
+                        updateComparison.Invoke(window, null);
+                        if (!compareSplit.IsEnabled ||
+                            compareSplit.Visibility != Visibility.Visible ||
+                            edit.HasChanges)
+                            throw new Exception(
+                                "Live Details preview had no comparison before applying.");
+                        var liveTask = (Task)showComparison.Invoke(window,
+                            [Enum.Parse(compareMode, "Split")])!;
+                        Until(window, () => liveTask.IsCompleted,
+                            "Live Details comparison did not render.");
+                        liveTask.GetAwaiter().GetResult();
+                        Flush(window);
+                        if (swipe.Visibility != Visibility.Visible ||
+                            !ReferenceEquals(beforeImage.Source, actualBefore) ||
+                            afterImage.Source is null)
+                            throw new Exception(
+                                "Live Details comparison lost its before/after pair.");
+                        resetComparison.Invoke(window, null);
+                    }
+                    finally
+                    {
+                        advancedActive.SetValue(window, oldAdvancedActive);
+                        advancedKind.SetValue(window, oldAdvancedKind);
+                        advancedAmount.SetValue(window, oldAdvancedAmount);
+                    }
+                    Console.WriteLine(
+                        "PASS: Unsaved live Details preview enables real before/after.");
+
                     edit.Apply(new PhotoEditStep("contrast", Amount: 0.25));
                     editStateFixture.SetValue(window, edit);
                     viewerImage.Source = editedPixels;
@@ -2986,6 +3032,46 @@ internal static class Program
                         clip.Rect.Width <= 0 || clip.Rect.Width >= swipe.ActualWidth)
                         throw new Exception(
                             "Split did not expose the original with a clipped divider.");
+                    // Undo and Redo must preserve comparison geometry and
+                    // the user's zoom, including when Undo reaches Original.
+                    // Only explicit Save/Cancel ends this selected comparison.
+                    var editModeField = viewerType.GetField(
+                        "_editCompareMode", reflectFlags)!;
+                    var splitFractionField = viewerType.GetField(
+                        "_editCompareSplitFraction", reflectFlags)!;
+                    var moveHistory = viewerType.GetMethod(
+                        "MoveEditHistory", reflectFlags)!;
+                    fitField.SetValue(window, false);
+                    zoomField.SetValue(window, 175d);
+                    splitFractionField.SetValue(window, .32d);
+                    edit.Apply(new PhotoEditStep("brightness", Amount: .2));
+                    viewerImage.Source = edit.Render();
+                    editControls.Invoke(window, null);
+                    Flush(window);
+                    moveHistory.Invoke(window, [-1]);
+                    Flush(window);
+                    if (Convert.ToString(editModeField.GetValue(window)) != "Split" ||
+                        swipe.Visibility != Visibility.Visible ||
+                        Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01 ||
+                        Math.Abs((double)splitFractionField.GetValue(window)! - .32d) > .001 ||
+                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
+                        throw new Exception(
+                            "Undo changed zoom/split mode or retained stale After pixels.");
+                    moveHistory.Invoke(window, [-1]);
+                    Flush(window);
+                    if (edit.HasChanges ||
+                        Convert.ToString(editModeField.GetValue(window)) != "Split" ||
+                        swipe.Visibility != Visibility.Visible ||
+                        Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01)
+                        throw new Exception(
+                            "Undo to Original unexpectedly closed comparison or reset zoom.");
+                    moveHistory.Invoke(window, [1]);
+                    Flush(window);
+                    if (Convert.ToString(editModeField.GetValue(window)) != "Split" ||
+                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
+                        throw new Exception("Redo failed to update the active comparison.");
+                    Console.WriteLine(
+                        "PASS: Undo/Redo preserve selected comparison, split divider and zoom.");
                     editStateFixture.SetValue(window, null); // Save/Cancel completion.
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||
