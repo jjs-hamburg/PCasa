@@ -809,7 +809,8 @@
                             <Canvas Width="24" Height="20" ClipToBounds="False">
                                 <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                       StrokeThickness="1.7" StrokeLineJoin="Round"
-                                      Data="M3.5,3.5 L20.5,3.5 L20.5,16.5 L3.5,16.5 Z M12,3.5 L12,16.5"/>
+                                      Data="M3.5,4 L20.5,4 L20.5,16 L3.5,16 Z M12,0.75 L12,19.25"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                             </Canvas>
                         </Button>
                         <Button Content="{loc:Tr Key='An Fenster anpassen'}" MinWidth="103" Height="30"
@@ -1480,7 +1481,11 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="22" />
                         </Grid.ColumnDefinitions>
+                        <!-- Keep layout measurable while restoring the saved
+                             image anchor. Opacity (not Collapsed) prevents the
+                             transient first-folder thumbnails from flashing. -->
                         <ScrollViewer x:Name="BrowseScrollViewer" Grid.Column="0"
+                                      Opacity="0" IsHitTestVisible="False"
                                       HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Hidden"
                                       CanContentScroll="False"
