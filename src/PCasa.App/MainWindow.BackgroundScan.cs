@@ -105,6 +105,12 @@ public partial class MainWindow
 
     private void BackgroundScan_WindowLoaded(object sender, RoutedEventArgs e)
     {
+        // Window.Loaded can occur before the async gallery finishes. Starting
+        // monitor reconciliation now would compete with the first thumbnails.
+        // BrowseGallery releases this gate only after first paint AND durable
+        // user-package recovery, preserving existing P0-before-P4 ordering.
+        if (!_startupGalleryPresented || !_startupRecoveryComplete)
+            return;
         if (_backgroundScanInitialized)
         {
             return;

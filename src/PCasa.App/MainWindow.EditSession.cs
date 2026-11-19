@@ -4,7 +4,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 using Path = System.IO.Path;
 using System.Windows.Threading;
 using PCasa.App.Data;
@@ -87,7 +86,6 @@ public partial class MainWindow
             StraightenAngleSlider.Minimum = -10;
             StraightenAngleSlider.Maximum = 10;
         };
-        ViewerStraightenGrid.SizeChanged += (_, _) => DrawStraightenGrid();
         UpdateEditControls();
     }
 
@@ -152,7 +150,6 @@ public partial class MainWindow
                 SetViewerBitmap(source);
                 ApplyViewerImageLayout();
                 _straightenPreviewQuarterTurns = _straightenQuarterTurns;
-                DrawStraightenGrid();
             }
 
             // The same centered, auto-inscribed rectangle as the durable
@@ -184,37 +181,6 @@ public partial class MainWindow
         }
     }
 
-    private void DrawStraightenGrid()
-    {
-        ViewerStraightenGrid.Children.Clear();
-        if (!_straightenActive) return;
-        var width = ViewerStraightenGrid.ActualWidth;
-        var height = ViewerStraightenGrid.ActualHeight;
-        if (width <= 0 || height <= 0) return;
-        var pen = new SolidColorBrush(Color.FromArgb(155, 245, 245, 245));
-        pen.Freeze();
-        const int divisions = 12;
-        for (var n = 1; n < divisions; n++)
-        {
-            var x = n * width / divisions;
-            var y = n * height / divisions;
-            ViewerStraightenGrid.Children.Add(new Line
-            {
-                X1 = x, X2 = x, Y1 = 0, Y2 = height,
-                Stroke = pen, StrokeThickness = .7,
-                StrokeDashArray = new DoubleCollection { 2, 4 },
-                IsHitTestVisible = false
-            });
-            ViewerStraightenGrid.Children.Add(new Line
-            {
-                X1 = 0, X2 = width, Y1 = y, Y2 = y,
-                Stroke = pen, StrokeThickness = .7,
-                StrokeDashArray = new DoubleCollection { 2, 4 },
-                IsHitTestVisible = false
-            });
-        }
-    }
-
     private void LeaveStraighten()
     {
         ResetStraightenPreviewTransform();
@@ -222,7 +188,6 @@ public partial class MainWindow
         _straightenPreviewQuarterTurns = int.MinValue;
         _straightenActive = false;
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
-        ViewerStraightenGrid.Children.Clear();
         ViewerStraightenOptions.Visibility = Visibility.Collapsed;
         ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;
@@ -375,44 +340,62 @@ public partial class MainWindow
         UpdateEditComparisonFromSession();
     }
 
-    private bool ApplyEditTool()
+    // One edit-step identity is shared by the live comparison and the
+    // existing Save/Undo transaction. All image pixels still use PhotoEditSession.Render.
+    private PhotoEditStep? GetActiveEditStep()
     {
-        if (_photoEditSession is null) return false;
         if (_cropActive)
         {
             var area = FitToImageAspect(_cropRect);
-            if (area.Width <= .01 || area.Height <= .01) return false;
-            _photoEditSession.Apply(new PhotoEditStep("crop",
-                area.X, area.Y, area.Width, area.Height));
-            EndCrop();
+            return area.Width > .01 && area.Height > .01
+                ? new PhotoEditStep("crop", area.X, area.Y, area.Width, area.Height)
+                : null;
         }
-        else if (_straightenActive)
+        if (_straightenActive)
         {
             var degrees = _straightenAngle + 90 * _straightenQuarterTurns;
-            LeaveStraighten();
-            if (Math.Abs(degrees) > .00001)
-                _photoEditSession.Apply(new PhotoEditStep(
-                    "rotate", Degrees: degrees));
+            return Math.Abs(degrees) > .00001
+                ? new PhotoEditStep("rotate", Degrees: degrees) : null;
         }
-        else if (_brightnessActive)
-        {
-            var exposure = _brightnessAmount;
-            LeaveBrightness();
-            if (Math.Abs(exposure) > .00001)
-                _photoEditSession.Apply(new PhotoEditStep(
-                    "brightness", Amount: exposure));
-        }
-        else if (_advancedToneActive)
-        {
-            var kind = _advancedToneKind!;
-            var amount = _advancedToneAmount;
-            LeaveAdvancedTone();
-            if (Math.Abs(amount) > .00001)
-                _photoEditSession.Apply(new PhotoEditStep(kind, Amount: amount,
+        if (_brightnessActive)
+            return Math.Abs(_brightnessAmount) > .00001
+                ? new PhotoEditStep("brightness", Amount: _brightnessAmount) : null;
+        if (_advancedToneActive && _advancedToneKind is { } kind)
+            return Math.Abs(_advancedToneAmount) > .00001
+                ? new PhotoEditStep(kind, Amount: _advancedToneAmount,
                     Radius: kind == "sharpen" ? SharpenRadiusSlider.Value : 1,
-                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5));
-        }
-        else return false;
+                    Detail: kind == "sharpen" ? SharpenDetailSlider.Value : .5)
+                : null;
+        return null;
+    }
+
+    private PhotoEditStep? GetPendingLiveEditStep()
+    {
+        var step = GetActiveEditStep();
+        if (!_cropActive || step is null) return step;
+        // Simply entering Crop does not make a before/after change.
+        return _cropHistory.Count > 0 &&
+               (_cropRect != _cropHistory[0].Bounds ||
+                _cropRatio != _cropHistory[0].AspectRatio ||
+                _cropRatioMode != _cropHistory[0].Mode)
+            ? step : null;
+    }
+
+    private bool ApplyEditTool()
+    {
+        if (_photoEditSession is null) return false;
+        if (!_cropActive && !_straightenActive && !_brightnessActive &&
+            !_advancedToneActive) return false;
+        var step = GetActiveEditStep();
+        if (_cropActive && step is null) return false;
+        // Commit BEFORE Leave* updates comparison availability. Otherwise
+        // the live-preview-only comparison briefly resets and loses its mode.
+        if (step is not null)
+            _photoEditSession.Apply(step);
+        if (_cropActive) EndCrop();
+        else if (_straightenActive) LeaveStraighten();
+        else if (_brightnessActive) LeaveBrightness();
+        else if (_advancedToneActive) LeaveAdvancedTone();
         SetViewerBitmap(_photoEditSession.Render());
         ApplyViewerImageLayout();
         UpdateEditControls();

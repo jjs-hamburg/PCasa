@@ -96,8 +96,29 @@ internal static class Program
                 startupScroller.Opacity != 1 || !startupScroller.IsHitTestVisible)
                 throw new Exception(
                     "Startup gallery was not visible after the startup page warm completed.");
+            // First frame is also the release fence for speculative pages and
+            // background monitoring. A gallery that stays deferred forever
+            // would appear initially but stop loading pages after navigation.
+            Flush(window);
+            if (window.FindName("BrowseSurface") is not BrowseGallerySurface startupSurface ||
+                startupSurface.ViewportPageRequestsDeferred)
+                throw new Exception(
+                    "Viewport page requests remained suspended after first paint.");
+            var startupFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            if (typeof(PCasa.App.MainWindow).GetField(
+                    "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
+                throw new Exception("First gallery frame was not presented.");
+            var deferredSurface = new BrowseGallerySurface();
+            deferredSurface.DeferViewportPageRequests(true);
+            deferredSurface.SetViewport(1000, 600);
+            if (!deferredSurface.ViewportPageRequestsDeferred)
+                throw new Exception("Provisional thumbnail loads were not suspended.");
+            deferredSurface.DeferViewportPageRequests(false);
+            if (deferredSurface.ViewportPageRequestsDeferred)
+                throw new Exception("Provisional thumbnail loads cannot be released.");
             Console.WriteLine(
-                "PASS: Real gallery startup completes before synthetic WPF navigation fixtures.");
+                "PASS: Startup warms the restored viewport before releasing background thumbnails.");
 
             // A submenu arrow is not sufficient: the application-wide WPF
             // template must contain a working PART_Popup for child programs.
@@ -217,8 +238,8 @@ internal static class Program
             if (!optionLabels.SequenceEqual(new[]
                 {
                     "Ordnermanager", "Sprache", "Externe Programme",
-                    "GPX Import", "Taskmanager...", "Datenbankverwaltung...",
-                    "Schreibfehler (GPS/Tags)"
+                    "GPX Import", "Slideshow", "Taskmanager...",
+                    "Datenbankverwaltung...", "Schreibfehler (GPS/Tags)"
                 }))
                 throw new Exception("Incorrect Options menu order: " +
                     string.Join(", ", optionLabels));
@@ -294,6 +315,38 @@ internal static class Program
                 System.Reflection.BindingFlags.NonPublic)!;
             initEditing.Invoke(window, null);
             Flush(window);
+            // Rendering is size-driven, not an initial imperative draw.
+            if (window.FindName("ViewerStraightenGrid") is not StraightenGridOverlay)
+                throw new Exception("Straighten grid uses the old Canvas painter.");
+            if (StraightenGridOverlay.Divisions != 24)
+                throw new Exception("Straighten grid spacing was not halved.");
+            var gridProbe = new StraightenGridOverlay { Width = 480, Height = 320 };
+            void AssertGridPaint(int width, int height)
+            {
+                gridProbe.Width = width;
+                gridProbe.Height = height;
+                gridProbe.Measure(new Size(width, height));
+                gridProbe.Arrange(new Rect(0, 0, width, height));
+                var bitmap = new RenderTargetBitmap(width, height, 96, 96,
+                    PixelFormats.Pbgra32);
+                bitmap.Render(gridProbe);
+                var bytes = new byte[width * height * 4];
+                bitmap.CopyPixels(bytes, width * 4, 0);
+                var x = width / 24; // A new line absent in the 12-part grid.
+                var painted = 0;
+                for (var y = 4; y < height - 4; y++)
+                    for (var dx = -1; dx <= 1; dx++)
+                        if (bytes[(y * width + x + dx) * 4 + 3] > 0)
+                            painted++;
+                if (painted < 5)
+                    throw new Exception("Straighten grid missing after WPF layout.");
+            }
+            AssertGridPaint(480, 320);
+            gridProbe.Visibility = Visibility.Collapsed;
+            gridProbe.Visibility = Visibility.Visible;
+            AssertGridPaint(240, 160);
+            Console.WriteLine("PASS: Fine straighten grid is rendered and survives layout changes.");
+
             var manualTools = (WrapPanel)window.FindName("ViewerToolsList")!;
             var automaticTools = (StackPanel)window.FindName("ViewerAutoToolsList")!;
             if (manualTools.Children.Count != 2 ||
@@ -364,6 +417,47 @@ internal static class Program
                 optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
                 throw new Exception("Undo or editor program configuration is in the wrong menu.");
+            // Slideshow Play belongs permanently at the LEFT edge of the
+            // search toolbar; horizontal search scrolling may not displace it.
+            var slideshowPlay = window.FindName("SlideshowStartButton") as Button
+                ?? throw new Exception("Slideshow Play button missing.");
+            var searchScroller = (ScrollViewer)window.FindName(
+                "SearchToolbarScrollViewer")!;
+            for (DependencyObject? ancestor = slideshowPlay;
+                 ancestor is not null; ancestor = VisualTreeHelper.GetParent(ancestor))
+                if (ReferenceEquals(ancestor, searchScroller))
+                    throw new Exception("Slideshow Play scrolls away with search controls.");
+            var slideshowOptions = window.FindName("SlideshowOptionsMenuItem") as MenuItem
+                ?? throw new Exception("Slideshow options menu missing.");
+            var slideshowMenuItems = optionsMenu.Items.Cast<object>().ToList();
+            var slideshowMenuPosition = slideshowMenuItems.IndexOf(slideshowOptions);
+            var taskMenuPosition = slideshowMenuItems.IndexOf(
+                window.FindName("TaskManagerMenuItem"));
+            var separatorPosition = slideshowMenuItems.FindIndex(x => x is Separator);
+            if (slideshowMenuPosition < 0 || separatorPosition <= slideshowMenuPosition ||
+                taskMenuPosition <= separatorPosition)
+                throw new Exception("Slideshow and Task Manager options have wrong menu grouping.");
+            var slideshowDefaults = new SlideshowSettings();
+            if (slideshowDefaults.BackgroundMode != "gallery" ||
+                slideshowDefaults.DisplayMode != "gallery" ||
+                slideshowDefaults.Transition != "projector" ||
+                slideshowDefaults.IntervalSeconds != 5 ||
+                slideshowDefaults.TransitionMilliseconds != 700 ||
+                !slideshowDefaults.PreloadNext)
+                throw new Exception("Kodi-like slideshow defaults or inherited gallery texture changed.");
+            var normalizedSlideshow = new SlideshowSettings
+            {
+                IntervalSeconds = -42,
+                Transition = "unknown",
+                BackgroundMode = "invalid"
+            }.Normalize();
+            if (normalizedSlideshow.IntervalSeconds != 1 ||
+                normalizedSlideshow.Transition != "projector" ||
+                normalizedSlideshow.BackgroundMode != "gallery")
+                throw new Exception("Slideshow settings normalization is unsafe.");
+            Console.WriteLine(
+                "PASS: Left-anchored slideshow Play, grouped options and inherited gallery texture.");
+
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;
             if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
@@ -1327,14 +1421,23 @@ internal static class Program
                 throw new Exception("The main menu is not in its own top header row.");
             var searchScroll = window.FindName("SearchToolbarScrollViewer") as ScrollViewer
                 ?? throw new Exception("Search row needs a separate horizontal scroller.");
-            if (searchScroll.Parent is not Border searchBorder ||
+            // Alpha.44: the slideshow Play button stays visible to the LEFT
+            // while only the unchanged filter/sort/search controls scroll.
+            // Both sit together in the permanent second menu row.
+            if (searchScroll.Parent is not Grid searchShell ||
+                searchShell.Parent is not Border searchBorder ||
                 !ReferenceEquals(searchBorder.Parent, twoRowHeader) ||
                 Grid.GetRow(searchBorder) != 1 ||
+                searchShell.ColumnDefinitions.Count != 2 ||
+                !ReferenceEquals(slideshowPlay.Parent, searchShell) ||
+                Grid.GetColumn(slideshowPlay) != 0 ||
+                Grid.GetColumn(searchScroll) != 1 ||
                 searchScroll.HorizontalScrollBarVisibility != ScrollBarVisibility.Auto ||
                 searchScroll.VerticalScrollBarVisibility != ScrollBarVisibility.Disabled ||
                 searchScroll.Content is not StackPanel searchRow ||
                 searchRow.Orientation != Orientation.Horizontal)
-                throw new Exception("Search is not in a permanent horizontal row under menu.");
+                throw new Exception(
+                    "Permanent search row must contain fixed left slideshow Play and right scrolling filters.");
             if (sortFrame.Child is not StackPanel sortGroup ||
                 searchFrame.Child is not StackPanel searchGroup ||
                 !ReferenceEquals(sortButton.Parent, sortGroup) ||
@@ -1643,6 +1746,63 @@ internal static class Program
                 filteredSequence.IndexOfImage(synthetic[1].ImageId) >= 0)
                 throw new Exception("Filtered gallery sequence added images not shown.");
             Console.WriteLine("PASS: Viewer sequences use gallery order, search, collapsed folders and cyclic limits.");
+            // The slideshow reuses the very same filtered PhotoSequence,
+            // skipping movies without creating a second index or filesystem
+            // traversal. Arrows must work without waiting for its timer.
+            var slideItems = new[]
+            {
+                synthetic[0] with { FileName = "first.jpg" },
+                synthetic[1] with { FileName = "movie.mp4" },
+                synthetic[2] with { FileName = "third.jpg" }
+            };
+            var slideshowSequence = PhotoSequence.Create(slideItems,
+                new HashSet<long>(), slideItems[0].ImageId, PhotoSequenceScope.Gallery);
+            if (SlideshowWindow.NextStillIndex(slideshowSequence, 0, +1) != 2 ||
+                SlideshowWindow.NextStillIndex(slideshowSequence, 2, -1) != 0 ||
+                SlideshowWindow.NextStillIndex(slideshowSequence, 2, +1) != 0)
+                throw new Exception("Slideshow movie skipping/wrapping disagrees with gallery sequence.");
+            var previewPixels = new byte[64 * 48 * 4];
+            for (var j = 3; j < previewPixels.Length; j += 4)
+                previewPixels[j] = 255;
+            var slideshowPreview = BitmapSource.Create(64, 48, 96, 96,
+                PixelFormats.Bgra32, null, previewPixels, 64 * 4);
+            slideshowPreview.Freeze();
+            var galleryBrush = new SolidColorBrush(Colors.SlateGray);
+            var slideshowDatabase = (PCasa.App.Data.LocalDatabase)
+                typeof(PCasa.App.MainWindow).GetField("_database",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+            var slideshow = new SlideshowWindow(window, slideshowSequence, 0,
+                slideshowDatabase, galleryBrush, new SlideshowSettings
+                {
+                    IntervalSeconds = 3600,
+                    PreloadNext = false,
+                    Transition = "none"
+                }, _ => slideshowPreview)
+            {
+                WindowState = WindowState.Normal,
+                Width = 640, Height = 480
+            };
+            try
+            {
+                slideshow.Show();
+                Flush(slideshow);
+                if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
+                    slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
+                    throw new Exception("Slideshow failed to show the gallery-texture default.");
+                typeof(SlideshowWindow).GetMethod("Navigate",
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(slideshow, [1]);
+                Flush(slideshow);
+                if (slideshow.CurrentImageIndex != 2)
+                    throw new Exception("Manual slideshow Right did not skip video instantly.");
+            }
+            finally { slideshow.Close(); }
+            Console.WriteLine(
+                "PASS: WPF slideshow displays local pixels, uses gallery brush and changes image immediately.");
+
+
 
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
@@ -1858,6 +2018,24 @@ internal static class Program
             if (scroller.VerticalOffset > 3)
                 throw new Exception("Gallery start button did not land at global beginning.");
             Console.WriteLine("PASS: Six icon navigation commands retain exact gallery/folder destinations.");
+            // Regression guard: these handlers must never await SQLite or a
+            // scheduler-backed refresh before applying a virtual jump.
+            foreach (var name in new[]
+            {
+                "GalleryNavigate_Click", "GalleryReturnToRemembered_Click",
+                "GalleryReturnToDeparture_Click"
+            })
+            {
+                var handler = typeof(PCasa.App.MainWindow).GetMethod(name,
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!;
+                if (handler.GetCustomAttributes(
+                        typeof(System.Runtime.CompilerServices.AsyncStateMachineAttribute),
+                        inherit: false).Length != 0)
+                    throw new Exception(
+                        name + " awaited background catalog work before navigation.");
+            }
+            Console.WriteLine("PASS: Gallery and bookmark jumps do not await catalog refresh.");
             scroller.ScrollToVerticalOffset(2800);
             Flush(window);
             surface.SetViewport(scroller.VerticalOffset,
@@ -2880,6 +3058,52 @@ internal static class Program
                         !originalBytes.SequenceEqual(beforeBytes))
                         throw new Exception(
                             "Edit session detached the wrong original pixels.");
+                    // A real-time adjustment is already comparable before
+                    // it is accepted into Undo history or saved to disk.
+                    var advancedActive = viewerType.GetField(
+                        "_advancedToneActive", reflectFlags)!;
+                    var advancedKind = viewerType.GetField(
+                        "_advancedToneKind", reflectFlags)!;
+                    var advancedAmount = viewerType.GetField(
+                        "_advancedToneAmount", reflectFlags)!;
+                    var oldAdvancedActive = advancedActive.GetValue(window);
+                    var oldAdvancedKind = advancedKind.GetValue(window);
+                    var oldAdvancedAmount = advancedAmount.GetValue(window);
+                    try
+                    {
+                        editStateFixture.SetValue(window, edit);
+                        viewerImage.Source = originalPixels;
+                        advancedActive.SetValue(window, true);
+                        advancedKind.SetValue(window, "denoise-luma");
+                        advancedAmount.SetValue(window, .35d);
+                        updateComparison.Invoke(window, null);
+                        if (!compareSplit.IsEnabled ||
+                            compareSplit.Visibility != Visibility.Visible ||
+                            edit.HasChanges)
+                            throw new Exception(
+                                "Live Details preview had no comparison before applying.");
+                        var liveTask = (Task)showComparison.Invoke(window,
+                            [Enum.Parse(compareMode, "Split")])!;
+                        Until(window, () => liveTask.IsCompleted,
+                            "Live Details comparison did not render.");
+                        liveTask.GetAwaiter().GetResult();
+                        Flush(window);
+                        if (swipe.Visibility != Visibility.Visible ||
+                            !ReferenceEquals(beforeImage.Source, actualBefore) ||
+                            afterImage.Source is null)
+                            throw new Exception(
+                                "Live Details comparison lost its before/after pair.");
+                        resetComparison.Invoke(window, null);
+                    }
+                    finally
+                    {
+                        advancedActive.SetValue(window, oldAdvancedActive);
+                        advancedKind.SetValue(window, oldAdvancedKind);
+                        advancedAmount.SetValue(window, oldAdvancedAmount);
+                    }
+                    Console.WriteLine(
+                        "PASS: Unsaved live Details preview enables real before/after.");
+
                     edit.Apply(new PhotoEditStep("contrast", Amount: 0.25));
                     editStateFixture.SetValue(window, edit);
                     viewerImage.Source = editedPixels;
@@ -2915,6 +3139,46 @@ internal static class Program
                         clip.Rect.Width <= 0 || clip.Rect.Width >= swipe.ActualWidth)
                         throw new Exception(
                             "Split did not expose the original with a clipped divider.");
+                    // Undo and Redo must preserve comparison geometry and
+                    // the user's zoom, including when Undo reaches Original.
+                    // Only explicit Save/Cancel ends this selected comparison.
+                    var editModeField = viewerType.GetField(
+                        "_editCompareMode", reflectFlags)!;
+                    var splitFractionField = viewerType.GetField(
+                        "_editCompareSplitFraction", reflectFlags)!;
+                    var moveHistory = viewerType.GetMethod(
+                        "MoveEditHistory", reflectFlags)!;
+                    fitField.SetValue(window, false);
+                    zoomField.SetValue(window, 175d);
+                    splitFractionField.SetValue(window, .32d);
+                    edit.Apply(new PhotoEditStep("brightness", Amount: .2));
+                    viewerImage.Source = edit.Render();
+                    editControls.Invoke(window, null);
+                    Flush(window);
+                    moveHistory.Invoke(window, [-1]);
+                    Flush(window);
+                    if (Convert.ToString(editModeField.GetValue(window)) != "Split" ||
+                        swipe.Visibility != Visibility.Visible ||
+                        Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01 ||
+                        Math.Abs((double)splitFractionField.GetValue(window)! - .32d) > .001 ||
+                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
+                        throw new Exception(
+                            "Undo changed zoom/split mode or retained stale After pixels.");
+                    moveHistory.Invoke(window, [-1]);
+                    Flush(window);
+                    if (edit.HasChanges ||
+                        Convert.ToString(editModeField.GetValue(window)) != "Split" ||
+                        swipe.Visibility != Visibility.Visible ||
+                        Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01)
+                        throw new Exception(
+                            "Undo to Original unexpectedly closed comparison or reset zoom.");
+                    moveHistory.Invoke(window, [1]);
+                    Flush(window);
+                    if (Convert.ToString(editModeField.GetValue(window)) != "Split" ||
+                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
+                        throw new Exception("Redo failed to update the active comparison.");
+                    Console.WriteLine(
+                        "PASS: Undo/Redo preserve selected comparison, split divider and zoom.");
                     editStateFixture.SetValue(window, null); // Save/Cancel completion.
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||

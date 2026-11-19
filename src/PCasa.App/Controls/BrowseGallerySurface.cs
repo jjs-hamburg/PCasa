@@ -279,6 +279,19 @@ public sealed class BrowseGallerySurface : FrameworkElement
         InvalidateVisual();
     }
 
+    // Startup is allowed to lay out the virtual gallery, but must not issue
+    // thumbnail reads for the temporary first-folder viewport before the
+    // persisted image anchor has been restored.
+    private bool _viewportPageRequestsDeferred;
+    public bool ViewportPageRequestsDeferred => _viewportPageRequestsDeferred;
+
+    public void DeferViewportPageRequests(bool defer)
+    {
+        if (_viewportPageRequestsDeferred == defer) return;
+        _viewportPageRequestsDeferred = defer;
+        if (!defer) RequestViewportPages();
+    }
+
     public void SetViewport(double verticalOffset, double viewportHeight)
     {
         _lastViewportTop = _viewportTop;
@@ -1106,7 +1119,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
 
     private void RequestViewportPages()
     {
-        if (_pageCache is null)
+        if (_viewportPageRequestsDeferred || _pageCache is null)
             return;
         var ranges = GetIndexRangesForViewport(_viewportTop, _viewportHeight);
         if (ranges.Count > 0)

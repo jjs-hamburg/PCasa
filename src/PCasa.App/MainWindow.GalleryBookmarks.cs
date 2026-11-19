@@ -40,13 +40,19 @@ public partial class MainWindow
 
     private void ScrollToBookmarkPosition(double top)
     {
-        BrowseScrollViewer.ScrollToVerticalOffset(
-            Math.Clamp(top, 0, BrowseScrollViewer.ScrollableHeight));
-        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
-            Math.Max(1, BrowseScrollViewer.ViewportHeight));
-        if (BrowseSurface.GetFolderIdAtOffset(
-            BrowseScrollViewer.VerticalOffset + 4) is long folder)
+        var destination = Math.Clamp(top, 0, BrowseScrollViewer.ScrollableHeight);
+        if (BrowseSurface.GetFolderIdAtOffset(destination + 4) is long folder)
+        {
+            ScrollToExplicitGalleryFolder(folder, destination);
             UpdateActiveFolderDisplay(folder, updateTreeSelection: false);
+        }
+        else
+        {
+            BrowseScrollViewer.ScrollToVerticalOffset(destination);
+            BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+                Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        }
+        if (GalleryAtLiveEdge()) PublishDeferredScanGallery();
     }
 
     private void ClearBookmarkDeparture()
@@ -85,7 +91,7 @@ public partial class MainWindow
         GalleryReturnToRememberedButton.IsEnabled = true;
     }
 
-    private async void GalleryReturnToRemembered_Click(object sender, RoutedEventArgs e)
+    private void GalleryReturnToRemembered_Click(object sender, RoutedEventArgs e)
     {
         if (_rememberedGalleryPosition is not { } saved ||
             !_browseInitialized) return;
@@ -96,14 +102,8 @@ public partial class MainWindow
             // virtual gallery. Resolve by image identity on the new layout.
             var departure = CaptureBookmarkPosition();
             MarkExplicitGalleryNavigation();
-            if (_scanGalleryPublicationDeferred)
-            {
-                _scanGalleryPublicationDeferred = false;
-                await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
-                if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
-            }
-            BrowseScrollViewer.UpdateLayout();
+            // The saved image identity is resolved in the currently
+            // published surface; scanner refresh never blocks a jump.
             var target = ResolveBookmarkPosition(saved);
             if (target is not double top)
             {
@@ -130,21 +130,15 @@ public partial class MainWindow
         }
     }
 
-    private async void GalleryReturnToDeparture_Click(object sender, RoutedEventArgs e)
+    private void GalleryReturnToDeparture_Click(object sender, RoutedEventArgs e)
     {
         if (_bookmarkDeparturePosition is not { } original ||
             !_browseInitialized) return;
         try
         {
             MarkExplicitGalleryNavigation();
-            if (_scanGalleryPublicationDeferred)
-            {
-                _scanGalleryPublicationDeferred = false;
-                await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
-                if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
-            }
-            BrowseScrollViewer.UpdateLayout();
+            // The saved image identity is resolved in the currently
+            // published surface; scanner refresh never blocks a jump.
             var target = ResolveBookmarkPosition(original);
             if (target is not double top)
             {

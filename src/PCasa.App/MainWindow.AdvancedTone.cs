@@ -144,6 +144,8 @@ public partial class MainWindow
                 Dispatcher.HasShutdownStarted) return;
             SetViewerBitmap(bitmap);
             ApplyViewerImageLayout();
+            UpdateEditComparisonAvailability();
+            UpdateEditComparisonFromSession();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

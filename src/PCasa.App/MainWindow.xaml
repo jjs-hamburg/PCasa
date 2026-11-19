@@ -533,10 +533,13 @@
                                   Header="{loc:Tr Key='Externe Programme'}"
                                   Click="ExternalEditorsOptions_Click"/>
                         <MenuItem Header="{loc:Tr Key='GPX Import'}" Click="GpxOptions_Click"/>
+                        <MenuItem x:Name="SlideshowOptionsMenuItem"
+                                  Header="{loc:Tr Key='Slideshow'}"
+                                  Click="SlideshowOptions_Click"/>
+                        <Separator/>
                         <MenuItem x:Name="TaskManagerMenuItem"
                                   Header="{loc:Tr Key='Taskmanager...'}"
                                   Click="TaskManagerMenu_Click"/>
-                        <Separator/>
                         <MenuItem x:Name="DatabaseManagementMenuItem"
                                   Header="{loc:Tr Key='Datenbankverwaltung...'}"
                                   Click="DatabaseManagementMenu_Click"/>
@@ -559,9 +562,29 @@
                     Background="{DynamicResource PcasaTopBrush}"
                     BorderBrush="{DynamicResource PcasaDividerBrush}"
                     BorderThickness="0,1,0,1">
-                <!-- Preserve the exact controls and order. On narrow windows
-                     the search row scrolls; nothing clips or displaces menu. -->
-                <ScrollViewer x:Name="SearchToolbarScrollViewer"
+                <!-- Play is left-anchored OUTSIDE the horizontal search scroll.
+                     Filters remain right-aligned and independently scrollable. -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="SlideshowStartButton" Grid.Column="0"
+                            Style="{StaticResource PcasaSearchSortButtonStyle}"
+                            Width="35" Height="30" Padding="5"
+                            Margin="10,3,5,3"
+                            ToolTip="{loc:Tr Key='Slideshow starten'}"
+                            Click="SlideshowStart_Click">
+                        <Viewbox Width="19" Height="19">
+                            <Canvas Width="24" Height="24">
+                                <Path Data="M 7,3 L 20,12 L 7,21 Z"
+                                      Stroke="{DynamicResource PcasaTextBrush}"
+                                      StrokeThickness="1.8" StrokeLineJoin="Round"
+                                      Fill="{DynamicResource PcasaTextBrush}"/>
+                            </Canvas>
+                        </Viewbox>
+                    </Button>
+                <ScrollViewer x:Name="SearchToolbarScrollViewer" Grid.Column="1"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled"
                               PanningMode="HorizontalOnly"
@@ -735,6 +758,7 @@
 </Border>
                     </StackPanel>
                 </ScrollViewer>
+                </Grid>
             </Border>
         </Grid>
 
@@ -1556,7 +1580,7 @@
                                     <Line x:Name="ViewerCropThirdH1" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                     <Line x:Name="ViewerCropThirdH2" Stroke="#A6FFFFFF" StrokeThickness=".8" IsHitTestVisible="False"/>
                                 </Canvas>
-                                <Canvas x:Name="ViewerStraightenGrid" Visibility="Collapsed"
+                                <controls:StraightenGridOverlay x:Name="ViewerStraightenGrid" Visibility="Collapsed"
                                         Width="{Binding ActualWidth, ElementName=PhotoViewerImage}"
                                         Height="{Binding ActualHeight, ElementName=PhotoViewerImage}"
                                         HorizontalAlignment="Center" VerticalAlignment="Center"

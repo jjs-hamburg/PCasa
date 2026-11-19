@@ -160,6 +160,8 @@ public partial class MainWindow
                 return;
             SetViewerBitmap(rendered);
             ApplyViewerImageLayout();
+            UpdateEditComparisonAvailability();
+            UpdateEditComparisonFromSession();
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

@@ -30,6 +30,24 @@ public partial class MainWindow
     // The first catalog publication must never paint the first folder
     // before the user's saved thumbnail anchor has been restored.
     private bool _startupGalleryPublished;
+    private bool _startupGalleryPresented;
+    private bool _startupRecoveryComplete;
+    private readonly System.Diagnostics.Stopwatch _startupClock =
+        System.Diagnostics.Stopwatch.StartNew();
+
+    private void LogStartupStage(string stage)
+        => PCasaDiagnostics.WriteMessage("Gallery.StartupTiming",
+            $"{stage}: {_startupClock.ElapsedMilliseconds} ms");
+
+    // Both conditions are required: the correct gallery must have been
+    // painted and durable P0 recovery must be registered before P3/P4 work.
+    private void BeginDeferredBackgroundMonitoring()
+    {
+        if (_startupGalleryPresented && _startupRecoveryComplete &&
+            IsLoaded && !_backgroundScanInitialized &&
+            !Dispatcher.HasShutdownStarted && !_shutdownStarted)
+            BackgroundScan_WindowLoaded(this, new RoutedEventArgs());
+    }
     // The first catalog pass already read these immutable folder summaries
     // and total before the first gallery projection. Reuse them ONCE rather
     // than repeating the same grouping/count query on a 500K-photo SQLite DB.
@@ -93,6 +111,11 @@ public partial class MainWindow
         }
 
         _browseInitialized = true;
+        LogStartupStage("gallery-loaded");
+        // The first layout has a temporary scroll position (usually 0).
+        // Suppress ALL page requests from that provisional viewport; the
+        // explicit warm after restore will load only the actual visible pages.
+        BrowseSurface.DeferViewportPageRequests(true);
         _browseProfileRepository = new BrowseThumbnailProfileRepository(_database);
         _browseCacheRepository = new BrowseCacheRepository(_database);
         _browseCacheBuilder = new BrowseCacheBuilder(
@@ -112,6 +135,11 @@ public partial class MainWindow
         // recovery or first-import admission. Loading a view is not P0-P4
         // work; no NAS filesystem probe is required for this projection.
         await EnsureBrowseCacheAndRefreshAsync(initialProjectionOnly: true);
+        if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
+        LogStartupStage("correct-viewport-warmed");
+        // A ContextIdle continuation runs after WPF Render. Even recovered
+        // high-priority jobs may not consume CPU before the first gallery frame.
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ContextIdle);
         if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
 
         // Recovery is a scheduler operation, not an alternative scanner.
@@ -176,6 +204,9 @@ public partial class MainWindow
         _ = ReconcilePersistedExclusionsAsync();
         _ = CompleteBrowseStartupMaintenanceAsync();
         StartTagBackfill();
+        _startupRecoveryComplete = true;
+        LogStartupStage("durable-recovery-registered");
+        BeginDeferredBackgroundMonitoring();
     }
 
 
@@ -366,6 +397,7 @@ public partial class MainWindow
             });
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
+        if (initialProjectionOnly) LogStartupStage("catalog-and-folder-snapshot");
         if (initialProjectionOnly)
             _startupFolderSnapshot = (initialFolders, imageCount);
         _dropTargetProjection = initialConfiguration;
@@ -720,6 +752,7 @@ public partial class MainWindow
             // Keep the newly read index PRIVATE until the last awaited
             // catalog read. Neither index nor folders may be published alone.
             nextIndex = index;
+            if (!_startupGalleryPublished) LogStartupStage("gallery-index-read");
         }
 
         if (_selectedImageIds.Count > 0)
@@ -848,6 +881,7 @@ public partial class MainWindow
             // The visible area can contain multiple disjoint index ranges
             // when intervening photo folders are collapsed.
             await BrowseSurface.WarmVisibleAsync();
+            if (!_startupGalleryPublished) LogStartupStage("visible-pages-decoded");
             if (!_browseRefreshRequests.IsCurrent(refresh))
                 return;
             BrowseSurface.InvalidateVisual();
@@ -867,6 +901,16 @@ public partial class MainWindow
         _startupGalleryPublished = true;
         BrowseScrollViewer.Opacity = 1;
         BrowseScrollViewer.IsHitTestVisible = true;
+        // The correct viewport has been warmed; let WPF draw it before
+        // speculative thumbnail reads or background-monitor jobs start.
+        _ = Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
+            _startupGalleryPresented = true;
+            LogStartupStage("first-gallery-frame");
+            BrowseSurface.DeferViewportPageRequests(false);
+            BeginDeferredBackgroundMonitoring();
+        }), DispatcherPriority.ContextIdle);
     }
 
     // Called only on Dispatcher, with a complete paired gallery snapshot.
