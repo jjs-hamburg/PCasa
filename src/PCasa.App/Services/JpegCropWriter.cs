@@ -52,8 +52,33 @@ public static class JpegCropWriter
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
         => SaveCore(originalPath, copyPath, operations, token);
 
-    private static void SaveCore(string originalPath, string? copyPath,
+    // An external editor has not yet committed its result to the gallery.
+    // Apply approved internal adjustments to that EXISTING isolated output,
+    // reusing precisely the same full-resolution renderer, staging, format
+    // encoder, metadata transfer and validated File.Replace as normal Save.
+    // The central external transaction captures ONE Undo of the real
+    // original when the user subsequently chooses Save; the temporary
+    // workspace itself must never enter the user's Undo archive.
+    internal static void EditExternalWorkspaceResult(
+        string resultPath, string sessionDirectory,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
+    {
+        var result = Path.GetFullPath(resultPath);
+        var workspace = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(sessionDirectory));
+        if (!string.Equals(Path.GetDirectoryName(result), workspace,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                "Externe Bearbeitung außerhalb des isolierten Arbeitsverzeichnisses.");
+        if (!EditableImageFormats.Supports(result))
+            throw new NotSupportedException(
+                "Das externe Ergebnisformat erlaubt keine interne Bildbearbeitung.");
+        SaveCore(result, null, operations, token, captureUndo: false);
+    }
+
+    private static void SaveCore(string originalPath, string? copyPath,
+        IReadOnlyList<PhotoEditStep> operations, CancellationToken token,
+        bool captureUndo = true)
     {
         var extension = Path.GetExtension(originalPath);
         if (!EditableImageFormats.Supports(originalPath))
@@ -129,17 +154,20 @@ public static class JpegCropWriter
             else
             {
                 // Only in-place writes need a pre-save Undo snapshot.
-                try
+                if (captureUndo)
                 {
-                    new UndoHistoryService(UndoOptions.Load())
-                        .CaptureBeforeSave(fullPath, token);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    FileLockDiagnostics.ReportFailure("Image.Edit.UndoSnapshot:" +
-                        string.Join(",", operations.Select(step => step.Kind)),
-                        ex, fullPath, staged);
-                    throw;
+                    try
+                    {
+                        new UndoHistoryService(UndoOptions.Load())
+                            .CaptureBeforeSave(fullPath, token);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        FileLockDiagnostics.ReportFailure("Image.Edit.UndoSnapshot:" +
+                            string.Join(",", operations.Select(step => step.Kind)),
+                            ex, fullPath, staged);
+                        throw;
+                    }
                 }
                 token.ThrowIfCancellationRequested();
                 try { ReplaceWithSharingRetry(staged, fullPath, token); }

@@ -166,6 +166,8 @@ internal static class Program
         Run("Manual thumbnail rebuild updates one image without evicting its neighbors", TargetedThumbnailRebuildRetainsNeighbor, failures);
         Run("Per-folder gallery sorting preserves tree order for all six sort fields", PerFolderSortAllFields, failures);
         Run("Gallery sorting reads EXIF capture date, file dates, size and original dimensions from one index", GallerySortUsesCatalogMetadata, failures);
+        Run("External Topaz result supports an in-workspace crop before explicit Save without touching original",
+            ExternalWorkspaceEditKeepsOriginalAndScope, failures);
         Run("Moved images reuse their decoded pixels without blanking unrelated folders", ChangedIndexRetainsUnmodifiedImages, failures);
         Run("Targeted image lookup and folder counts match full catalog", SingleImageCatalogProjectionMatchesFullIndex, failures);
         Run("Exclusion service removes and re-includes folder", ExclusionServiceRoundTrip, failures);
@@ -4100,6 +4102,84 @@ internal static class Program
         if (second.Failed != 0 || after.ImageId != imageId ||
             (after.PackFile, after.ByteOffset, after.ByteLength) != pack)
             throw new Exception("Sorting metadata created duplicate images or thumbnails.");
+    }
+
+    private static void ExternalWorkspaceEditKeepsOriginalAndScope()
+    {
+        // The editor's working copy may receive an internal crop BEFORE
+        // the user approves the external Save/SaveCopy. The regular image
+        // writer must reuse its renderer but NEVER create an Undo entry for
+        // this transient workspace or modify the catalog original.
+        var root = Path.Combine(Path.GetTempPath(),
+            "PCasa-ExternalResultCrop-" + Guid.NewGuid().ToString("N"));
+        var workspace = Path.Combine(root, "external-workspace");
+        Directory.CreateDirectory(workspace);
+        var original = Path.Combine(root, "original.jpg");
+        var edited = Path.Combine(workspace, "topaz-result.jpg");
+        try
+        {
+            const int width = 200, height = 120;
+            var bytes = new byte[width * height * 4];
+            for (var y = 0; y < height; y++)
+            for (var x = 0; x < width; x++)
+            {
+                var i = (y * width + x) * 4;
+                bytes[i] = (byte)x;
+                bytes[i + 1] = (byte)y;
+                bytes[i + 2] = 120;
+                bytes[i + 3] = 255;
+            }
+            var bitmap = BitmapSource.Create(width, height, 96, 96,
+                PixelFormats.Bgra32, null, bytes, width * 4);
+            EditableImageFormats.Encode(bitmap, original);
+            File.Copy(original, edited);
+            var originalHash = SHA256.HashData(File.ReadAllBytes(original));
+            var edit = typeof(JpegCropWriter).GetMethod(
+                "EditExternalWorkspaceResult",
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Static)
+                ?? throw new Exception(
+                    "External workspace crop is not routed through the shared image writer.");
+            var steps = new[]
+            {
+                new PhotoEditStep("crop", .1, .1, .8, .8)
+            };
+            // A caller must never bypass the isolated working folder and
+            // accidentally apply this temporary edit to the real source.
+            try
+            {
+                edit.Invoke(null, [original, workspace, steps,
+                    CancellationToken.None]);
+                throw new Exception("External crop accepted an original outside the workspace.");
+            }
+            catch (System.Reflection.TargetInvocationException e)
+                when (e.InnerException is InvalidDataException) { }
+
+            try
+            {
+                edit.Invoke(null, [edited, workspace, steps,
+                    CancellationToken.None]);
+            }
+            catch (System.Reflection.TargetInvocationException e)
+            {
+                throw new Exception("Workspace crop failed.", e.InnerException ?? e);
+            }
+            var actual = EditableImageFormats.Dimensions(edited);
+            if (actual.Width != 160 || actual.Height != 96)
+                throw new Exception(
+                    $"Topaz workspace crop used preview rather than full-res pixels: " +
+                    $"{actual.Width}x{actual.Height}.");
+            if (!SHA256.HashData(File.ReadAllBytes(original))
+                    .SequenceEqual(originalHash))
+                throw new Exception("Cropping an external result touched the gallery original.");
+            if (Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .Count() != 2)
+                throw new Exception("A temporary external edit left unapproved sidecar files.");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static void PerFolderSortAllFields()

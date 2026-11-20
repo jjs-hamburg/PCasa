@@ -179,9 +179,22 @@ public partial class MainWindow
         public long ResultSize { get; set; }
         public bool Ready { get; set; }
         public bool Busy { get; set; }
+        // True ONLY after the actual external-result pixels are displayed.
+        // A failed preview must never make tools edit the old source image.
+        public bool PreviewReady { get; set; }
+        // The shared full-resolution writer stages these steps only ONCE.
+        // Retrying a failed outer file commit must not crop twice.
+        public bool InternalEditsStaged { get; set; }
     }
 
     private ExternalEditReview? _externalEditReview;
+
+    private bool CanEditPendingExternalResult(long imageId)
+        => _externalEditReview is
+            { Ready: true, Busy: false, PreviewReady: true,
+              InternalEditsStaged: false, ResultPath: string path } review &&
+           review.ImageId == imageId &&
+           EditableImageFormats.Supports(path);
     private IDisposable? _externalEditSchedulerLease;
     private bool _externalEditLaunchPending;
 
@@ -506,6 +519,15 @@ public partial class MainWindow
                     StringComparison.OrdinalIgnoreCase) ||
                 (result is not null && (metadata.Length != review.ResultSize ||
                     metadata.Time != review.ResultWriteUtc));
+            if (changed)
+            {
+                review.PreviewReady = false;
+                // A fresh Topaz export supersedes any local edits made to
+                // the previous result. A committed external session never
+                // shares the old edit-buffer identity with a new result.
+                if (_photoEditSession?.ImageId == review.ImageId)
+                    _photoEditSession = null;
+            }
             review.ResultPath = result;
             review.ResultSize = metadata.Length;
             review.ResultWriteUtc = metadata.Time;
@@ -563,6 +585,7 @@ public partial class MainWindow
                         ++_viewerImageRequest;
                         _photoEditSession = null;
                         SetViewerBitmap(bitmap);
+                        review.PreviewReady = true;
                         ApplyViewerImageLayout();
                     }
                     catch (Exception ex)
@@ -615,6 +638,22 @@ public partial class MainWindow
     {
         var review = _externalEditReview;
         if (review is null || !review.Ready || review.Busy) return false;
+        // A crop/rotation/tonal adjustment to Topaz's displayed result
+        // belongs to the SAME external Save/Copy/Cancel decision, not to a
+        // second save request against the untouched original.
+        if (decision != ExternalEditDecision.Cancel &&
+            CanEditPendingExternalResult(review.ImageId) &&
+            (_cropActive || _straightenActive ||
+             _brightnessActive || _advancedToneActive))
+        {
+            if (_cropActive && GetPendingLiveEditStep() is null)
+                EndCrop();
+            else
+                ApplyEditTool();
+        }
+        PhotoEditStep[] internalSteps = decision == ExternalEditDecision.Cancel ||
+            _photoEditSession?.ImageId != review.ImageId
+            ? [] : _photoEditSession.AppliedSteps.ToArray();
         review.Busy = true;
         UpdateEditControls();
         try
@@ -644,6 +683,24 @@ public partial class MainWindow
                     {
                         var result = decision == ExternalEditDecision.Cancel ? null :
                             ExternalEditTransaction.DetectResult(review.Snapshot);
+                        if (result is not null && internalSteps.Length > 0 &&
+                            !review.InternalEditsStaged)
+                        {
+                            // An external re-export after the last visible
+                            // preview may not inherit the user's crop of the
+                            // PREVIOUS revision. Never apply it blindly.
+                            var detected = new FileInfo(result);
+                            if (!string.Equals(result, review.ResultPath,
+                                    StringComparison.OrdinalIgnoreCase) ||
+                                detected.Length != review.ResultSize ||
+                                detected.LastWriteTimeUtc != review.ResultWriteUtc)
+                                throw new IOException(
+                                    "Das externe Ergebnis wurde nach der internen Bearbeitung geändert. Bitte Ergebnis erneut prüfen.");
+                            JpegCropWriter.EditExternalWorkspaceResult(
+                                result, review.Snapshot.DirectoryPath,
+                                internalSteps, token);
+                            review.InternalEditsStaged = true;
+                        }
                         _scheduler.ReportProgress(saveKey,
                             UiLanguage.T("Externe Bearbeitung"), 0, 100,
                             review.Snapshot.OriginalPath);
@@ -663,6 +720,11 @@ public partial class MainWindow
             // The file transaction is now complete, even if a subsequent
             // catalog refresh fails. It must not be submitted a second time.
             _externalEditReview = null;
+            if (_cropActive) EndCrop();
+            if (_straightenActive) LeaveStraighten();
+            if (_brightnessActive) LeaveBrightness();
+            if (_advancedToneActive) LeaveAdvancedTone();
+            _photoEditSession = null;
             _latestExternalComparison = null;
             _externalComparisonUnavailableImageId = null;
             ResetEditComparison();
@@ -682,9 +744,11 @@ public partial class MainWindow
                     ex.Message, UiLanguage.T("Externe Bearbeitung"),
                     MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            // The source mutation/copy and its required catalog re-index
-            // have completed; the suspended scanner may now resume.
+            // Once Save/Copy/Cancel has committed, internal tools belong
+            // to the current (possibly newly activated) image again.
+            // Do not leave them disabled from the completed Topaz review.
             ResumeSchedulerAfterExternalEdit();
+            if (_viewerOpen) UpdateEditControls();
             if (decision == ExternalEditDecision.Cancel &&
                 returnToGalleryAfterCancel && _viewerOpen &&
                 _viewerSequence is { } activeSequence &&

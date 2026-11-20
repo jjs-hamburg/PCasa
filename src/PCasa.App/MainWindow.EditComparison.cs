@@ -20,12 +20,14 @@ public partial class MainWindow
     private BitmapSource? _editCompareHeldEdited;
     private long _editCompareImageId = -1;
     private int _editCompareRequest;
+    // Normalized X in the picture (not in the screen viewport).
     private double _editCompareSplitFraction = 0.5;
     private bool _editCompareHoldingOriginal;
     private DispatcherTimer? _editCompareHoldTimer;
     private bool _editCompareHoldArmed;
     private long _editCompareHoldArmedImageId = -1;
     private double _editCompareZoomFactor = 1;
+    private double _editCompareFitPercent = 100;
     private bool _editComparePanActive;
     private bool _editComparePanMoved;
     private Point _editComparePanStart;
@@ -232,6 +234,10 @@ public partial class MainWindow
             EditCompareSideEdited.Source = _editCompareEdited;
             EditCompareSwipeOriginal.Source = _editCompareOriginal;
             EditCompareSwipeEdited.Source = _editCompareEdited;
+            // A previously scheduled resolution refinement belongs to
+            // the single-view scroller. It must never call ShowViewerImage
+            // and reset a comparison after the user has selected it.
+            _viewerZoomCancellation?.Cancel();
             EditCompareSidePanel.Visibility = requested == EditCompareMode.SideBySide
                 ? Visibility.Visible : Visibility.Collapsed;
             EditCompareSwipePanel.Visibility = requested == EditCompareMode.Split
@@ -276,36 +282,67 @@ public partial class MainWindow
     {
         if (_editCompareMode == EditCompareMode.Single ||
             _editCompareEdited is null) return;
-        var panel = _editCompareMode == EditCompareMode.SideBySide
-            ? EditCompareSidePanel : EditCompareSwipePanel;
-        var width = Math.Max(1, panel.ActualWidth /
-            (_editCompareMode == EditCompareMode.SideBySide ? 2 : 1));
-        var height = Math.Max(1, panel.ActualHeight);
-        var fit = Math.Min(width / _editCompareEdited.PixelWidth,
-            height / _editCompareEdited.PixelHeight);
-        if (_editCompareMode == EditCompareMode.Split)
+        var side = _editCompareMode == EditCompareMode.SideBySide;
+        var panel = side ? EditCompareSidePanel : EditCompareSwipePanel;
+        var width = panel.ActualWidth;
+        var height = panel.ActualHeight;
+        if (!(width > 1) || !(height > 1)) return;
+
+        var availableWidth = Math.Max(1, width / (side ? 2 : 1) -
+            (side ? 8 : 0));
+        var availableHeight = Math.Max(1, height - (side ? 6 : 0));
+        var fit = Math.Min(availableWidth / _editCompareEdited.PixelWidth,
+            availableHeight / _editCompareEdited.PixelHeight);
+        if (side)
         {
-            // WPF Image.Stretch=Uniform independently fits the two decoded
-            // aspect ratios, so even adjacent JPG pixel-rounding differences
-            // make the comparison drift. Size ONE centered frame using the
-            // edited image's aspect; both images then fill that identical
-            // frame without distorting the edited result.
+            var before = _editCompareOriginal ?? _editCompareEdited;
+            var beforeFit = Math.Min(availableWidth / before.PixelWidth,
+                availableHeight / before.PixelHeight);
+            EditCompareSideOriginal.Width = before.PixelWidth * beforeFit;
+            EditCompareSideOriginal.Height = before.PixelHeight * beforeFit;
+            EditCompareSideEdited.Width = _editCompareEdited.PixelWidth * fit;
+            EditCompareSideEdited.Height = _editCompareEdited.PixelHeight * fit;
+        }
+        else
+        {
             EditCompareImageFrame.Width = _editCompareEdited.PixelWidth * fit;
             EditCompareImageFrame.Height = _editCompareEdited.PixelHeight * fit;
         }
+
+        // 100% is the original's real pixel resolution, independent of
+        // reduced preview dimensions and which comparison mode is active.
+        var logicalWidth = _viewerImageInfo is { Width: > 0 } info
+            ? GetViewerLogicalImageSize(info).Width
+            : _editCompareEdited.PixelWidth;
+        var dpi = VisualTreeHelper.GetDpi(PhotoViewerPanel).DpiScaleX;
+        var actualWidth = Math.Max(1, logicalWidth * _viewerZoomPercent /
+            (100 * dpi));
+        var fitWidth = Math.Max(1, _editCompareEdited.PixelWidth * fit);
         _editCompareZoomFactor = _viewerFitToScreen ? 1 :
-            Math.Clamp(_viewerZoomPercent / Math.Max(1, 100 * fit), 0.25, 12);
+            Math.Clamp(actualWidth / fitWidth, .05, 64);
         if (_viewerFitToScreen)
-        {
-            // Pixel pan offsets are relative to the last zoomed geometry.
-            // Keeping them when the user selects Fit shifts both pictures
-            // outside the center frame, exposing only the gallery texture.
-            // Keep _editCompareSplitFraction unchanged: the divider remains
-            // fixed at the same screen X regardless of picture zoom.
-            _editComparePanX = 0;
-            _editComparePanY = 0;
-        }
+            _editComparePanX = _editComparePanY = 0;
+        _editCompareFitPercent = 100 * fitWidth * dpi /
+            Math.Max(1, logicalWidth);
+        if (!side)
+            KeepEditCompareDividerVisible(width);
         ApplyEditComparisonTransforms();
+        UpdateViewerZoomControls(_viewerFitToScreen
+            ? _editCompareFitPercent : _viewerZoomPercent);
+    }
+
+    private void KeepEditCompareDividerVisible(double viewportWidth)
+    {
+        var imageWidth = EditCompareImageFrame.Width * _editCompareZoomFactor;
+        if (!(imageWidth > 0) || !(viewportWidth > 0)) return;
+        var maxPan = Math.Max(0, (imageWidth - viewportWidth) / 2);
+        var x = viewportWidth / 2 + _editComparePanX +
+            (_editCompareSplitFraction - .5) * imageWidth;
+        var edge = Math.Min(18, viewportWidth / 4);
+        if (x < edge) _editComparePanX += edge - x;
+        else if (x > viewportWidth - edge)
+            _editComparePanX -= x - (viewportWidth - edge);
+        _editComparePanX = Math.Clamp(_editComparePanX, -maxPan, maxPan);
     }
 
     private void ApplyEditComparisonTransforms()
@@ -401,34 +438,39 @@ public partial class MainWindow
         UpdateEditCompareClip();
     }
 
-    // Thumb owns WPF mouse capture throughout the gesture. Record the
-    // click offset on the thumb once, then derive every divider position
-    // from the pointer's absolute viewport X. Cumulative DragDelta
-    // changes are not stable across zoom/reflow and can visibly drift.
+    // The clip and the grip share one image-coordinate fraction. WPF
+    // mouse capture is owned by the Thumb throughout a drag.
     private double _editCompareThumbGrabOffset;
-
     private static double SplitFractionForPointer(
-        double pointerX, double grabOffset, double viewportWidth)
+        double pointerX, double grabOffset, double viewportWidth,
+        double frameWidth, double zoom, double panX)
     {
-        if (!(viewportWidth > 0) || !double.IsFinite(pointerX) ||
-            !double.IsFinite(grabOffset)) return 0.5;
-        return Math.Clamp((pointerX - grabOffset) / viewportWidth, 0.02, 0.98);
+        var actualWidth = frameWidth * zoom;
+        if (!(actualWidth > 0) || !double.IsFinite(pointerX)) return .5;
+        return Math.Clamp(.5 + (pointerX - grabOffset -
+            viewportWidth / 2 - panX) / actualWidth, .02, .98);
     }
+
+    private double EditCompareDividerScreenX()
+        => EditCompareSwipePanel.ActualWidth / 2 + _editComparePanX +
+            (_editCompareSplitFraction - .5) *
+            EditCompareImageFrame.Width * _editCompareZoomFactor;
 
     private void EditCompareSplit_DragStarted(object sender, DragStartedEventArgs e)
     {
         _editCompareThumbGrabOffset =
-            System.Windows.Input.Mouse.GetPosition(EditCompareSwipePanel).X -
-            EditCompareSwipePanel.ActualWidth * _editCompareSplitFraction;
+            Mouse.GetPosition(EditCompareSwipePanel).X -
+            EditCompareDividerScreenX();
     }
 
     private void EditCompareSplit_DragDelta(object sender, DragDeltaEventArgs e)
     {
-        var width = EditCompareSwipePanel.ActualWidth;
-        if (!(width > 0)) return;
+        if (!(EditCompareSwipePanel.ActualWidth > 0) ||
+            !(EditCompareImageFrame.Width > 0)) return;
         _editCompareSplitFraction = SplitFractionForPointer(
-            System.Windows.Input.Mouse.GetPosition(EditCompareSwipePanel).X,
-            _editCompareThumbGrabOffset, width);
+            Mouse.GetPosition(EditCompareSwipePanel).X,
+            _editCompareThumbGrabOffset, EditCompareSwipePanel.ActualWidth,
+            EditCompareImageFrame.Width, _editCompareZoomFactor, _editComparePanX);
         UpdateEditCompareClip();
     }
 
@@ -443,21 +485,27 @@ public partial class MainWindow
         if (_editCompareMode != EditCompareMode.Split) return;
         var width = EditCompareSwipePanel.ActualWidth;
         var height = EditCompareSwipePanel.ActualHeight;
-        if (width <= 0 || height <= 0) return;
-        var x = width * _editCompareSplitFraction;
         var frameWidth = EditCompareImageFrame.Width;
         var frameHeight = EditCompareImageFrame.Height;
-        if (!(frameWidth > 0) || !(frameHeight > 0)) return;
-        // The visible image frame is centered inside the full swipe panel.
-        // The thumb stays at the panel coordinate, whereas the clip must
-        // use the image's OWN unscaled local coordinates. Pan/zoom modify
-        // the mapping without ever modifying either image's frame geometry.
-        var localEdge = frameWidth / 2 +
-            (x - width / 2 - _editComparePanX) /
-            Math.Max(0.01, _editCompareZoomFactor);
+        if (!(width > 0) || !(height > 0) ||
+            !(frameWidth > 0) || !(frameHeight > 0)) return;
+
+        // Clip before the image transform. Never recompute its image X
+        // from an unrelated screen X when Fit, zoom or pan changes.
         EditCompareSwipeOriginal.Clip = new RectangleGeometry(
-            new Rect(0, 0, Math.Clamp(localEdge, 0, frameWidth), frameHeight));
-        Canvas.SetLeft(EditCompareSplitHandle, x - EditCompareSplitHandle.Width / 2);
+            new Rect(0, 0, _editCompareSplitFraction * frameWidth, frameHeight));
+        var x = EditCompareDividerScreenX();
+        Canvas.SetLeft(EditCompareSplitHandle,
+            x - EditCompareSplitHandle.Width / 2);
+        // Limit the hit area to the VISIBLE portion of the zoomed image.
+        // A 400% zoom or vertical pan must never park the drag grip beyond
+        // the viewport or create a 20,000px-high WPF control.
+        var visualHeight = Math.Max(1, frameHeight * _editCompareZoomFactor);
+        var imageTop = height / 2 + _editComparePanY - visualHeight / 2;
+        var visibleTop = Math.Clamp(imageTop, 0, height);
+        var visibleBottom = Math.Clamp(imageTop + visualHeight, 0, height);
+        EditCompareSplitHandle.Height = Math.Max(1, visibleBottom - visibleTop);
+        Canvas.SetTop(EditCompareSplitHandle, visibleTop);
     }
 
     private void CancelPendingOriginalHold()
@@ -501,14 +549,12 @@ public partial class MainWindow
                 _editCompareHeldEdited = PhotoViewerImage.Source as BitmapSource;
                 if (live && _photoEditSession?.ImageId == info.Id)
                 {
-                    SetViewerBitmap(_photoEditSession.Original);
-                    ApplyViewerImageLayout();
+                    DisplayHoldPixelsWithoutRelayout(_photoEditSession.Original);
                 }
                 else if (_editCompareOriginal is not null &&
                     _editCompareImageId == info.Id)
                 {
-                    SetViewerBitmap(_editCompareOriginal);
-                    ApplyViewerImageLayout();
+                    DisplayHoldPixelsWithoutRelayout(_editCompareOriginal);
                 }
                 else
                     _ = ShowSavedOriginalWhileHeldAsync(info.Id);
@@ -527,13 +573,20 @@ public partial class MainWindow
                 pair is null) return;
             _editCompareImageId = imageId;
             _editCompareOriginal = pair.Value.Original;
-            SetViewerBitmap(pair.Value.Original);
-            ApplyViewerImageLayout();
+            DisplayHoldPixelsWithoutRelayout(pair.Value.Original);
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("EditComparison.Hold", ex);
         }
+    }
+
+    // Press-and-hold must NEVER recalculate image geometry or zoom.
+    private void DisplayHoldPixelsWithoutRelayout(BitmapSource pixels)
+    {
+        PhotoViewerImage.Source = pixels;
+        if (_viewerFullscreenImage is not null)
+            _viewerFullscreenImage.Source = pixels;
     }
 
     private bool EndEditOriginalHold(MouseButtonEventArgs e)
@@ -546,8 +599,7 @@ public partial class MainWindow
         ReleaseViewerPan();
         if (_editCompareHeldEdited is not null)
         {
-            SetViewerBitmap(_editCompareHeldEdited);
-            ApplyViewerImageLayout();
+            DisplayHoldPixelsWithoutRelayout(_editCompareHeldEdited);
         }
         _editCompareHeldEdited = null;
         e.Handled = true;
@@ -578,6 +630,7 @@ public partial class MainWindow
         {
             PhotoViewerScroller.Visibility = Visibility.Visible;
             PhotoViewerNavigator.Visibility = Visibility.Visible;
+            ApplyViewerImageLayout();
         }
         UpdateEditComparisonAvailability();
     }

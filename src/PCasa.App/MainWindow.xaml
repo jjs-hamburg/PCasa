@@ -1753,21 +1753,31 @@
                              stretching two halves into different proportions. -->
                         <Grid x:Name="EditComparePanel" Visibility="Collapsed"
                               Background="{Binding Background, ElementName=BrowseScrollViewer}">
-                            <Grid x:Name="EditCompareSidePanel" Visibility="Collapsed" ClipToBounds="True">
+                            <Grid x:Name="EditCompareSidePanel" Visibility="Collapsed" ClipToBounds="True"
+                                  SizeChanged="EditCompareSwipe_SizeChanged">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="3"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <Image x:Name="EditCompareSideOriginal" Grid.Column="0"
-                                       Stretch="Uniform" Margin="3" ClipToBounds="True"
-                                       RenderTransformOrigin="0.5,0.5"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <!-- Each image is clipped to its OWN column.
+                                     RenderTransform on an unwrapped Image could
+                                     previously paint OVER its neighbor. -->
+                                <Grid Grid.Column="0" ClipToBounds="True">
+                                    <Image x:Name="EditCompareSideOriginal"
+                                           Stretch="Fill" HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           RenderTransformOrigin="0.5,0.5"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                </Grid>
                                 <Border Grid.Column="1" Background="{DynamicResource PcasaDividerBrush}"/>
-                                <Image x:Name="EditCompareSideEdited" Grid.Column="2"
-                                       Stretch="Uniform" Margin="3" ClipToBounds="True"
-                                       RenderTransformOrigin="0.5,0.5"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Grid Grid.Column="2" ClipToBounds="True">
+                                    <Image x:Name="EditCompareSideEdited"
+                                           Stretch="Fill" HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           RenderTransformOrigin="0.5,0.5"
+                                           RenderOptions.BitmapScalingMode="HighQuality"/>
+                                </Grid>
                                 <TextBlock Grid.Column="0" Text="{loc:Tr Key='Original'}"
                                            FontSize="11" FontWeight="Light" Foreground="#E4FFFFFF"
                                            Margin="11,8,0,0" HorizontalAlignment="Left"
@@ -1802,7 +1812,7 @@
                                 <Canvas Background="Transparent">
                                     <primitives:Thumb x:Name="EditCompareSplitHandle"
                                                       Width="30" Cursor="SizeWE"
-                                                      Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
+                                                      Height="1"
                                                       DragStarted="EditCompareSplit_DragStarted"
                                                       DragDelta="EditCompareSplit_DragDelta"
                                                       DragCompleted="EditCompareSplit_DragCompleted"
@@ -1814,7 +1824,8 @@
                                                 <Grid Background="#01000000">
                                                     <Border Width="2" HorizontalAlignment="Center"
                                                             Background="#F0F0F0"/>
-                                                    <Border Width="28" Height="32"
+                                                    <Border x:Name="DragGrip" Width="28" Height="32"
+                                                            Visibility="Collapsed"
                                                             VerticalAlignment="Center"
                                                             HorizontalAlignment="Center"
                                                             BorderBrush="#F0F0F0"
@@ -1830,6 +1841,11 @@
                                                         </Canvas>
                                                     </Border>
                                                 </Grid>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="DragGrip" Property="Visibility" Value="Visible"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </primitives:Thumb.Template>
                                     </primitives:Thumb>
