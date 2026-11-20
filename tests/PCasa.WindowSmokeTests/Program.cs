@@ -1758,6 +1758,64 @@ internal static class Program
             // The slideshow reuses the very same filtered PhotoSequence,
             // skipping movies without creating a second index or filesystem
             // traversal. Arrows must work without waiting for its timer.
+            // Real WPF: verify selected captions (not just ComboBoxItem
+            // data) remain legible in the selected dark or light theme.
+            var slideshowDialog = new SlideshowSettingsWindow(new SlideshowSettings())
+            {
+                Owner = window
+            };
+            try
+            {
+                slideshowDialog.Show();
+                Flush(slideshowDialog);
+                var slideshowChoices = Descendants<ComboBox>(slideshowDialog).ToArray();
+                if (slideshowChoices.Length != 3)
+                    throw new Exception("Slideshow needs three accessible dropdowns.");
+                foreach (var choice in slideshowChoices)
+                {
+                    choice.ApplyTemplate();
+                    var selectedText = choice.Template.FindName(
+                        "SelectedCaption", choice) as TextBlock;
+                    var captionText = (choice.SelectedItem as ComboBoxItem)?.Content as string;
+                    if (selectedText is null || string.IsNullOrWhiteSpace(selectedText.Text) ||
+                        selectedText.Text != captionText)
+                        throw new Exception(
+                            "Slideshow selected choice is visually empty in dark theme.");
+                    if (selectedText.Foreground is SolidColorBrush ink &&
+                        choice.Background is SolidColorBrush paper &&
+                        Math.Abs(ink.Color.R - paper.Color.R) +
+                        Math.Abs(ink.Color.G - paper.Color.G) +
+                        Math.Abs(ink.Color.B - paper.Color.B) < 240)
+                        throw new Exception(
+                            "Slideshow choice foreground and background are too similar.");
+                    choice.IsDropDownOpen = true;
+                    Flush(slideshowDialog);
+                    var popup = choice.Template.FindName(
+                        "PART_Popup", choice) as Popup;
+                    if (popup?.IsOpen != true || choice.Items.OfType<ComboBoxItem>()
+                        .Any(item => string.IsNullOrWhiteSpace(item.Content as string) ||
+                            !Equals(item.Foreground, selectedText.Foreground)))
+                        throw new Exception(
+                            "Slideshow dropdown is empty, inaccessible or illegible.");
+                    choice.IsDropDownOpen = false;
+                    Flush(slideshowDialog);
+                }
+                var picker = (Microsoft.Win32.OpenFileDialog)
+                    typeof(SlideshowSettingsWindow).GetMethod(
+                        "CreateBackgroundPicker",
+                        System.Reflection.BindingFlags.Static |
+                        System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(null, null)!;
+                if (!string.Equals(picker.InitialDirectory,
+                    GalleryTextureLibrary.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new Exception(
+                        "Slideshow background picker did not open at texture directory.");
+            }
+            finally { slideshowDialog.Close(); }
+            Console.WriteLine(
+                "PASS: Slideshow dropdowns render real text and use the gallery texture directory.");
+
             var slideItems = new[]
             {
                 synthetic[0] with { FileName = "first.jpg" },
@@ -1776,6 +1834,26 @@ internal static class Program
             var slideshowPreview = BitmapSource.Create(64, 48, 96, 96,
                 PixelFormats.Bgra32, null, previewPixels, 64 * 4);
             slideshowPreview.Freeze();
+            // The second still is PORTRAIT: a slideshow border sized to
+            // the empty stage rather than the actual photo fails this check.
+            var portraitPixels = new byte[48 * 64 * 4];
+            for (var j = 3; j < portraitPixels.Length; j += 4)
+                portraitPixels[j] = 255;
+            var slideshowPortrait = BitmapSource.Create(48, 64, 96, 96,
+                PixelFormats.Bgra32, null, portraitPixels, 48 * 4);
+            slideshowPortrait.Freeze();
+            var landscapeFrame = SlideshowWindow.FitPhotoFrame(
+                640, 480, 800, 600, 10);
+            var portraitFrame = SlideshowWindow.FitPhotoFrame(
+                480, 640, 800, 600, 10);
+            if (Math.Abs((landscapeFrame.Width - 20) /
+                (landscapeFrame.Height - 20) - 640d / 480) > .001 ||
+                Math.Abs((portraitFrame.Width - 20) /
+                (portraitFrame.Height - 20) - 480d / 640) > .001 ||
+                portraitFrame.Width >= landscapeFrame.Width)
+                throw new Exception(
+                    "Slideshow photo frame does not follow photo aspect ratio.");
+
             var galleryBrush = new SolidColorBrush(Colors.SlateGray);
             var slideshowDatabase = (PCasa.App.Data.LocalDatabase)
                 typeof(PCasa.App.MainWindow).GetField("_database",
@@ -1787,7 +1865,7 @@ internal static class Program
                     IntervalSeconds = 3600,
                     PreloadNext = false,
                     Transition = "none"
-                }, _ => slideshowPreview)
+                }, index => index == 2 ? slideshowPortrait : slideshowPreview)
             {
                 WindowState = WindowState.Normal,
                 Width = 640, Height = 480
@@ -1799,6 +1877,26 @@ internal static class Program
                 if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
                     slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
                     throw new Exception("Slideshow failed to show the gallery-texture default.");
+                var slidesFlags = System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var currentLayerField = typeof(SlideshowWindow).GetField(
+                    "_active", slidesFlags)!;
+                Border PhotoFrame(SlideshowWindow presentation)
+                {
+                    var layer = currentLayerField.GetValue(presentation)!;
+                    return (Border)layer.GetType().GetField(
+                        "Frame", System.Reflection.BindingFlags.Public |
+                            System.Reflection.BindingFlags.Instance)!
+                        .GetValue(layer)!;
+                }
+                var currentFrame = PhotoFrame(slideshow);
+                if (currentFrame.Effect is not
+                        System.Windows.Media.Effects.DropShadowEffect shadow ||
+                    Math.Abs(shadow.Direction - 315) > .01 ||
+                    Math.Abs((currentFrame.Width - 20) /
+                        (currentFrame.Height - 20) - 64d / 48) > .001)
+                    throw new Exception(
+                        "Landscape slideshow frame/shadow does not match image bounds.");
                 typeof(SlideshowWindow).GetMethod("Navigate",
                     System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic)!
@@ -1806,10 +1904,71 @@ internal static class Program
                 Flush(slideshow);
                 if (slideshow.CurrentImageIndex != 2)
                     throw new Exception("Manual slideshow Right did not skip video instantly.");
+                var frameAfter = PhotoFrame(slideshow);
+                if (Math.Abs((frameAfter.Width - 20) /
+                    (frameAfter.Height - 20) - 48d / 64) > .001)
+                    throw new Exception(
+                        "Portrait slideshow border stayed at the old landscape bounds.");
+                // A single click anywhere in the show exits just as in the
+                // ordinary PCasa photo viewer.
+                slideshow.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
+                    System.Windows.Input.Mouse.PrimaryDevice, 0,
+                    System.Windows.Input.MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent
+                });
+                Flush(window);
+                if (slideshow.IsVisible)
+                    throw new Exception("Single click did not close slideshow.");
             }
-            finally { slideshow.Close(); }
+            finally { if (slideshow.IsVisible) slideshow.Close(); }
             Console.WriteLine(
                 "PASS: WPF slideshow displays local pixels, uses gallery brush and changes image immediately.");
+            // The default "Projector" is required to produce REAL WPF
+            // animations, not just store the transition name in JSON.
+            var projector = new SlideshowWindow(window, slideshowSequence, 0,
+                slideshowDatabase, galleryBrush, new SlideshowSettings
+                {
+                    IntervalSeconds = 3600, PreloadNext = false,
+                    Transition = "projector", TransitionMilliseconds = 700
+                }, index => index == 2 ? slideshowPortrait : slideshowPreview)
+            {
+                WindowState = WindowState.Normal, Width = 640, Height = 480
+            };
+            try
+            {
+                projector.Show();
+                Flush(projector);
+                var flags = System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance;
+                typeof(SlideshowWindow).GetMethod("Navigate", flags)!
+                    .Invoke(projector, [1]);
+                if (typeof(SlideshowWindow).GetField("_transitioning", flags)!
+                    .GetValue(projector) is not true)
+                    throw new Exception(
+                        "Projector default failed to start its transition.");
+                var incomingLayer = typeof(SlideshowWindow).GetField(
+                    "_incoming", flags)!.GetValue(projector)!;
+                var scale = (ScaleTransform)incomingLayer.GetType().GetField(
+                    "Scale", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public)!
+                    .GetValue(incomingLayer)!;
+                if (scale.ScaleY >= .99)
+                    throw new Exception(
+                        "Projector animation did not visibly transform image.");
+                Until(projector, () =>
+                    typeof(SlideshowWindow).GetField("_transitioning", flags)!
+                        .GetValue(projector) is false,
+                    "Projector animation never completed.");
+                if (projector.CurrentImageIndex != 2)
+                    throw new Exception(
+                        "Animation completion lost the destination image.");
+            }
+            finally { projector.Close(); }
+            Console.WriteLine(
+                "PASS: Portrait/landscape borders, diagonal thumbnail-style shadow, click exit and live projector animation.");
+
+
 
 
 

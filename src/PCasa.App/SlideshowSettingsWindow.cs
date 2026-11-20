@@ -2,6 +2,8 @@ using Microsoft.Win32;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Media;
 using PCasa.App.Services;
 
@@ -96,11 +98,7 @@ public sealed class SlideshowSettingsWindow : Window
         var browse = new Button { Content = UiLanguage.T("Durchsuchen..."), Width = 105 };
         browse.Click += (_, _) =>
         {
-            var dialog = new OpenFileDialog
-            {
-                Title = UiLanguage.T("Hintergrundbild wählen"),
-                Filter = "Bilder (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp"
-            };
+            var dialog = CreateBackgroundPicker();
             if (dialog.ShowDialog(this) == true)
             {
                 _customFile.Text = dialog.FileName;
@@ -124,6 +122,13 @@ public sealed class SlideshowSettingsWindow : Window
         _shadowOpacity = Number(fields, "Schattenstärke (%)", _values.ShadowOpacity);
     }
 
+    internal static OpenFileDialog CreateBackgroundPicker() => new()
+    {
+        Title = UiLanguage.T("Hintergrundbild wählen"),
+        Filter = "Bilder (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp",
+        InitialDirectory = GalleryTextureLibrary.DirectoryPath
+    };
+
     private static TextBlock Caption(string label) => new()
     {
         Text = UiLanguage.T(label),
@@ -143,15 +148,149 @@ public sealed class SlideshowSettingsWindow : Window
         return row;
     }
 
+    // WPF's installed dark theme can paint the collapsed ComboBox
+    // selection and popup text in the SAME color as the background.
+    // Give this dialog an explicit, accessible selection/display template
+    // rather than modifying every ComboBox in PCasa.
+    private static ControlTemplate ChoiceTemplate(Brush foreground,
+        Brush background, Brush outline)
+    {
+        var template = new ControlTemplate(typeof(ComboBox));
+        var root = new FrameworkElementFactory(typeof(Grid));
+        var frame = new FrameworkElementFactory(typeof(Border));
+        frame.SetValue(Border.BackgroundProperty, background);
+        frame.SetValue(Border.BorderBrushProperty, outline);
+        frame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        frame.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        root.AppendChild(frame);
+
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.Name = "SelectedCaption";
+        text.SetValue(TextBlock.ForegroundProperty, foreground);
+        text.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+        text.SetValue(TextBlock.MarginProperty, new Thickness(10, 0, 30, 0));
+        text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+        text.SetValue(UIElement.IsHitTestVisibleProperty, false);
+        text.SetBinding(TextBlock.TextProperty, new Binding("SelectedItem.Content")
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+        });
+        root.AppendChild(text);
+
+        var arrow = new FrameworkElementFactory(typeof(TextBlock));
+        arrow.SetValue(TextBlock.TextProperty, "▾");
+        arrow.SetValue(TextBlock.ForegroundProperty, foreground);
+        arrow.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+        arrow.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+        arrow.SetValue(TextBlock.MarginProperty, new Thickness(0, 0, 10, 0));
+        arrow.SetValue(UIElement.IsHitTestVisibleProperty, false);
+        root.AppendChild(arrow);
+
+        // A transparent, real toggle control retains mouse, keyboard
+        // and ComboBox.IsDropDownOpen semantics.
+        var toggle = new FrameworkElementFactory(typeof(ToggleButton));
+        toggle.SetValue(Control.FocusableProperty, false);
+        toggle.SetValue(Control.BorderThicknessProperty, new Thickness(0));
+        var toggleTemplate = new ControlTemplate(typeof(ToggleButton));
+        var hitTarget = new FrameworkElementFactory(typeof(Border));
+        hitTarget.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+        toggleTemplate.VisualTree = hitTarget;
+        toggle.SetValue(Control.TemplateProperty, toggleTemplate);
+        toggle.SetBinding(ToggleButton.IsCheckedProperty,
+            new Binding("IsDropDownOpen")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent),
+                Mode = BindingMode.TwoWay
+            });
+        root.AppendChild(toggle);
+
+        var popup = new FrameworkElementFactory(typeof(Popup));
+        popup.Name = "PART_Popup";
+        popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
+        popup.SetValue(Popup.AllowsTransparencyProperty, true);
+        popup.SetValue(Popup.StaysOpenProperty, false);
+        popup.SetValue(Popup.PopupAnimationProperty, PopupAnimation.Fade);
+        popup.SetBinding(Popup.IsOpenProperty, new Binding("IsDropDownOpen")
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+        });
+        popup.SetBinding(Popup.PlacementTargetProperty, new Binding
+        {
+            RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+        });
+        var listFrame = new FrameworkElementFactory(typeof(Border));
+        listFrame.SetValue(Border.BackgroundProperty, background);
+        listFrame.SetValue(Border.BorderBrushProperty, outline);
+        listFrame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+        listFrame.SetValue(Border.PaddingProperty, new Thickness(2));
+        listFrame.SetBinding(FrameworkElement.MinWidthProperty,
+            new Binding("ActualWidth")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            });
+        var scroll = new FrameworkElementFactory(typeof(ScrollViewer));
+        scroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty,
+            ScrollBarVisibility.Auto);
+        scroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty,
+            ScrollBarVisibility.Disabled);
+        scroll.SetValue(FrameworkElement.MaxHeightProperty, 250d);
+        var items = new FrameworkElementFactory(typeof(ItemsPresenter));
+        scroll.AppendChild(items);
+        listFrame.AppendChild(scroll);
+        popup.AppendChild(listFrame);
+        root.AppendChild(popup);
+        template.VisualTree = root;
+        return template;
+    }
+
     private static ComboBox Choice(StackPanel fields, string label, string value,
         params (string Value, string Label)[] options)
     {
         var row = Row(fields, label);
-        var choice = new ComboBox { MinWidth = 205, Height = 28 };
+        var foreground = Application.Current.TryFindResource("PcasaTextBrush") as Brush
+            ?? Brushes.White;
+        var background = Application.Current.TryFindResource("PcasaPanelAltBrush") as Brush
+            ?? Brushes.Black;
+        var outline = Application.Current.TryFindResource("PcasaDividerBrush") as Brush
+            ?? Brushes.Gray;
+        var choice = new ComboBox
+        {
+            MinWidth = 205, Height = 28,
+            Foreground = foreground, Background = background, BorderBrush = outline,
+            Template = ChoiceTemplate(foreground, background, outline)
+        };
+        var itemTemplate = new ControlTemplate(typeof(ComboBoxItem));
+        var itemFrame = new FrameworkElementFactory(typeof(Border));
+        itemFrame.Name = "ChoiceItemFrame";
+        itemFrame.SetValue(Border.PaddingProperty, new Thickness(9, 6, 9, 6));
+        itemFrame.SetValue(Border.BackgroundProperty, background);
+        var content = new FrameworkElementFactory(typeof(ContentPresenter));
+        content.SetValue(ContentPresenter.ContentSourceProperty, "Content");
+        itemFrame.AppendChild(content);
+        itemTemplate.VisualTree = itemFrame;
+        foreach (var (triggerProperty, brush) in new[]
+        {
+            (ComboBoxItem.IsMouseOverProperty,
+                Application.Current.TryFindResource("PcasaHoverBrush") as Brush
+                    ?? Brushes.Gray),
+            (ComboBoxItem.IsSelectedProperty,
+                Application.Current.TryFindResource("PcasaSelectionBrush") as Brush
+                    ?? Brushes.DarkGray)
+        })
+        {
+            var trigger = new Trigger { Property = triggerProperty, Value = true };
+            trigger.Setters.Add(new Setter(Border.BackgroundProperty, brush,
+                "ChoiceItemFrame"));
+            itemTemplate.Triggers.Add(trigger);
+        }
         foreach (var option in options)
             choice.Items.Add(new ComboBoxItem
             {
-                Tag = option.Value, Content = UiLanguage.T(option.Label)
+                Tag = option.Value,
+                Content = UiLanguage.T(option.Label),
+                Foreground = foreground,
+                Background = background,
+                Template = itemTemplate
             });
         Select(choice, value);
         row.Children.Add(choice);
@@ -218,7 +357,7 @@ public sealed class SlideshowSettingsWindow : Window
         _values.BorderWidth = ReadInt(_borderSize, 10);
         _values.Shadow = _shadow.IsChecked == true;
         _values.ShadowWidth = ReadInt(_shadowSize, 26);
-        _values.ShadowOffset = ReadInt(_shadowOffset, 30);
+        _values.ShadowOffset = ReadInt(_shadowOffset, 12);
         _values.ShadowOpacity = ReadInt(_shadowOpacity, 60);
         _values.Normalize();
         try { _values.Save(); }
