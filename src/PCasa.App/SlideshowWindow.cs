@@ -78,6 +78,10 @@ public sealed class SlideshowWindow : Window
     private CancellationTokenSource? _currentDecode;
     private CancellationTokenSource? _aheadDecode;
     private BitmapSource? _aheadPixels;
+    // A higher-resolution decode may finish during a cached WPF fade.
+    // Apply it only AFTER the transition to avoid remeasuring its frame
+    // and repainting a large image in the middle of animation.
+    private BitmapSource? _afterTransitionPixels;
     private long _aheadImageId = -1;
     private int _requestVersion;
     private int _transitionVersion;
@@ -324,6 +328,7 @@ public sealed class SlideshowWindow : Window
         var revision = ++_requestVersion;
         var entry = _sequence.At(_index);
         _awaitingPixels = true;
+        _afterTransitionPixels = null;
 
         BitmapSource? preview = null;
         var hadPrefetchedOriginal = _aheadImageId == entry.ImageId &&
@@ -342,11 +347,10 @@ public sealed class SlideshowWindow : Window
         _aheadPixels = null;
         _aheadImageId = -1;
 
-        // Do not flash a small local preview and replace it mid-transition.
-        // A transition uses fully decoded look-ahead pixels, or waits for
-        // the async original. The first slide/no-prefetch remains immediate.
-        if (preview is not null &&
-            (_shownIndex < 0 || hadPrefetchedOriginal || !_options.PreloadNext))
+        // Use the local thumbnail IMMEDIATELY even for manual navigation
+        // while the NAS is slow. Its full-resolution replacement is deferred
+        // until AFTER the GPU transition, never performed mid-fade.
+        if (preview is not null)
         {
             Present(preview, _index);
             _awaitingPixels = false;
@@ -377,9 +381,13 @@ public sealed class SlideshowWindow : Window
             {
                 // During A/B transitions the new image lives in _incoming,
                 // not in the disappearing old _active layer.
-                var layer = _transitioning ? _incoming : _active;
-                layer.Picture.Source = bitmap;
-                UpdateLayerGeometry(layer);
+                if (_transitioning)
+                    _afterTransitionPixels = bitmap;
+                else
+                {
+                    _active.Picture.Source = bitmap;
+                    UpdateLayerGeometry(_active);
+                }
             }
             else
                 Present(bitmap, position);
@@ -548,5 +556,11 @@ public sealed class SlideshowWindow : Window
         _active.Frame.Visibility = Visibility.Visible;
         _incoming.Frame.Visibility = Visibility.Collapsed;
         _incoming.Picture.Source = null;
+        if (_afterTransitionPixels is { } refined)
+        {
+            _afterTransitionPixels = null;
+            _active.Picture.Source = refined;
+            UpdateLayerGeometry(_active);
+        }
     }
 }

@@ -2006,6 +2006,69 @@ internal static class Program
             finally { if (slideshow.IsVisible) slideshow.Close(); }
             Console.WriteLine(
                 "PASS: WPF slideshow displays local pixels, uses gallery brush and changes image immediately.");
+            // Even with look-ahead enabled, missing a high-resolution
+            // prefetch must not make manual Next wait for the NAS. The local
+            // gallery thumbnail appears immediately, while any replacement
+            // of its pixels is deferred until the WPF transition completes.
+            var preloadShow = new SlideshowWindow(window, slideshowSequence, 0,
+                slideshowDatabase, galleryBrush, new SlideshowSettings
+                {
+                    IntervalSeconds = 3600, PreloadNext = true,
+                    Transition = "zoom", TransitionMilliseconds = 700
+                }, index => index == 2 ? slideshowPortrait : slideshowPreview)
+            {
+                WindowState = WindowState.Normal, Width = 640, Height = 480
+            };
+            try
+            {
+                preloadShow.Show();
+                Flush(preloadShow);
+                var preloadFlags = System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var goNext = typeof(SlideshowWindow).GetMethod("Navigate", preloadFlags)!;
+                goNext.Invoke(preloadShow, [1]);
+                var shown = (int)typeof(SlideshowWindow).GetField(
+                    "_shownIndex", preloadFlags)!.GetValue(preloadShow)!;
+                var transitioning = (bool)typeof(SlideshowWindow).GetField(
+                    "_transitioning", preloadFlags)!.GetValue(preloadShow)!;
+                var nextLayer = typeof(SlideshowWindow).GetField(
+                    "_incoming", preloadFlags)!.GetValue(preloadShow)!;
+                var nextPicture = (Image)nextLayer.GetType().GetField(
+                    "Picture", System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.Instance)!
+                    .GetValue(nextLayer)!;
+                if (shown != 2 || !transitioning ||
+                    !ReferenceEquals(nextPicture.Source, slideshowPortrait))
+                    throw new Exception(
+                        "Slideshow with prefetch enabled delayed manual Next instead of showing local cached pixels.");
+                var improvedPixels = new byte[96 * 128 * 4];
+                for (var j = 3; j < improvedPixels.Length; j += 4)
+                    improvedPixels[j] = 255;
+                var improved = BitmapSource.Create(96, 128, 96, 96,
+                    PixelFormats.Bgra32, null, improvedPixels, 96 * 4);
+                improved.Freeze();
+                typeof(SlideshowWindow).GetField(
+                    "_afterTransitionPixels", preloadFlags)!
+                    .SetValue(preloadShow, improved);
+                if (!ReferenceEquals(nextPicture.Source, slideshowPortrait))
+                    throw new Exception(
+                        "High-resolution result interrupted a still-running slideshow transition.");
+                typeof(SlideshowWindow).GetMethod("FinishTransition", preloadFlags)!
+                    .Invoke(preloadShow, null);
+                var activeLayer = typeof(SlideshowWindow).GetField(
+                    "_active", preloadFlags)!.GetValue(preloadShow)!;
+                var activePicture = (Image)activeLayer.GetType().GetField(
+                    "Picture", System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.Instance)!
+                    .GetValue(activeLayer)!;
+                if (!ReferenceEquals(activePicture.Source, improved))
+                    throw new Exception(
+                        "Slideshow failed to swap in high-resolution pixels after animation finished.");
+            }
+            finally { if (preloadShow.IsVisible) preloadShow.Close(); }
+            Console.WriteLine(
+                "PASS: Prefetched slideshow navigates from local cache and applies refined pixels after transition.");
+
             // The default "Projector" is required to produce REAL WPF
             // animations, not just store the transition name in JSON.
             var projector = new SlideshowWindow(window, slideshowSequence, 0,
