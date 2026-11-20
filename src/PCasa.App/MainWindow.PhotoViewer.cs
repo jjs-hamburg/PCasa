@@ -572,6 +572,11 @@ public partial class MainWindow
 
     private double CurrentViewerZoomPercent()
     {
+        // Comparison Fit is measured on the comparison panel, not on
+        // the hidden single-view ScrollViewer's obsolete viewport.
+        if (_editCompareMode != EditCompareMode.Single)
+            return _viewerFitToScreen
+                ? _editCompareFitPercent : _viewerZoomPercent;
         if (!_viewerFitToScreen)
         {
             return _viewerZoomPercent;
@@ -778,7 +783,8 @@ public partial class MainWindow
         object sender, ManipulationStartingEventArgs e)
     {
         if (!_viewerOpen) return;
-        e.ManipulationContainer = ActiveViewerScroller;
+        e.ManipulationContainer = _editCompareMode == EditCompareMode.Single
+            ? ActiveViewerScroller : EditComparePanel;
         e.Mode = ManipulationModes.Scale;
         e.Handled = true;
     }

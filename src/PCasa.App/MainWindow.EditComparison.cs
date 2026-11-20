@@ -27,6 +27,7 @@ public partial class MainWindow
     private bool _editCompareHoldArmed;
     private long _editCompareHoldArmedImageId = -1;
     private double _editCompareZoomFactor = 1;
+    private double _editCompareFitPercent = 100;
     private bool _editComparePanActive;
     private bool _editComparePanMoved;
     private Point _editComparePanStart;
@@ -321,12 +322,13 @@ public partial class MainWindow
             Math.Clamp(actualWidth / fitWidth, .05, 64);
         if (_viewerFitToScreen)
             _editComparePanX = _editComparePanY = 0;
+        _editCompareFitPercent = 100 * fitWidth * dpi /
+            Math.Max(1, logicalWidth);
         if (!side)
             KeepEditCompareDividerVisible(width);
         ApplyEditComparisonTransforms();
         UpdateViewerZoomControls(_viewerFitToScreen
-            ? 100 * fitWidth * dpi / Math.Max(1, logicalWidth)
-            : _viewerZoomPercent);
+            ? _editCompareFitPercent : _viewerZoomPercent);
     }
 
     private void KeepEditCompareDividerVisible(double viewportWidth)
@@ -495,10 +497,15 @@ public partial class MainWindow
         var x = EditCompareDividerScreenX();
         Canvas.SetLeft(EditCompareSplitHandle,
             x - EditCompareSplitHandle.Width / 2);
+        // Limit the hit area to the VISIBLE portion of the zoomed image.
+        // A 400% zoom or vertical pan must never park the drag grip beyond
+        // the viewport or create a 20,000px-high WPF control.
         var visualHeight = Math.Max(1, frameHeight * _editCompareZoomFactor);
-        EditCompareSplitHandle.Height = visualHeight;
-        Canvas.SetTop(EditCompareSplitHandle,
-            height / 2 + _editComparePanY - visualHeight / 2);
+        var imageTop = height / 2 + _editComparePanY - visualHeight / 2;
+        var visibleTop = Math.Clamp(imageTop, 0, height);
+        var visibleBottom = Math.Clamp(imageTop + visualHeight, 0, height);
+        EditCompareSplitHandle.Height = Math.Max(1, visibleBottom - visibleTop);
+        Canvas.SetTop(EditCompareSplitHandle, visibleTop);
     }
 
     private void CancelPendingOriginalHold()

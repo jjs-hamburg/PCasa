@@ -3507,6 +3507,14 @@ internal static class Program
                     recomputeGeometry.Invoke(window, null);
                     Flush(window);
                     var dividerFitX = Canvas.GetLeft(thumb);
+                    var fitPercent = (double)viewerType.GetField(
+                        "_editCompareFitPercent", reflectFlags)!.GetValue(window)!;
+                    var currentZoom = (double)viewerType.GetMethod(
+                        "CurrentViewerZoomPercent", reflectFlags)!
+                        .Invoke(window, null)!;
+                    if (Math.Abs(fitPercent - currentZoom) > .001)
+                        throw new Exception(
+                            "Comparison Fit zoom incorrectly used the hidden single-view scroller.");
                     var fitFrameWidth = ((Grid)window.FindName(
                         "EditCompareImageFrame")!).Width;
                     var fitClip = beforeImage.Clip as RectangleGeometry;
@@ -3530,7 +3538,8 @@ internal static class Program
                         Math.Abs(dividerZoomX - expectedScreenX) > .5 ||
                         Math.Abs(dividerZoomX - dividerFitX) < 1 ||
                         dividerZoomX < -thumb.Width ||
-                        dividerZoomX > swipe.ActualWidth + thumb.Width)
+                        dividerZoomX > swipe.ActualWidth + thumb.Width ||
+                        thumb.Height > swipe.ActualHeight + 1)
                         throw new Exception(
                             "Zoom moved the divider away from its image coordinate or hid its handle.");
                     fitField.SetValue(window, true);
