@@ -73,6 +73,15 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
+            // About has exactly one user-visible release identity: Version.
+            var aboutDialogType = typeof(PCasa.App.MainWindow).Assembly
+                .GetType("PCasa.App.PcasaAboutWindow")!;
+            if (aboutDialogType.GetConstructors(
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance).Single()
+                .GetParameters().Length != 2)
+                throw new Exception("About dialog still expects an optional build identifier.");
             // Prior WPF tests in this isolated runner can persist a 1044px
             // window size. The user's approved complete one-row toolbar
             // targets normal/wide windows; do not silently shrink old UI.
@@ -3020,6 +3029,45 @@ internal static class Program
                             "Editable JPEG failed to show internal editor tools again.");
                     Console.WriteLine(
                         "PASS: Internal edit tools vanish for PSD and return for editable JPEG.");
+                    // A Topaz transaction must not hide tabs or the tools
+                    // while an editable JPEG remains the current picture.
+                    var externalField = viewerType.GetField(
+                        "_externalEditReview", reflectFlags)!;
+                    var externalType = viewerType.GetNestedType(
+                        "ExternalEditReview",
+                        System.Reflection.BindingFlags.NonPublic)!;
+                    var externalCtor = externalType.GetConstructors(
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance).Single();
+                    var originalExternal = externalField.GetValue(window);
+                    try
+                    {
+                        var review = externalCtor.Invoke(
+                            [null, 999L, "Topaz", false]);
+                        externalField.SetValue(window, review);
+                        editControls.Invoke(window, null);
+                        if (internalTabs.Visibility != Visibility.Visible ||
+                            internalTools.Visibility != Visibility.Visible ||
+                            internalAuto.Visibility != Visibility.Visible ||
+                            internalTabs.IsEnabled)
+                            throw new Exception(
+                                "Topaz launch hid JPEG edit tools or allowed conflicting edits.");
+                        externalField.SetValue(window, null);
+                        editControls.Invoke(window, null);
+                        if (internalTabs.Visibility != Visibility.Visible ||
+                            internalTools.Visibility != Visibility.Visible ||
+                            !internalTabs.IsEnabled)
+                            throw new Exception(
+                                "Returning from Topaz failed to restore JPEG edit tools.");
+                    }
+                    finally
+                    {
+                        externalField.SetValue(window, originalExternal);
+                        editControls.Invoke(window, null);
+                    }
+                    Console.WriteLine(
+                        "PASS: Topaz does not hide internal tools and restores access after return.");
 
                     // The splitter's vertical marker extends ABOVE and
                     // BELOW its enclosing rectangle, unlike the adjacent
@@ -3139,9 +3187,24 @@ internal static class Program
                         clip.Rect.Width <= 0 || clip.Rect.Width >= swipe.ActualWidth)
                         throw new Exception(
                             "Split did not expose the original with a clipped divider.");
-                    // Undo and Redo must preserve comparison geometry and
-                    // the user's zoom, including when Undo reaches Original.
-                    // Only explicit Save/Cancel ends this selected comparison.
+                    // Undo keeps zoom while there are accepted edits.
+                    // Undo of the LAST effect exits comparison to single
+                    // view and hides its icons; Redo re-enables them.
+                    var comparePanXField = viewerType.GetField(
+                        "_editComparePanX", reflectFlags)!;
+                    var comparePanYField = viewerType.GetField(
+                        "_editComparePanY", reflectFlags)!;
+                    var updateCompareZoom = viewerType.GetMethod(
+                        "UpdateEditComparisonZoom", reflectFlags)!;
+                    comparePanXField.SetValue(window, 135d);
+                    comparePanYField.SetValue(window, -240d);
+                    fitField.SetValue(window, true);
+                    updateCompareZoom.Invoke(window, null);
+                    Flush(window);
+                    if (Math.Abs((double)comparePanXField.GetValue(window)!) > .01 ||
+                        Math.Abs((double)comparePanYField.GetValue(window)!) > .01)
+                        throw new Exception(
+                            "Fit-to-window retained stale pan translation in split comparison.");
                     var editModeField = viewerType.GetField(
                         "_editCompareMode", reflectFlags)!;
                     var splitFractionField = viewerType.GetField(
@@ -3167,18 +3230,22 @@ internal static class Program
                     moveHistory.Invoke(window, [-1]);
                     Flush(window);
                     if (edit.HasChanges ||
-                        Convert.ToString(editModeField.GetValue(window)) != "Split" ||
-                        swipe.Visibility != Visibility.Visible ||
+                        Convert.ToString(editModeField.GetValue(window)) != "Single" ||
+                        swipe.Visibility != Visibility.Collapsed ||
+                        compareSplit.Visibility != Visibility.Collapsed ||
                         Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01)
                         throw new Exception(
-                            "Undo to Original unexpectedly closed comparison or reset zoom.");
+                            "Undo of last effect must close comparison and hide its buttons.");
                     moveHistory.Invoke(window, [1]);
                     Flush(window);
-                    if (Convert.ToString(editModeField.GetValue(window)) != "Split" ||
-                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
-                        throw new Exception("Redo failed to update the active comparison.");
+                    if (Convert.ToString(editModeField.GetValue(window)) != "Single" ||
+                        compareSplit.Visibility != Visibility.Visible ||
+                        !ReferenceEquals(viewerImage.Source, afterImage.Source) &&
+                        afterImage.Source is not null)
+                        throw new Exception(
+                            "Redo must show comparison controls without reviving an old mode.");
                     Console.WriteLine(
-                        "PASS: Undo/Redo preserve selected comparison, split divider and zoom.");
+                        "PASS: Undo to original hides comparison; Redo restores icons in single view.");
                     editStateFixture.SetValue(window, null); // Save/Cancel completion.
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||

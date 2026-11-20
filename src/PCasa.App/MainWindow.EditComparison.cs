@@ -119,11 +119,7 @@ public partial class MainWindow
             imageId is long id &&
             EditableImageFormats.Supports(_viewerImageInfo!.LocalPath) &&
             ((_photoEditSession is { } live && live.ImageId == id &&
-                 (live.HasChanges || GetPendingLiveEditStep() is not null ||
-                  // An Undo to the original must not leave a comparison
-                  // which the user explicitly selected. Redo is still valid.
-                  (live.CanRedo && _editCompareMode != EditCompareMode.Single &&
-                   _editCompareImageId == id))) ||
+                 (live.HasChanges || GetPendingLiveEditStep() is not null)) ||
              (_externalEditReview is { Ready: true, Busy: false,
                  ResultPath: not null } external && external.ImageId == id));
         if (!eligible && _editCompareMode != EditCompareMode.Single)
@@ -177,8 +173,7 @@ public partial class MainWindow
                     PhotoEditSession.Render(accepted, [pending]));
                 return (live.Original, edited);
             }
-            if (live.HasChanges || (live.CanRedo &&
-                _editCompareMode != EditCompareMode.Single))
+            if (live.HasChanges)
             {
                 var edited = PhotoViewerImage.Source as BitmapSource ?? live.Render();
                 return (live.Original, edited);
@@ -264,8 +259,7 @@ public partial class MainWindow
             _editCompareImageId != _viewerImageInfo?.Id ||
             _photoEditSession is not { } session ||
             session.ImageId != _editCompareImageId ||
-            (!session.HasChanges && GetPendingLiveEditStep() is null &&
-             !session.CanRedo))
+            (!session.HasChanges && GetPendingLiveEditStep() is null))
             return;
         _editCompareOriginal = session.Original;
         _editCompareEdited = PhotoViewerImage.Source as BitmapSource ?? session.Render();
@@ -301,6 +295,16 @@ public partial class MainWindow
         }
         _editCompareZoomFactor = _viewerFitToScreen ? 1 :
             Math.Clamp(_viewerZoomPercent / Math.Max(1, 100 * fit), 0.25, 12);
+        if (_viewerFitToScreen)
+        {
+            // Pixel pan offsets are relative to the last zoomed geometry.
+            // Keeping them when the user selects Fit shifts both pictures
+            // outside the center frame, exposing only the gallery texture.
+            // Keep _editCompareSplitFraction unchanged: the divider remains
+            // fixed at the same screen X regardless of picture zoom.
+            _editComparePanX = 0;
+            _editComparePanY = 0;
+        }
         ApplyEditComparisonTransforms();
     }
 
@@ -445,8 +449,7 @@ public partial class MainWindow
             return false;
         var session = _photoEditSession;
         var live = session is not null && session.ImageId == info.Id &&
-            (session.HasChanges || GetPendingLiveEditStep() is not null ||
-             (session.CanRedo && _editCompareImageId == info.Id));
+            (session.HasChanges || GetPendingLiveEditStep() is not null);
         if (!live && (_externalEditReview is not { ResultPath: not null } review ||
                      review.ImageId != info.Id))
             return false;

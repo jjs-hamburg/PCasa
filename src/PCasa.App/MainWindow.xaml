@@ -1535,6 +1535,7 @@
                           Background="{Binding Background, ElementName=BrowseScrollViewer}"
                           Focusable="True"
                           PreviewKeyDown="PhotoViewerPanel_PreviewKeyDown"
+                          PreviewMouseWheel="PhotoViewerPanel_PreviewMouseWheel"
                           IsManipulationEnabled="True"
                           ManipulationStarting="PhotoViewer_ManipulationStarting"
                           ManipulationDelta="PhotoViewer_ManipulationDelta"

@@ -1303,6 +1303,21 @@ public partial class MainWindow
     private void PhotoViewerPanel_PreviewKeyDown(object sender, KeyEventArgs e)
         => HandleViewerKey(e, fullscreen: false);
 
+    private void PhotoViewerPanel_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_viewerOpen || e.Handled || e.Delta == 0) return;
+        // Trackpad and wheel use the existing toolbar's image zoom state.
+        // Preserve center and propagate every change to comparison views.
+        var currentPercent = CurrentViewerZoomPercent();
+        _viewerFitToScreen = false;
+        _viewerZoomPercent = Math.Clamp(currentPercent *
+            Math.Pow(1.15, e.Delta / 120.0), ViewerZoomMin, ViewerZoomMax);
+        ApplyViewerImageLayout();
+        UpdateEditComparisonZoom();
+        ScheduleViewerZoomRefinement();
+        e.Handled = true;
+    }
+
     private void PhotoViewerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (!_viewerOpen && _sidebarMode == "GPS" && e.Key == Key.Escape &&
