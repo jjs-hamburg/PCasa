@@ -531,6 +531,11 @@ public sealed class SlideshowWindow : Window
             Animate(_active.Shift, TranslateTransform.XProperty, 0, -width * .18, duration);
         }
 
+        // WPF starts the animation clock on its next render pass. With
+        // a still-uninitialized (1.0) frame, the very first visible paint
+        // otherwise shows the final image without the projector transform.
+        // Set the initial alpha explicitly; the clock then interpolates.
+        _incoming.Frame.Opacity = 0;
         var fade = new DoubleAnimation(0, 1, duration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
@@ -546,6 +551,11 @@ public sealed class SlideshowWindow : Window
     private static void Animate(Animatable target, DependencyProperty property,
         double from, double to, TimeSpan duration)
     {
+        // Make the initial frame deterministic even before composition has
+        // advanced the newly attached animation clock. Never retain a
+        // previous transition's base transform after rapid manual Next.
+        target.BeginAnimation(property, null);
+        target.SetValue(property, from);
         target.BeginAnimation(property, new DoubleAnimation(from, to, duration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }

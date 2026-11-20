@@ -1953,34 +1953,51 @@ internal static class Program
                     "Scale", System.Reflection.BindingFlags.Instance |
                         System.Reflection.BindingFlags.Public)!
                     .GetValue(incomingLayer)!;
-                // BeginAnimation schedules its first interpolated value
-                // for the NEXT WPF render frame. Reading ScaleY before
-                // pumping the dispatcher only returns the old base value 1.
-                // Verify a real animated dependency property AND observe
-                // an intermediate rendered scale, not just an attached clock.
-                if (!DependencyPropertyHelper.GetValueSource(
-                    scale, ScaleTransform.ScaleYProperty).IsAnimated)
+                // The first BeginAnimation is queued for WPF's NEXT render
+                // frame. Inspect the ACTUAL transform attached to the photo,
+                // not a detached object or the base value at t=0.
+                var incomingFrame = (Border)incomingLayer.GetType().GetField(
+                    "Frame", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public)!
+                    .GetValue(incomingLayer)!;
+                if (incomingFrame.RenderTransform is not TransformGroup transforms ||
+                    transforms.Children.Count == 0 ||
+                    !ReferenceEquals(transforms.Children[0], scale))
                     throw new Exception(
-                        "Projector did not attach an actual WPF animation clock.");
-                var observedScaledFrame = false;
+                        "Projector animation targets a transform not attached to the image.");
+                var initialScale = scale.ScaleY;
+                if (initialScale > .95)
+                    throw new Exception(
+                        "Projector does not establish its compressed initial picture frame.");
+                var observedMotion = false;
+                var observedClock = false;
+                var lastScale = initialScale;
                 var animationDeadline = DateTime.UtcNow.AddMilliseconds(620);
                 while (DateTime.UtcNow < animationDeadline)
                 {
                     Flush(projector);
-                    if (scale.ScaleY < .96)
-                    {
-                        observedScaledFrame = true;
-                        break;
-                    }
+                    var currentScale = scale.ScaleY;
+                    observedClock |= DependencyPropertyHelper.GetValueSource(
+                        scale, ScaleTransform.ScaleYProperty).IsAnimated;
+                    if (currentScale > lastScale + .025 &&
+                        currentScale < .99)
+                        observedMotion = true;
+                    lastScale = currentScale;
+                    if (observedMotion && observedClock) break;
                     System.Threading.Thread.Sleep(15);
                 }
-                if (!observedScaledFrame)
+                if (!observedMotion)
                     throw new Exception(
-                        "Projector never painted a visibly scaled frame.");
+                        $"Projector did not interpolate a visible image transform " +
+                        $"(first={initialScale:F3}, last={lastScale:F3}, " +
+                        $"clock={observedClock}).");
                 Until(projector, () =>
                     typeof(SlideshowWindow).GetField("_transitioning", flags)!
                         .GetValue(projector) is false,
                     "Projector animation never completed.");
+                if (Math.Abs(scale.ScaleY - 1) > .01)
+                    throw new Exception(
+                        "Projector transition did not restore the original picture dimensions.");
                 if (projector.CurrentImageIndex != 2)
                     throw new Exception(
                         "Animation completion lost the destination image.");
