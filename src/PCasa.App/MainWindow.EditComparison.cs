@@ -233,6 +233,10 @@ public partial class MainWindow
             EditCompareSideEdited.Source = _editCompareEdited;
             EditCompareSwipeOriginal.Source = _editCompareOriginal;
             EditCompareSwipeEdited.Source = _editCompareEdited;
+            // A previously scheduled resolution refinement belongs to
+            // the single-view scroller. It must never call ShowViewerImage
+            // and reset a comparison after the user has selected it.
+            _viewerZoomCancellation?.Cancel();
             EditCompareSidePanel.Visibility = requested == EditCompareMode.SideBySide
                 ? Visibility.Visible : Visibility.Collapsed;
             EditCompareSwipePanel.Visibility = requested == EditCompareMode.Split

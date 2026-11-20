@@ -898,6 +898,8 @@ public partial class MainWindow
 
     private void ScheduleViewerZoomRefinement()
     {
+        if (_editCompareMode != EditCompareMode.Single)
+            return;
         _viewerZoomCancellation?.Cancel();
         _viewerZoomCancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
@@ -911,7 +913,8 @@ public partial class MainWindow
         {
             await Task.Delay(180, token);
             if (token.IsCancellationRequested || !_viewerOpen ||
-                _viewerFullscreenWindow is not null)
+                _viewerFullscreenWindow is not null ||
+                _editCompareMode != EditCompareMode.Single)
             {
                 return;
             }

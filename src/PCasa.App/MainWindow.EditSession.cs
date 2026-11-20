@@ -31,7 +31,9 @@ public partial class MainWindow
     {
         if (!_viewerOpen || _viewerImageInfo is not { } info ||
             PhotoViewerImage.Source is not BitmapSource bitmap ||
-            _externalBatchReview is not null || _externalEditReview is not null ||
+            _externalBatchReview is not null ||
+            (_externalEditReview is not null &&
+             !CanEditPendingExternalResult(info.Id)) ||
             _pendingEditImageIds.Contains(info.Id))
             return false;
         if (!EditableImageFormats.Supports(info.LocalPath))
@@ -271,9 +273,14 @@ public partial class MainWindow
                 !ExternalEditTransaction.RequiresNewFile(
                     external.Snapshot.OriginalPath, external.ResultPath!);
             CropCancelButton.IsEnabled = ready;
-            CropApplyButton.IsEnabled = false;
-            ViewerToolCancelButton.IsEnabled = false;
-            CropUndoButton.IsEnabled = CropRedoButton.IsEnabled = false;
+            var canEditResult = CanEditPendingExternalResult(external.ImageId);
+            CropApplyButton.IsEnabled = canEditResult &&
+                (_cropActive || _straightenActive);
+            ViewerToolCancelButton.IsEnabled = CropApplyButton.IsEnabled;
+            CropUndoButton.IsEnabled = canEditResult &&
+                _photoEditSession?.CanUndo == true;
+            CropRedoButton.IsEnabled = canEditResult &&
+                _photoEditSession?.CanRedo == true;
         }
         if (_externalBatchReview is { } batch)
         {
@@ -308,7 +315,10 @@ public partial class MainWindow
         // internal or external editing action. Topaz may temporarily own
         // editing rights, but it must not collapse tabs or select Quick.
         var internalToolsVisible = editable;
-        var internalToolsEnabled = editable && noExternalEdit;
+        var internalToolsEnabled = editable &&
+            (noExternalEdit ||
+             (_viewerImageInfo is { } readyImage &&
+              CanEditPendingExternalResult(readyImage.Id)));
         EditorToolTabs.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         EditorToolTabs.IsEnabled = internalToolsEnabled;

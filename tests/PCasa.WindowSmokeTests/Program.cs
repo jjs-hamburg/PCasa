@@ -3322,8 +3322,12 @@ internal static class Program
                     var originalExternal = externalField.GetValue(window);
                     try
                     {
+                        var snapshot = new ExternalEditSnapshot(
+                            Guid.NewGuid(), @"C:\synthetic\photo.jpg",
+                            @"C:\synthetic\topaz-work\photo.jpg",
+                            "", 1024, DateTime.UtcNow, DateTime.UtcNow, []);
                         var review = externalCtor.Invoke(
-                            [null, 999L, "Topaz", false]);
+                            [snapshot, 999L, "Topaz", false]);
                         externalField.SetValue(window, review);
                         editControls.Invoke(window, null);
                         if (internalTabs.Visibility != Visibility.Visible ||
@@ -3332,6 +3336,30 @@ internal static class Program
                             internalTabs.IsEnabled)
                             throw new Exception(
                                 "Topaz launch hid JPEG edit tools or allowed conflicting edits.");
+                        // After a real external result has arrived and PCasa
+                        // has displayed those pixels, Crop and other internal
+                        // tools must edit that PENDING result before Save/Copy.
+                        // A missing preview must not edit the old original.
+                        var resultProp = externalType.GetProperty("ResultPath")!;
+                        var readyProp = externalType.GetProperty("Ready")!;
+                        var previewProp = externalType.GetProperty("PreviewReady")!;
+                        var busyProp = externalType.GetProperty("Busy")!;
+                        resultProp.SetValue(review, @"C:\synthetic\topaz-work\result.jpg");
+                        readyProp.SetValue(review, true);
+                        editControls.Invoke(window, null);
+                        if (internalTabs.IsEnabled)
+                            throw new Exception(
+                                "An unrendered Topaz result unlocked internal edits on the old original.");
+                        previewProp.SetValue(review, true);
+                        editControls.Invoke(window, null);
+                        if (!internalTabs.IsEnabled)
+                            throw new Exception(
+                                "A displayed Topaz result failed to unlock internal crop.");
+                        busyProp.SetValue(review, true);
+                        editControls.Invoke(window, null);
+                        if (internalTabs.IsEnabled)
+                            throw new Exception(
+                                "Busy external Save allowed conflicting internal changes.");
                         externalField.SetValue(window, null);
                         editControls.Invoke(window, null);
                         if (internalTabs.Visibility != Visibility.Visible ||
