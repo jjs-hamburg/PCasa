@@ -304,20 +304,23 @@ public partial class MainWindow
         // external editors: if this format/session cannot use them, they
         // simply are not present. Keep the Quick panel itself: it contains
         // the independently filtered external-program cards.
-        var internalToolsAvailable = editable && noExternalEdit;
-        EditorToolTabs.Visibility = internalToolsAvailable
+        // Visibility follows the loaded image FORMAT, never a later
+        // internal or external editing action. Topaz may temporarily own
+        // editing rights, but it must not collapse tabs or select Quick.
+        var internalToolsVisible = editable;
+        var internalToolsEnabled = editable && noExternalEdit;
+        EditorToolTabs.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
-        EditorToolTabs.IsEnabled = internalToolsAvailable;
-        ViewerToolsList.Visibility = internalToolsAvailable
+        EditorToolTabs.IsEnabled = internalToolsEnabled;
+        ViewerToolsList.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
-        ViewerAutoToolsList.Visibility = internalToolsAvailable
+        ViewerAutoToolsList.Visibility = internalToolsVisible
             ? Visibility.Visible : Visibility.Collapsed;
         foreach (var tool in _editorToolLabels)
-            tool.Button.IsEnabled = internalToolsAvailable;
-        // If the user navigates from an editable JPG while the Light/Color/
-        // Detail tab is open to a PSD/RAW/video, the external editor cards
-        // must not be hidden behind a now-unavailable internal tab.
-        if (!internalToolsAvailable)
+            tool.Button.IsEnabled = internalToolsEnabled;
+        // A newly loaded PSD/RAW/video still switches to Quick so
+        // independently compatible external editors remain accessible.
+        if (!editable)
             SwitchEditorPanel("Quick");
         // With no detected external result, a deliberate click on another
         // editor automatically discards the unchanged working copy.

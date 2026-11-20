@@ -73,6 +73,15 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
+            // About has exactly one user-visible release identity: Version.
+            var aboutDialogType = typeof(PCasa.App.MainWindow).Assembly
+                .GetType("PCasa.App.PcasaAboutWindow")!;
+            if (aboutDialogType.GetConstructors(
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Instance).Single()
+                .GetParameters().Length != 2)
+                throw new Exception("About dialog still expects an optional build identifier.");
             // Prior WPF tests in this isolated runner can persist a 1044px
             // window size. The user's approved complete one-row toolbar
             // targets normal/wide windows; do not silently shrink old UI.
@@ -417,6 +426,50 @@ internal static class Program
                 optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
                 throw new Exception("Undo or editor program configuration is in the wrong menu.");
+            // Startup loads one FULL local catalog index. Its potentially
+            // costly folder sort now runs on the foreground catalog-read
+            // worker, but the publication must reject stale tree order or
+            // a sort setting changed while SQLite was being read.
+            var startupSortGuard = typeof(PCasa.App.MainWindow).GetMethod(
+                "CanReuseStartupOrdering",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Startup catalog sort publication guard missing.");
+            var startupOrderBefore = new Dictionary<long, int>
+            {
+                [30] = 0, [20] = 1
+            };
+            var startupOrderEqual = new Dictionary<long, int>
+            {
+                [20] = 1, [30] = 0
+            };
+            var startupOrderReversed = new Dictionary<long, int>
+            {
+                [30] = 1, [20] = 0
+            };
+            bool ReuseStartup(
+                IReadOnlyDictionary<long, int>? previous,
+                IReadOnlyDictionary<long, int> published,
+                GallerySortOptions priorSort, GallerySortOptions actualSort) =>
+                (bool)startupSortGuard.Invoke(null,
+                    [previous, published, priorSort, actualSort])!;
+            if (!ReuseStartup(startupOrderBefore, startupOrderEqual,
+                    GallerySortOptions.Default, GallerySortOptions.Default) ||
+                ReuseStartup(startupOrderBefore, startupOrderReversed,
+                    GallerySortOptions.Default, GallerySortOptions.Default) ||
+                ReuseStartup(startupOrderBefore, startupOrderEqual,
+                    GallerySortOptions.Default,
+                    new GallerySortOptions(GallerySortField.Captured, false)) ||
+                ReuseStartup(startupOrderBefore,
+                    new Dictionary<long, int> { [20] = 1 },
+                    GallerySortOptions.Default, GallerySortOptions.Default) ||
+                ReuseStartup(null, startupOrderEqual,
+                    GallerySortOptions.Default, GallerySortOptions.Default))
+                throw new Exception(
+                    "Startup background sort reused a stale WPF tree/sort snapshot.");
+            Console.WriteLine(
+                "PASS: Startup background sort accepts only current folder order and sort choice.");
+
             // Slideshow Play belongs permanently at the LEFT edge of the
             // search toolbar; horizontal search scrolling may not displace it.
             var slideshowPlay = window.FindName("SlideshowStartButton") as Button
@@ -458,6 +511,38 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Left-anchored slideshow Play, grouped options and inherited gallery texture.");
 
+            // The original tone sliders had no direction markings.
+            // Each axis must display its endpoint meaning immediately below
+            // the track, with language-aware, non-hit-testing captions.
+            foreach (var (toneName, low, high) in new[]
+            {
+                ("BrightnessSlider", "−", "+"),
+                ("HighlightsSlider", "−", "+"),
+                ("ShadowsSlider", "−", "+"),
+                ("ContrastSlider", "−", "+"),
+                ("TemperatureSlider", "Kühler", "Wärmer"),
+                ("TintSlider", "Grün", "Magenta"),
+                ("SaturationSlider", "Weniger", "Mehr"),
+                ("DenoiseLumaSlider", "Weniger", "Mehr"),
+                ("DenoiseChromaSlider", "Weniger", "Mehr"),
+                ("SharpenSlider", "Weniger", "Mehr"),
+                ("SharpenRadiusSlider", "Klein", "Groß"),
+                ("SharpenDetailSlider", "Weniger", "Mehr")
+            })
+            {
+                if (window.FindName(toneName) is not Slider tone ||
+                    window.FindName(toneName + "Axis") is not Grid axis ||
+                    axis.Children.OfType<TextBlock>().Count() != 2 ||
+                    axis.Children.OfType<TextBlock>().First().Text != UiLanguage.T(low) ||
+                    axis.Children.OfType<TextBlock>().Last().Text != UiLanguage.T(high) ||
+                    axis.IsHitTestVisible ||
+                    axis.Children.OfType<TextBlock>().Any(label =>
+                        label.FontSize > 10) ||
+                    tone.Parent != axis.Parent)
+                    throw new Exception(
+                        "Tone slider axis lacks thin language-aware direction labels: " + toneName);
+            }
+            Console.WriteLine("PASS: Light/Color/Details tone axes show localized directions.");
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;
             if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
@@ -1749,6 +1834,64 @@ internal static class Program
             // The slideshow reuses the very same filtered PhotoSequence,
             // skipping movies without creating a second index or filesystem
             // traversal. Arrows must work without waiting for its timer.
+            // Real WPF: verify selected captions (not just ComboBoxItem
+            // data) remain legible in the selected dark or light theme.
+            var slideshowDialog = new SlideshowSettingsWindow(new SlideshowSettings())
+            {
+                Owner = window
+            };
+            try
+            {
+                slideshowDialog.Show();
+                Flush(slideshowDialog);
+                var slideshowChoices = Descendants<ComboBox>(slideshowDialog).ToArray();
+                if (slideshowChoices.Length != 3)
+                    throw new Exception("Slideshow needs three accessible dropdowns.");
+                foreach (var choice in slideshowChoices)
+                {
+                    choice.ApplyTemplate();
+                    var selectedText = choice.Template.FindName(
+                        "SelectedCaption", choice) as TextBlock;
+                    var captionText = (choice.SelectedItem as ComboBoxItem)?.Content as string;
+                    if (selectedText is null || string.IsNullOrWhiteSpace(selectedText.Text) ||
+                        selectedText.Text != captionText)
+                        throw new Exception(
+                            "Slideshow selected choice is visually empty in dark theme.");
+                    if (selectedText.Foreground is SolidColorBrush ink &&
+                        choice.Background is SolidColorBrush paper &&
+                        Math.Abs(ink.Color.R - paper.Color.R) +
+                        Math.Abs(ink.Color.G - paper.Color.G) +
+                        Math.Abs(ink.Color.B - paper.Color.B) < 240)
+                        throw new Exception(
+                            "Slideshow choice foreground and background are too similar.");
+                    choice.IsDropDownOpen = true;
+                    Flush(slideshowDialog);
+                    var slideshowChoicePopup = choice.Template.FindName(
+                        "PART_Popup", choice) as Popup;
+                    if (slideshowChoicePopup?.IsOpen != true || choice.Items.OfType<ComboBoxItem>()
+                        .Any(item => string.IsNullOrWhiteSpace(item.Content as string) ||
+                            !Equals(item.Foreground, selectedText.Foreground)))
+                        throw new Exception(
+                            "Slideshow dropdown is empty, inaccessible or illegible.");
+                    choice.IsDropDownOpen = false;
+                    Flush(slideshowDialog);
+                }
+                var slideshowBackgroundPicker = (Microsoft.Win32.OpenFileDialog)
+                    typeof(SlideshowSettingsWindow).GetMethod(
+                        "CreateBackgroundPicker",
+                        System.Reflection.BindingFlags.Static |
+                        System.Reflection.BindingFlags.NonPublic)!
+                    .Invoke(null, null)!;
+                if (!string.Equals(slideshowBackgroundPicker.InitialDirectory,
+                    GalleryTextureLibrary.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new Exception(
+                        "Slideshow background picker did not open at texture directory.");
+            }
+            finally { slideshowDialog.Close(); }
+            Console.WriteLine(
+                "PASS: Slideshow dropdowns render real text and use the gallery texture directory.");
+
             var slideItems = new[]
             {
                 synthetic[0] with { FileName = "first.jpg" },
@@ -1767,6 +1910,26 @@ internal static class Program
             var slideshowPreview = BitmapSource.Create(64, 48, 96, 96,
                 PixelFormats.Bgra32, null, previewPixels, 64 * 4);
             slideshowPreview.Freeze();
+            // The second still is PORTRAIT: a slideshow border sized to
+            // the empty stage rather than the actual photo fails this check.
+            var portraitPixels = new byte[48 * 64 * 4];
+            for (var j = 3; j < portraitPixels.Length; j += 4)
+                portraitPixels[j] = 255;
+            var slideshowPortrait = BitmapSource.Create(48, 64, 96, 96,
+                PixelFormats.Bgra32, null, portraitPixels, 48 * 4);
+            slideshowPortrait.Freeze();
+            var landscapeFrame = SlideshowWindow.FitPhotoFrame(
+                640, 480, 800, 600, 10);
+            var portraitFrame = SlideshowWindow.FitPhotoFrame(
+                480, 640, 800, 600, 10);
+            if (Math.Abs((landscapeFrame.Width - 20) /
+                (landscapeFrame.Height - 20) - 640d / 480) > .001 ||
+                Math.Abs((portraitFrame.Width - 20) /
+                (portraitFrame.Height - 20) - 480d / 640) > .001 ||
+                portraitFrame.Width >= landscapeFrame.Width)
+                throw new Exception(
+                    "Slideshow photo frame does not follow photo aspect ratio.");
+
             var galleryBrush = new SolidColorBrush(Colors.SlateGray);
             var slideshowDatabase = (PCasa.App.Data.LocalDatabase)
                 typeof(PCasa.App.MainWindow).GetField("_database",
@@ -1778,7 +1941,7 @@ internal static class Program
                     IntervalSeconds = 3600,
                     PreloadNext = false,
                     Transition = "none"
-                }, _ => slideshowPreview)
+                }, index => index == 2 ? slideshowPortrait : slideshowPreview)
             {
                 WindowState = WindowState.Normal,
                 Width = 640, Height = 480
@@ -1790,6 +1953,26 @@ internal static class Program
                 if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
                     slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
                     throw new Exception("Slideshow failed to show the gallery-texture default.");
+                var slidesFlags = System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+                var currentLayerField = typeof(SlideshowWindow).GetField(
+                    "_active", slidesFlags)!;
+                Border PhotoFrame(SlideshowWindow presentation)
+                {
+                    var layer = currentLayerField.GetValue(presentation)!;
+                    return (Border)layer.GetType().GetField(
+                        "Frame", System.Reflection.BindingFlags.Public |
+                            System.Reflection.BindingFlags.Instance)!
+                        .GetValue(layer)!;
+                }
+                var currentFrame = PhotoFrame(slideshow);
+                if (currentFrame.Effect is not
+                        System.Windows.Media.Effects.DropShadowEffect shadow ||
+                    Math.Abs(shadow.Direction - 315) > .01 ||
+                    Math.Abs((currentFrame.Width - 20) /
+                        (currentFrame.Height - 20) - 64d / 48) > .001)
+                    throw new Exception(
+                        "Landscape slideshow frame/shadow does not match image bounds.");
                 typeof(SlideshowWindow).GetMethod("Navigate",
                     System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic)!
@@ -1797,10 +1980,109 @@ internal static class Program
                 Flush(slideshow);
                 if (slideshow.CurrentImageIndex != 2)
                     throw new Exception("Manual slideshow Right did not skip video instantly.");
+                var frameAfter = PhotoFrame(slideshow);
+                if (Math.Abs((frameAfter.Width - 20) /
+                    (frameAfter.Height - 20) - 48d / 64) > .001)
+                    throw new Exception(
+                        "Portrait slideshow border stayed at the old landscape bounds.");
+                // A single click anywhere in the show exits just as in the
+                // ordinary PCasa photo viewer.
+                slideshow.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(
+                    System.Windows.Input.Mouse.PrimaryDevice, 0,
+                    System.Windows.Input.MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent
+                });
+                Flush(window);
+                if (slideshow.IsVisible)
+                    throw new Exception("Single click did not close slideshow.");
             }
-            finally { slideshow.Close(); }
+            finally { if (slideshow.IsVisible) slideshow.Close(); }
             Console.WriteLine(
                 "PASS: WPF slideshow displays local pixels, uses gallery brush and changes image immediately.");
+            // The default "Projector" is required to produce REAL WPF
+            // animations, not just store the transition name in JSON.
+            var projector = new SlideshowWindow(window, slideshowSequence, 0,
+                slideshowDatabase, galleryBrush, new SlideshowSettings
+                {
+                    IntervalSeconds = 3600, PreloadNext = false,
+                    Transition = "projector", TransitionMilliseconds = 700
+                }, index => index == 2 ? slideshowPortrait : slideshowPreview)
+            {
+                WindowState = WindowState.Normal, Width = 640, Height = 480
+            };
+            try
+            {
+                projector.Show();
+                Flush(projector);
+                var flags = System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance;
+                typeof(SlideshowWindow).GetMethod("Navigate", flags)!
+                    .Invoke(projector, [1]);
+                if (typeof(SlideshowWindow).GetField("_transitioning", flags)!
+                    .GetValue(projector) is not true)
+                    throw new Exception(
+                        "Projector default failed to start its transition.");
+                var incomingLayer = typeof(SlideshowWindow).GetField(
+                    "_incoming", flags)!.GetValue(projector)!;
+                var scale = (ScaleTransform)incomingLayer.GetType().GetField(
+                    "Scale", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public)!
+                    .GetValue(incomingLayer)!;
+                // The first BeginAnimation is queued for WPF's NEXT render
+                // frame. Inspect the ACTUAL transform attached to the photo,
+                // not a detached object or the base value at t=0.
+                var incomingFrame = (Border)incomingLayer.GetType().GetField(
+                    "Frame", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public)!
+                    .GetValue(incomingLayer)!;
+                if (incomingFrame.RenderTransform is not TransformGroup transforms ||
+                    transforms.Children.Count == 0 ||
+                    !ReferenceEquals(transforms.Children[0], scale))
+                    throw new Exception(
+                        "Projector animation targets a transform not attached to the image.");
+                var initialScale = scale.ScaleY;
+                if (initialScale > .95)
+                    throw new Exception(
+                        "Projector does not establish its compressed initial picture frame.");
+                var observedMotion = false;
+                var observedClock = false;
+                var lastScale = initialScale;
+                var animationDeadline = DateTime.UtcNow.AddMilliseconds(620);
+                while (DateTime.UtcNow < animationDeadline)
+                {
+                    Flush(projector);
+                    var currentScale = scale.ScaleY;
+                    observedClock |= DependencyPropertyHelper.GetValueSource(
+                        scale, ScaleTransform.ScaleYProperty).IsAnimated;
+                    if (currentScale > lastScale + .025 &&
+                        currentScale < .99)
+                        observedMotion = true;
+                    lastScale = currentScale;
+                    if (observedMotion && observedClock) break;
+                    System.Threading.Thread.Sleep(15);
+                }
+                if (!observedMotion)
+                    throw new Exception(
+                        $"Projector did not interpolate a visible image transform " +
+                        $"(first={initialScale:F3}, last={lastScale:F3}, " +
+                        $"clock={observedClock}).");
+                Until(projector, () =>
+                    typeof(SlideshowWindow).GetField("_transitioning", flags)!
+                        .GetValue(projector) is false,
+                    "Projector animation never completed.");
+                if (Math.Abs(scale.ScaleY - 1) > .01)
+                    throw new Exception(
+                        "Projector transition did not restore the original picture dimensions.");
+                if (projector.CurrentImageIndex != 2)
+                    throw new Exception(
+                        "Animation completion lost the destination image.");
+            }
+            finally { projector.Close(); }
+            Console.WriteLine(
+                "PASS: Portrait/landscape borders, diagonal thumbnail-style shadow, click exit and live projector animation.");
+
+
 
 
 
@@ -3020,6 +3302,45 @@ internal static class Program
                             "Editable JPEG failed to show internal editor tools again.");
                     Console.WriteLine(
                         "PASS: Internal edit tools vanish for PSD and return for editable JPEG.");
+                    // A Topaz transaction must not hide tabs or the tools
+                    // while an editable JPEG remains the current picture.
+                    var externalField = viewerType.GetField(
+                        "_externalEditReview", reflectFlags)!;
+                    var externalType = viewerType.GetNestedType(
+                        "ExternalEditReview",
+                        System.Reflection.BindingFlags.NonPublic)!;
+                    var externalCtor = externalType.GetConstructors(
+                        System.Reflection.BindingFlags.Public |
+                        System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance).Single();
+                    var originalExternal = externalField.GetValue(window);
+                    try
+                    {
+                        var review = externalCtor.Invoke(
+                            [null, 999L, "Topaz", false]);
+                        externalField.SetValue(window, review);
+                        editControls.Invoke(window, null);
+                        if (internalTabs.Visibility != Visibility.Visible ||
+                            internalTools.Visibility != Visibility.Visible ||
+                            internalAuto.Visibility != Visibility.Visible ||
+                            internalTabs.IsEnabled)
+                            throw new Exception(
+                                "Topaz launch hid JPEG edit tools or allowed conflicting edits.");
+                        externalField.SetValue(window, null);
+                        editControls.Invoke(window, null);
+                        if (internalTabs.Visibility != Visibility.Visible ||
+                            internalTools.Visibility != Visibility.Visible ||
+                            !internalTabs.IsEnabled)
+                            throw new Exception(
+                                "Returning from Topaz failed to restore JPEG edit tools.");
+                    }
+                    finally
+                    {
+                        externalField.SetValue(window, originalExternal);
+                        editControls.Invoke(window, null);
+                    }
+                    Console.WriteLine(
+                        "PASS: Topaz does not hide internal tools and restores access after return.");
 
                     // The splitter's vertical marker extends ABOVE and
                     // BELOW its enclosing rectangle, unlike the adjacent
@@ -3124,6 +3445,46 @@ internal static class Program
                         !ReferenceEquals(afterImage.Source, editedPixels))
                         throw new Exception(
                             "Split mode silently switched to side-by-side or loaded incorrect pixels.");
+                    var thumb = (System.Windows.Controls.Primitives.Thumb)
+                        window.FindName("EditCompareSplitHandle")!;
+                    if (thumb.Width < 28 ||
+                        thumb.Cursor != System.Windows.Input.Cursors.SizeWE)
+                        throw new Exception(
+                            "Split grip must provide a larger horizontal-drag target and visible arrow cursor.");
+                    var pointerToFraction = viewerType.GetMethod(
+                        "SplitFractionForPointer",
+                        reflectFlags | System.Reflection.BindingFlags.Static)!;
+                    double FromPointer(double x, double offset, double width) =>
+                        (double)pointerToFraction.Invoke(null, [x, offset, width])!;
+                    if (Math.Abs(FromPointer(310, 10, 1000) - .30) > .001 ||
+                        Math.Abs(FromPointer(-30, 0, 1000) - .02) > .001 ||
+                        Math.Abs(FromPointer(1100, 0, 1000) - .98) > .001)
+                        throw new Exception(
+                            "Split divider must follow actual captured pointer position and clamp at edges.");
+                    var dividerFraction = viewerType.GetField(
+                        "_editCompareSplitFraction", reflectFlags)!;
+                    dividerFraction.SetValue(window, .37d);
+                    fitField.SetValue(window, true);
+                    var recomputeGeometry = viewerType.GetMethod(
+                        "UpdateEditComparisonZoom", reflectFlags)!;
+                    recomputeGeometry.Invoke(window, null);
+                    Flush(window);
+                    var dividerFitX = Canvas.GetLeft(thumb);
+                    fitField.SetValue(window, false);
+                    zoomField.SetValue(window, 220d);
+                    recomputeGeometry.Invoke(window, null);
+                    Flush(window);
+                    var dividerZoomX = Canvas.GetLeft(thumb);
+                    fitField.SetValue(window, true);
+                    recomputeGeometry.Invoke(window, null);
+                    Flush(window);
+                    if (Math.Abs(Canvas.GetLeft(thumb) - dividerFitX) > .5 ||
+                        Math.Abs(dividerZoomX - dividerFitX) > .5 ||
+                        Math.Abs((double)dividerFraction.GetValue(window)! - .37d) > .001)
+                        throw new Exception(
+                            "Split divider moved in screen space when toggling Fit and 220% zoom.");
+                    Console.WriteLine(
+                        "PASS: Captured split grip follows pointer, stays at fixed viewport X across Fit and zoom.");
                     var firstBounds = beforeImage.TransformToAncestor(swipe)
                         .TransformBounds(new Rect(new Point(0, 0), beforeImage.RenderSize));
                     var secondBounds = afterImage.TransformToAncestor(swipe)
@@ -3139,9 +3500,24 @@ internal static class Program
                         clip.Rect.Width <= 0 || clip.Rect.Width >= swipe.ActualWidth)
                         throw new Exception(
                             "Split did not expose the original with a clipped divider.");
-                    // Undo and Redo must preserve comparison geometry and
-                    // the user's zoom, including when Undo reaches Original.
-                    // Only explicit Save/Cancel ends this selected comparison.
+                    // Undo keeps zoom while there are accepted edits.
+                    // Undo of the LAST effect exits comparison to single
+                    // view and hides its icons; Redo re-enables them.
+                    var comparePanXField = viewerType.GetField(
+                        "_editComparePanX", reflectFlags)!;
+                    var comparePanYField = viewerType.GetField(
+                        "_editComparePanY", reflectFlags)!;
+                    var updateCompareZoom = viewerType.GetMethod(
+                        "UpdateEditComparisonZoom", reflectFlags)!;
+                    comparePanXField.SetValue(window, 135d);
+                    comparePanYField.SetValue(window, -240d);
+                    fitField.SetValue(window, true);
+                    updateCompareZoom.Invoke(window, null);
+                    Flush(window);
+                    if (Math.Abs((double)comparePanXField.GetValue(window)!) > .01 ||
+                        Math.Abs((double)comparePanYField.GetValue(window)!) > .01)
+                        throw new Exception(
+                            "Fit-to-window retained stale pan translation in split comparison.");
                     var editModeField = viewerType.GetField(
                         "_editCompareMode", reflectFlags)!;
                     var splitFractionField = viewerType.GetField(
@@ -3167,18 +3543,22 @@ internal static class Program
                     moveHistory.Invoke(window, [-1]);
                     Flush(window);
                     if (edit.HasChanges ||
-                        Convert.ToString(editModeField.GetValue(window)) != "Split" ||
-                        swipe.Visibility != Visibility.Visible ||
+                        Convert.ToString(editModeField.GetValue(window)) != "Single" ||
+                        swipe.Visibility != Visibility.Collapsed ||
+                        compareSplit.Visibility != Visibility.Collapsed ||
                         Math.Abs((double)zoomField.GetValue(window)! - 175d) > .01)
                         throw new Exception(
-                            "Undo to Original unexpectedly closed comparison or reset zoom.");
+                            "Undo of last effect must close comparison and hide its buttons.");
                     moveHistory.Invoke(window, [1]);
                     Flush(window);
-                    if (Convert.ToString(editModeField.GetValue(window)) != "Split" ||
-                        !ReferenceEquals(afterImage.Source, viewerImage.Source))
-                        throw new Exception("Redo failed to update the active comparison.");
+                    if (Convert.ToString(editModeField.GetValue(window)) != "Single" ||
+                        compareSplit.Visibility != Visibility.Visible ||
+                        !ReferenceEquals(viewerImage.Source, afterImage.Source) &&
+                        afterImage.Source is not null)
+                        throw new Exception(
+                            "Redo must show comparison controls without reviving an old mode.");
                     Console.WriteLine(
-                        "PASS: Undo/Redo preserve selected comparison, split divider and zoom.");
+                        "PASS: Undo to original hides comparison; Redo restores icons in single view.");
                     editStateFixture.SetValue(window, null); // Save/Cancel completion.
                     updateComparison.Invoke(window, null);
                     if (compareSingle.IsEnabled || compareSide.IsEnabled ||

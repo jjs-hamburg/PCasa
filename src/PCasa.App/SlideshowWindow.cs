@@ -28,7 +28,9 @@ public sealed class SlideshowWindow : Window
         {
             Picture = new Image
             {
-                Stretch = Stretch.Uniform,
+                // The enclosing frame already has the exact source
+                // aspect ratio; Fill cannot distort the photograph here.
+                Stretch = Stretch.Fill,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch
             };
@@ -40,8 +42,8 @@ public sealed class SlideshowWindow : Window
             {
                 Child = Picture,
                 Background = Brushes.Transparent,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Stretch,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
                 RenderTransform = transforms,
                 RenderTransformOrigin = new Point(.5, .5),
                 Visibility = Visibility.Collapsed,
@@ -162,6 +164,14 @@ public sealed class SlideshowWindow : Window
         };
         _clock.Tick += ClockTick;
         PreviewKeyDown += SlideshowKeyDown;
+        // Just as a click on PCasa's ordinary picture viewer leaves that
+        // view. Key commands still control the slideshow independently.
+        PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (_closed) return;
+            e.Handled = true;
+            Close();
+        };
         _root.SizeChanged += (_, _) => UpdateFrameGeometry();
         Loaded += (_, _) =>
         {
@@ -226,10 +236,43 @@ public sealed class SlideshowWindow : Window
                 Color = Colors.Black,
                 BlurRadius = _options.ShadowWidth,
                 ShadowDepth = _options.ShadowOffset,
-                Direction = 270,
+                // WPF's 315° casts the shadow down and right: the
+                // virtual light source is in the top-left, as in thumbnails.
+                Direction = 315,
                 Opacity = _options.ShadowOpacity / 100.0
             };
         }
+    }
+
+    // The frame border is drawn exactly around the FITTED PHOTO, not
+    // around the stage's empty letterbox area. Both portrait and landscape
+    // retain their pixel aspect ratio on every window size.
+    public static Size FitPhotoFrame(int pixelWidth, int pixelHeight,
+        double availableWidth, double availableHeight, double borderWidth)
+    {
+        if (pixelWidth <= 0 || pixelHeight <= 0 ||
+            !(availableWidth > 0) || !(availableHeight > 0) ||
+            !double.IsFinite(availableWidth) ||
+            !double.IsFinite(availableHeight))
+            return new Size(0, 0);
+        var border = Math.Max(0, borderWidth);
+        var contentWidth = Math.Max(1, availableWidth - 2 * border);
+        var contentHeight = Math.Max(1, availableHeight - 2 * border);
+        var scale = Math.Min(contentWidth / pixelWidth, contentHeight / pixelHeight);
+        return new Size(pixelWidth * scale + 2 * border,
+            pixelHeight * scale + 2 * border);
+    }
+
+    private void UpdateLayerGeometry(Layer layer)
+    {
+        if (layer.Picture.Source is not BitmapSource bitmap) return;
+        var border = _options.DisplayMode == "gallery" && _options.WhiteBorder
+            ? _options.BorderWidth : 0;
+        var size = FitPhotoFrame(bitmap.PixelWidth, bitmap.PixelHeight,
+            _stage.Width, _stage.Height, border);
+        if (!(size.Width > 0) || !(size.Height > 0)) return;
+        layer.Frame.Width = size.Width;
+        layer.Frame.Height = size.Height;
     }
 
     private void UpdateFrameGeometry()
@@ -241,6 +284,8 @@ public sealed class SlideshowWindow : Window
             ? 1 : _options.GalleryPercent / 100.0;
         _stage.Width = Math.Max(1, width * ratio);
         _stage.Height = Math.Max(1, height * ratio);
+        UpdateLayerGeometry(_active);
+        UpdateLayerGeometry(_incoming);
     }
 
     public static int NextStillIndex(PhotoSequence sequence, int start, int direction)
@@ -356,7 +401,9 @@ public sealed class SlideshowWindow : Window
             {
                 // During A/B transitions the new image lives in _incoming,
                 // not in the disappearing old _active layer.
-                (_transitioning ? _incoming : _active).Picture.Source = bitmap;
+                var layer = _transitioning ? _incoming : _active;
+                layer.Picture.Source = bitmap;
+                UpdateLayerGeometry(layer);
             }
             else
                 Present(bitmap, position);
@@ -436,11 +483,14 @@ public sealed class SlideshowWindow : Window
     {
         if (_shownIndex == position)
         {
-            _active.Picture.Source = image;
+            var layer = _transitioning ? _incoming : _active;
+            layer.Picture.Source = image;
+            UpdateLayerGeometry(layer);
             return;
         }
         FinishTransition();
         _incoming.Picture.Source = image;
+        UpdateLayerGeometry(_incoming);
         _incoming.Frame.Visibility = Visibility.Visible;
         Panel.SetZIndex(_incoming.Frame, 2);
         Panel.SetZIndex(_active.Frame, 1);
@@ -481,6 +531,11 @@ public sealed class SlideshowWindow : Window
             Animate(_active.Shift, TranslateTransform.XProperty, 0, -width * .18, duration);
         }
 
+        // WPF starts the animation clock on its next render pass. With
+        // a still-uninitialized (1.0) frame, the very first visible paint
+        // otherwise shows the final image without the projector transform.
+        // Set the initial alpha explicitly; the clock then interpolates.
+        _incoming.Frame.Opacity = 0;
         var fade = new DoubleAnimation(0, 1, duration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
@@ -496,6 +551,11 @@ public sealed class SlideshowWindow : Window
     private static void Animate(Animatable target, DependencyProperty property,
         double from, double to, TimeSpan duration)
     {
+        // Make the initial frame deterministic even before composition has
+        // advanced the newly attached animation clock. Never retain a
+        // previous transition's base transform after rapid manual Next.
+        target.BeginAnimation(property, null);
+        target.SetValue(property, from);
         target.BeginAnimation(property, new DoubleAnimation(from, to, duration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }

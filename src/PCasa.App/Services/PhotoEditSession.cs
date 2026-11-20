@@ -152,8 +152,10 @@ public sealed class PhotoEditSession
         if (kind == "auto-sharpen")
         {
             kind = "sharpen";
-            amount = .4;
-            radius = 1;
+            // A 1px/.4 preset barely changes moderately softened edges.
+            // Use the same bounded, noise-gated unsharp kernel at 2px.
+            amount = .65;
+            radius = 2;
             detail = .65;
         }
         var argb = new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
@@ -282,82 +284,168 @@ public sealed class PhotoEditSession
         }
     }
 
-    // Edge-aware 3x3 smoothing for luma/chroma and thresholded luminance
-    // unsharp masking. Work from a frozen snapshot, preserve alpha and keep
-    // the original luminance when denoising color. Noise in smooth skies is
-    // not indiscriminately boosted by sharpening.
+    // A single, deterministic image-space kernel for preview AND the P0
+    // full-resolution writer. The old 3x3 filter could neither suppress
+    // broad chroma noise nor distinguish a real edge from noisy grain.
+    //
+    // Luma/chroma denoise: 5x5 spatial Gaussian with separate luminance and
+    // chroma range gates. It preserves color edges (including equal-luma
+    // red/green edges) and never modifies the source luminance for chroma.
+    //
+    // Sharpen: Gaussian unsharp mask at the user's 1–3px radius, with a
+    // detail-dependent noise threshold and local halo/overshoot limiter.
+    // Every path preserves alpha, cancellation and exact neutral identity.
     private static void ApplySpatialTone(byte[] pixels, int width, int height,
         string kind, double amount, double radius, double detail,
         CancellationToken token)
     {
-        var sampleRadius = kind == "sharpen"
-            ? Math.Clamp((int)Math.Round(radius), 1, 3) : 1;
-        if (amount <= .00001 || width <= sampleRadius * 2 ||
-            height <= sampleRadius * 2) return;
-        detail = Math.Clamp(detail, 0, 1);
-        var source = (byte[])pixels.Clone();
+        if (amount <= .00001 || width < 3 || height < 3) return;
+        if (!double.IsFinite(radius) || !double.IsFinite(detail))
+            throw new InvalidDataException("Ungültige Detailparameter.");
         amount = Math.Clamp(amount, 0, 1);
-        static double Luma(byte[] data, int index) =>
-            (.2126 * data[index + 2] + .7152 * data[index + 1] +
-                .0722 * data[index]);
-        for (var y = sampleRadius; y < height - sampleRadius; y++)
+        detail = Math.Clamp(detail, 0, 1);
+
+        // Keep the original immutable for this one edit step. The shared
+        // luma plane is 1 byte/pixel and avoids converting each neighbor
+        // repeatedly in the inner 5x5 loop.
+        var source = (byte[])pixels.Clone();
+        var luminance = new byte[checked(width * height)];
+        for (var i = 0; i < luminance.Length; i++)
         {
-            if ((y & 31) == 0) token.ThrowIfCancellationRequested();
-            for (var x = sampleRadius; x < width - sampleRadius; x++)
+            var p = i * 4;
+            luminance[i] = (byte)((54 * source[p + 2] +
+                183 * source[p + 1] + 19 * source[p] + 128) >> 8);
+        }
+
+        int[] gaussian = [1, 4, 6, 4, 1];
+        var isSharpen = kind == "sharpen";
+        var isChroma = kind == "denoise-chroma";
+        var stride = checked(width * 4);
+        var spacing = isSharpen ? Math.Clamp((int)Math.Round(radius), 1, 3) : 1;
+        var lumaLimit = 14 + amount * 64;
+        var chromaLimit = 24 + amount * 92;
+        var noiseFloor = 2.5 + (1 - detail) * 8;
+        var sharpenGain = amount * (1.5 + detail * .85);
+        var denoiseBlend = amount * .96;
+
+        for (var y = 0; y < height; y++)
+        {
+            if ((y & 15) == 0) token.ThrowIfCancellationRequested();
+            var rowStart = y * width;
+            for (var x = 0; x < width; x++)
             {
-                var index = (y * width + x) * 4;
-                if (source[index + 3] == 0) continue;
-                var center = Luma(source, index);
-                double sumWeight = 0, sumLuma = 0;
-                double chromaB = 0, chromaG = 0, chromaR = 0;
-                for (var dy = -1; dy <= 1; dy++)
-                for (var dx = -1; dx <= 1; dx++)
+                var pixel = rowStart + x;
+                var p = pixel * 4;
+                if (source[p + 3] == 0) continue;
+
+                var centerY = (int)luminance[pixel];
+                var centerB = source[p] - centerY;
+                var centerG = source[p + 1] - centerY;
+                var centerR = source[p + 2] - centerY;
+                double total = 0, sumY = 0;
+                double sumB = 0, sumG = 0, sumR = 0;
+                var nearMin = centerY;
+                var nearMax = centerY;
+
+                for (var dy = -2; dy <= 2; dy++)
                 {
-                    var neighbor = index +
-                        (dy * width + dx) * 4 * sampleRadius;
-                    if (source[neighbor + 3] == 0) continue;
-                    var nLuma = Luma(source, neighbor);
-                    // Do not blur over high-contrast boundaries.
-                    var distance = Math.Abs(center - nLuma);
-                    var weight = (dx == 0 && dy == 0 ? 4.0 :
-                        dx == 0 || dy == 0 ? 2.0 : 1.0);
-                    if (kind != "sharpen")
-                        weight *= Math.Max(.02, 1 - distance /
-                            (12 + amount * 68));
-                    sumWeight += weight;
-                    sumLuma += weight * nLuma;
-                    if (kind == "denoise-chroma")
+                    var ny = y + dy * spacing;
+                    if ((uint)ny >= (uint)height) continue;
+                    var neighborRow = ny * width;
+                    for (var dx = -2; dx <= 2; dx++)
                     {
-                        chromaB += weight * (source[neighbor] - nLuma);
-                        chromaG += weight * (source[neighbor + 1] - nLuma);
-                        chromaR += weight * (source[neighbor + 2] - nLuma);
+                        var nx = x + dx * spacing;
+                        if ((uint)nx >= (uint)width) continue;
+                        var neighborPixel = neighborRow + nx;
+                        var q = neighborPixel * 4;
+                        if (source[q + 3] == 0) continue;
+                        var nearY = (int)luminance[neighborPixel];
+                        double weight = gaussian[dy + 2] * gaussian[dx + 2];
+
+                        if (isSharpen)
+                        {
+                            if (Math.Abs(dx) <= 1 && Math.Abs(dy) <= 1)
+                            {
+                                nearMin = Math.Min(nearMin, nearY);
+                                nearMax = Math.Max(nearMax, nearY);
+                            }
+                        }
+                        else
+                        {
+                            // Do not average across high-contrast contours.
+                            var yDifference = Math.Abs(nearY - centerY);
+                            var yGate = Math.Max(0, 1 - yDifference / lumaLimit);
+                            if (yGate <= 0) continue;
+                            weight *= yGate;
+
+                            if (isChroma)
+                            {
+                                // Luminance alone cannot detect colored
+                                // edges of equal brightness. Gating chroma
+                                // prevents red/green color leakage.
+                                var db = source[q] - nearY;
+                                var dg = source[q + 1] - nearY;
+                                var dr = source[q + 2] - nearY;
+                                var separation = (Math.Abs(db - centerB) +
+                                    Math.Abs(dg - centerG) +
+                                    Math.Abs(dr - centerR)) / 3.0;
+                                weight *= Math.Max(0, 1 - separation / chromaLimit);
+                                if (weight <= 0) continue;
+                                sumB += weight * db;
+                                sumG += weight * dg;
+                                sumR += weight * dr;
+                            }
+                        }
+
+                        total += weight;
+                        sumY += weight * nearY;
                     }
                 }
-                if (sumWeight <= 0) continue;
-                var local = sumLuma / sumWeight;
-                if (kind == "denoise-chroma")
+                if (total <= 0) continue;
+
+                if (isChroma)
                 {
-                    var blend = amount * .92;
-                    pixels[index] = (byte)Math.Clamp((int)Math.Round(
-                        source[index] * (1 - blend) +
-                        (center + chromaB / sumWeight) * blend), 0, 255);
-                    pixels[index + 1] = (byte)Math.Clamp((int)Math.Round(
-                        source[index + 1] * (1 - blend) +
-                        (center + chromaG / sumWeight) * blend), 0, 255);
-                    pixels[index + 2] = (byte)Math.Clamp((int)Math.Round(
-                        source[index + 2] * (1 - blend) +
-                        (center + chromaR / sumWeight) * blend), 0, 255);
+                    // Keep the source's original Y while replacing only
+                    // noisy B-Y, G-Y and R-Y residuals. Never cross color
+                    // contours just because both sides have equal Y.
+                    pixels[p] = ToneByte(source[p] + denoiseBlend *
+                        (centerY + sumB / total - source[p]));
+                    pixels[p + 1] = ToneByte(source[p + 1] + denoiseBlend *
+                        (centerY + sumG / total - source[p + 1]));
+                    pixels[p + 2] = ToneByte(source[p + 2] + denoiseBlend *
+                        (centerY + sumR / total - source[p + 2]));
                     continue;
                 }
-                var delta = kind == "sharpen"
-                    ? (Math.Abs(center - local) < 1 + (1 - detail) * 7 ? 0 :
-                        Math.Clamp((center - local) * amount * 2.1, -52, 52))
-                    : (local - center) * amount;
-                for (var channel = 0; channel < 3; channel++)
-                    pixels[index + channel] = (byte)Math.Clamp(
-                        (int)Math.Round(source[index + channel] + delta), 0, 255);
+
+                var average = sumY / total;
+                double delta;
+                if (isSharpen)
+                {
+                    var highPass = centerY - average;
+                    var magnitude = Math.Abs(highPass) - noiseFloor;
+                    if (magnitude <= 0) continue;
+                    delta = Math.Sign(highPass) *
+                        Math.Min(38, magnitude * sharpenGain);
+                    // Only a bounded extension of nearby intensities is
+                    // permitted: large radius must not cause bright or
+                    // dark ringing around high-contrast edges.
+                    var sharpenedY = Math.Clamp(centerY + delta,
+                        Math.Max(0, nearMin - 9), Math.Min(255, nearMax + 9));
+                    delta = sharpenedY - centerY;
+                }
+                else
+                    delta = (average - centerY) * denoiseBlend;
+
+                // Shared RGB delta preserves chroma instead of smearing
+                // colors or adding false saturation around edges.
+                pixels[p] = ToneByte(source[p] + delta);
+                pixels[p + 1] = ToneByte(source[p + 1] + delta);
+                pixels[p + 2] = ToneByte(source[p + 2] + delta);
             }
         }
+
+        static byte ToneByte(double value) =>
+            (byte)Math.Clamp((int)Math.Round(value), 0, 255);
     }
 
     private static void StretchLuminance(byte[] pixels)

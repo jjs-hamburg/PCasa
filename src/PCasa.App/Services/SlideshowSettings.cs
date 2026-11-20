@@ -25,7 +25,7 @@ public sealed class SlideshowSettings
     public int BorderWidth { get; set; } = 10;
     public bool Shadow { get; set; } = true;
     public int ShadowWidth { get; set; } = 26;
-    public int ShadowOffset { get; set; } = 30;
+    public int ShadowOffset { get; set; } = 12;
     public int ShadowOpacity { get; set; } = 60;
 
     public SlideshowSettings Normalize()

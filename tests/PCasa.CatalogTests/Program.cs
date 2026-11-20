@@ -194,6 +194,8 @@ internal static class Program
         Run("JPEG EXIF orientation 6/8 is honored by viewer without altering original", JpegExifOrientationViewer, failures);
         Run("Viewer uses decoded EXIF axes at original pixel size", ViewerDecodedGeometry, failures);
         Run("RAW preview applies container orientation exactly once", RawPreviewOrientation, failures);
+        Run("Edge-aware luminance/chroma denoise and unsharp mask preserve real edges, alpha and preview parity",
+            SpatialToneQualityTests.Run, failures);
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
         Run("Scan progress previews come from committed local thumbnails, never NAS originals", ScanProgressUsesLocalThumbnails, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);

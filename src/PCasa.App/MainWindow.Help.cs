@@ -94,24 +94,9 @@ public partial class MainWindow
 
     private void HelpAbout_Click(object sender, RoutedEventArgs e)
     {
-        var version = CurrentProductVersion;
-        string build = UiLanguage.T("Nicht verfügbar");
-        try
-        {
-            var file = Path.Combine(AppContext.BaseDirectory, "BUILD-INFO.txt");
-            if (File.Exists(file))
-            {
-                var line = File.ReadLines(file)
-                    .FirstOrDefault(value => value.StartsWith(
-                        "Commit=", StringComparison.OrdinalIgnoreCase));
-                if (line is not null && line.Length > 7)
-                    build = line[7..].Trim()[..Math.Min(12, line[7..].Trim().Length)];
-            }
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-
-        new PcasaAboutWindow(this, version, build).ShowDialog();
+        // The unique product version, not an optional build SHA, is our
+        // published identity on the About screen.
+        new PcasaAboutWindow(this, CurrentProductVersion).ShowDialog();
     }
 
     private async void HelpCheckForUpdates_Click(object sender, RoutedEventArgs e)

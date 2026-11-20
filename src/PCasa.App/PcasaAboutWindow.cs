@@ -12,7 +12,7 @@ namespace PCasa.App;
 /// <summary>A compact product About dialog, distinct from warning/confirmation dialogs.</summary>
 internal sealed class PcasaAboutWindow : Window
 {
-    public PcasaAboutWindow(Window owner, string version, string build)
+    public PcasaAboutWindow(Window owner, string version)
     {
         Owner = owner;
         Title = UiLanguage.T("Über PCasa");
@@ -84,7 +84,6 @@ internal sealed class PcasaAboutWindow : Window
         foreach (var line in new[]
         {
             $"{UiLanguage.T("Version")}: {version}",
-            $"{UiLanguage.T("Build")}: {build}",
             "Windows x64 · .NET 10",
         })
             details.Children.Add(new TextBlock { Text = line, FontSize = 13,
