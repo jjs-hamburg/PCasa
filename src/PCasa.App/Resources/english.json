@@ -991,5 +991,13 @@
   "Schattenstärke (%)": "Shadow opacity (%)",
   "Esc: Beenden   ←/→: Bildwechsel   Leertaste: Pause": "Esc: Exit   ←/→: Next/previous   Space: Pause",
   "Hintergrundbild nicht gefunden.": "Background image not found.",
-  "Keine Fotos für die Slideshow.": "No photos available for slideshow."
+  "Keine Fotos für die Slideshow.": "No photos available for slideshow.",
+  "Kühler": "Cooler",
+  "Wärmer": "Warmer",
+  "Grün": "Green",
+  "Magenta": "Magenta",
+  "Weniger": "Less",
+  "Mehr": "More",
+  "Klein": "Small",
+  "Groß": "Large"
 }

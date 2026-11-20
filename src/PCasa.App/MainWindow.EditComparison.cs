@@ -401,12 +401,40 @@ public partial class MainWindow
         UpdateEditCompareClip();
     }
 
+    // Thumb owns WPF mouse capture throughout the gesture. Record the
+    // click offset on the thumb once, then derive every divider position
+    // from the pointer's absolute viewport X. Cumulative DragDelta
+    // changes are not stable across zoom/reflow and can visibly drift.
+    private double _editCompareThumbGrabOffset;
+
+    private static double SplitFractionForPointer(
+        double pointerX, double grabOffset, double viewportWidth)
+    {
+        if (!(viewportWidth > 0) || !double.IsFinite(pointerX) ||
+            !double.IsFinite(grabOffset)) return 0.5;
+        return Math.Clamp((pointerX - grabOffset) / viewportWidth, 0.02, 0.98);
+    }
+
+    private void EditCompareSplit_DragStarted(object sender, DragStartedEventArgs e)
+    {
+        _editCompareThumbGrabOffset =
+            System.Windows.Input.Mouse.GetPosition(EditCompareSwipePanel).X -
+            EditCompareSwipePanel.ActualWidth * _editCompareSplitFraction;
+    }
+
     private void EditCompareSplit_DragDelta(object sender, DragDeltaEventArgs e)
     {
         var width = EditCompareSwipePanel.ActualWidth;
-        if (width < 1) return;
-        _editCompareSplitFraction = Math.Clamp(
-            _editCompareSplitFraction + e.HorizontalChange / width, 0.02, 0.98);
+        if (!(width > 0)) return;
+        _editCompareSplitFraction = SplitFractionForPointer(
+            System.Windows.Input.Mouse.GetPosition(EditCompareSwipePanel).X,
+            _editCompareThumbGrabOffset, width);
+        UpdateEditCompareClip();
+    }
+
+    private void EditCompareSplit_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        _editCompareThumbGrabOffset = 0;
         UpdateEditCompareClip();
     }
 

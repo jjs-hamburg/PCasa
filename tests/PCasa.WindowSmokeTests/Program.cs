@@ -467,6 +467,38 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Left-anchored slideshow Play, grouped options and inherited gallery texture.");
 
+            // The original tone sliders had no direction markings.
+            // Each axis must display its endpoint meaning immediately below
+            // the track, with language-aware, non-hit-testing captions.
+            foreach (var (toneName, low, high) in new[]
+            {
+                ("BrightnessSlider", "−", "+"),
+                ("HighlightsSlider", "−", "+"),
+                ("ShadowsSlider", "−", "+"),
+                ("ContrastSlider", "−", "+"),
+                ("TemperatureSlider", "Kühler", "Wärmer"),
+                ("TintSlider", "Grün", "Magenta"),
+                ("SaturationSlider", "Weniger", "Mehr"),
+                ("DenoiseLumaSlider", "Weniger", "Mehr"),
+                ("DenoiseChromaSlider", "Weniger", "Mehr"),
+                ("SharpenSlider", "Weniger", "Mehr"),
+                ("SharpenRadiusSlider", "Klein", "Groß"),
+                ("SharpenDetailSlider", "Weniger", "Mehr")
+            })
+            {
+                if (window.FindName(toneName) is not Slider tone ||
+                    window.FindName(toneName + "Axis") is not Grid axis ||
+                    axis.Children.OfType<TextBlock>().Count() != 2 ||
+                    axis.Children.OfType<TextBlock>().First().Text != UiLanguage.T(low) ||
+                    axis.Children.OfType<TextBlock>().Last().Text != UiLanguage.T(high) ||
+                    axis.IsHitTestVisible ||
+                    axis.Children.OfType<TextBlock>().Any(label =>
+                        label.FontSize > 10) ||
+                    tone.Parent != axis.Parent)
+                    throw new Exception(
+                        "Tone slider axis lacks thin language-aware direction labels: " + toneName);
+            }
+            Console.WriteLine("PASS: Light/Color/Details tone axes show localized directions.");
             var brightness = (Slider)window.FindName("BrightnessSlider")!;
             var highlights = (Slider)window.FindName("HighlightsSlider")!;
             if (brightness.Minimum != -1 || brightness.Maximum != 1 ||
@@ -3369,6 +3401,46 @@ internal static class Program
                         !ReferenceEquals(afterImage.Source, editedPixels))
                         throw new Exception(
                             "Split mode silently switched to side-by-side or loaded incorrect pixels.");
+                    var thumb = (System.Windows.Controls.Primitives.Thumb)
+                        window.FindName("EditCompareSplitHandle")!;
+                    if (thumb.Width < 28 ||
+                        thumb.Cursor != System.Windows.Input.Cursors.SizeWE)
+                        throw new Exception(
+                            "Split grip must provide a larger horizontal-drag target and visible arrow cursor.");
+                    var pointerToFraction = viewerType.GetMethod(
+                        "SplitFractionForPointer",
+                        reflectFlags | System.Reflection.BindingFlags.Static)!;
+                    double FromPointer(double x, double offset, double width) =>
+                        (double)pointerToFraction.Invoke(null, [x, offset, width])!;
+                    if (Math.Abs(FromPointer(310, 10, 1000) - .30) > .001 ||
+                        Math.Abs(FromPointer(-30, 0, 1000) - .02) > .001 ||
+                        Math.Abs(FromPointer(1100, 0, 1000) - .98) > .001)
+                        throw new Exception(
+                            "Split divider must follow actual captured pointer position and clamp at edges.");
+                    var dividerFraction = viewerType.GetField(
+                        "_editCompareSplitFraction", reflectFlags)!;
+                    dividerFraction.SetValue(window, .37d);
+                    fitField.SetValue(window, true);
+                    var recomputeGeometry = viewerType.GetMethod(
+                        "UpdateEditComparisonZoom", reflectFlags)!;
+                    recomputeGeometry.Invoke(window, null);
+                    Flush(window);
+                    var dividerFitX = Canvas.GetLeft(thumb);
+                    fitField.SetValue(window, false);
+                    zoomField.SetValue(window, 220d);
+                    recomputeGeometry.Invoke(window, null);
+                    Flush(window);
+                    var dividerZoomX = Canvas.GetLeft(thumb);
+                    fitField.SetValue(window, true);
+                    recomputeGeometry.Invoke(window, null);
+                    Flush(window);
+                    if (Math.Abs(Canvas.GetLeft(thumb) - dividerFitX) > .5 ||
+                        Math.Abs(dividerZoomX - dividerFitX) > .5 ||
+                        Math.Abs((double)dividerFraction.GetValue(window)! - .37d) > .001)
+                        throw new Exception(
+                            "Split divider moved in screen space when toggling Fit and 220% zoom.");
+                    Console.WriteLine(
+                        "PASS: Captured split grip follows pointer, stays at fixed viewport X across Fit and zoom.");
                     var firstBounds = beforeImage.TransformToAncestor(swipe)
                         .TransformBounds(new Rect(new Point(0, 0), beforeImage.RenderSize));
                     var secondBounds = afterImage.TransformToAncestor(swipe)

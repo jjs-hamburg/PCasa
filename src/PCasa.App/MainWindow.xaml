@@ -1095,18 +1095,40 @@
                                 <TextBlock x:Name="BrightnessValueText" Grid.Row="1" Grid.Column="1"
                                            Text="0,00 EV" HorizontalAlignment="Center"
                                            FontSize="11" TextAlignment="Center"/>
+                                <Grid x:Name="BrightnessSliderAxis" Grid.Row="1" Grid.Column="1"
+                                      Margin="4,0,4,0" IsHitTestVisible="False">
+                                    <TextBlock Text="−" FontSize="9" FontWeight="Light"
+                                               Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                               HorizontalAlignment="Left"/>
+                                    <TextBlock Text="+" FontSize="9" FontWeight="Light"
+                                               Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                               HorizontalAlignment="Right"/>
+                                </Grid>
                             </Grid>
                                     
 <Grid Margin="0,3,0,3">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Lichter'}" FontSize="11"/>
-                                        <Slider x:Name="HighlightsSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="HighlightsSlider" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Lichter'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="HighlightsSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="−" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="+" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="HighlightsResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1115,12 +1137,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Tiefen'}" FontSize="11"/>
-                                        <Slider x:Name="ShadowsSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="ShadowsSlider" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Tiefen'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="ShadowsSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="−" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="+" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="ShadowsResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1129,12 +1164,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Kontrast (manuell)'}" FontSize="11"/>
-                                        <Slider x:Name="ContrastSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="ContrastSlider" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Kontrast (manuell)'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="ContrastSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="−" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="+" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="ContrastResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1145,12 +1193,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Farbtemperatur'}" FontSize="11"/>
-                                        <Slider x:Name="TemperatureSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="TemperatureSlider" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Farbtemperatur'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="TemperatureSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="{loc:Tr Key='Kühler'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="{loc:Tr Key='Wärmer'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="TemperatureResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1159,12 +1220,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Farbstich (Grün/Magenta)'}" FontSize="11"/>
-                                        <Slider x:Name="TintSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="TintSlider" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Farbstich (Grün/Magenta)'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="TintSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="{loc:Tr Key='Grün'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="{loc:Tr Key='Magenta'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="TintResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1173,12 +1247,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Sättigung'}" FontSize="11"/>
-                                        <Slider x:Name="SaturationSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="SaturationSlider" Margin="4,0,4,0" 
                                                 Minimum="-1" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Sättigung'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="SaturationSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="{loc:Tr Key='Mehr'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="SaturationResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1189,12 +1276,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Rauschen (Helligkeit)'}" FontSize="11"/>
-                                        <Slider x:Name="DenoiseLumaSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="DenoiseLumaSlider" Margin="4,0,4,0" 
                                                 Minimum="0" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Rauschen (Helligkeit)'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="DenoiseLumaSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="{loc:Tr Key='Mehr'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="DenoiseLumaResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1203,12 +1303,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Rauschen (Farbe)'}" FontSize="11"/>
-                                        <Slider x:Name="DenoiseChromaSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="DenoiseChromaSlider" Margin="4,0,4,0" 
                                                 Minimum="0" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Rauschen (Farbe)'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="DenoiseChromaSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="{loc:Tr Key='Mehr'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="DenoiseChromaResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1217,12 +1330,25 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="94"/><ColumnDefinition Width="*"/><ColumnDefinition Width="30"/></Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" TextWrapping="Wrap" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Schärfen'}" FontSize="11"/>
-                                        <Slider x:Name="SharpenSlider" Grid.Column="1" Margin="4,0,4,0" 
+                                        <Grid Grid.Column="1" Height="38" VerticalAlignment="Center">
+    <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="12"/></Grid.RowDefinitions>
+    <Slider x:Name="SharpenSlider" Margin="4,0,4,0" 
                                                 Minimum="0" Maximum="1" Value="0"
                                                 SmallChange=".01" LargeChange=".05"
                                                 IsMoveToPointEnabled="True"
                                                 TickFrequency=".01" VerticalAlignment="Center"
                                                 ToolTip="{loc:Tr Key='Schärfen'}"/>
+    <!-- Subtle but legible axis ends; labels never consume thumb hit area. -->
+    <Grid x:Name="SharpenSliderAxis" Grid.Row="1" Margin="4,-1,4,0"
+          IsHitTestVisible="False">
+        <TextBlock Text="{loc:Tr Key='Weniger'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Left"/>
+        <TextBlock Text="{loc:Tr Key='Mehr'}" FontSize="9" FontWeight="Light"
+                   Foreground="{DynamicResource PcasaMutedTextBrush}"
+                   HorizontalAlignment="Right"/>
+    </Grid>
+</Grid>
                                         <Button x:Name="SharpenResetButton" Grid.Column="2" Width="25"
                                                 Content="↺" Margin="5,0,0,0" Padding="2,0"
                                                 ToolTip="{loc:Tr Key='Zurücksetzen'}"/>
@@ -1236,20 +1362,54 @@
 <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
                                         <TextBlock Width="110" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Schärfradius'}" FontSize="11"/>
-                                        <Slider x:Name="SharpenRadiusSlider" Width="96"
+                                        <Grid Width="96" Height="37" VerticalAlignment="Center">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="26"/>
+                                                <RowDefinition Height="11"/>
+                                            </Grid.RowDefinitions>
+                                            <Slider x:Name="SharpenRadiusSlider" Width="96"
                                                 Minimum="1" Maximum="3" Value="1"
                                                 SmallChange=".25" LargeChange=".5"
                                                 IsMoveToPointEnabled="True"
                                                 ToolTip="{loc:Tr Key='Schärfradius'}"/>
+                                            <Grid x:Name="SharpenRadiusSliderAxis" Grid.Row="1"
+                                                  IsHitTestVisible="False">
+                                                <TextBlock Text="{loc:Tr Key='Klein'}"
+                                                           HorizontalAlignment="Left"
+                                                           Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                                           FontSize="9" FontWeight="Light"/>
+                                                <TextBlock Text="{loc:Tr Key='Groß'}"
+                                                           HorizontalAlignment="Right"
+                                                           Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                                           FontSize="9" FontWeight="Light"/>
+                                            </Grid>
+                                        </Grid>
                                     </StackPanel>
 <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
                                         <TextBlock Width="110" VerticalAlignment="Center"
                                                    Text="{loc:Tr Key='Detailerhalt'}" FontSize="11"/>
-                                        <Slider x:Name="SharpenDetailSlider" Width="96"
+                                        <Grid Width="96" Height="37" VerticalAlignment="Center">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="26"/>
+                                                <RowDefinition Height="11"/>
+                                            </Grid.RowDefinitions>
+                                            <Slider x:Name="SharpenDetailSlider" Width="96"
                                                 Minimum="0" Maximum="1" Value=".5"
                                                 SmallChange=".05" LargeChange=".2"
                                                 IsMoveToPointEnabled="True"
                                                 ToolTip="{loc:Tr Key='Detailerhalt'}"/>
+                                            <Grid x:Name="SharpenDetailSliderAxis" Grid.Row="1"
+                                                  IsHitTestVisible="False">
+                                                <TextBlock Text="{loc:Tr Key='Weniger'}"
+                                                           HorizontalAlignment="Left"
+                                                           Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                                           FontSize="9" FontWeight="Light"/>
+                                                <TextBlock Text="{loc:Tr Key='Mehr'}"
+                                                           HorizontalAlignment="Right"
+                                                           Foreground="{DynamicResource PcasaMutedTextBrush}"
+                                                           FontSize="9" FontWeight="Light"/>
+                                            </Grid>
+                                        </Grid>
                                     </StackPanel>
                             </StackPanel>
                                 </StackPanel>
@@ -1641,15 +1801,34 @@
                                 </Grid>
                                 <Canvas Background="Transparent">
                                     <primitives:Thumb x:Name="EditCompareSplitHandle"
-                                                      Width="18"
+                                                      Width="30" Cursor="SizeWE"
                                                       Height="{Binding ActualHeight, ElementName=EditCompareSwipePanel}"
-                                                      DragDelta="EditCompareSplit_DragDelta">
+                                                      DragStarted="EditCompareSplit_DragStarted"
+                                                      DragDelta="EditCompareSplit_DragDelta"
+                                                      DragCompleted="EditCompareSplit_DragCompleted"
+                                                      ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}">
                                         <primitives:Thumb.Template>
                                             <ControlTemplate TargetType="{x:Type primitives:Thumb}">
+                                                <!-- The entire vertical line captures mouse input.
+                                                     WPF Thumb retains capture even outside the line. -->
                                                 <Grid Background="#01000000">
                                                     <Border Width="2" HorizontalAlignment="Center"
                                                             Background="#F0F0F0"/>
-                                                    
+                                                    <Border Width="28" Height="32"
+                                                            VerticalAlignment="Center"
+                                                            HorizontalAlignment="Center"
+                                                            BorderBrush="#F0F0F0"
+                                                            BorderThickness="1"
+                                                            Background="#CC232323"
+                                                            CornerRadius="5">
+                                                        <Canvas Width="24" Height="26">
+                                                            <Path Stroke="#F5F5F5" StrokeThickness="1.5"
+                                                                  StrokeLineCap="Round" Fill="Transparent"
+                                                                  Data="M 9,6 L 3,13 L 9,20 M 15,6 L 21,13 L 15,20"/>
+                                                            <Path Stroke="#F5F5F5" StrokeThickness="1.3"
+                                                                  Data="M 11,6 L 11,20 M 13,6 L 13,20"/>
+                                                        </Canvas>
+                                                    </Border>
                                                 </Grid>
                                             </ControlTemplate>
                                         </primitives:Thumb.Template>
