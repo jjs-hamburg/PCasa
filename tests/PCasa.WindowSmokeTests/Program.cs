@@ -1953,6 +1953,11 @@ internal static class Program
                 if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
                     slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
                     throw new Exception("Slideshow failed to show the gallery-texture default.");
+                if (slideshow.Content is not Grid slideRoot ||
+                    slideRoot.Children.Count != 1 ||
+                    slideRoot.Children[0] is not Grid)
+                    throw new Exception(
+                        "Slideshow added unrequested filenames, captions or keyboard hint overlays.");
                 var slidesFlags = System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic;
                 var currentLayerField = typeof(SlideshowWindow).GetField(
@@ -1966,7 +1971,8 @@ internal static class Program
                         .GetValue(layer)!;
                 }
                 var currentFrame = PhotoFrame(slideshow);
-                if (currentFrame.Effect is not
+                if (currentFrame.CacheMode is not BitmapCache ||
+                    currentFrame.Effect is not
                         System.Windows.Media.Effects.DropShadowEffect shadow ||
                     Math.Abs(shadow.Direction - 315) > .01 ||
                     Math.Abs((currentFrame.Width - 20) /
@@ -3454,13 +3460,16 @@ internal static class Program
                     var pointerToFraction = viewerType.GetMethod(
                         "SplitFractionForPointer",
                         reflectFlags | System.Reflection.BindingFlags.Static)!;
-                    double FromPointer(double x, double offset, double width) =>
-                        (double)pointerToFraction.Invoke(null, [x, offset, width])!;
-                    if (Math.Abs(FromPointer(310, 10, 1000) - .30) > .001 ||
-                        Math.Abs(FromPointer(-30, 0, 1000) - .02) > .001 ||
-                        Math.Abs(FromPointer(1100, 0, 1000) - .98) > .001)
+                    double FromPointer(double pointerX, double grab,
+                        double viewport, double image, double zoom, double pan) =>
+                        (double)pointerToFraction.Invoke(null,
+                            [pointerX, grab, viewport, image, zoom, pan])!;
+                    if (Math.Abs(FromPointer(390, 10, 1000, 600, 1, 0) - .30) > .001 ||
+                        Math.Abs(FromPointer(270, 10, 1000, 600, 2, 0) - .30) > .001 ||
+                        Math.Abs(FromPointer(-1000, 0, 1000, 600, 1, 0) - .02) > .001 ||
+                        Math.Abs(FromPointer(2000, 0, 1000, 600, 1, 0) - .98) > .001)
                         throw new Exception(
-                            "Split divider must follow actual captured pointer position and clamp at edges.");
+                            "Captured splitter coordinates must be normalized in the IMAGE, never the viewport.");
                     var dividerFraction = viewerType.GetField(
                         "_editCompareSplitFraction", reflectFlags)!;
                     dividerFraction.SetValue(window, .37d);
@@ -3470,21 +3479,63 @@ internal static class Program
                     recomputeGeometry.Invoke(window, null);
                     Flush(window);
                     var dividerFitX = Canvas.GetLeft(thumb);
+                    var fitFrameWidth = ((Grid)window.FindName(
+                        "EditCompareImageFrame")!).Width;
+                    var fitClip = beforeImage.Clip as RectangleGeometry;
+                    if (fitClip is null ||
+                        Math.Abs(fitClip.Rect.Width - .37 * fitFrameWidth) > .5)
+                        throw new Exception("Fitted picture clip is not in image coordinates.");
                     fitField.SetValue(window, false);
                     zoomField.SetValue(window, 220d);
                     recomputeGeometry.Invoke(window, null);
                     Flush(window);
                     var dividerZoomX = Canvas.GetLeft(thumb);
+                    var zoomClip = beforeImage.Clip as RectangleGeometry;
+                    var currentFactor = (double)viewerType.GetField(
+                        "_editCompareZoomFactor", reflectFlags)!.GetValue(window)!;
+                    var panX = (double)viewerType.GetField(
+                        "_editComparePanX", reflectFlags)!.GetValue(window)!;
+                    var expectedScreenX = swipe.ActualWidth / 2 + panX +
+                        (.37 - .5) * fitFrameWidth * currentFactor - thumb.Width / 2;
+                    if (zoomClip is null ||
+                        Math.Abs(zoomClip.Rect.Width - .37 * fitFrameWidth) > .5 ||
+                        Math.Abs(dividerZoomX - expectedScreenX) > .5 ||
+                        Math.Abs(dividerZoomX - dividerFitX) < 1 ||
+                        dividerZoomX < -thumb.Width ||
+                        dividerZoomX > swipe.ActualWidth + thumb.Width)
+                        throw new Exception(
+                            "Zoom moved the divider away from its image coordinate or hid its handle.");
                     fitField.SetValue(window, true);
                     recomputeGeometry.Invoke(window, null);
                     Flush(window);
                     if (Math.Abs(Canvas.GetLeft(thumb) - dividerFitX) > .5 ||
-                        Math.Abs(dividerZoomX - dividerFitX) > .5 ||
                         Math.Abs((double)dividerFraction.GetValue(window)! - .37d) > .001)
                         throw new Exception(
-                            "Split divider moved in screen space when toggling Fit and 220% zoom.");
+                            "Returning to Fit changed the picture-relative splitter position.");
                     Console.WriteLine(
-                        "PASS: Captured split grip follows pointer, stays at fixed viewport X across Fit and zoom.");
+                        "PASS: Splitter follows photo X through Fit/zoom/pan and stays reachable.");
+                    // Side-by-side must not let a zoomed original paint over
+                    // the edited image: each image has a separately clipped
+                    // half-width visual parent.
+                    ((Task)showComparison.Invoke(window,
+                        [Enum.Parse(compareMode, "SideBySide")])!)
+                        .GetAwaiter().GetResult();
+                    Flush(window);
+                    var sideBefore = (Image)window.FindName("EditCompareSideOriginal")!;
+                    var sideAfter = (Image)window.FindName("EditCompareSideEdited")!;
+                    if (side.Visibility != Visibility.Visible ||
+                        swipe.Visibility != Visibility.Collapsed ||
+                        sideBefore.Source is null || sideAfter.Source is null ||
+                        sideBefore.Parent is not Grid originalHalf ||
+                        sideAfter.Parent is not Grid editedHalf ||
+                        !originalHalf.ClipToBounds || !editedHalf.ClipToBounds ||
+                        originalHalf.ActualWidth <= 0 || editedHalf.ActualWidth <= 0)
+                        throw new Exception(
+                            "Side-by-side shows only one image or allows either image to cover its neighbor.");
+                    ((Task)showComparison.Invoke(window,
+                        [Enum.Parse(compareMode, "Split")])!)
+                        .GetAwaiter().GetResult();
+                    Flush(window);
                     var firstBounds = beforeImage.TransformToAncestor(swipe)
                         .TransformBounds(new Rect(new Point(0, 0), beforeImage.RenderSize));
                     var secondBounds = afterImage.TransformToAncestor(swipe)

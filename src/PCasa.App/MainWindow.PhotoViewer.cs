@@ -265,6 +265,10 @@ public partial class MainWindow
         }
 
         ApplyViewerImageLayout();
+        // An external Save may have cleared its review while the refreshed
+        // viewer metadata was still loading. Restore internal edit access
+        // against the resolved picture, not the stale review state.
+        if (_cropToolsReady) UpdateEditControls();
         var size = GetViewerRequiredPixelSize();
         _viewerPendingOriginalPixels = size;
 
@@ -810,8 +814,7 @@ public partial class MainWindow
         _viewerFitToScreen = false;
         _viewerZoomPercent = Math.Clamp(current * Math.Clamp(ratio, 0.75, 1.3),
             ViewerZoomMin, ViewerZoomMax);
-        ApplyViewerImageLayout();
-        ScheduleViewerZoomRefinement();
+        ApplyActiveViewerZoom();
         e.Handled = true;
     }
 
@@ -822,13 +825,24 @@ public partial class MainWindow
         e.Handled = true;
     }
 
+    // One zoom state, separate renderer per view. Do NOT resize or
+    // refine the hidden ScrollViewer while before/after is visible.
+    private void ApplyActiveViewerZoom()
+    {
+        if (_editCompareMode != EditCompareMode.Single)
+            UpdateEditComparisonZoom();
+        else
+        {
+            ApplyViewerImageLayout();
+            ScheduleViewerZoomRefinement();
+        }
+    }
+
     private void PhotoViewerFit_Click(object sender, RoutedEventArgs e)
     {
         if (!_viewerOpen) return;
         _viewerFitToScreen = true;
-        ApplyViewerImageLayout();
-        UpdateEditComparisonZoom();
-        ScheduleViewerZoomRefinement();
+        ApplyActiveViewerZoom();
         Keyboard.Focus(PhotoViewerPanel);
     }
 
@@ -837,9 +851,7 @@ public partial class MainWindow
         if (!_viewerOpen) return;
         _viewerFitToScreen = false;
         _viewerZoomPercent = 100;
-        ApplyViewerImageLayout();
-        UpdateEditComparisonZoom();
-        ScheduleViewerZoomRefinement();
+        ApplyActiveViewerZoom();
         Keyboard.Focus(PhotoViewerPanel);
     }
 
@@ -849,9 +861,7 @@ public partial class MainWindow
         if (!_viewerOpen || _viewerUpdatingZoomControls) return;
         _viewerFitToScreen = false;
         _viewerZoomPercent = TrackToZoom(e.NewValue);
-        ApplyViewerImageLayout();
-        UpdateEditComparisonZoom();
-        ScheduleViewerZoomRefinement();
+        ApplyActiveViewerZoom();
     }
 
     private void PhotoViewerViewport_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -874,6 +884,11 @@ public partial class MainWindow
         {
             _viewerViewportRelayoutQueued = false;
             if (!_viewerOpen || _viewerFullscreenWindow is not null) return;
+            if (_editCompareMode != EditCompareMode.Single)
+            {
+                UpdateEditComparisonZoom();
+                return;
+            }
             ApplyViewerImageLayout();
             // A changed Fit viewport may need a larger decoded original,
             // while a manually chosen percentage must remain untouched.
@@ -1312,9 +1327,7 @@ public partial class MainWindow
         _viewerFitToScreen = false;
         _viewerZoomPercent = Math.Clamp(currentPercent *
             Math.Pow(1.15, e.Delta / 120.0), ViewerZoomMin, ViewerZoomMax);
-        ApplyViewerImageLayout();
-        UpdateEditComparisonZoom();
-        ScheduleViewerZoomRefinement();
+        ApplyActiveViewerZoom();
         e.Handled = true;
     }
 

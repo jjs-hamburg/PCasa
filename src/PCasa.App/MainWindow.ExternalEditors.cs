@@ -682,9 +682,11 @@ public partial class MainWindow
                     ex.Message, UiLanguage.T("Externe Bearbeitung"),
                     MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            // The source mutation/copy and its required catalog re-index
-            // have completed; the suspended scanner may now resume.
+            // Once Save/Copy/Cancel has committed, internal tools belong
+            // to the current (possibly newly activated) image again.
+            // Do not leave them disabled from the completed Topaz review.
             ResumeSchedulerAfterExternalEdit();
+            if (_viewerOpen) UpdateEditControls();
             if (decision == ExternalEditDecision.Cancel &&
                 returnToGalleryAfterCancel && _viewerOpen &&
                 _viewerSequence is { } activeSequence &&

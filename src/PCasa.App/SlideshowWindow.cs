@@ -47,7 +47,10 @@ public sealed class SlideshowWindow : Window
                 RenderTransform = transforms,
                 RenderTransformOrigin = new Point(.5, .5),
                 Visibility = Visibility.Collapsed,
-                ClipToBounds = false
+                ClipToBounds = false,
+                // Render picture, white border and shadow once into a
+                // compositor cache instead of recalculating each frame.
+                CacheMode = new BitmapCache { RenderAtScale = 1 }
             };
         }
 
@@ -69,7 +72,6 @@ public sealed class SlideshowWindow : Window
     private readonly SlideshowSettings _options;
     private readonly Grid _root = new();
     private readonly Grid _stage = new();
-    private readonly TextBlock _caption = new();
     private Layer _active = new();
     private Layer _incoming = new();
     private readonly DispatcherTimer _clock;
@@ -131,33 +133,7 @@ public sealed class SlideshowWindow : Window
         _stage.Children.Add(_active.Frame);
         _stage.Children.Add(_incoming.Frame);
 
-        var status = new Border
-        {
-            Background = new SolidColorBrush(Color.FromArgb(120, 0, 0, 0)),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(12, 6, 12, 6),
-            Margin = new Thickness(12),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Top,
-            Child = _caption
-        };
-        _caption.FontSize = 13;
-        _caption.Foreground = Brushes.White;
-        _caption.TextTrimming = TextTrimming.CharacterEllipsis;
-        _root.Children.Add(status);
-        Panel.SetZIndex(status, 5);
-
-        var hint = new TextBlock
-        {
-            Text = UiLanguage.T("Esc: Beenden   ←/→: Bildwechsel   Leertaste: Pause"),
-            FontSize = 12, Foreground = Brushes.White,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Margin = new Thickness(18, 0, 0, 12)
-        };
-        _root.Children.Add(hint);
-        Panel.SetZIndex(hint, 5);
-
+        // Picture-only slideshow: no unrequested text or filename overlays.
         _clock = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(100)
@@ -316,7 +292,6 @@ public sealed class SlideshowWindow : Window
         {
             _paused = !_paused;
             _lastChangeUtc = DateTime.UtcNow;
-            ShowCaption();
             e.Handled = true;
         }
     }
@@ -349,7 +324,6 @@ public sealed class SlideshowWindow : Window
         var revision = ++_requestVersion;
         var entry = _sequence.At(_index);
         _awaitingPixels = true;
-        ShowCaption();
 
         BitmapSource? preview = null;
         var hadPrefetchedOriginal = _aheadImageId == entry.ImageId &&
@@ -368,24 +342,26 @@ public sealed class SlideshowWindow : Window
         _aheadPixels = null;
         _aheadImageId = -1;
 
-        if (preview is not null)
+        // Do not flash a small local preview and replace it mid-transition.
+        // A transition uses fully decoded look-ahead pixels, or waits for
+        // the async original. The first slide/no-prefetch remains immediate.
+        if (preview is not null &&
+            (_shownIndex < 0 || hadPrefetchedOriginal || !_options.PreloadNext))
         {
             Present(preview, _index);
             _awaitingPixels = false;
             _failedInRow = 0;
             if (hadPrefetchedOriginal)
             {
-                // Already decoded at screen quality: do not read the NAS
-                // original twice while a manual Right key is waiting.
                 StartLookAhead();
                 return;
             }
         }
-        _ = DecodeCurrentAsync(entry.ImageId, _index, revision, token);
+        _ = DecodeCurrentAsync(entry.ImageId, _index, revision, token, preview);
     }
 
     private async Task DecodeCurrentAsync(long id, int position,
-        int revision, CancellationToken token)
+        int revision, CancellationToken token, BitmapSource? localFallback)
     {
         BitmapSource? bitmap = null;
         try { bitmap = await DecodeAsync(id, token); }
@@ -410,10 +386,12 @@ public sealed class SlideshowWindow : Window
             _awaitingPixels = false;
             StartLookAhead();
         }
-        else if (_shownIndex == position)
+        else if (localFallback is not null)
         {
-            // An offline original must not erase its local packed thumbnail.
+            if (_shownIndex != position)
+                Present(localFallback, position);
             _awaitingPixels = false;
+            _failedInRow = 0;
             StartLookAhead();
         }
         else
@@ -428,7 +406,6 @@ public sealed class SlideshowWindow : Window
             }
         }
         _lastChangeUtc = DateTime.UtcNow;
-        ShowCaption();
     }
 
     private Task<BitmapSource?> DecodeAsync(long id, CancellationToken token)
@@ -472,13 +449,6 @@ public sealed class SlideshowWindow : Window
         catch (Exception ex) { PCasaDiagnostics.Write("Slideshow.Prefetch", ex); }
     }
 
-    private void ShowCaption()
-    {
-        var fileName = _sequence.At(_index).FileName;
-        var state = _paused ? "Ⅱ" : "▶";
-        _caption.Text = $"{state}  {_index + 1:N0} / {_sequence.Count:N0} · {fileName}";
-    }
-
     private void Present(BitmapSource image, int position)
     {
         if (_shownIndex == position)
@@ -491,13 +461,14 @@ public sealed class SlideshowWindow : Window
         FinishTransition();
         _incoming.Picture.Source = image;
         UpdateLayerGeometry(_incoming);
+        // Frame must not paint even once before the opacity clock is ready.
+        _incoming.Frame.Opacity = 0;
         _incoming.Frame.Visibility = Visibility.Visible;
         Panel.SetZIndex(_incoming.Frame, 2);
         Panel.SetZIndex(_active.Frame, 1);
         _shownIndex = position;
         _awaitingPixels = false;
         _lastChangeUtc = DateTime.UtcNow;
-        ShowCaption();
 
         var type = _options.Transition;
         if (_active.Picture.Source is null || type == "none" ||
@@ -513,8 +484,9 @@ public sealed class SlideshowWindow : Window
         var width = _stage.ActualWidth > 0 ? _stage.ActualWidth : 1000;
         if (type == "zoom")
         {
-            Animate(_incoming.Scale, ScaleTransform.ScaleXProperty, 1.07, 1, duration);
-            Animate(_incoming.Scale, ScaleTransform.ScaleYProperty, 1.07, 1, duration);
+            // Zoom inward so the next border never peeks outside first.
+            Animate(_incoming.Scale, ScaleTransform.ScaleXProperty, .97, 1, duration);
+            Animate(_incoming.Scale, ScaleTransform.ScaleYProperty, .97, 1, duration);
         }
         else if (type == "slide")
         {
@@ -531,11 +503,8 @@ public sealed class SlideshowWindow : Window
             Animate(_active.Shift, TranslateTransform.XProperty, 0, -width * .18, duration);
         }
 
-        // WPF starts the animation clock on its next render pass. With
-        // a still-uninitialized (1.0) frame, the very first visible paint
-        // otherwise shows the final image without the projector transform.
-        // Set the initial alpha explicitly; the clock then interpolates.
-        _incoming.Frame.Opacity = 0;
+        // Cached compositor layers prevent repeated high-quality picture
+        // scaling and CPU drop-shadow rasterization during each frame.
         var fade = new DoubleAnimation(0, 1, duration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
