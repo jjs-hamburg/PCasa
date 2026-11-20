@@ -426,6 +426,50 @@ internal static class Program
                 optionsMenu.Items.OfType<MenuItem>().Any(item =>
                     item.Header?.ToString() is "Image editing" or "Bildbearbeitung"))
                 throw new Exception("Undo or editor program configuration is in the wrong menu.");
+            // Startup loads one FULL local catalog index. Its potentially
+            // costly folder sort now runs on the foreground catalog-read
+            // worker, but the publication must reject stale tree order or
+            // a sort setting changed while SQLite was being read.
+            var startupSortGuard = typeof(PCasa.App.MainWindow).GetMethod(
+                "CanReuseStartupOrdering",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Startup catalog sort publication guard missing.");
+            var startupOrderBefore = new Dictionary<long, int>
+            {
+                [30] = 0, [20] = 1
+            };
+            var startupOrderEqual = new Dictionary<long, int>
+            {
+                [20] = 1, [30] = 0
+            };
+            var startupOrderReversed = new Dictionary<long, int>
+            {
+                [30] = 1, [20] = 0
+            };
+            bool ReuseStartup(
+                IReadOnlyDictionary<long, int>? previous,
+                IReadOnlyDictionary<long, int> published,
+                GallerySortOptions priorSort, GallerySortOptions actualSort) =>
+                (bool)startupSortGuard.Invoke(null,
+                    [previous, published, priorSort, actualSort])!;
+            if (!ReuseStartup(startupOrderBefore, startupOrderEqual,
+                    GallerySortOptions.Default, GallerySortOptions.Default) ||
+                ReuseStartup(startupOrderBefore, startupOrderReversed,
+                    GallerySortOptions.Default, GallerySortOptions.Default) ||
+                ReuseStartup(startupOrderBefore, startupOrderEqual,
+                    GallerySortOptions.Default,
+                    new GallerySortOptions(GallerySortField.Captured, false)) ||
+                ReuseStartup(startupOrderBefore,
+                    new Dictionary<long, int> { [20] = 1 },
+                    GallerySortOptions.Default, GallerySortOptions.Default) ||
+                ReuseStartup(null, startupOrderEqual,
+                    GallerySortOptions.Default, GallerySortOptions.Default))
+                throw new Exception(
+                    "Startup background sort reused a stale WPF tree/sort snapshot.");
+            Console.WriteLine(
+                "PASS: Startup background sort accepts only current folder order and sort choice.");
+
             // Slideshow Play belongs permanently at the LEFT edge of the
             // search toolbar; horizontal search scrolling may not displace it.
             var slideshowPlay = window.FindName("SlideshowStartButton") as Button

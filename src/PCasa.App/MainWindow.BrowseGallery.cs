@@ -381,23 +381,32 @@ public partial class MainWindow
         HashSet<long> pendingInitialRootIds = new();
         IReadOnlyList<string> verifiedInitialDirectories = Array.Empty<string>();
         imageCount = 0;
+        long initialFolderSqlMs = 0, initialConfigurationSqlMs = 0;
         await _galleryCatalogReader.ReadAsync(
             token =>
             {
                 token.ThrowIfCancellationRequested();
+                var watch = System.Diagnostics.Stopwatch.StartNew();
                 initialFolders = _imageCatalog.GetPhotoFolders();
                 imageCount = _imageCatalog.CountAll();
+                initialFolderSqlMs = watch.ElapsedMilliseconds;
                 initialConfiguration = ReadFolderTreeConfigurationSnapshot();
                 pendingInitialRootIds = _folderRepository.GetPendingInitialScans()
                     .Select(root => root.Id).ToHashSet();
                 verifiedInitialDirectories = _folderRepository
                     .GetVerifiedPendingInitialDirectories();
                 createdDirectories = _folderRepository.GetCreatedDirectories();
+                initialConfigurationSqlMs =
+                    watch.ElapsedMilliseconds - initialFolderSqlMs;
                 return Task.CompletedTask;
             });
         if (!_browseInitialized || _folderRemovalPending) return;
         _photoFolders = initialFolders;
-        if (initialProjectionOnly) LogStartupStage("catalog-and-folder-snapshot");
+        if (initialProjectionOnly)
+            LogStartupStage($"catalog-and-folder-snapshot: " +
+                $"photo-summary={initialFolderSqlMs} ms; " +
+                $"tree-config={initialConfigurationSqlMs} ms; " +
+                $"folders={initialFolders.Count:N0}; photos={imageCount:N0}");
         if (initialProjectionOnly)
             _startupFolderSnapshot = (initialFolders, imageCount);
         _dropTargetProjection = initialConfiguration;
@@ -412,6 +421,7 @@ public partial class MainWindow
         _createdEmptyFolderPaths.UnionWith(createdDirectories);
         _dragTargetValidity.Clear();
         RefreshFolderTree(preserveGalleryAnchor: false);
+        if (initialProjectionOnly) LogStartupStage("folder-tree-ready");
         _ = RefreshPendingTagDotsAsync();
         _lastCatalogImageCount = imageCount;
         UpdateFolderImageTotal();
@@ -645,6 +655,20 @@ public partial class MainWindow
         }
     }
 
+    // A worker may sort using a snapshot of WPF folder order, but only
+    // the CURRENT tree and selected sort own publication. This check is
+    // small (one item per folder, not one item per image), and gives the
+    // same result for startup, later folder changes and manual resorting.
+    private static bool CanReuseStartupOrdering(
+        IReadOnlyDictionary<long, int>? beforeTree,
+        IReadOnlyDictionary<long, int> publishedTree,
+        GallerySortOptions beforeSort, GallerySortOptions publishedSort)
+        => beforeTree is not null && beforeSort == publishedSort &&
+            beforeTree.Count == publishedTree.Count &&
+            publishedTree.All(pair =>
+                beforeTree.TryGetValue(pair.Key, out var earlier) &&
+                earlier == pair.Value);
+
     private async Task RefreshBrowseGalleryCoreAsync(
         bool forceIndexReload,
         bool warmViewport = false,
@@ -728,6 +752,20 @@ public partial class MainWindow
         var tier = profile.ChooseForDisplayWidth(ThumbnailSizeSlider.Value);
         IReadOnlyList<BrowseThumbnailIndexEntry>? nextIndex = null;
 
+        // Only the initial 500k-scale index benefits from this one-time
+        // off-UI sort. Capture WPF tree order on the dispatcher, then perform
+        // BOTH SQLite materialization and the same canonical gallery sort
+        // on the existing foreground catalog-read worker. Never create a
+        // second index or run a separate file-system scan.
+        IReadOnlyDictionary<long, int>? startupTreeOrder = null;
+        var startupSort = GallerySortOptions.Default;
+        long indexSqlMs = 0, initialSortMs = 0;
+        if (!_startupGalleryPublished && !fromScanner)
+        {
+            startupTreeOrder = CaptureGalleryFolderOrder();
+            startupSort = CurrentGallerySort;
+        }
+
         if (forceIndexReload || _activeBrowseTier != tier || _browseIndex.Count == 0)
         {
             if (!_isScanning && !_manualScanRunning && _visibleManualWindow is null)
@@ -739,7 +777,19 @@ public partial class MainWindow
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
+                        var watch = System.Diagnostics.Stopwatch.StartNew();
                         index = _browseCacheRepository.GetGalleryIndex(tier);
+                        indexSqlMs = watch.ElapsedMilliseconds;
+                        // The initial sort previously ran synchronously on
+                        // WPF immediately before displaying the first image.
+                        // Keep it next to the one SQL read, on this worker.
+                        if (startupTreeOrder is not null)
+                        {
+                            watch.Restart();
+                            index = GalleryFolderOrdering.Order(index,
+                                startupTreeOrder, startupSort);
+                            initialSortMs = watch.ElapsedMilliseconds;
+                        }
                         return Task.CompletedTask;
                     }, () => _browseRefreshRequests.IsCurrent(refresh));
             }
@@ -752,7 +802,9 @@ public partial class MainWindow
             // Keep the newly read index PRIVATE until the last awaited
             // catalog read. Neither index nor folders may be published alone.
             nextIndex = index;
-            if (!_startupGalleryPublished) LogStartupStage("gallery-index-read");
+            if (!_startupGalleryPublished)
+                LogStartupStage($"gallery-index-read: {index.Count:N0} photos; " +
+                    $"sqlite={indexSqlMs} ms; background-sort={initialSortMs} ms");
         }
 
         if (_selectedImageIds.Count > 0)
@@ -809,8 +861,16 @@ public partial class MainWindow
                 ordered = ordered.Where(image =>
                     visibleIds.Contains(image.PhotoFolderId)).ToArray();
             }
-            ordered = GalleryFolderOrdering.Order(ordered,
-                CaptureGalleryFolderOrder(), CurrentGallerySort);
+            var displayOrder = CaptureGalleryFolderOrder();
+            // Only reuse the background sort when the actual published tree
+            // and sort option have not changed while SQLite was being read.
+            // New roots or user changes always fall back to the existing
+            // unique canonical sort, preserving gallery jump semantics.
+            var sameOrder = CanReuseStartupOrdering(startupTreeOrder,
+                displayOrder, startupSort, CurrentGallerySort);
+            if (!sameOrder)
+                ordered = GalleryFolderOrdering.Order(ordered,
+                    displayOrder, CurrentGallerySort);
             if (_restoreBadgeImageIds.Count > 0)
                 ordered = ordered.Select(entry =>
                     entry with { HasRestore = _restoreBadgeImageIds.Contains(entry.ImageId) })
@@ -830,6 +890,8 @@ public partial class MainWindow
             _browseIndex.Count > 0 ? 1 : 0);
 
         await ApplyTagFilterAsync();
+        if (!_startupGalleryPublished)
+            LogStartupStage("filtered-gallery-projection-ready");
         if (!_restoreBadgeChecking) _ = RefreshRestoreBadgesAsync();
         if (!_browseRefreshRequests.IsCurrent(refresh))
             return;
@@ -859,6 +921,8 @@ public partial class MainWindow
 
         if (!_browseRefreshRequests.IsCurrent(refresh))
             return;
+        if (!_startupGalleryPublished)
+            LogStartupStage("saved-viewport-positioned");
 
         if (warmViewport && !_startupGalleryPublished)
         {
