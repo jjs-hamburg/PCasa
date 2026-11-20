@@ -1953,9 +1953,30 @@ internal static class Program
                     "Scale", System.Reflection.BindingFlags.Instance |
                         System.Reflection.BindingFlags.Public)!
                     .GetValue(incomingLayer)!;
-                if (scale.ScaleY >= .99)
+                // BeginAnimation schedules its first interpolated value
+                // for the NEXT WPF render frame. Reading ScaleY before
+                // pumping the dispatcher only returns the old base value 1.
+                // Verify a real animated dependency property AND observe
+                // an intermediate rendered scale, not just an attached clock.
+                if (!DependencyPropertyHelper.GetValueSource(
+                    scale, ScaleTransform.ScaleYProperty).IsAnimated)
                     throw new Exception(
-                        "Projector animation did not visibly transform image.");
+                        "Projector did not attach an actual WPF animation clock.");
+                var observedScaledFrame = false;
+                var animationDeadline = DateTime.UtcNow.AddMilliseconds(620);
+                while (DateTime.UtcNow < animationDeadline)
+                {
+                    Flush(projector);
+                    if (scale.ScaleY < .96)
+                    {
+                        observedScaledFrame = true;
+                        break;
+                    }
+                    System.Threading.Thread.Sleep(15);
+                }
+                if (!observedScaledFrame)
+                    throw new Exception(
+                        "Projector never painted a visibly scaled frame.");
                 Until(projector, () =>
                     typeof(SlideshowWindow).GetField("_transitioning", flags)!
                         .GetValue(projector) is false,
