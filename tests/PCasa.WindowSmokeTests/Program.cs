@@ -1790,9 +1790,9 @@ internal static class Program
                             "Slideshow choice foreground and background are too similar.");
                     choice.IsDropDownOpen = true;
                     Flush(slideshowDialog);
-                    var popup = choice.Template.FindName(
+                    var slideshowChoicePopup = choice.Template.FindName(
                         "PART_Popup", choice) as Popup;
-                    if (popup?.IsOpen != true || choice.Items.OfType<ComboBoxItem>()
+                    if (slideshowChoicePopup?.IsOpen != true || choice.Items.OfType<ComboBoxItem>()
                         .Any(item => string.IsNullOrWhiteSpace(item.Content as string) ||
                             !Equals(item.Foreground, selectedText.Foreground)))
                         throw new Exception(
@@ -1800,13 +1800,13 @@ internal static class Program
                     choice.IsDropDownOpen = false;
                     Flush(slideshowDialog);
                 }
-                var picker = (Microsoft.Win32.OpenFileDialog)
+                var slideshowBackgroundPicker = (Microsoft.Win32.OpenFileDialog)
                     typeof(SlideshowSettingsWindow).GetMethod(
                         "CreateBackgroundPicker",
                         System.Reflection.BindingFlags.Static |
                         System.Reflection.BindingFlags.NonPublic)!
                     .Invoke(null, null)!;
-                if (!string.Equals(picker.InitialDirectory,
+                if (!string.Equals(slideshowBackgroundPicker.InitialDirectory,
                     GalleryTextureLibrary.DirectoryPath,
                     StringComparison.OrdinalIgnoreCase))
                     throw new Exception(
