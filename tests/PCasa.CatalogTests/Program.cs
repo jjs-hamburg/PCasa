@@ -4155,26 +4155,42 @@ internal static class Program
             catch (System.Reflection.TargetInvocationException e)
                 when (e.InnerException is InvalidDataException) { }
 
+            string internalResult;
             try
             {
-                edit.Invoke(null, [edited, workspace, steps,
-                    CancellationToken.None]);
+                internalResult = (string)edit.Invoke(null, [edited, workspace, steps,
+                    CancellationToken.None])!;
             }
             catch (System.Reflection.TargetInvocationException e)
             {
                 throw new Exception("Workspace crop failed.", e.InnerException ?? e);
             }
-            var actual = EditableImageFormats.Dimensions(edited);
+            // Alpha.48 deliberately leaves the Topaz-owned file unmodified:
+            // another process may still have it open without FILE_SHARE_DELETE.
+            // The one private edited output is passed to the external commit.
+            if (!Path.GetDirectoryName(internalResult)!.Equals(
+                    Path.Combine(workspace, ".pcasa-internal"),
+                    StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFileName(internalResult).Equals("result.jpg",
+                    StringComparison.OrdinalIgnoreCase))
+                throw new Exception(
+                    "External crop was not staged in the private PCasa workspace.");
+            var actual = EditableImageFormats.Dimensions(internalResult);
             if (actual.Width != 160 || actual.Height != 96)
                 throw new Exception(
                     $"Topaz workspace crop used preview rather than full-res pixels: " +
                     $"{actual.Width}x{actual.Height}.");
+            var untouchedExport = EditableImageFormats.Dimensions(edited);
+            if (untouchedExport.Width != width || untouchedExport.Height != height)
+                throw new Exception("Internal crop modified the external editor's export.");
             if (!SHA256.HashData(File.ReadAllBytes(original))
                     .SequenceEqual(originalHash))
                 throw new Exception("Cropping an external result touched the gallery original.");
-            if (Directory.GetFiles(root, "*", SearchOption.AllDirectories)
-                .Count() != 2)
-                throw new Exception("A temporary external edit left unapproved sidecar files.");
+            var files = Directory.GetFiles(root, "*", SearchOption.AllDirectories);
+            if (files.Length != 3 || !files.Contains(original) ||
+                !files.Contains(edited) || !files.Contains(internalResult))
+                throw new Exception(
+                    "External crop created additional work files or sidecars.");
         }
         finally
         {
