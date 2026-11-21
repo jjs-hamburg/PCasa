@@ -37,7 +37,9 @@ public partial class MainWindow
         InfoDateModified.Text =
             ExifDateMetadata.DisplayDate(_infoDatesOriginal.ModifyDate);
         SetInfoDateEditing(false);
-        InfoDatesEdit.Visibility = path is not null && CanManuallyEditExifDates(path)
+        InfoDatesEdit.Visibility = path is not null && CanManuallyEditExifDates(path) &&
+            imageId is long id && _selectedImageIds.Count == 1 &&
+            _selectedImageIds.Contains(id)
             ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -52,7 +54,9 @@ public partial class MainWindow
         InfoDateFromName.Visibility = value
             ? Visibility.Visible : Visibility.Collapsed;
         InfoDatesEdit.Visibility = !value && _infoDatesPath is { } path &&
-            CanManuallyEditExifDates(path) ? Visibility.Visible : Visibility.Collapsed;
+            _infoDatesImageId is long id && _selectedImageIds.Count == 1 &&
+            _selectedImageIds.Contains(id) && CanManuallyEditExifDates(path)
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void InfoDatesEdit_Click(object sender, RoutedEventArgs e)
@@ -179,7 +183,7 @@ public partial class MainWindow
         {
             PCasaDiagnostics.Write("ImageInfo.ExifDates.Save", ex);
             MessageBox.Show(this, UiLanguage.T("Aufnahmedatum konnte nicht gespeichert werden.") +
-                Environment.NewLine + ex.Message,
+                Environment.NewLine + UiLanguage.T(ex.Message),
                 UiLanguage.T("Bildinformationen"), MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
