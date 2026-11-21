@@ -34,9 +34,7 @@ public static class ExternalEditTransaction
     private static readonly object Gate = new();
     private static string? _testDirectory;
     private static Guid? _currentProcessSessionId;
-    private const string RetiredWorkspaceMarker = ".pcasa-retired-session";
     private const string OwnedWorkspaceMarker = ".pcasa-owned-session";
-    private const string RetiredLegacyMarker = ".pcasa-retired-legacy";
     public static string DirectoryPath => _testDirectory ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PCasa", "ExternalEdit");
@@ -63,73 +61,28 @@ public static class ExternalEditTransaction
     }
     private static string SessionFile => Path.Combine(DirectoryPath, "session.json");
 
-    // History is evidence and possibly an external application's only copy
-    // of an export. It is deliberately NOT a runnable task, manifest or queue.
-    private static string RetiredHistoryRoot => Path.Combine(
-        Path.GetDirectoryName(DirectoryPath)!,
-        "ExternalEditRetired");
-
     /// <summary>
-    /// At application startup, retire the previous *process*'s external edit.
-    /// Only scan jobs survive a restart. This never commits/cancels a file
-    /// mutation, writes the original or deletes external work products.
-    /// Keep the original manifest as inert evidence outside the active root.
+    /// Abandon edits from a previous PCasa process. No session archive and
+    /// no post-crash recovery: only the original file must remain safe.
     /// </summary>
     public static bool RetirePreviousProcessSession()
     {
         lock (Gate)
         {
             _currentProcessSessionId = null;
-            if (!File.Exists(SessionFile)) return false;
-
-            // Preserve the raw manifest even if a previous crash truncated it.
-            // Unreadable manifests must never indefinitely pause the scheduler.
+            var found = File.Exists(SessionFile);
             ExternalEditSnapshot? previous = null;
-            try { previous = ReadPending(); }
-            catch (Exception ex) when (ex is InvalidDataException or JsonException
-                or IOException or ArgumentException)
+            if (found)
             {
-                PCasaDiagnostics.Write("ExternalEdit.RetireInvalidManifest", ex);
+                try { previous = ReadPending(); }
+                catch (Exception ex) when (ex is InvalidDataException or JsonException
+                    or IOException or ArgumentException)
+                { PCasaDiagnostics.Write("ExternalEdit.StaleManifest", ex); }
+                File.Delete(SessionFile);
             }
-
-            var manifestContent = File.ReadAllText(SessionFile);
-            if (previous is not null)
-            {
-                // An old external process might still have photo.psd open.
-                // Do not move/delete that workspace. Mark it exempt from
-                // automatic P4 cleanup and leave the content retrievable.
-                Directory.CreateDirectory(previous.DirectoryPath);
-                var marker = previous.DirectoryPath.Equals(DirectoryPath,
-                    StringComparison.OrdinalIgnoreCase)
-                    ? RetiredLegacyMarker : RetiredWorkspaceMarker;
-                File.WriteAllText(Path.Combine(previous.DirectoryPath, marker),
-                    previous.Id.ToString("N"));
-            }
-            else
-            {
-                // A corrupt old manifest does not identify its workdir.
-                // Conservatively preserve every possible workdir and old
-                // flat-workspace file, rather than risking their deletion.
-                foreach (var folder in Directory.EnumerateDirectories(
-                    DirectoryPath, "session-*"))
-                    File.WriteAllText(Path.Combine(folder, RetiredWorkspaceMarker),
-                        "invalid prior manifest");
-                File.WriteAllText(Path.Combine(DirectoryPath, RetiredLegacyMarker),
-                    "invalid prior manifest");
-            }
-
-            Directory.CreateDirectory(RetiredHistoryRoot);
-            var archive = Path.Combine(RetiredHistoryRoot,
-                DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fffffff") + "-" +
-                (previous?.Id.ToString("N") ?? Guid.NewGuid().ToString("N")) +
-                ".json");
-            // Same-volume rename detaches the ONLY active session manifest.
-            // A crash before this boundary is safe to retry on next startup.
-            File.Move(SessionFile, archive);
-            PCasaDiagnostics.WriteMessage("ExternalEdit.RetiredAfterRestart",
-                "Previous-process session retired without file writes. " +
-                "Manifest: " + archive);
-            return true;
+            if (previous is not null) CleanupWorkspaceContents(previous.DirectoryPath);
+            CleanupCompletedWorkspaces();
+            return found;
         }
     }
 
@@ -160,21 +113,18 @@ public static class ExternalEditTransaction
         var pending = JsonSerializer.Deserialize<ExternalEditSnapshot>(
             File.ReadAllText(SessionFile))
             ?? throw new InvalidDataException("ExternalEdit: session.json ist ungültig.");
-        // Alpha.33 stored the work image directly in ExternalEdit. Continue
-        // accepting that manifest so upgrades never discard a recoverable edit.
-        // New sessions have their own directory; a locked old photo must not
-        // prevent the next independent session from starting.
-        var legacy = pending.ConfiguredWorkspaceRoot is null &&
-            Path.GetFullPath(pending.DirectoryPath).Equals(
-                Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase);
-        var sessionRoot = pending.ConfiguredWorkspaceRoot is { Length: > 0 } chosen
+        // Accept legacy nested manifests solely for stale-file cleanup.
+        // New sessions always use their configured root directly.
+        var root = pending.ConfiguredWorkspaceRoot is { Length: > 0 } chosen
             ? Path.GetFullPath(chosen) : Path.GetFullPath(DirectoryPath);
+        var flat = Path.GetFullPath(pending.DirectoryPath).Equals(root,
+            StringComparison.OrdinalIgnoreCase);
         var isolated = Path.GetFullPath(
                 Path.GetDirectoryName(pending.DirectoryPath) ?? string.Empty).Equals(
-                sessionRoot, StringComparison.OrdinalIgnoreCase) &&
+                root, StringComparison.OrdinalIgnoreCase) &&
             Path.GetFileName(pending.DirectoryPath).Equals(
                 "session-" + pending.Id.ToString("N"), StringComparison.OrdinalIgnoreCase);
-        if (pending.Id == Guid.Empty || !(legacy || isolated) ||
+        if (pending.Id == Guid.Empty || !(flat || isolated) ||
             !Path.GetFileName(pending.BackupPath).StartsWith(
                 VideoFormats.IsVideo(pending.OriginalPath) ? "video." : "photo.",
                 StringComparison.OrdinalIgnoreCase))
@@ -207,77 +157,75 @@ public static class ExternalEditTransaction
     }
 
 
-    // Files from a committed session can remain open in Topaz/PhotoCraft.
-    // They are garbage to collect, not an active editing transaction. Never
-    // delete an active manifest or reuse an old editor's fixed filename.
-    private static IEnumerable<string> CustomOwnedWorkspaceDirectories()
-    {
-        // Only folders carrying PCasa's own marker may ever be recursively
-        // deleted from a USER-CHOSEN exchange root. Other user files,
-        // including arbitrarily named session-* directories, are untouchable.
-        foreach (var root in ExternalEditorSettings.Load().Programs
+    // A configured custom exchange directory may also contain unrelated
+    // subdirectories; remove only top-level exports and PCasa-owned folders.
+    // An unmarked custom directory with existing loose files is rejected
+    // rather than silently deleting user data.
+    private const string FlatExchangeMarker = ".pcasa-exchange-root";
+
+    private static bool IsCustomRoot(string root)
+        => !Path.GetFullPath(root).Equals(
+            Path.GetFullPath(DirectoryPath), StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> KnownCustomRoots()
+        => ExternalEditorSettings.Load().Programs
             .Select(p => p.ExchangeDirectory)
             .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Distinct(StringComparer.OrdinalIgnoreCase))
+            .Select(p => Path.GetFullPath(p!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(root => File.Exists(Path.Combine(root, FlatExchangeMarker)));
+
+    private static void CleanupWorkspaceContents(string root)
+    {
+        if (!Directory.Exists(root)) return;
+        var defaultRoot = !IsCustomRoot(root);
+        foreach (var file in Directory.EnumerateFiles(root))
         {
-            if (root is null || !Directory.Exists(root)) continue;
-            string[] candidates;
-            try { candidates = Directory.GetDirectories(root, "session-*"); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                PCasaDiagnostics.Write("ExternalEdit.CustomCleanupList", ex);
+            var name = Path.GetFileName(file);
+            if (defaultRoot && name.Equals("session.json",
+                    StringComparison.OrdinalIgnoreCase) && File.Exists(SessionFile))
                 continue;
-            }
-            foreach (var candidate in candidates)
-            {
-                var name = Path.GetFileName(candidate);
-                if (!name.StartsWith("session-", StringComparison.OrdinalIgnoreCase) ||
-                    !Guid.TryParseExact(name["session-".Length..], "N", out var expected))
-                    continue;
-                var marker = Path.Combine(candidate, OwnedWorkspaceMarker);
-                bool owned = false;
-                try
-                {
-                    owned = File.Exists(marker) &&
-                        string.Equals(File.ReadAllText(marker).Trim(),
-                            expected.ToString("N"), StringComparison.OrdinalIgnoreCase);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                { PCasaDiagnostics.Write("ExternalEdit.CustomCleanupMarker", ex); }
-                if (owned) yield return candidate;
-            }
+            if (name.Equals(FlatExchangeMarker, StringComparison.OrdinalIgnoreCase))
+                continue;
+            try { File.Delete(file); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { PCasaDiagnostics.Write("ExternalEdit.CleanupFile", ex); }
         }
+        var before = Path.Combine(root, ".pcasa-before");
+        if (Directory.Exists(before)) TryCleanupFolder(before);
+        foreach (var folder in Directory.EnumerateDirectories(root, "session-*"))
+        {
+            var name = Path.GetFileName(folder);
+            if (!Guid.TryParseExact(name["session-".Length..], "N", out _))
+                continue;
+            if (defaultRoot || File.Exists(Path.Combine(folder, OwnedWorkspaceMarker)))
+                TryCleanupFolder(folder);
+        }
+    }
+
+    private static int RemainingFiles(string root)
+    {
+        if (!Directory.Exists(root)) return 0;
+        var files = Directory.EnumerateFiles(root).Count(file =>
+            Path.GetFileName(file) is not
+                ("session.json" or FlatExchangeMarker));
+        var before = Directory.Exists(Path.Combine(root, ".pcasa-before")) ? 1 : 0;
+        var sessions = Directory.EnumerateDirectories(root, "session-*")
+            .Count(dir => Guid.TryParseExact(
+                Path.GetFileName(dir)["session-".Length..], "N", out _));
+        return files + before + sessions;
     }
 
     public static int PendingCleanupCount()
     {
         lock (Gate)
         {
-            if (!Directory.Exists(DirectoryPath)) return 0;
             var active = ReadPending();
-            var directories = Directory.EnumerateDirectories(DirectoryPath, "session-*")
-                .Count(dir => !dir.Equals(active?.DirectoryPath,
-                    StringComparison.OrdinalIgnoreCase));
-            var legacy = active is not null &&
-                active.DirectoryPath.Equals(DirectoryPath, StringComparison.OrdinalIgnoreCase);
-            var unprotectedDirectories = Directory.EnumerateDirectories(
-                DirectoryPath, "session-*")
-                .Count(dir => !dir.Equals(active?.DirectoryPath,
-                    StringComparison.OrdinalIgnoreCase) &&
-                    !File.Exists(Path.Combine(dir, RetiredWorkspaceMarker)));
-            // A retired legacy workspace is kept as evidence only; no
-            // task/cleanup row should be created for its data.
-            var hasLegacyArchive = File.Exists(
-                Path.Combine(DirectoryPath, RetiredLegacyMarker));
-            var customPending = CustomOwnedWorkspaceDirectories().Count(dir =>
-                !dir.Equals(active?.DirectoryPath,
-                    StringComparison.OrdinalIgnoreCase) &&
-                !File.Exists(Path.Combine(dir, RetiredWorkspaceMarker)));
-            return unprotectedDirectories + customPending +
-                (legacy || hasLegacyArchive ? 0 :
-                    Directory.EnumerateFiles(DirectoryPath).Count(file =>
-                        Path.GetFileName(file) is not
-                            ("session.json" or "session.json.tmp")));
+            return new[] { DirectoryPath }.Concat(KnownCustomRoots())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(root => active is null || !root.Equals(
+                    active.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                .Sum(RemainingFiles);
         }
     }
 
@@ -285,36 +233,12 @@ public static class ExternalEditTransaction
     {
         lock (Gate)
         {
-            if (!Directory.Exists(DirectoryPath)) return 0;
             var active = ReadPending();
-            foreach (var custom in CustomOwnedWorkspaceDirectories())
-            {
-                if (custom.Equals(active?.DirectoryPath,
-                        StringComparison.OrdinalIgnoreCase) ||
-                    File.Exists(Path.Combine(custom, RetiredWorkspaceMarker)))
-                    continue;
-                TryCleanupFolder(custom);
-            }
-            foreach (var folder in Directory.EnumerateDirectories(DirectoryPath, "session-*"))
-            {
-                if (folder.Equals(active?.DirectoryPath, StringComparison.OrdinalIgnoreCase) ||
-                    File.Exists(Path.Combine(folder, RetiredWorkspaceMarker)))
-                    continue;
-                TryCleanupFolder(folder);
-            }
-            // Also clean up pre-Alpha.34 flat working images once no legacy
-            // transaction owns them. A locked image stays for the next attempt.
-            if ((active is null || !active.DirectoryPath.Equals(
-                    DirectoryPath, StringComparison.OrdinalIgnoreCase)) &&
-                !File.Exists(Path.Combine(DirectoryPath, RetiredLegacyMarker)))
-                foreach (var file in Directory.EnumerateFiles(DirectoryPath))
-                {
-                    if (Path.GetFileName(file) is "session.json" or "session.json.tmp")
-                        continue;
-                    try { File.Delete(file); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                    { PCasaDiagnostics.Write("ExternalEdit.CleanupPending", ex); }
-                }
+            foreach (var root in new[] { DirectoryPath }.Concat(KnownCustomRoots())
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+                if (active is null || !root.Equals(
+                    active.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                    CleanupWorkspaceContents(root);
             return PendingCleanupCount();
         }
     }
@@ -323,24 +247,15 @@ public static class ExternalEditTransaction
     {
         try { if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // The export/launcher may still hold photo.jpg. This must never
-            // turn an already committed Save or Cancel into a failed action.
-            PCasaDiagnostics.Write("ExternalEdit.CleanupPending", ex);
-        }
+        { PCasaDiagnostics.Write("ExternalEdit.CleanupPending", ex); }
     }
 
     private static void Finish(ExternalEditSnapshot session)
     {
-        // The durable decision is committed BEFORE any best-effort cleanup.
-        // If a crash follows this deletion, abandoned files remain isolated
-        // and never masquerade as a live transaction.
         File.Delete(SessionFile);
         if (_currentProcessSessionId == session.Id) _currentProcessSessionId = null;
-        if (!session.DirectoryPath.Equals(DirectoryPath, StringComparison.OrdinalIgnoreCase))
-            TryCleanupFolder(session.DirectoryPath);
-        else
-            CleanupCompletedWorkspaces();
+        CleanupWorkspaceContents(session.DirectoryPath);
+        CleanupCompletedWorkspaces();
     }
 
     public static ExternalEditSnapshot Begin(string original, CancellationToken token = default,
@@ -353,25 +268,33 @@ public static class ExternalEditTransaction
             if (File.Exists(SessionFile))
                 throw new InvalidOperationException(
                     UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
-            // Never spend a manual P0 editor launch on old large exports.
-            // Cleanup is a separate P4 scheduler job and each session has
-            // its own unique work directory, so no collision is possible.
             Directory.CreateDirectory(DirectoryPath);
             var root = string.IsNullOrWhiteSpace(workspaceRoot)
                 ? DirectoryPath : Path.GetFullPath(workspaceRoot);
             if (root.Length == 0 || Path.GetPathRoot(root) == root)
                 throw new ArgumentException("Ein Laufwerksstamm ist kein Austauschverzeichnis.");
+            if (path.StartsWith(Path.GetFullPath(root).TrimEnd(
+                    Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Das Original liegt im Austauschverzeichnis.");
             Directory.CreateDirectory(root);
+            var marker = Path.Combine(root, FlatExchangeMarker);
+            if (IsCustomRoot(root) && !File.Exists(marker) &&
+                Directory.EnumerateFiles(root).Any())
+                throw new IOException(
+                    "Das Austauschverzeichnis enthält fremde Dateien; bitte einen eigenen Ordner wählen.");
+            // Before every launch purge all old outputs; locked stale files
+            // prevent reuse of photo.jpg rather than corrupting an edit.
+            CleanupWorkspaceContents(root);
+            if (RemainingFiles(root) != 0)
+                throw new InvalidOperationException(
+                    "Alte Austauschdateien sind gesperrt. Bitte das externe Programm schließen.");
+            if (IsCustomRoot(root)) File.WriteAllText(marker, "PCasa external exchange");
             var id = Guid.NewGuid();
-            var sessionDirectory = Path.Combine(root, "session-" + id.ToString("N"));
-            Directory.CreateDirectory(sessionDirectory);
-            File.WriteAllText(Path.Combine(sessionDirectory, OwnedWorkspaceMarker),
-                id.ToString("N"));
             var inputName = (VideoFormats.IsVideo(path) ? "video" : "photo") +
                 Path.GetExtension(path).ToLowerInvariant();
-            var work = Path.Combine(sessionDirectory, inputName);
-            var beforePath = Path.Combine(sessionDirectory,
-                ".pcasa-before", inputName);
+            var work = Path.Combine(root, inputName);
+            var beforePath = Path.Combine(root, ".pcasa-before", inputName);
             try
             {
                 using (SourceFileLocks.Enter(path, token))
@@ -453,7 +376,7 @@ public static class ExternalEditTransaction
             {
                 // A published manifest means recovery must be possible.
                 if (!File.Exists(SessionFile))
-                    TryCleanupFolder(sessionDirectory);
+                    CleanupWorkspaceContents(root);
                 throw;
             }
         }
