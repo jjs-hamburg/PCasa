@@ -2522,6 +2522,11 @@ internal static class Program
             var browseInitializedField = scrollType.GetField(
                 "_browseInitialized", scrollFlags)!;
             var wasBrowseInitialized = beforeSyntheticBrowseInitialized;
+            // Restore production notification handling for the scanner
+            // deferral checks, after the isolated bookmark/navigation tests.
+            // Those checks intentionally exercise REAL OnCatalogImageIndexed,
+            // rather than the disabled fixture-only catalogue publisher.
+            browseInitializedField.SetValue(window, wasBrowseInitialized);
             try
             {
                 folderBeforeScroll.SetValue(window, (long?)100);
