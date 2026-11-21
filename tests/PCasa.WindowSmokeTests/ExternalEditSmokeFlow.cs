@@ -389,7 +389,7 @@ internal static class ExternalEditSmokeFlow
                     ExternalEditTransaction.DirectoryPath,
                     StringComparison.OrdinalIgnoreCase) ||
                 !File.Exists(Path.Combine(flatPano.Directory,
-                    PanoramaTransaction.BatchMarker)) ||
+                    ".pcasa-batch-session")) ||
                 Directory.EnumerateDirectories(flatPano.Directory,
                     "session-*").Any())
                 throw new Exception(
@@ -403,7 +403,7 @@ internal static class ExternalEditSmokeFlow
             catch (InvalidOperationException) { }
             PanoramaTransaction.Cleanup(flatPano);
             if (File.Exists(Path.Combine(flatPano.Directory,
-                    PanoramaTransaction.BatchMarker)))
+                    ".pcasa-batch-session")))
                 throw new Exception("Panorama marker was not released.");
             var following = ExternalEditTransaction.Begin(photo);
             ExternalEditTransaction.Commit(following, null,
