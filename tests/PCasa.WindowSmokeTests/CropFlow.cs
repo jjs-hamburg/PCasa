@@ -43,6 +43,29 @@ internal static class CropFlow
             var bitmap = BitmapSource.Create(480, 320, 96, 96,
                 PixelFormats.Bgra32, null, pixels, 480 * 4);
 
+            // Alpha.47: the swipe viewer must compare corresponding
+            // pixels even after several edits and an actual crop. Do not
+            // stretch the entire original onto the cropped output frame.
+            var geometry = new PhotoEditSession(4701, bitmap);
+            geometry.Apply(new PhotoEditStep("brightness", Amount: .2));
+            var cropRect = new PhotoEditStep("crop",
+                X: .125, Y: .25, Width: .625, Height: .5);
+            geometry.Apply(cropRect);
+            var alignedBefore = geometry.RenderAlignedOriginal();
+            var expectedBefore = PhotoEditSession.Render(bitmap, [cropRect]);
+            var editedAfter = geometry.Render();
+            if (!PixelsEqual(alignedBefore, expectedBefore) ||
+                alignedBefore.PixelWidth != editedAfter.PixelWidth ||
+                alignedBefore.PixelHeight != editedAfter.PixelHeight)
+                throw new Exception("Swipe comparison distorted an internal crop.");
+
+            var withPending = geometry.RenderAlignedOriginal(
+                new PhotoEditStep("crop", X: .1, Y: .1, Width: .8, Height: .8));
+            if (withPending.PixelWidth >= alignedBefore.PixelWidth ||
+                withPending.PixelHeight >= alignedBefore.PixelHeight)
+                throw new Exception("Live crop was not reflected in original alignment.");
+            Console.WriteLine("PASS: Alpha.47 crop-aware swipe comparison alignment.");
+
             // Alpha.28: editor previews must use full-resolution zoom
             // geometry even when filters replace a smaller preview buffer.
             var physical = ViewerImageGeometry.LogicalEditPixels(

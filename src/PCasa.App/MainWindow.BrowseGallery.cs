@@ -944,8 +944,28 @@ public partial class MainWindow
         {
             // The visible area can contain multiple disjoint index ranges
             // when intervening photo folders are collapsed.
-            await BrowseSurface.WarmVisibleAsync();
-            if (!_startupGalleryPublished) LogStartupStage("visible-pages-decoded");
+            var visibleWarm = BrowseSurface.WarmVisibleAsync();
+            if (!_startupGalleryPublished)
+            {
+                // All pages were previously awaited before showing ANY image.
+                // A single slow 32-photo cache pack (especially on slower
+                // storage) could stall the whole gallery. Give the correct
+                // viewport a bounded warm-up, then publish it. The same
+                // outstanding page loads continue and paint via PageReady.
+                try
+                {
+                    await visibleWarm.WaitAsync(TimeSpan.FromMilliseconds(750));
+                    LogStartupStage("visible-pages-decoded");
+                }
+                catch (TimeoutException)
+                {
+                    LogStartupStage("visible-pages-warming-after-first-frame");
+                }
+            }
+            else
+            {
+                await visibleWarm;
+            }
             if (!_browseRefreshRequests.IsCurrent(refresh))
                 return;
             BrowseSurface.InvalidateVisual();

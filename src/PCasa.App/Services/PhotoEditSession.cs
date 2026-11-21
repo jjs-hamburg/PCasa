@@ -69,6 +69,22 @@ public sealed class PhotoEditSession
     public void Redo() { if (CanRedo) _cursor++; }
     public BitmapSource Render() => Render(_original, AppliedSteps);
 
+    /// <summary>
+    /// For the swipe comparator, show ONLY the original area that maps to
+    /// the edited image. Tone/denoise/sharpen do not alter the source's
+    /// geometry; crop and rotate do. Replaying those same geometric steps
+    /// preserves pixel alignment without scaling the full original to a
+    /// cropped aspect ratio. No extra files or sidecars are created.
+    /// </summary>
+    public BitmapSource RenderAlignedOriginal(PhotoEditStep? pending = null)
+    {
+        var geometry = AppliedSteps.Where(s => s.Kind is "crop" or "rotate");
+        if (pending is { Kind: "crop" or "rotate" })
+            geometry = geometry.Append(pending);
+        var steps = geometry.ToArray();
+        return steps.Length == 0 ? _original : Render(_original, steps);
+    }
+
     public static BitmapSource Render(BitmapSource original,
         IEnumerable<PhotoEditStep> steps, CancellationToken token = default)
     {
