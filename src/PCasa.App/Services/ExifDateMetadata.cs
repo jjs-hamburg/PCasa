@@ -204,7 +204,8 @@ public static class PhotoDateFromFilename
     public sealed record Detected(DateOnly Date, TimeOnly? Time)
     {
         public string AsExifDateTime => Time is { } time
-            ? Date.ToString("yyyy:MM:dd", CultureInfo.InvariantCulture) +
+            ? Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                  .Replace('-', ':') +
               " " + time.ToString("HH:mm:ss", CultureInfo.InvariantCulture)
             : "";
     }
