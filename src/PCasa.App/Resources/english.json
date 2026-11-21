@@ -992,6 +992,7 @@
   "Esc: Beenden   ←/→: Bildwechsel   Leertaste: Pause": "Esc: Exit   ←/→: Next/previous   Space: Pause",
   "Hintergrundbild nicht gefunden.": "Background image not found.",
   "Keine Fotos für die Slideshow.": "No photos available for slideshow.",
+  "Bitte die laufende Bildbearbeitung zuerst speichern oder abbrechen.": "Please save or cancel the current image edit first.",
   "Kühler": "Cooler",
   "Wärmer": "Warmer",
   "Grün": "Green",
