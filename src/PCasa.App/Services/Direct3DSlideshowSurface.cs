@@ -115,6 +115,7 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     private long _startedAt;
     private Action? _completed;
     private bool _dirty = true;
+    private int _drawnTransitionFrames;
 
     private bool _fullscreen;
     private double _galleryPercent = 86;
@@ -210,6 +211,7 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             _duration = Math.Max(0, milliseconds);
             _completed = completed;
             _startedAt = Stopwatch.GetTimestamp();
+            _drawnTransitionFrames = 0;
             if (effect == "none" || _duration == 0)
                 EndTransition(reportCompletion: true);
             _dirty = true;
@@ -416,6 +418,7 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             DrawPhoto(_next, b, shift, alpha, zoom);
         }
         _swapChain!.Present(1, PresentFlags.None).CheckError();
+        if (_next is not null) _drawnTransitionFrames++;
         if (_next is not null && t >= 1)
             EndTransition(reportCompletion: true);
     }
@@ -472,6 +475,12 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     private void EndTransition(bool reportCompletion)
     {
         if (_next is null) return;
+        var seconds = Stopwatch.GetElapsedTime(_startedAt).TotalSeconds;
+        if (seconds > 0.01)
+            PCasaDiagnostics.WriteMessage("Slideshow.Direct3D11.Frames",
+                $"effect={_transition}; frames={_drawnTransitionFrames}; " +
+                $"seconds={seconds:F2}; fps={_drawnTransitionFrames / seconds:F1}; " +
+                $"completed={reportCompletion}");
         _active?.Dispose();
         _active = _next;
         _next = null;
