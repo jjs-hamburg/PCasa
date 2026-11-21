@@ -3532,9 +3532,14 @@ internal static class Program
                         compareSide.Visibility != Visibility.Visible ||
                         compareSplit.Visibility != Visibility.Visible)
                         throw new Exception("Actual unsaved edit did not SHOW comparison icons.");
-                    ((Task)showComparison.Invoke(window,
-                        [Enum.Parse(compareMode, "Split")])!)
-                        .GetAwaiter().GetResult();
+                    // Alpha.47 computes the geometrically aligned original on
+                    // a worker. Blocking this STA dispatcher on GetResult()
+                    // deadlocks the UI continuation and times out CI.
+                    var initialSplitTask = (Task)showComparison.Invoke(window,
+                        [Enum.Parse(compareMode, "Split")])!;
+                    Until(window, () => initialSplitTask.IsCompleted,
+                        "Split comparison did not finish rendering.");
+                    initialSplitTask.GetAwaiter().GetResult();
                     Flush(window);
                     if (side.Visibility != Visibility.Collapsed ||
                         swipe.Visibility != Visibility.Visible ||
@@ -3545,10 +3550,10 @@ internal static class Program
                             "Split mode silently switched to side-by-side or loaded incorrect pixels.");
                     var thumb = (System.Windows.Controls.Primitives.Thumb)
                         window.FindName("EditCompareSplitHandle")!;
-                    if (thumb.Width < 28 ||
+                    if (thumb.Width < 20 || thumb.Width > 28 ||
                         thumb.Cursor != System.Windows.Input.Cursors.SizeWE)
                         throw new Exception(
-                            "Split grip must provide a larger horizontal-drag target and visible arrow cursor.");
+                            "Split divider must expose a narrow invisible hit zone with the native horizontal resize cursor, not a separate visible grip.");
                     var pointerToFraction = viewerType.GetMethod(
                         "SplitFractionForPointer",
                         reflectFlags | System.Reflection.BindingFlags.Static)!;
@@ -3618,9 +3623,11 @@ internal static class Program
                     // Side-by-side must not let a zoomed original paint over
                     // the edited image: each image has a separately clipped
                     // half-width visual parent.
-                    ((Task)showComparison.Invoke(window,
-                        [Enum.Parse(compareMode, "SideBySide")])!)
-                        .GetAwaiter().GetResult();
+                    var sideBySideTask = (Task)showComparison.Invoke(window,
+                        [Enum.Parse(compareMode, "SideBySide")])!;
+                    Until(window, () => sideBySideTask.IsCompleted,
+                        "Side-by-side comparison did not finish rendering.");
+                    sideBySideTask.GetAwaiter().GetResult();
                     Flush(window);
                     var sideBefore = (Image)window.FindName("EditCompareSideOriginal")!;
                     var sideAfter = (Image)window.FindName("EditCompareSideEdited")!;
@@ -3633,9 +3640,11 @@ internal static class Program
                         originalHalf.ActualWidth <= 0 || editedHalf.ActualWidth <= 0)
                         throw new Exception(
                             "Side-by-side shows only one image or allows either image to cover its neighbor.");
-                    ((Task)showComparison.Invoke(window,
-                        [Enum.Parse(compareMode, "Split")])!)
-                        .GetAwaiter().GetResult();
+                    var returnSplitTask = (Task)showComparison.Invoke(window,
+                        [Enum.Parse(compareMode, "Split")])!;
+                    Until(window, () => returnSplitTask.IsCompleted,
+                        "Returning to split comparison did not finish rendering.");
+                    returnSplitTask.GetAwaiter().GetResult();
                     Flush(window);
                     var firstBounds = beforeImage.TransformToAncestor(swipe)
                         .TransformBounds(new Rect(new Point(0, 0), beforeImage.RenderSize));
