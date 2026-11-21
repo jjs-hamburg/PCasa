@@ -1975,6 +1975,7 @@ internal static class Program
                     currentFrame.Effect is not
                         System.Windows.Media.Effects.DropShadowEffect shadow ||
                     Math.Abs(shadow.Direction - 315) > .01 ||
+                    shadow.Opacity < .75 ||
                     Math.Abs((currentFrame.Width - 20) /
                         (currentFrame.Height - 20) - 64d / 48) > .001)
                     throw new Exception(
