@@ -354,10 +354,13 @@ internal static class FolderAddFlow
             finally
             {
                 releaseCreateProbe.TrySetResult();
+                Console.WriteLine("DIAG: Manual probe released; waiting for scheduler completion.");
                 Until(window, () => pendingProbe.IsCompleted,
                     "Held manual source-probe never finished.");
+                Console.WriteLine("DIAG: Manual source probe completed.");
             }
 
+            Console.WriteLine("DIAG: Testing collapsed monitored root before restart.");
             // Persist the ACTUAL closed state of a monitored root before
             // the first real shutdown. Earlier compressed-tree rebuilding
             // forced monitored nodes open unconditionally on the next launch.
@@ -400,10 +403,13 @@ internal static class FolderAddFlow
                     "Incremental scanner discovery reopened or lost a collapsed branch.");
 
             var firstWindow = window;
+            Console.WriteLine("DIAG: Closing first WPF window for restart regression.");
             firstWindow.Close();
+            Console.WriteLine("DIAG: First WPF window Close returned.");
             Until(firstWindow, () => !firstWindow.IsVisible,
                 "The first window's asynchronous scheduler/ExifTool shutdown did not finish.");
             window = null;
+            Console.WriteLine("DIAG: First WPF window fully closed.");
 
             // Re-open PCasa with a second persisted, unfinished user selection.
             // No watcher event or in-memory task survives. Startup must
