@@ -46,7 +46,10 @@ public sealed class ImageExifReader : IDisposable
             // NEVER allow that reply to be stored under the next photo ID.
             var arguments = new List<string> { "-j", "-G1", "-n", "-File:FileType", "-EXIF:All",
                 "-GPS:All", "-XMP:GPSLatitude", "-XMP:GPSLongitude",
-                "-XMP:Make", "-XMP:Model" };
+                "-XMP:Make", "-XMP:Model", "-IPTC:DateCreated",
+                "-IPTC:TimeCreated", "-XMP-exif:DateTimeOriginal",
+                "-XMP-exif:DateTimeDigitized", "-XMP-xmp:CreateDate",
+                "-XMP-xmp:ModifyDate", "-XMP-photoshop:DateCreated" };
             // ExifTool video metadata lives in container groups rather than
             // EXIF. Preserve the native raw tags in the SAME catalog column.
             if (VideoFormats.IsVideo(path))
