@@ -81,6 +81,14 @@ public static class ExternalEditTransaction
                 File.Delete(SessionFile);
             }
             if (previous is not null) CleanupWorkspaceContents(previous.DirectoryPath);
+            // Panorama/batch sessions have no durable manifest: after a
+            // process restart their exchange marker is stale. Remove the
+            // marker before cleaning, never on normal Activate/Save.
+            foreach (var root in new[] { DirectoryPath }.Concat(KnownCustomRoots()))
+            {
+                var marker = Path.Combine(root, PanoramaTransaction.BatchMarker);
+                if (File.Exists(marker)) File.Delete(marker);
+            }
             CleanupCompletedWorkspaces();
             // Prior alphas archived inert GUID manifests outside ExternalEdit.
             // These have no purpose once crash recovery is intentionally gone.
@@ -182,7 +190,9 @@ public static class ExternalEditTransaction
 
     private static void CleanupWorkspaceContents(string root)
     {
-        if (!Directory.Exists(root)) return;
+        if (!Directory.Exists(root) ||
+            File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)))
+            return;
         var defaultRoot = !IsCustomRoot(root);
         foreach (var file in Directory.EnumerateFiles(root))
         {
@@ -244,8 +254,9 @@ public static class ExternalEditTransaction
             var active = ReadPending();
             foreach (var root in new[] { DirectoryPath }.Concat(KnownCustomRoots())
                 .Distinct(StringComparer.OrdinalIgnoreCase))
-                if (active is null || !root.Equals(
-                    active.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                if ((active is null || !root.Equals(
+                    active.DirectoryPath, StringComparison.OrdinalIgnoreCase)) &&
+                    !File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)))
                     CleanupWorkspaceContents(root);
             return PendingCleanupCount();
         }
@@ -273,7 +284,9 @@ public static class ExternalEditTransaction
         lock (Gate)
         {
             token.ThrowIfCancellationRequested();
-            if (File.Exists(SessionFile))
+            if (File.Exists(SessionFile) ||
+                File.Exists(Path.Combine(DirectoryPath,
+                    PanoramaTransaction.BatchMarker)))
                 throw new InvalidOperationException(
                     UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
             Directory.CreateDirectory(DirectoryPath);
@@ -286,6 +299,9 @@ public static class ExternalEditTransaction
                     StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Das Original liegt im Austauschverzeichnis.");
             Directory.CreateDirectory(root);
+            if (File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)))
+                throw new InvalidOperationException(
+                    UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
             var marker = Path.Combine(root, FlatExchangeMarker);
             if (IsCustomRoot(root) && !File.Exists(marker) &&
                 Directory.EnumerateFiles(root).Any())
