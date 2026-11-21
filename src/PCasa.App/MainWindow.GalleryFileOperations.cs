@@ -911,7 +911,7 @@ public partial class MainWindow
             if (_selectedImageIds.Count == 0) _gallerySelection.Reset();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);
             ApplyGallerySelection();
-            if (viewerDeleting && succeeded.Any(ids.Contains) && _viewerOpen)
+            if (viewerDeleting && succeeded.Any(id => ids.Contains(id)) && _viewerOpen)
             {
                 // Recreate the sequence from the just-published gallery,
                 // preserving the same scope and order. Never show a deleted
