@@ -902,16 +902,6 @@ public partial class MainWindow
             : string.Join("\n  • ", infoKeywords.Split(
                 ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries |
                     StringSplitOptions.TrimEntries));
-        var text = $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
-               $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
-               $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
-               // Keep an XMP-only/RAW capture date visible even when native
-               // EXIF DateTimeOriginal is not present.
-               $"\nAufnahme (Katalog): {StringAt(8) ?? "–"}" +
-               $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
-               $"\nGPS: {(gpsValid ? FormatGpsCoordinates(lat!.Value, lon!.Value) : "–")}" +
-               $"\nTags: {(tagLines == "–" ? "–" : "\n  • " + tagLines)}" +
-               $"\nLetzte Änderung: {modified:g}";
         ExifDateMetadata.Fields dates = new(null, null, null);
         if (StringAt(13) is { } exifJson)
         {
@@ -919,6 +909,18 @@ public partial class MainWindow
             catch (System.Text.Json.JsonException ex)
             { PCasaDiagnostics.Write("Sidebar.ExifDates", ex); }
         }
+        // The editable native EXIF field already displays its date. Show
+        // the cached fallback only for XMP-only/RAW or incomplete metadata.
+        var catalogCaptureLine = dates.DateTimeOriginal is null
+            ? $"\nAufnahme: {StringAt(8) ?? "–"}" : "";
+        var text = $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
+               $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
+               $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
+               catalogCaptureLine +
+               $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
+               $"\nGPS: {(gpsValid ? FormatGpsCoordinates(lat!.Value, lon!.Value) : "–")}" +
+               $"\nTags: {(tagLines == "–" ? "–" : "\n  • " + tagLines)}" +
+               $"\nLetzte Änderung: {modified:g}";
         return new SidebarInfoResult(text, gpsValid ? lat : null,
             gpsValid ? lon : null, path, row.GetString(0),
             new DateTime(row.GetInt64(5), DateTimeKind.Utc), dates);
