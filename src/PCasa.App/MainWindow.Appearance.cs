@@ -783,7 +783,10 @@ public partial class MainWindow
     // Snapshot from the SAME SQLite read that renders the Info panel.
     // No separate metadata request and no coordinate-to-thumbnail guessing.
     private sealed record SidebarInfoResult(string Text,
-        double? Latitude = null, double? Longitude = null);
+        double? Latitude = null, double? Longitude = null,
+        string? ImagePath = null, string? FileName = null,
+        DateTime? LastWriteUtc = null,
+        ExifDateMetadata.Fields? Dates = null);
     private (double Lat, double Lon)? _infoCopyGpsCoordinates;
 
     private void InfoCopyGps_Click(object sender, RoutedEventArgs e)
@@ -800,6 +803,7 @@ public partial class MainWindow
         var request = _sidebarInfoRequests.Begin(mode, _selectedImageIds);
         _infoCopyGpsCoordinates = null;
         InfoCopyGpsButton.Visibility = Visibility.Collapsed;
+        UpdateInfoDateEditor(null, null, null, null, null);
         if (mode == "Tags")
         {
             await RefreshTagSidebarAsync();
@@ -824,6 +828,9 @@ public partial class MainWindow
             if (_sidebarInfoRequests.IsCurrent(request, _sidebarMode, _selectedImageIds))
             {
                 SidePanelText.Text = content.Text;
+                if (mode == "Info")
+                    UpdateInfoDateEditor(imageId, content.ImagePath,
+                        content.FileName, content.LastWriteUtc, content.Dates);
                 if (mode == "Info" &&
                     content.Latitude is double lat &&
                     content.Longitude is double lon)
@@ -859,7 +866,7 @@ public partial class MainWindow
             SELECT i.file_name, i.local_path, i.file_size, i.width, i.height,
                    i.modified_utc_ticks, x.camera_make, x.camera_model,
                    x.date_time_original, x.gps_latitude, x.gps_longitude,
-                   x.gps_altitude, t.keywords
+                   x.gps_altitude, t.keywords, x.exif_json
             FROM images i
             LEFT JOIN image_exif x ON x.image_id = i.id
                 AND x.source_modified_utc_ticks = i.modified_utc_ticks
@@ -898,13 +905,20 @@ public partial class MainWindow
         var text = $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
                $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
                $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
-               $"\nAufnahme: {StringAt(8) ?? "–"}" +
                $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
                $"\nGPS: {(gpsValid ? FormatGpsCoordinates(lat!.Value, lon!.Value) : "–")}" +
                $"\nTags: {(tagLines == "–" ? "–" : "\n  • " + tagLines)}" +
                $"\nLetzte Änderung: {modified:g}";
+        ExifDateMetadata.Fields dates = new(null, null, null);
+        if (StringAt(13) is { } exifJson)
+        {
+            try { dates = ExifDateMetadata.FieldsFromJson(exifJson); }
+            catch (System.Text.Json.JsonException ex)
+            { PCasaDiagnostics.Write("Sidebar.ExifDates", ex); }
+        }
         return new SidebarInfoResult(text, gpsValid ? lat : null,
-            gpsValid ? lon : null);
+            gpsValid ? lon : null, path, row.GetString(0),
+            new DateTime(row.GetInt64(5), DateTimeKind.Utc), dates);
     }
 
 }
