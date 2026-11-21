@@ -133,6 +133,7 @@ public static class ExifDateMetadata
         var initial = ReadFields(path, token);
         if (normalized == initial) return;
         var beforeModifiedUtc = File.GetLastWriteTimeUtc(path);
+        var beforeCreatedUtc = File.GetCreationTimeUtc(path);
         // One central full-file snapshot before the native atomic EXIF write.
         new UndoHistoryService(undoOptions ?? UndoOptions.Load())
             .CaptureBeforeSave(path, token);
@@ -151,6 +152,10 @@ public static class ExifDateMetadata
         // EXPLICIT metadata edit must advance the file revision so the
         // catalog cache and file watchers recognize its new EXIF fields.
         var now = DateTime.UtcNow;
+        // ExifTool replaces the native file through a temporary. Retain the
+        // filesystem CREATION date even though this intentional edit must
+        // advance its LAST MODIFIED revision.
+        File.SetCreationTimeUtc(path, beforeCreatedUtc);
         File.SetLastWriteTimeUtc(path, now > beforeModifiedUtc
             ? now : beforeModifiedUtc.AddMilliseconds(1));
     }
