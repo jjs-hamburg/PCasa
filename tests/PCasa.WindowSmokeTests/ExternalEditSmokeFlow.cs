@@ -189,12 +189,24 @@ internal static class ExternalEditSmokeFlow
             var oldRetired = Path.Combine(root, "ExternalEditRetired");
             Directory.CreateDirectory(oldRetired);
             File.WriteAllText(Path.Combine(oldRetired, "obsolete-session.json"), "{}");
+            var legacyPanoramaRoot = Path.Combine(root, "Panorama");
+            var legacySession = Path.Combine(legacyPanoramaRoot,
+                "session-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(legacySession);
+            File.WriteAllText(Path.Combine(legacySession, "old-copy.jpg"), "old");
+            var unrelatedPanoramaFolder = Path.Combine(
+                legacyPanoramaRoot, "manual-folder");
+            Directory.CreateDirectory(unrelatedPanoramaFolder);
+            File.WriteAllText(Path.Combine(
+                unrelatedPanoramaFolder, "keep.txt"), "untouched");
             var crashed = ExternalEditTransaction.Begin(photo);
             WriteJpeg(crashed.BackupPath, 192);
             if (!ExternalEditTransaction.RetirePreviousProcessSession() ||
                 ExternalEditTransaction.FindPending() is not null ||
                 File.Exists(crashed.BackupPath) ||
                 Directory.Exists(oldRetired) ||
+                Directory.Exists(legacySession) ||
+                !File.Exists(Path.Combine(unrelatedPanoramaFolder, "keep.txt")) ||
                 !File.ReadAllBytes(photo).SequenceEqual(stableOriginal))
                 throw new Exception("Crash recovery preserved an abandoned editor session.");
             var resumed = ExternalEditTransaction.Begin(photo);
