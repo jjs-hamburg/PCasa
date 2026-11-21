@@ -1397,6 +1397,27 @@ public partial class MainWindow
             return;
         }
 
+        if (e.Key == Key.Delete && !_comparisonActive &&
+            e.OriginalSource is not TextBox &&
+            _viewerSequence is { } sequence &&
+            _viewerCurrentIndex >= 0 && _viewerCurrentIndex < sequence.Count)
+        {
+            e.Handled = true;
+            if (_externalEditReview is not null || _externalBatchReview is not null ||
+                _cropSavePending || _photoEditSession?.HasChanges == true ||
+                _cropActive || _straightenActive || _brightnessActive ||
+                _advancedToneActive)
+            {
+                PcasaDialog.Show(this, UiLanguage.T(
+                    "Bitte die laufende Bildbearbeitung zuerst speichern oder abbrechen."),
+                    UiLanguage.T("Bilder löschen"), MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+            _ = DeleteSelectedImagesAsync([sequence.At(_viewerCurrentIndex).ImageId]);
+            return;
+        }
+
         if (_comparisonActive && (e.Key == Key.Left || e.Key == Key.Right)) { e.Handled = true; return; }
 
         if (_cropActive)
