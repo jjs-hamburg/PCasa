@@ -120,7 +120,7 @@ public static class ExifDateMetadata
     }
 
     public static void SaveExplicit(string path, Fields updated,
-        CancellationToken token = default)
+        CancellationToken token = default, UndoOptions? undoOptions = null)
     {
         if (RawImageSource.IsRawPath(path))
             throw new NotSupportedException(
@@ -132,8 +132,9 @@ public static class ExifDateMetadata
         using var lease = SourceFileLocks.Enter(path, token);
         var initial = ReadFields(path, token);
         if (normalized == initial) return;
+        var beforeModifiedUtc = File.GetLastWriteTimeUtc(path);
         // One central full-file snapshot before the native atomic EXIF write.
-        new UndoHistoryService(UndoOptions.Load())
+        new UndoHistoryService(undoOptions ?? UndoOptions.Load())
             .CaptureBeforeSave(path, token);
         using (var writer = new ExifToolKeywordWriter.Session())
             writer.WriteExactExifDates(path, new Dictionary<string, string?>
@@ -146,6 +147,12 @@ public static class ExifDateMetadata
         if (verified != normalized)
             throw new InvalidDataException(
                 "Gespeicherte EXIF-Datumsfelder stimmen nicht mit der Eingabe überein.");
+        // ExifTool's -P preserves last-write timestamps by default. An
+        // EXPLICIT metadata edit must advance the file revision so the
+        // catalog cache and file watchers recognize its new EXIF fields.
+        var now = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(path, now > beforeModifiedUtc
+            ? now : beforeModifiedUtc.AddMilliseconds(1));
     }
 
     // Other services must not write arbitrary -stay_open commands. This
