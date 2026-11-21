@@ -2229,6 +2229,44 @@ internal static class Program
             }
             Console.WriteLine("PASS: One persistent image-sequence setting switches both modes.");
 
+            var syntheticFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var syntheticType = typeof(PCasa.App.MainWindow);
+            var syntheticInitializedField = syntheticType.GetField(
+                "_browseInitialized", syntheticFlags)!;
+            var beforeSyntheticBrowseInitialized =
+                (bool)syntheticInitializedField.GetValue(window)!;
+            // This fixture lives only in memory; the real test SQLite
+            // catalogue is deliberately empty. With longer GPU slideshow
+            // checks, a startup/pending async publisher can otherwise replace
+            // the artificial folder positions after the fixture is installed.
+            // Quiesce the production publisher IN THE TEST ONLY before any
+            // gallery navigation assertions, rather than hiding a missing
+            // folder behind Nullable<T>.Value or changing app behavior.
+            syntheticInitializedField.SetValue(window, false);
+            ((LatestViewRequest)syntheticType.GetField(
+                "_browseRefreshRequests", syntheticFlags)!.GetValue(window)!)
+                .Invalidate();
+            var syntheticPublicationTimer = (DispatcherTimer?)syntheticType.GetField(
+                "_catalogPublicationTimer", syntheticFlags)!.GetValue(window);
+            syntheticPublicationTimer?.Stop();
+            syntheticType.GetField("_catalogPublicationPending", syntheticFlags)!
+                .SetValue(window, 0);
+            var pendingSyntheticPublisher = syntheticType.GetField(
+                "_galleryRefreshCompletion", syntheticFlags)!;
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                Flush(window);
+                if (pendingSyntheticPublisher.GetValue(window) is not Task pending ||
+                    pending.IsCompleted)
+                    break;
+                System.Threading.Thread.Sleep(20);
+            }
+            if (pendingSyntheticPublisher.GetValue(window) is Task unfinished &&
+                !unfinished.IsCompleted)
+                throw new Exception(
+                    "Catalog publisher still running before gallery navigation test.");
+
             pages.SetIndex(synthetic);
             var surface = (BrowseGallerySurface?)window.FindName("BrowseSurface")
                 ?? throw new Exception("Actual browse surface not found.");
@@ -2236,6 +2274,10 @@ internal static class Program
                 ?? throw new Exception("Actual browse scroll viewer not found.");
             surface.SetData(synthetic, groups, pages);
             Flush(window);
+            if (surface.GetFolderOffset(100) is null ||
+                surface.GetFolderOffset(200) is null)
+                throw new Exception(
+                    "Synthetic gallery navigation fixture did not expose both folders.");
 
             // Real regression: a GPS-marked photo in folder 100 must never
             // pull the gallery back after the user explicitly enters folder
@@ -2479,7 +2521,7 @@ internal static class Program
             var previousTierForScanner = tierForScanner.GetValue(window);
             var browseInitializedField = scrollType.GetField(
                 "_browseInitialized", scrollFlags)!;
-            var wasBrowseInitialized = (bool)browseInitializedField.GetValue(window)!;
+            var wasBrowseInitialized = beforeSyntheticBrowseInitialized;
             try
             {
                 folderBeforeScroll.SetValue(window, (long?)100);
