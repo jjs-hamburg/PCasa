@@ -493,7 +493,7 @@ internal static class Program
             var slideshowDefaults = new SlideshowSettings();
             if (slideshowDefaults.BackgroundMode != "gallery" ||
                 slideshowDefaults.DisplayMode != "gallery" ||
-                slideshowDefaults.Transition != "projector" ||
+                slideshowDefaults.Transition != "fade" ||
                 slideshowDefaults.IntervalSeconds != 5 ||
                 slideshowDefaults.TransitionMilliseconds != 700 ||
                 !slideshowDefaults.PreloadNext)
@@ -505,7 +505,7 @@ internal static class Program
                 BackgroundMode = "invalid"
             }.Normalize();
             if (normalizedSlideshow.IntervalSeconds != 1 ||
-                normalizedSlideshow.Transition != "projector" ||
+                normalizedSlideshow.Transition != "fade" ||
                 normalizedSlideshow.BackgroundMode != "gallery")
                 throw new Exception("Slideshow settings normalization is unsafe.");
             Console.WriteLine(
@@ -2070,91 +2070,58 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Prefetched slideshow navigates from local cache and applies refined pixels after transition.");
 
-            // The default "Projector" is required to produce REAL WPF
-            // animations, not just store the transition name in JSON.
-            var projector = new SlideshowWindow(window, slideshowSequence, 0,
+            // Projector has been retired. The slide transition must move
+            // cached whole-photo frames with an explicit gap, without
+            // scheduling an independent opacity transition on top.
+            if (new SlideshowSettings { Transition = "projector" }
+                    .Normalize().Transition != "fade")
+                throw new Exception("Legacy projector setting was not migrated.");
+            var sliding = new SlideshowWindow(window, slideshowSequence, 0,
                 slideshowDatabase, galleryBrush, new SlideshowSettings
                 {
                     IntervalSeconds = 3600, PreloadNext = false,
-                    Transition = "projector", TransitionMilliseconds = 700
+                    Transition = "slide", TransitionMilliseconds = 700
                 }, index => index == 2 ? slideshowPortrait : slideshowPreview)
             {
                 WindowState = WindowState.Normal, Width = 640, Height = 480
             };
             try
             {
-                projector.Show();
-                Flush(projector);
+                sliding.Show();
+                Flush(sliding);
                 var flags = System.Reflection.BindingFlags.NonPublic |
                     System.Reflection.BindingFlags.Instance;
                 typeof(SlideshowWindow).GetMethod("Navigate", flags)!
-                    .Invoke(projector, [1]);
+                    .Invoke(sliding, [1]);
                 if (typeof(SlideshowWindow).GetField("_transitioning", flags)!
-                    .GetValue(projector) is not true)
-                    throw new Exception(
-                        "Projector default failed to start its transition.");
+                    .GetValue(sliding) is not true)
+                    throw new Exception("Slide did not start its transition.");
                 var incomingLayer = typeof(SlideshowWindow).GetField(
-                    "_incoming", flags)!.GetValue(projector)!;
-                var scale = (ScaleTransform)incomingLayer.GetType().GetField(
-                    "Scale", System.Reflection.BindingFlags.Instance |
-                        System.Reflection.BindingFlags.Public)!
-                    .GetValue(incomingLayer)!;
-                // The first BeginAnimation is queued for WPF's NEXT render
-                // frame. Inspect the ACTUAL transform attached to the photo,
-                // not a detached object or the base value at t=0.
+                    "_incoming", flags)!.GetValue(sliding)!;
+                var shift = (TranslateTransform)incomingLayer.GetType().GetField(
+                    "Shift", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.Public)!.GetValue(incomingLayer)!;
                 var incomingFrame = (Border)incomingLayer.GetType().GetField(
                     "Frame", System.Reflection.BindingFlags.Instance |
-                        System.Reflection.BindingFlags.Public)!
-                    .GetValue(incomingLayer)!;
+                        System.Reflection.BindingFlags.Public)!.GetValue(incomingLayer)!;
                 if (incomingFrame.RenderTransform is not TransformGroup transforms ||
-                    transforms.Children.Count == 0 ||
-                    !ReferenceEquals(transforms.Children[0], scale))
-                    throw new Exception(
-                        "Projector animation targets a transform not attached to the image.");
-                var initialScale = scale.ScaleY;
-                if (initialScale > .95)
-                    throw new Exception(
-                        "Projector does not establish its compressed initial picture frame.");
-                var observedMotion = false;
-                var observedClock = false;
-                var lastScale = initialScale;
-                var animationDeadline = DateTime.UtcNow.AddMilliseconds(620);
-                while (DateTime.UtcNow < animationDeadline)
-                {
-                    Flush(projector);
-                    var currentScale = scale.ScaleY;
-                    observedClock |= DependencyPropertyHelper.GetValueSource(
-                        scale, ScaleTransform.ScaleYProperty).IsAnimated;
-                    if (currentScale > lastScale + .025 &&
-                        currentScale < .99)
-                        observedMotion = true;
-                    lastScale = currentScale;
-                    if (observedMotion && observedClock) break;
-                    System.Threading.Thread.Sleep(15);
-                }
-                if (!observedMotion)
-                    throw new Exception(
-                        $"Projector did not interpolate a visible image transform " +
-                        $"(first={initialScale:F3}, last={lastScale:F3}, " +
-                        $"clock={observedClock}).");
-                Until(projector, () =>
+                    !transforms.Children.Contains(shift))
+                    throw new Exception("Slide transform is not attached to its image.");
+                if (!DependencyPropertyHelper.GetValueSource(
+                        shift, TranslateTransform.XProperty).IsAnimated)
+                    throw new Exception("Slide is not driven by a WPF render clock.");
+                Until(sliding, () =>
                     typeof(SlideshowWindow).GetField("_transitioning", flags)!
-                        .GetValue(projector) is false,
-                    "Projector animation never completed.");
-                if (Math.Abs(scale.ScaleY - 1) > .01)
-                    throw new Exception(
-                        "Projector transition did not restore the original picture dimensions.");
-                if (projector.CurrentImageIndex != 2)
-                    throw new Exception(
-                        "Animation completion lost the destination image.");
+                        .GetValue(sliding) is false,
+                    "Slide transition never completed.");
+                if (Math.Abs(shift.X) > 0.01)
+                    throw new Exception("Slide did not restore its destination position.");
+                if (sliding.CurrentImageIndex != 2)
+                    throw new Exception("Slide completion lost the destination.");
             }
-            finally { projector.Close(); }
+            finally { sliding.Close(); }
             Console.WriteLine(
-                "PASS: Portrait/landscape borders, diagonal thumbnail-style shadow, click exit and live projector animation.");
-
-
-
-
+                "PASS: Picture-to-picture slide uses GPU translation with a visible gap; projector removed.");
 
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
