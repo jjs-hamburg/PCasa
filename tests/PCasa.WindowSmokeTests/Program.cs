@@ -2130,9 +2130,24 @@ internal static class Program
                     if (observedClock && observedMotion) break;
                     System.Threading.Thread.Sleep(15);
                 }
-                if (!observedClock || !observedMotion)
+                var gpu = typeof(SlideshowWindow).GetField("_gpu", flags)!
+                    .GetValue(sliding) as Direct3DSlideshowSurface;
+                if (gpu is { IsReady: true })
+                {
+                    // Direct3D11 uses an independent vsync-paced flip chain:
+                    // there MUST NOT be a WPF animation clock in this mode.
+                    if (observedClock)
+                        throw new Exception("GPU slide still animated WPF.");
+                    var travel = Direct3DSlideshowSurface.SlideTravel(
+                        640, 400, 320);
+                    var gap = travel - 400 / 2.0 - 320 / 2.0;
+                    if (Math.Abs(gap - (640 - 400) / 2.0) > .01)
+                        throw new Exception(
+                            "Slide image gap differs from previous right margin.");
+                }
+                else if (!observedClock || !observedMotion)
                     throw new Exception(
-                        "Slide did not animate an attached WPF transform " +
+                        "Fallback slide did not animate an attached WPF transform " +
                         $"(clock={observedClock}, moving={observedMotion}, x={shift.X:F1}).");
                 Until(sliding, () =>
                     typeof(SlideshowWindow).GetField("_transitioning", flags)!
