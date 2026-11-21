@@ -1000,5 +1000,19 @@
   "Weniger": "Less",
   "Mehr": "More",
   "Klein": "Small",
-  "Groß": "Large"
+  "Groß": "Large",
+  "EXIF-Datumsfelder": "EXIF date fields",
+  "Digitalisierungsdatum": "Date digitized",
+  "EXIF-Änderungsdatum": "EXIF modification date",
+  "Datum und Uhrzeit: TT.MM.JJJJ HH:MM:SS": "Date and time: DD.MM.YYYY HH:MM:SS",
+  "Aus Dateinamen übernehmen": "Use date from filename",
+  "Im Dateinamen wurde kein gültiges Aufnahmedatum gefunden.": "No valid capture date was found in the filename.",
+  "Der Dateiname enthält nur ein Datum. Bitte die Uhrzeit ergänzen.": "The filename contains only a date. Please enter the time.",
+  "EXIF-Datumsfelder speichern": "Save EXIF date fields",
+  "Aufnahmedatum konnte nicht gespeichert werden.": "Could not save the capture date.",
+  "Ungültiges EXIF-Datum. Format: TT.MM.JJJJ HH:MM:SS.": "Invalid EXIF date. Format: DD.MM.YYYY HH:MM:SS.",
+  "Die Datei wurde seit dem Öffnen der Bildinformationen geändert.": "The file changed since Image Information was opened.",
+  "Nicht unterstütztes EXIF-Datumsfeld: ": "Unsupported EXIF date field: ",
+  "Die neuen EXIF-Datumsfelder konnten nicht katalogisiert werden.": "The new EXIF date fields could not be cataloged.",
+  "Gespeicherte EXIF-Datumsfelder stimmen nicht mit der Eingabe überein.": "Saved EXIF date fields do not match the input."
 }
