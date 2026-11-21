@@ -1,5 +1,4 @@
 using System.IO;
-using System.Windows.Forms.Integration;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -76,12 +75,7 @@ public sealed class SlideshowWindow : Window
     private readonly SlideshowSettings _options;
     private readonly Grid _root = new();
     private readonly Grid _stage = new();
-    private readonly WindowsFormsHost _gpuHost = new();
-    private readonly System.Windows.Forms.Panel _gpuWindow = new()
-    {
-        Dock = System.Windows.Forms.DockStyle.Fill,
-        TabStop = false
-    };
+    private readonly Direct3DSlideshowHost _gpuHost = new();
     private Direct3DSlideshowSurface? _gpu;
     private Layer _active = new();
     private Layer _incoming = new();
@@ -151,23 +145,23 @@ public sealed class SlideshowWindow : Window
         _stage.Children.Add(_incoming.Frame);
         // Native HWND has its own GPU flip chain; WPF layers remain a fallback
         // only when the Direct3D device cannot be created.
-        _gpuHost.Child = _gpuWindow;
         _root.Children.Add(_gpuHost);
-        _gpuWindow.Resize += (_, _) =>
+        _gpuHost.SizeChanged += (_, _) =>
         {
             if (_gpu is not { IsReady: true }) return;
-            _gpu.Resize(_gpuWindow.ClientSize.Width, _gpuWindow.ClientSize.Height);
+            var (width, height) = _gpuHost.ClientSize;
+            _gpu.Resize(width, height);
             RefreshGpuBackground();
         };
-        _gpuWindow.MouseDown += (_, _) => Close();
-        _gpuWindow.KeyDown += (_, e) =>
+        _gpuHost.Clicked += () => Dispatcher.BeginInvoke(new Action(Close));
+        _gpuHost.NativeKeyDown += key =>
         {
-            switch (e.KeyCode)
+            switch (key)
             {
-                case System.Windows.Forms.Keys.Escape: Close(); break;
-                case System.Windows.Forms.Keys.Right: Navigate(+1); break;
-                case System.Windows.Forms.Keys.Left: Navigate(-1); break;
-                case System.Windows.Forms.Keys.Space: _paused = !_paused; break;
+                case 0x1B: Close(); break; // Escape
+                case 0x27: Navigate(+1); break; // Right
+                case 0x25: Navigate(-1); break; // Left
+                case 0x20: _paused = !_paused; break; // Space
             }
         };
 
@@ -220,9 +214,9 @@ public sealed class SlideshowWindow : Window
         var renderer = new Direct3DSlideshowSurface(Dispatcher);
         try
         {
-            if (!renderer.Start(_gpuWindow.Handle,
-                    _gpuWindow.ClientSize.Width, _gpuWindow.ClientSize.Height,
-                    _options))
+            var (width, height) = _gpuHost.ClientSize;
+            if (!renderer.Start(_gpuHost.WindowHandle,
+                    width, height, _options))
             {
                 PCasaDiagnostics.WriteMessage("Slideshow.Direct3D11",
                     "Direct3D11 unavailable: " + renderer.StartupError?.Message);
@@ -245,8 +239,7 @@ public sealed class SlideshowWindow : Window
     private void RefreshGpuBackground()
     {
         if (_gpu is not { IsReady: true }) return;
-        var width = _gpuWindow.ClientSize.Width;
-        var height = _gpuWindow.ClientSize.Height;
+        var (width, height) = _gpuHost.ClientSize;
         if (width < 1 || height < 1) return;
         // WPF paints the gallery texture ONCE at startup/resize. Each
         // transition frame is then rendered exclusively by Direct3D.
