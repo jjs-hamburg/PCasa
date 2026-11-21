@@ -1886,13 +1886,13 @@ internal static class Program
                         Math.Abs(slider.Width - numericSliders[0].Width) > .01 ||
                         !slider.IsSnapToTickEnabled) ||
                     numericSliders.Any(slider => slider.Parent is not StackPanel row ||
-                        row.Children.LastOrDefault() is not TextBlock))
+                        row.Children.OfType<UIElement>().LastOrDefault() is not TextBlock))
                     throw new Exception(
                         "Slideshow numeric settings need seven equally wide stepped sliders and readouts.");
                 numericSliders[0].Value = 90;
                 Flush(slideshowDialog);
                 if (numericSliders[0].Parent is not StackPanel sliderRow ||
-                    sliderRow.Children.LastOrDefault() is not TextBlock liveNumber ||
+                    sliderRow.Children.OfType<UIElement>().LastOrDefault() is not TextBlock liveNumber ||
                     !liveNumber.Text.Contains("90", StringComparison.Ordinal))
                     throw new Exception("Slideshow slider readout did not update.");
                 var slideshowBackgroundPicker = (Microsoft.Win32.OpenFileDialog)
