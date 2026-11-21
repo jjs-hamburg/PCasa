@@ -540,17 +540,20 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             }
             else
             {
-                for (var layer = 4; layer >= 1; layer--)
+                // Twelve GPU-only nested steps produce a much softer
+                // one-sided falloff than the old three hard rectangles.
+                // No expensive WPF DropShadowEffect runs per frame.
+                for (var layer = 12; layer >= 1; layer--)
                 {
                     var shadow = ShadowRect(x, y, w, h,
-                        offset, spread * layer / 4);
+                        offset, spread * layer / 12);
                     Draw(_black!, shadow.X, shadow.Y,
                         shadow.Width, shadow.Height,
-                        alpha * (float)_shadowOpacity * .17f);
+                        alpha * (float)_shadowOpacity * .065f);
                 }
                 var core = ShadowRect(x, y, w, h, offset, 0);
                 Draw(_black!, core.X, core.Y, core.Width, core.Height,
-                    alpha * (float)_shadowOpacity * .45f);
+                    alpha * (float)_shadowOpacity * .30f);
             }
         }
         if (_border > 0)
