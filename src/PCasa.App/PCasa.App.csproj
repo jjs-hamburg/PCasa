@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon Condition="Exists('Assets/PCasa.ico')">Assets/PCasa.ico</ApplicationIcon>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -15,6 +16,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="CefSharp.Wpf.NETCore" />
     <PackageReference Include="NetVips" />
+    <PackageReference Include="Vortice.Direct3D11" />
+    <PackageReference Include="Vortice.D3DCompiler" />
   </ItemGroup>
   
   <ItemGroup Condition="Exists('Assets/PCasa.ico')">
