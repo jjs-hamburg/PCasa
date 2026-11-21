@@ -186,11 +186,15 @@ internal static class ExternalEditSmokeFlow
             // A crash discards the unfinished work on next process start.
             // The edited bytes must never flow into the original implicitly.
             var stableOriginal = File.ReadAllBytes(photo);
+            var oldRetired = Path.Combine(root, "ExternalEditRetired");
+            Directory.CreateDirectory(oldRetired);
+            File.WriteAllText(Path.Combine(oldRetired, "obsolete-session.json"), "{}");
             var crashed = ExternalEditTransaction.Begin(photo);
             WriteJpeg(crashed.BackupPath, 192);
             if (!ExternalEditTransaction.RetirePreviousProcessSession() ||
                 ExternalEditTransaction.FindPending() is not null ||
                 File.Exists(crashed.BackupPath) ||
+                Directory.Exists(oldRetired) ||
                 !File.ReadAllBytes(photo).SequenceEqual(stableOriginal))
                 throw new Exception("Crash recovery preserved an abandoned editor session.");
             var resumed = ExternalEditTransaction.Begin(photo);
