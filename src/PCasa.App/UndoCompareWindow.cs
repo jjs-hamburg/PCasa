@@ -22,7 +22,9 @@ internal sealed class UndoCompareWindow : Window
     private readonly Grid _splitFrame = new() {
         HorizontalAlignment = HorizontalAlignment.Center,
         VerticalAlignment = VerticalAlignment.Center };
-    private readonly Thumb _divider = new() { Width = 18 };
+    private readonly Thumb _divider = new() { Width = 24, Cursor = Cursors.SizeWE };
+    private double _dividerGrabOffset;
+    private BitmapSource? _currentBitmap;
     private readonly Grid _sidePanel = new();
     private readonly Button _singleMode = new(), _sideMode = new(), _splitMode = new();
     private int _mode = 1; // Existing restore dialog opens side by side.
@@ -100,6 +102,24 @@ internal sealed class UndoCompareWindow : Window
         panes.Children.Add(_rightScroll);
         _leftScroll.SizeChanged += (_, _) => FitImagesToPanes();
         _rightScroll.SizeChanged += (_, _) => FitImagesToPanes();
+        // In full-image mode, holding the mouse shows the whole restore
+        // candidate. Each image keeps its own aspect, including after a crop.
+        _rightScroll.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            if (_mode != 0 || _candidate.Source is null) return;
+            _current.Source = _candidate.Source;
+            e.Handled = true;
+        };
+        _rightScroll.PreviewMouseLeftButtonUp += (_, e) =>
+        {
+            if (_mode != 0) return;
+            _current.Source = _currentBitmap;
+            e.Handled = true;
+        };
+        _rightScroll.MouseLeave += (_, _) =>
+        {
+            if (_mode == 0) _current.Source = _currentBitmap;
+        };
         _leftScroll.ScrollChanged += (_, e) => Synchronize(_leftScroll,_rightScroll,e);
         _rightScroll.ScrollChanged += (_, e) => Synchronize(_rightScroll,_leftScroll,e);
         // Version/current labels are deliberately small and light, just
@@ -126,13 +146,21 @@ internal sealed class UndoCompareWindow : Window
         lineVisual.SetValue(Border.BackgroundProperty, Brushes.WhiteSmoke);
         dividerVisual.AppendChild(lineVisual);
         _divider.Template = new ControlTemplate(typeof(Thumb)) { VisualTree = dividerVisual };
-        _divider.DragDelta += (_, e) =>
+        _divider.DragStarted += (_, _) =>
         {
-            if (_splitPanel.ActualWidth <= 0) return;
-            _splitFraction = Math.Clamp(_splitFraction +
-                e.HorizontalChange / _splitPanel.ActualWidth, 0.02, 0.98);
+            _dividerGrabOffset = Mouse.GetPosition(_splitPanel).X -
+                DividerScreenX();
+        };
+        _divider.DragDelta += (_, _) =>
+        {
+            var imageWidth = _splitFrame.Width * _zoom;
+            if (!(imageWidth > 0)) return;
+            _splitFraction = Math.Clamp(.5 +
+                (Mouse.GetPosition(_splitPanel).X - _dividerGrabOffset -
+                 _splitPanel.ActualWidth / 2) / imageWidth, .02, .98);
             UpdateSplitGeometry();
         };
+        _divider.DragCompleted += (_, _) => _dividerGrabOffset = 0;
         sliderCanvas.Children.Add(_divider);
         _splitPanel.Children.Add(MakeOverlayLabel(
             english ? "Restore version" : "Wiederherstellung", HorizontalAlignment.Left));
@@ -187,6 +215,7 @@ internal sealed class UndoCompareWindow : Window
             else if (e.Key == Key.Right) { Navigate(1); e.Handled = true; }
         };
         _current.Source = Load(originalPath);
+        _currentBitmap = (BitmapSource)_current.Source;
         _splitCurrent.Source = _current.Source;
         ShowVersion();
     }
@@ -262,17 +291,22 @@ internal sealed class UndoCompareWindow : Window
         parent.Children.Add(button);
     }
 
-    private static TextBlock MakeLabel(string caption, int column)
+    private static Border MakeLabel(string caption, int column)
     {
         var label = MakeOverlayLabel(caption, HorizontalAlignment.Left);
         Grid.SetColumn(label, column);
         return label;
     }
 
-    private static TextBlock MakeOverlayLabel(string caption, HorizontalAlignment side)
+    private static Border MakeOverlayLabel(string caption, HorizontalAlignment side)
         => new() {
-            Text = caption, FontSize = 11, FontWeight = FontWeights.Light,
-            Foreground = Brushes.WhiteSmoke, IsHitTestVisible = false,
+            Child = new TextBlock {
+                Text = caption, FontSize = 11, FontWeight = FontWeights.Light,
+                Foreground = Brushes.WhiteSmoke },
+            Background = new SolidColorBrush(Color.FromArgb(170, 26, 26, 28)),
+            CornerRadius = new CornerRadius(5),
+            Padding = new Thickness(8, 4, 8, 4),
+            IsHitTestVisible = false,
             HorizontalAlignment = side, VerticalAlignment = VerticalAlignment.Top,
             Margin = side == HorizontalAlignment.Right
                 ? new Thickness(0,8,11,0) : new Thickness(11,8,0,0)
@@ -281,6 +315,7 @@ internal sealed class UndoCompareWindow : Window
     private void SetCompareMode(int mode)
     {
         _mode = mode;
+        _current.Source = _currentBitmap;
         _sidePanel.Visibility = mode == 2 ? Visibility.Collapsed : Visibility.Visible;
         _splitPanel.Visibility = mode == 2 ? Visibility.Visible : Visibility.Collapsed;
         _leftScroll.Visibility = mode == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -307,13 +342,16 @@ internal sealed class UndoCompareWindow : Window
         _splitFrame.Height = frameHeight;
         _splitCandidate.Width = _splitCurrent.Width = frameWidth;
         _splitCandidate.Height = _splitCurrent.Height = frameHeight;
-        var marker = _splitFraction * width;
-        var clipEdge = frameWidth / 2 +
-            (marker - width / 2) / Math.Max(0.01, _zoom);
+        // The split fraction is a picture coordinate. The divider follows
+        // the same image location through Fit, zoom and resize.
         _splitCandidate.Clip = new RectangleGeometry(
-            new Rect(0, 0, Math.Clamp(clipEdge,0,frameWidth),frameHeight));
-        Canvas.SetLeft(_divider, marker - _divider.Width / 2);
+            new Rect(0, 0, _splitFraction * frameWidth, frameHeight));
+        Canvas.SetLeft(_divider, DividerScreenX() - _divider.Width / 2);
     }
+
+    private double DividerScreenX()
+        => _splitPanel.ActualWidth / 2 +
+            (_splitFraction - .5) * _splitFrame.Width * _zoom;
 
     private void Synchronize(ScrollViewer from,ScrollViewer to,ScrollChangedEventArgs e)
     {
