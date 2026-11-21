@@ -59,7 +59,7 @@ public static class JpegCropWriter
     // The central external transaction captures ONE Undo of the real
     // original when the user subsequently chooses Save; the temporary
     // workspace itself must never enter the user's Undo archive.
-    internal static void EditExternalWorkspaceResult(
+    internal static string EditExternalWorkspaceResult(
         string resultPath, string sessionDirectory,
         IReadOnlyList<PhotoEditStep> operations, CancellationToken token)
     {
@@ -73,7 +73,37 @@ public static class JpegCropWriter
         if (!EditableImageFormats.Supports(result))
             throw new NotSupportedException(
                 "Das externe Ergebnisformat erlaubt keine interne Bildbearbeitung.");
-        SaveCore(result, null, operations, token, captureUndo: false);
+
+        // Topaz/another editor may still hold its export open. Never replace
+        // an editor-owned file: prepare the internal recipe on our private
+        // copy, then submit that image to the existing external transaction.
+        // The copy also prevents later external writes from undoing the
+        // in-PCasa straighten/crop while Save is in progress.
+        var privateDirectory = Path.Combine(workspace, ".pcasa-internal");
+        Directory.CreateDirectory(privateDirectory);
+        var candidate = Path.Combine(privateDirectory,
+            "result" + Path.GetExtension(result).ToLowerInvariant());
+        if (File.Exists(candidate))
+            throw new IOException(
+                "Interne Arbeitskopie ist bereits vorhanden; bitte den vorigen Auftrag abschließen.");
+        try
+        {
+            using (var source = new FileStream(result, FileMode.Open,
+                       FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var target = new FileStream(candidate, FileMode.CreateNew,
+                       FileAccess.Write, FileShare.None))
+                source.CopyTo(target);
+            token.ThrowIfCancellationRequested();
+            SaveCore(candidate, null, operations, token, captureUndo: false);
+            return candidate;
+        }
+        catch
+        {
+            try { if (File.Exists(candidate)) File.Delete(candidate); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            throw;
+        }
     }
 
     private static void SaveCore(string originalPath, string? copyPath,
