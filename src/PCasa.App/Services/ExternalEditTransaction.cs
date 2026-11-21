@@ -630,7 +630,11 @@ public static class ExternalEditTransaction
             // A Topaz/JPEG result may have replaced its camera timestamp.
             // Enforce the original EXIF/IPTC/XMP date values on the PRIVATE
             // workspace copy before any Save/SaveCopy can publish it.
-            if (!VideoFormats.IsVideo(source))
+            // PSDs already undergo full native EXIF/IPTC/XMP restoration
+            // through ExternalResultMetadata.CopyAll below. Do not run
+            // JPEG-specific date rewriting over a layered Photoshop file.
+            if (!VideoFormats.IsVideo(source) &&
+                !RawImageSource.IsPsdPath(source))
                 ExifDateMetadata.Preserve(session.OriginalPath, source, token);
 
             using (SourceFileLocks.Enter(session.OriginalPath, token))
