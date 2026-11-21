@@ -1953,11 +1953,15 @@ internal static class Program
                 if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
                     slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
                     throw new Exception("Slideshow failed to show the gallery-texture default.");
+                // The native Direct3D HWND is a rendering surface, not an
+                // extra slideshow control or caption. WPF's fallback Grid
+                // stays in the same root, but must not add label overlays.
                 if (slideshow.Content is not Grid slideRoot ||
-                    slideRoot.Children.Count != 1 ||
-                    slideRoot.Children[0] is not Grid)
+                    slideRoot.Children.Count != 2 ||
+                    slideRoot.Children[0] is not Grid ||
+                    slideRoot.Children[1] is not System.Windows.Interop.HwndHost)
                     throw new Exception(
-                        "Slideshow added unrequested filenames, captions or keyboard hint overlays.");
+                        "Slideshow added an unexpected overlay or is missing its GPU surface.");
                 var slidesFlags = System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic;
                 var currentLayerField = typeof(SlideshowWindow).GetField(
