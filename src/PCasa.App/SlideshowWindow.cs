@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows.Forms.Integration;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -75,6 +76,13 @@ public sealed class SlideshowWindow : Window
     private readonly SlideshowSettings _options;
     private readonly Grid _root = new();
     private readonly Grid _stage = new();
+    private readonly WindowsFormsHost _gpuHost = new();
+    private readonly System.Windows.Forms.Panel _gpuWindow = new()
+    {
+        Dock = System.Windows.Forms.DockStyle.Fill,
+        TabStop = false
+    };
+    private Direct3DSlideshowSurface? _gpu;
     private Layer _active = new();
     private Layer _incoming = new();
     private readonly DispatcherTimer _clock;
@@ -141,6 +149,27 @@ public sealed class SlideshowWindow : Window
         ConfigureLayer(_incoming);
         _stage.Children.Add(_active.Frame);
         _stage.Children.Add(_incoming.Frame);
+        // Native HWND has its own GPU flip chain; WPF layers remain a fallback
+        // only when the Direct3D device cannot be created.
+        _gpuHost.Child = _gpuWindow;
+        _root.Children.Add(_gpuHost);
+        _gpuWindow.Resize += (_, _) =>
+        {
+            if (_gpu is not { IsReady: true }) return;
+            _gpu.Resize(_gpuWindow.ClientSize.Width, _gpuWindow.ClientSize.Height);
+            RefreshGpuBackground();
+        };
+        _gpuWindow.MouseDown += (_, _) => Close();
+        _gpuWindow.KeyDown += (_, e) =>
+        {
+            switch (e.KeyCode)
+            {
+                case System.Windows.Forms.Keys.Escape: Close(); break;
+                case System.Windows.Forms.Keys.Right: Navigate(+1); break;
+                case System.Windows.Forms.Keys.Left: Navigate(-1); break;
+                case System.Windows.Forms.Keys.Space: _paused = !_paused; break;
+            }
+        };
 
         // Picture-only slideshow: no unrequested text or filename overlays.
         _clock = new DispatcherTimer(DispatcherPriority.Background)
@@ -164,6 +193,7 @@ public sealed class SlideshowWindow : Window
         Loaded += (_, _) =>
         {
             UpdateFrameGeometry();
+            InitializeGpu();
             ShowCurrent();
             _clock.Start();
             Focus();
@@ -178,9 +208,57 @@ public sealed class SlideshowWindow : Window
             _aheadDecode?.Cancel();
             _currentDecode?.Dispose();
             _aheadDecode?.Dispose();
+            _gpu?.Dispose();
+            _gpu = null;
             _active.StopAnimations();
             _incoming.StopAnimations();
         };
+    }
+
+    private void InitializeGpu()
+    {
+        var renderer = new Direct3DSlideshowSurface(Dispatcher);
+        try
+        {
+            if (!renderer.Start(_gpuWindow.Handle,
+                    _gpuWindow.ClientSize.Width, _gpuWindow.ClientSize.Height,
+                    _options))
+            {
+                PCasaDiagnostics.WriteMessage("Slideshow.Direct3D11",
+                    "Direct3D11 unavailable: " + renderer.StartupError?.Message);
+                renderer.Dispose();
+                _gpuHost.Visibility = Visibility.Collapsed;
+                return;
+            }
+            _gpu = renderer;
+            _stage.Visibility = Visibility.Collapsed;
+            RefreshGpuBackground();
+        }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Slideshow.Direct3D11.Initialize", ex);
+            renderer.Dispose();
+            _gpuHost.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void RefreshGpuBackground()
+    {
+        if (_gpu is not { IsReady: true }) return;
+        var width = _gpuWindow.ClientSize.Width;
+        var height = _gpuWindow.ClientSize.Height;
+        if (width < 1 || height < 1) return;
+        // WPF paints the gallery texture ONCE at startup/resize. Each
+        // transition frame is then rendered exclusively by Direct3D.
+        var visual = new DrawingVisual();
+        using (var drawing = visual.RenderOpen())
+            drawing.DrawRectangle(Background, null,
+                new Rect(0, 0, width, height));
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96,
+            PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        bitmap.Freeze();
+        _gpu.SetBackground(bitmap);
     }
 
     private Brush ResolveBackground(Brush galleryBackground)
@@ -411,6 +489,7 @@ public sealed class SlideshowWindow : Window
                 {
                     _active.Picture.Source = bitmap;
                     UpdateLayerGeometry(_active);
+                    _gpu?.Replace(bitmap);
                 }
             }
             else
@@ -488,6 +567,7 @@ public sealed class SlideshowWindow : Window
             var layer = _transitioning ? _incoming : _active;
             layer.Picture.Source = image;
             UpdateLayerGeometry(layer);
+            _gpu?.Replace(image);
             return;
         }
         FinishTransition();
@@ -506,6 +586,7 @@ public sealed class SlideshowWindow : Window
         if (_active.Picture.Source is null || type == "none" ||
             _options.TransitionMilliseconds <= 0)
         {
+            _gpu?.Present(image, "none", 0, () => { });
             SwapLayers();
             return;
         }
@@ -515,6 +596,17 @@ public sealed class SlideshowWindow : Window
         _transitionRenderedFrames = 0;
         var serial = ++_transitionVersion;
         var duration = TimeSpan.FromMilliseconds(_options.TransitionMilliseconds);
+        if (_gpu is { IsReady: true })
+        {
+            // ONE vsync-paced GPU clock moves both textures together.
+            // WPF never renders or animates a frame in this mode.
+            _gpu.Present(image, type, _options.TransitionMilliseconds, () =>
+            {
+                if (_transitioning && serial == _transitionVersion)
+                    FinishTransition();
+            });
+            return;
+        }
         if (type == "zoom")
         {
             // Zoom inward so the next border never peeks outside first.
@@ -527,16 +619,14 @@ public sealed class SlideshowWindow : Window
             // distance must include HALF of each frame plus a visible
             // right-hand gap. One screen width makes unequal aspect-ratio
             // pictures touch or overlap during the push.
-            var distance = (_active.Frame.Width +
-                _incoming.Frame.Width) / 2 +
-                Math.Max(16, _options.BorderWidth + 12);
+            var distance = Direct3DSlideshowSurface.SlideTravel(
+                _root.ActualWidth, _active.Frame.Width, _incoming.Frame.Width);
             _incoming.Frame.BeginAnimation(UIElement.OpacityProperty, null);
             _incoming.Frame.Opacity = 1;
             _incoming.Shift.BeginAnimation(TranslateTransform.XProperty, null);
             _incoming.Shift.X = distance;
             var slide = new DoubleAnimation(distance, 0, duration)
             {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
             };
             slide.Completed += (_, _) =>
             {
@@ -583,6 +673,7 @@ public sealed class SlideshowWindow : Window
         if (!_transitioning) return;
         ++_transitionVersion;
         _transitioning = false;
+        _gpu?.Complete();
         var elapsed = (DateTime.UtcNow - _transitionStartedUtc).TotalSeconds;
         if (elapsed > 0.01)
             PCasaDiagnostics.WriteMessage("Slideshow.TransitionFrames",
@@ -605,6 +696,7 @@ public sealed class SlideshowWindow : Window
             _afterTransitionPixels = null;
             _active.Picture.Source = refined;
             UpdateLayerGeometry(_active);
+            _gpu?.Replace(refined);
         }
     }
 }
