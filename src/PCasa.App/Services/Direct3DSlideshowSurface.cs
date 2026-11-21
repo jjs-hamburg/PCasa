@@ -470,7 +470,8 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
                 // the next image starts with the requested right-hand gap,
                 // while a wider outgoing image really exits the viewport.
                 var oldShift = _transition == "slide"
-                    ? (float)(-SlideExitTravel(_width, a.W, ShadowExtent) * t)
+                    ? (float)(-Math.Max(SlideTravel(_width, a.W, b.W),
+                        SlideExitTravel(_width, a.W, ShadowExtent)) * t)
                     : 0;
                 var oldAlpha = _transition == "zoomfade" ? 1 - t : 1;
                 var oldZoom = _transition == "zoomfade" ? 1f + .045f * t : 1;
