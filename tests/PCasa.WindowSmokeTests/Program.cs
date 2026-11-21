@@ -2384,6 +2384,24 @@ internal static class Program
                 Flush(window);
             }
 
+            // The synthetic gallery deliberately keeps production catalog
+            // publication disabled. Real button handlers require an initialized
+            // browse state, so enable it only for their synchronous click and
+            // immediately restore the isolated fixture before dispatcher work.
+            void ClickSyntheticGalleryButton(Button button)
+            {
+                syntheticInitializedField.SetValue(window, true);
+                try
+                {
+                    button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+                }
+                finally
+                {
+                    syntheticInitializedField.SetValue(window, false);
+                }
+                Flush(window);
+            }
+
             // The bookmark is a toggle, not a new scheduler/navigation stack.
             // It must restore a stable arbitrary picture-relative position
             // without selecting a thumbnail.
@@ -2402,15 +2420,11 @@ internal static class Program
             if (returnToDeparture.IsEnabled)
                 throw new Exception("Back to departure must be disabled before jumping to bookmark.");
             var departureOffset = scroller.VerticalOffset;
-            returnToRemembered.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToRemembered));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToRemembered);
             if (Math.Abs(scroller.VerticalOffset - markedOffset) > 3 ||
                 !returnToDeparture.IsEnabled)
                 throw new Exception("Bookmark jump failed or did not enable return to departure.");
-            returnToDeparture.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToDeparture));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToDeparture);
             if (Math.Abs(scroller.VerticalOffset - departureOffset) > 3 ||
                 returnToDeparture.IsEnabled || !returnToRemembered.IsEnabled ||
                 remembered.IsChecked != true)
@@ -2421,15 +2435,11 @@ internal static class Program
             scroller.ScrollToVerticalOffset(1530);
             Flush(window);
             var secondOrigin = scroller.VerticalOffset;
-            returnToRemembered.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToRemembered));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToRemembered);
             if (!returnToDeparture.IsEnabled ||
                 Math.Abs(scroller.VerticalOffset - markedOffset) > 3)
                 throw new Exception("Second bookmark jump did not capture a new departure.");
-            returnToDeparture.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToDeparture));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToDeparture);
             if (Math.Abs(scroller.VerticalOffset - secondOrigin) > 3 ||
                 returnToDeparture.IsEnabled)
                 throw new Exception("Return used stale departure instead of second origin.");
@@ -2446,8 +2456,7 @@ internal static class Program
             {
                 var button = (Button)window.FindName(
                     "GalleryNavigate" + action + "Button")!;
-                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
-                Flush(window);
+                ClickSyntheticGalleryButton(button);
             }
             Navigate("GalleryEnd");
             if (scroller.VerticalOffset < 100)
