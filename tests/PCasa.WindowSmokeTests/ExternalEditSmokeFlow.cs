@@ -110,7 +110,7 @@ internal static class ExternalEditSmokeFlow
             if (ExternalEditTransaction.Commit(cancel, cancel.BackupPath,
                     ExternalEditDecision.Cancel) is not null ||
                 !File.ReadAllBytes(photo).SequenceEqual(original) ||
-                Directory.Exists(cancel.DirectoryPath))
+                File.Exists(cancel.BackupPath))
                 throw new Exception("Cancel failed to preserve original or clear the workspace.");
 
             // A named export as used by Topaz is equally valid.
@@ -124,7 +124,7 @@ internal static class ExternalEditSmokeFlow
                 !copy.EndsWith("-Kopie.jpg", StringComparison.OrdinalIgnoreCase) ||
                 File.ReadAllBytes(copy).SequenceEqual(original) ||
                 !File.ReadAllBytes(photo).SequenceEqual(original) ||
-                Directory.Exists(copied.DirectoryPath))
+                File.Exists(copied.BackupPath))
                 throw new Exception("Save as Copy did not import a unique output and preserve original.");
             VerifyDates(copy, originalCreation, externalEditTime);
 
@@ -168,7 +168,7 @@ internal static class ExternalEditSmokeFlow
             var saved = ExternalEditTransaction.Commit(save, save.BackupPath,
                 ExternalEditDecision.Save, undoOptions: undoOptions);
             if (saved != photo || !File.ReadAllBytes(photo).SequenceEqual(edited) ||
-                Directory.Exists(save.DirectoryPath))
+                File.Exists(save.BackupPath))
                 throw new Exception("Save failed to commit working pixels or clear the workspace.");
             var history = new UndoHistoryService(undoOptions).GetVersions(photo);
             if (!history.Any(v => v.Sha256 == save.OriginalSha256 &&
@@ -180,12 +180,11 @@ internal static class ExternalEditSmokeFlow
                 throw new Exception("Unchanged workspace was incorrectly accepted as edited.");
             ExternalEditTransaction.Commit(unchanged, null,
                 ExternalEditDecision.Cancel);
-            if (Directory.Exists(unchanged.DirectoryPath))
+            if (File.Exists(unchanged.BackupPath))
                 throw new Exception("Unchanged workspace was not cleaned.");
 
-            // Configurable exchange roots isolate every edit under a
-            // PCasa-owned session directory. An unrelated user directory,
-            // even if called session-*, must never be removed by cleanup.
+            // A configurable dedicated exchange root itself is the workspace.
+            // Unrelated user subdirectories must never be deleted.
             var exchangeRoot = Path.Combine(root, "User-exchange");
             Directory.CreateDirectory(exchangeRoot);
             var unowned = Path.Combine(exchangeRoot, "session-unowned-user-data");
@@ -194,38 +193,35 @@ internal static class ExternalEditSmokeFlow
             File.WriteAllText(sentinel, "keep me");
             var custom = ExternalEditTransaction.Begin(photo,
                 workspaceRoot: exchangeRoot);
-            if (!string.Equals(Path.GetDirectoryName(custom.DirectoryPath),
+            if (!string.Equals(custom.DirectoryPath,
                     exchangeRoot, StringComparison.OrdinalIgnoreCase) ||
                 !File.Exists(custom.BeforePath) ||
                 ExternalEditTransaction.FindPending()?.Id != custom.Id)
                 throw new Exception("Custom exchange workspace was not properly isolated.");
             ExternalEditTransaction.Commit(custom, null, ExternalEditDecision.Cancel);
             ExternalEditTransaction.CleanupCompletedWorkspaces();
-            if (Directory.Exists(custom.DirectoryPath) ||
+            if (File.Exists(custom.BackupPath) ||
                 !File.Exists(sentinel) || !Directory.Exists(exchangeRoot))
                 throw new Exception("Custom exchange cleanup damaged unrelated user files.");
             Console.WriteLine(
-                "PASS: Exact immutable external before bytes and isolated optional exchange workspace.");
+                "PASS: Exact immutable before bytes and one flat dedicated exchange workspace.");
 
             var orphan = ExternalEditTransaction.DirectoryPath;
             Directory.CreateDirectory(orphan);
             File.WriteAllText(Path.Combine(orphan, "stale.txt"), "stale");
             var newSession = ExternalEditTransaction.Begin(photo);
-            // An unrelated abandoned export must not delay the P0 Begin.
-            // It is collected by the lower-priority cleanup path instead.
-            if (!File.Exists(Path.Combine(orphan, "stale.txt")))
-                throw new Exception("P0 editor launch performed background cleanup.");
+            // A new session must clear every abandoned output BEFORE staging.
+            if (File.Exists(Path.Combine(orphan, "stale.txt")))
+                throw new Exception("P0 editor launch reused a dirty workspace.");
             ExternalEditTransaction.Commit(newSession, null,
                 ExternalEditDecision.Cancel);
             ExternalEditTransaction.CleanupCompletedWorkspaces();
             if (File.Exists(Path.Combine(orphan, "stale.txt")))
                 throw new Exception("Orphan cleanup did not remove stale work.");
 
-            // Real editor behavior: Topaz/PhotoCraft may keep photo.jpg
-            // open even when PCasa's Cancel/Save button is pressed. A locked
-            // work image must not roll back a COMMITTED decision, remove the
-            // manifest in an ambiguous way, crash focus activation, or block
-            // creation of a completely new session.
+            // A locked former output must never be mistaken for a NEW edit.
+            // Cancel completes even if Topaz still holds photo.jpg open, but
+            // another Begin is blocked until the old file can be removed.
             var lockedCancel = ExternalEditTransaction.Begin(photo);
             using (var held = new FileStream(lockedCancel.BackupPath,
                        FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -235,17 +231,21 @@ internal static class ExternalEditSmokeFlow
                     throw new Exception("Locked Cancel unexpectedly returned a saved path.");
                 if (ExternalEditTransaction.FindPending() is not null)
                     throw new Exception("Locked Cancel left an active manifest.");
-                if (!Directory.Exists(lockedCancel.DirectoryPath))
+                if (!File.Exists(lockedCancel.BackupPath))
                     throw new Exception("Locked image was unexpectedly deleted.");
-                var overlapping = ExternalEditTransaction.Begin(other);
-                if (overlapping.DirectoryPath == lockedCancel.DirectoryPath)
-                    throw new Exception("Two editor launches used the same working folder.");
-                ExternalEditTransaction.Commit(overlapping, null,
-                    ExternalEditDecision.Cancel);
+                try
+                {
+                    ExternalEditTransaction.Begin(other);
+                    throw new Exception("Locked stale work was reused.");
+                }
+                catch (InvalidOperationException) { }
             }
             ExternalEditTransaction.CleanupCompletedWorkspaces();
-            if (Directory.Exists(lockedCancel.DirectoryPath))
+            if (File.Exists(lockedCancel.BackupPath))
                 throw new Exception("Released editor file could not be cleaned later.");
+            var afterLockedCancel = ExternalEditTransaction.Begin(other);
+            ExternalEditTransaction.Commit(afterLockedCancel, null,
+                ExternalEditDecision.Cancel);
 
             // Saving may succeed while the editor still holds an ordinary
             // read handle without FILE_SHARE_DELETE. This is NOT a Save error.
@@ -262,12 +262,19 @@ internal static class ExternalEditSmokeFlow
                     !File.ReadAllBytes(photo).SequenceEqual(expectedSaved) ||
                     ExternalEditTransaction.FindPending() is not null)
                     throw new Exception("Locked cleanup incorrectly failed a completed Save.");
-                var fresh = ExternalEditTransaction.Begin(other);
-                ExternalEditTransaction.Commit(fresh, null, ExternalEditDecision.Cancel);
+                try
+                {
+                    ExternalEditTransaction.Begin(other);
+                    throw new Exception("Locked Save output was reused.");
+                }
+                catch (InvalidOperationException) { }
             }
             ExternalEditTransaction.CleanupCompletedWorkspaces();
-            if (Directory.Exists(lockedSave.DirectoryPath))
+            if (File.Exists(lockedSave.BackupPath))
                 throw new Exception("Deferred locked Save workspace not cleaned.");
+            var afterLockedSave = ExternalEditTransaction.Begin(other);
+            ExternalEditTransaction.Commit(afterLockedSave, null,
+                ExternalEditDecision.Cancel);
 
             // A RAW input is staged verbatim for an explicitly RAW-enabled
             // external application. Cancel must never alter the camera file.
@@ -401,7 +408,7 @@ internal static class ExternalEditSmokeFlow
             finally { PanoramaTransaction.Cleanup(panorama); }
 
             Console.WriteLine(
-                "PASS: Isolated external sessions, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");
+                "PASS: Flat external exchange, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");
         }
         finally
         {
