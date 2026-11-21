@@ -627,6 +627,12 @@ public static class ExternalEditTransaction
             else if (!VideoFormats.IsVideo(source))
                 EditableImageFormats.ValidateStillImage(source);
 
+            // A Topaz/JPEG result may have replaced its camera timestamp.
+            // Enforce the original EXIF/IPTC/XMP date values on the PRIVATE
+            // workspace copy before any Save/SaveCopy can publish it.
+            if (!VideoFormats.IsVideo(source))
+                ExifDateMetadata.Preserve(session.OriginalPath, source, token);
+
             using (SourceFileLocks.Enter(session.OriginalPath, token))
             {
                 if (decision == ExternalEditDecision.Save)
