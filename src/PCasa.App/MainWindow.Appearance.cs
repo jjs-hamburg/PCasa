@@ -905,6 +905,9 @@ public partial class MainWindow
         var text = $"Name: {row.GetString(0)}\nOrdner: {Path.GetDirectoryName(path)}" +
                $"\nGröße: {row.GetInt64(2) / 1024d / 1024d:N2} MB" +
                $"\nAbmessungen: {row.GetInt32(3)} × {row.GetInt32(4)}" +
+               // Keep an XMP-only/RAW capture date visible even when native
+               // EXIF DateTimeOriginal is not present.
+               $"\nAufnahme (Katalog): {StringAt(8) ?? "–"}" +
                $"\nKamera: {(string.IsNullOrEmpty(camera) ? "–" : camera)}" +
                $"\nGPS: {(gpsValid ? FormatGpsCoordinates(lat!.Value, lon!.Value) : "–")}" +
                $"\nTags: {(tagLines == "–" ? "–" : "\n  • " + tagLines)}" +
