@@ -305,7 +305,8 @@ public partial class MainWindow
             availableHeight / _editCompareEdited.PixelHeight);
         if (side)
         {
-            var before = _editCompareOriginal ?? _editCompareEdited;
+            var before = _editCompareUncroppedOriginal ??
+                _editCompareOriginal ?? _editCompareEdited;
             var beforeFit = Math.Min(availableWidth / before.PixelWidth,
                 availableHeight / before.PixelHeight);
             EditCompareSideOriginal.Width = before.PixelWidth * beforeFit;
