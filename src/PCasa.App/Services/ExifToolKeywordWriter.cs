@@ -284,6 +284,36 @@ public static class ExifToolKeywordWriter
             }
         }
 
+        // Only the known capture/creation/modification date tags can enter
+        // this stay-open command stream. Preserve file last-write time for
+        // external results; user-initiated editing advances it independently.
+        public void WriteExactExifDates(string imagePath,
+            IReadOnlyDictionary<string, string?> values,
+            CancellationToken token = default)
+        {
+            if (RawImageSource.IsRawPath(imagePath))
+                throw new NotSupportedException(
+                    "RAW-Metadaten dürfen von dieser Funktion nicht verändert werden.");
+            if (values.Count == 0) return;
+            var commands = new List<string>();
+            foreach (var (tag, value) in values)
+            {
+                if (!ExifDateMetadata.IsAllowedTag(tag))
+                    throw new ArgumentException("Nicht unterstütztes EXIF-Datumsfeld: " + tag);
+                if (value is { Length: > 128 } || value?.Contains('\r') == true ||
+                    value?.Contains('\n') == true)
+                    throw new InvalidDataException(
+                        "Exif-Datumswert enthält unzulässige Steuerzeichen.");
+                commands.Add("-" + tag + "=" + (value ?? ""));
+            }
+            lock (_operationGate)
+            {
+                Interlocked.Increment(ref _activeWrites);
+                try { ExecuteMetadataEdit(imagePath, commands, token); }
+                finally { Interlocked.Decrement(ref _activeWrites); }
+            }
+        }
+
         // Shared native write lifecycle: a scheduler yield can interrupt
         // BEFORE the request, never during ExifTool's temporary-file swap.
         private void ExecuteMetadataEdit(string imagePath,

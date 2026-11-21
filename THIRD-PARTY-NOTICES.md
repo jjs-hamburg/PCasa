@@ -13,6 +13,9 @@ relicense those components.
 | Microsoft.Data.Sqlite 10.0.12 | MIT; includes transitive SQLitePCLRaw/native SQLite dependencies | https://www.nuget.org/packages/Microsoft.Data.Sqlite/10.0.12 |
 | CefSharp.Wpf.NETCore 152.0.100 | BSD-family; CEF and Chromium third-party notices apply | https://github.com/cefsharp/CefSharp |
 | NetVips 3.2.0 | MIT | https://github.com/kleisauke/net-vips |
+| Vortice.Direct3D11, Vortice.D3DCompiler, Vortice.DirectX and Vortice.DXGI 3.8.3 | MIT; copyright Amer Koleci and Contributors; original license at `Licenses/MIT-Vortice.txt` | https://github.com/amerkoleci/Vortice.Windows |
+| Vortice.Mathematics 2.1.0 | MIT; separate core math dependency | https://github.com/amerkoleci/Vortice.Mathematics |
+| SharpGen.Runtime and SharpGen.Runtime.COM 2.4.2-beta | MIT; transitive COM bindings dependencies; copyright Alexandre Mutel, Jeremy Koritzinsky, Amer Koleci and contributors | https://github.com/SharpGenTools/SharpGenTools |
 | libvips Windows dynamic web distribution 8.18.7 | LGPL-3.0-or-later for libvips; 38 separate native DLLs with individual licenses | https://github.com/libvips/build-win64-mxe/releases/tag/v8.18.7 |
 | MapLibre GL JS 5.9.0 | BSD-3-Clause; detailed attributions in `Licenses/MapLibre-LICENSE.txt` | https://github.com/maplibre/maplibre-gl-js |
 | ExifTool 13.59 | ExifTool's GPL/Artistic dual-licensing; Windows binary includes Perl and its additional third-party terms | https://exiftool.org/ |

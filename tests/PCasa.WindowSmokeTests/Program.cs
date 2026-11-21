@@ -1953,11 +1953,15 @@ internal static class Program
                 if (!ReferenceEquals(slideshow.Background, galleryBrush) ||
                     slideshow.CurrentImageIndex != 0 || slideshow.IsPaused)
                     throw new Exception("Slideshow failed to show the gallery-texture default.");
+                // The native Direct3D HWND is a rendering surface, not an
+                // extra slideshow control or caption. WPF's fallback Grid
+                // stays in the same root, but must not add label overlays.
                 if (slideshow.Content is not Grid slideRoot ||
-                    slideRoot.Children.Count != 1 ||
-                    slideRoot.Children[0] is not Grid)
+                    slideRoot.Children.Count != 2 ||
+                    slideRoot.Children[0] is not Grid ||
+                    slideRoot.Children[1] is not System.Windows.Interop.HwndHost)
                     throw new Exception(
-                        "Slideshow added unrequested filenames, captions or keyboard hint overlays.");
+                        "Slideshow added an unexpected overlay or is missing its GPU surface.");
                 var slidesFlags = System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic;
                 var currentLayerField = typeof(SlideshowWindow).GetField(
@@ -2130,9 +2134,26 @@ internal static class Program
                     if (observedClock && observedMotion) break;
                     System.Threading.Thread.Sleep(15);
                 }
-                if (!observedClock || !observedMotion)
+                var gpu = typeof(SlideshowWindow).GetField("_gpu", flags)!
+                    .GetValue(sliding);
+                if (gpu?.GetType().GetProperty("IsReady")?.GetValue(gpu)
+                    is true)
+                {
+                    // Direct3D11 uses an independent vsync-paced flip chain:
+                    // there MUST NOT be a WPF animation clock in this mode.
+                    if (observedClock)
+                        throw new Exception("GPU slide still animated WPF.");
+                    var slideMath = gpu.GetType().GetMethod("SlideTravel")!;
+                    var travel = (double)slideMath.Invoke(null,
+                        [640.0, 400.0, 320.0])!;
+                    var gap = travel - 400 / 2.0 - 320 / 2.0;
+                    if (Math.Abs(gap - (640 - 400) / 2.0) > .01)
+                        throw new Exception(
+                            "Slide image gap differs from previous right margin.");
+                }
+                else if (!observedClock || !observedMotion)
                     throw new Exception(
-                        "Slide did not animate an attached WPF transform " +
+                        "Fallback slide did not animate an attached WPF transform " +
                         $"(clock={observedClock}, moving={observedMotion}, x={shift.X:F1}).");
                 Until(sliding, () =>
                     typeof(SlideshowWindow).GetField("_transitioning", flags)!
@@ -2484,6 +2505,39 @@ internal static class Program
                 syntheticTimer?.Stop();
                 scrollType.GetField("_catalogPublicationPending", scrollFlags)!
                     .SetValue(window, 0);
+                // A timer tick may ALREADY have dispatched an async catalog
+                // snapshot before Stop() ran. The synthetic images are not
+                // in the real (empty) test database. Invalidate its request,
+                // drain any in-flight publisher and then restore the fixture
+                // before checking the real ScrollViewer's folder edge.
+                // Never relax the folder-edge assertions themselves.
+                browseInitializedField.SetValue(window, false);
+                ((LatestViewRequest)scrollType.GetField(
+                    "_browseRefreshRequests", scrollFlags)!.GetValue(window)!)
+                    .Invalidate();
+                var edgePublisherField = scrollType.GetField(
+                    "_galleryRefreshCompletion", scrollFlags)!;
+                for (var retry = 0; retry < 100; retry++)
+                {
+                    Flush(window);
+                    if (edgePublisherField.GetValue(window) is not Task pending ||
+                        pending.IsCompleted)
+                        break;
+                    System.Threading.Thread.Sleep(20);
+                }
+                if (edgePublisherField.GetValue(window) is Task edgePublisher &&
+                    !edgePublisher.IsCompleted)
+                    throw new Exception(
+                        "Catalog publisher did not settle before live folder-edge probe.");
+                syntheticTimer?.Stop();
+                scrollType.GetField("_catalogPublicationPending", scrollFlags)!
+                    .SetValue(window, 0);
+                pages.SetIndex(synthetic);
+                surface.SetData(synthetic, groups, pages);
+                Flush(window);
+                if (Math.Abs((surface.GetFolderOffset(200) ?? -1) - secondStart) > 1)
+                    throw new Exception(
+                        "Synthetic second-folder offset changed before live-edge probe.");
                 scroller.ScrollToVerticalOffset(secondStart - 60);
                 Flush(window);
                 if (scroller.VerticalOffset <= 2 ||

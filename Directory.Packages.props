@@ -6,5 +6,7 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageVersion Include="CefSharp.Wpf.NETCore" Version="152.0.100" />
     <PackageVersion Include="NetVips" Version="3.2.0" />
+    <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageVersion Include="Vortice.D3DCompiler" Version="3.8.3" />
   </ItemGroup>
 </Project>

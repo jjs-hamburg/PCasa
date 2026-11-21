@@ -161,6 +161,9 @@ public static class JpegCropWriter
             // Preserve EXIF/IPTC/XMP/GPS from the original in BOTH modes.
             // Pixels are already upright; EXIF Orientation must reset to 1.
             CopyMetadata(fullPath, staged, width, height, token);
+            // Validate before the atomic original replacement. No internal
+            // crop, adjustment or duplicate may rewrite camera dates.
+            ExifDateMetadata.VerifyUnchanged(fullPath, staged, token);
             var savedDimensions = EditableImageFormats.Dimensions(staged);
             if (savedDimensions.Width != width || savedDimensions.Height != height)
                 throw new InvalidDataException(

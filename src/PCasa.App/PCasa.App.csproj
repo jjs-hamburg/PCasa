@@ -15,6 +15,8 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="CefSharp.Wpf.NETCore" />
     <PackageReference Include="NetVips" />
+    <PackageReference Include="Vortice.Direct3D11" />
+    <PackageReference Include="Vortice.D3DCompiler" />
   </ItemGroup>
   
   <ItemGroup Condition="Exists('Assets/PCasa.ico')">
@@ -39,6 +41,8 @@
     <Content Include="../../LICENSES-APACHE-2.0.txt" Link="Licenses/Apache-2.0.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-MIT-Microsoft.txt" Link="Licenses/MIT-Microsoft.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSES-MIT-Vortice.txt" Link="Licenses/MIT-Vortice.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-MIT-NetVips.txt" Link="Licenses/MIT-NetVips.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

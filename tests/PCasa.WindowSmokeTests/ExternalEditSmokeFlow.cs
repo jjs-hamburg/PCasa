@@ -536,6 +536,106 @@ internal static class ExternalEditSmokeFlow
             }
             finally { PanoramaTransaction.Cleanup(panorama); }
 
+            // Alpha.49: never inherit Topaz's invented capture timestamps.
+            // This regression exercises the real EXIF fields and real
+            // SaveCopy/Save transactions, not a mocked metadata reader.
+            var datedPhoto = Path.Combine(root, "20261119_140035.jpg");
+            WriteJpeg(datedPhoto, 49, 64);
+            var trueDates = new ExifDateMetadata.Fields(
+                "2026:11:19 14:00:35", "2026:11:19 14:00:35",
+                "2026:11:19 14:00:35");
+            var fakeDates = new ExifDateMetadata.Fields(
+                "2026:11:19 14:08:07", "2026:11:19 14:08:07",
+                "2026:11:19 14:08:07");
+            using (var writer = new ExifToolKeywordWriter.Session())
+                writer.WriteExactExifDates(datedPhoto,
+                    new Dictionary<string, string?>
+                    {
+                        ["EXIF:DateTimeOriginal"] = trueDates.DateTimeOriginal,
+                        ["EXIF:CreateDate"] = trueDates.CreateDate,
+                        ["EXIF:ModifyDate"] = trueDates.ModifyDate
+                    });
+            if (ExifDateMetadata.ReadFields(datedPhoto) != trueDates)
+                throw new Exception("EXIF capture timestamp test image is invalid.");
+            var datedOriginalBytes = File.ReadAllBytes(datedPhoto);
+            var topazCopy = ExternalEditTransaction.Begin(datedPhoto);
+            WriteJpeg(topazCopy.BackupPath, 181, 64);
+            using (var writer = new ExifToolKeywordWriter.Session())
+                writer.WriteExactExifDates(topazCopy.BackupPath,
+                    new Dictionary<string, string?>
+                    {
+                        ["EXIF:DateTimeOriginal"] = fakeDates.DateTimeOriginal,
+                        ["EXIF:CreateDate"] = fakeDates.CreateDate,
+                        ["EXIF:ModifyDate"] = fakeDates.ModifyDate
+                    });
+            var datedCopy = ExternalEditTransaction.Commit(
+                topazCopy, topazCopy.BackupPath,
+                ExternalEditDecision.SaveCopy, undoOptions: undoOptions)!;
+            if (ExifDateMetadata.ReadFields(datedCopy) != trueDates ||
+                ExifDateMetadata.ReadFields(datedPhoto) != trueDates ||
+                !File.ReadAllBytes(datedPhoto).SequenceEqual(datedOriginalBytes))
+                throw new Exception(
+                    "Topaz SaveCopy changed original capture/digitization EXIF.");
+            var topazSave = ExternalEditTransaction.Begin(datedPhoto);
+            WriteJpeg(topazSave.BackupPath, 128, 64);
+            using (var writer = new ExifToolKeywordWriter.Session())
+                writer.WriteExactExifDates(topazSave.BackupPath,
+                    new Dictionary<string, string?>
+                    {
+                        ["EXIF:DateTimeOriginal"] = fakeDates.DateTimeOriginal,
+                        ["EXIF:CreateDate"] = fakeDates.CreateDate,
+                        ["EXIF:ModifyDate"] = fakeDates.ModifyDate
+                    });
+            ExternalEditTransaction.Commit(topazSave, topazSave.BackupPath,
+                ExternalEditDecision.Save, undoOptions: undoOptions);
+            if (ExifDateMetadata.ReadFields(datedPhoto) != trueDates)
+                throw new Exception(
+                    "Topaz Save changed the original EXIF photo timestamp.");
+            var corrected = trueDates with
+            {
+                DateTimeOriginal = "2026:11:19 14:01:05"
+            };
+            ExifDateMetadata.SaveExplicit(datedCopy, corrected,
+                undoOptions: undoOptions);
+            if (ExifDateMetadata.ReadFields(datedCopy) != corrected ||
+                !new UndoHistoryService(undoOptions).GetVersions(datedCopy).Any())
+                throw new Exception(
+                    "Explicit EXIF correction failed or has no central Undo.");
+            var noDate = Path.Combine(root, "no-date.jpg");
+            WriteJpeg(noDate, 58, 64);
+            var noDateSession = ExternalEditTransaction.Begin(noDate);
+            WriteJpeg(noDateSession.BackupPath, 118, 64);
+            using (var writer = new ExifToolKeywordWriter.Session())
+                writer.WriteExactExifDates(noDateSession.BackupPath,
+                    new Dictionary<string, string?>
+                    {
+                        ["EXIF:DateTimeOriginal"] = fakeDates.DateTimeOriginal
+                    });
+            var noDateCopy = ExternalEditTransaction.Commit(noDateSession,
+                noDateSession.BackupPath, ExternalEditDecision.SaveCopy,
+                undoOptions: undoOptions)!;
+            if (ExifDateMetadata.ReadFields(noDateCopy).DateTimeOriginal is not null)
+                throw new Exception(
+                    "External edit invented an EXIF capture date for a dateless photo.");
+            var filenameCases = new[]
+            {
+                ("20261119_140035-Kopie.jpg", "2026:11:19 14:00:35"),
+                ("IMG_20261119_140035.jpg", "2026:11:19 14:00:35"),
+                ("PXL_20261119_140035123.jpg", "2026:11:19 14:00:35"),
+                ("2026-11-19_14-00-35.jpg", "2026:11:19 14:00:35")
+            };
+            foreach (var (filename, expected) in filenameCases)
+                if (PhotoDateFromFilename.Recognize(filename)?.AsExifDateTime != expected)
+                    throw new Exception("Phone filename timestamp rejected: " + filename);
+            if (PhotoDateFromFilename.Recognize("IMG-20261119-WA0001.jpg")
+                    is not { Time: null } dateOnly ||
+                dateOnly.Date != new DateOnly(2026, 11, 19) ||
+                PhotoDateFromFilename.Recognize("IMG_20260230_256199.jpg") is not null)
+                throw new Exception(
+                    "Phone filename parser invented a time or accepted invalid fields.");
+            Console.WriteLine(
+                "PASS: Topaz Save/Copy preserves EXIF dates; explicit edits have Undo; phone filename conventions parsed.");
+
             Console.WriteLine(
                 "PASS: Flat external exchange, timestamp/copy rules, DNG, batch mapping, and independent editor flags.");
         }

@@ -1962,6 +1962,44 @@
                     <ScrollViewer x:Name="GeneralSidebarScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <TextBlock x:Name="SidePanelText" TextWrapping="Wrap" FontSize="12"/>
+                            <!-- Only visible for a selected still photo's Info sidebar.
+                                 Normal image edits cannot change these fields. -->
+                            <StackPanel x:Name="InfoDatesPanel" Margin="0,14,0,0"
+                                        Visibility="Collapsed">
+                                <TextBlock FontWeight="SemiBold" FontSize="13"
+                                           Text="{loc:Tr Key='EXIF-Datumsfelder'}"
+                                           Margin="0,0,0,7"/>
+                                <TextBlock Text="{loc:Tr Key='Aufnahmedatum'}" FontSize="12"/>
+                                <TextBox x:Name="InfoDateOriginal" FontSize="12"
+                                         IsReadOnly="True" Margin="0,2,0,4"
+                                         ToolTip="{loc:Tr Key='Datum und Uhrzeit: TT.MM.JJJJ HH:MM:SS'}"/>
+                                <Button x:Name="InfoDateFromName" Visibility="Collapsed"
+                                        Content="{loc:Tr Key='Aus Dateinamen übernehmen'}"
+                                        HorizontalAlignment="Left" Margin="0,0,0,9"
+                                        Padding="8,4" Click="InfoDateFromFilename_Click"/>
+                                <TextBlock Text="{loc:Tr Key='Digitalisierungsdatum'}" FontSize="12"/>
+                                <TextBox x:Name="InfoDateCreated" FontSize="12"
+                                         IsReadOnly="True" Margin="0,2,0,9"
+                                         ToolTip="{loc:Tr Key='Datum und Uhrzeit: TT.MM.JJJJ HH:MM:SS'}"/>
+                                <TextBlock Text="{loc:Tr Key='EXIF-Änderungsdatum'}" FontSize="12"/>
+                                <TextBox x:Name="InfoDateModified" FontSize="12"
+                                         IsReadOnly="True" Margin="0,2,0,9"
+                                         ToolTip="{loc:Tr Key='Datum und Uhrzeit: TT.MM.JJJJ HH:MM:SS'}"/>
+                                <Button x:Name="InfoDatesEdit" Padding="7,4"
+                                        Content="{loc:Tr Key='Bearbeiten'}"
+                                        HorizontalAlignment="Left"
+                                        Click="InfoDatesEdit_Click"/>
+                                <StackPanel x:Name="InfoDatesActions"
+                                            Orientation="Horizontal"
+                                            Visibility="Collapsed">
+                                    <Button x:Name="InfoDatesSave" Padding="9,4"
+                                            Margin="0,0,7,0" Click="InfoDatesSave_Click"
+                                            Content="{loc:Tr Key='Speichern'}"/>
+                                    <Button x:Name="InfoDatesCancel" Padding="9,4"
+                                            Click="InfoDatesCancel_Click"
+                                            Content="{loc:Tr Key='Abbrechen'}"/>
+                                </StackPanel>
+                            </StackPanel>
                             <Button x:Name="InfoCopyGpsButton" Visibility="Collapsed"
                                     HorizontalAlignment="Left" Margin="0,7,0,0"
                                     Padding="7,3" Click="InfoCopyGps_Click"
