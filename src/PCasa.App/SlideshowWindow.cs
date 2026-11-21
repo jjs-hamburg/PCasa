@@ -675,7 +675,7 @@ public sealed class SlideshowWindow : Window
         _transitioning = false;
         _gpu?.Complete();
         var elapsed = (DateTime.UtcNow - _transitionStartedUtc).TotalSeconds;
-        if (elapsed > 0.01)
+        if (_gpu is null && elapsed > 0.01)
             PCasaDiagnostics.WriteMessage("Slideshow.TransitionFrames",
                 $"mode={_options.Transition}; frames={_transitionRenderedFrames}; " +
                 $"seconds={elapsed:F2}; fps={_transitionRenderedFrames / elapsed:F1}");
