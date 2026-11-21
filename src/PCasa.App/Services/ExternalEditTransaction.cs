@@ -82,6 +82,11 @@ public static class ExternalEditTransaction
             }
             if (previous is not null) CleanupWorkspaceContents(previous.DirectoryPath);
             CleanupCompletedWorkspaces();
+            // Prior alphas archived inert GUID manifests outside ExternalEdit.
+            // These have no purpose once crash recovery is intentionally gone.
+            var retired = Path.Combine(Path.GetDirectoryName(DirectoryPath)!,
+                "ExternalEditRetired");
+            if (Directory.Exists(retired)) TryCleanupFolder(retired);
             return found;
         }
     }
