@@ -2131,15 +2131,17 @@ internal static class Program
                     System.Threading.Thread.Sleep(15);
                 }
                 var gpu = typeof(SlideshowWindow).GetField("_gpu", flags)!
-                    .GetValue(sliding) as Direct3DSlideshowSurface;
-                if (gpu is { IsReady: true })
+                    .GetValue(sliding);
+                if (gpu?.GetType().GetProperty("IsReady")?.GetValue(gpu)
+                    is true)
                 {
                     // Direct3D11 uses an independent vsync-paced flip chain:
                     // there MUST NOT be a WPF animation clock in this mode.
                     if (observedClock)
                         throw new Exception("GPU slide still animated WPF.");
-                    var travel = Direct3DSlideshowSurface.SlideTravel(
-                        640, 400, 320);
+                    var slideMath = gpu.GetType().GetMethod("SlideTravel")!;
+                    var travel = (double)slideMath.Invoke(null,
+                        [640.0, 400.0, 320.0])!;
                     var gap = travel - 400 / 2.0 - 320 / 2.0;
                     if (Math.Abs(gap - (640 - 400) / 2.0) > .01)
                         throw new Exception(
