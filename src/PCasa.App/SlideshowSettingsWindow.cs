@@ -111,8 +111,7 @@ public sealed class SlideshowSettingsWindow : Window
         _preload = Toggle(fields, "Nächstes Bild vorausladen", _values.PreloadNext);
         _transition = Choice(fields, "Übergang", _values.Transition,
             ("none", "Aus"), ("fade", "Überblenden"),
-            ("zoom", "Sanfter Zoom"), ("slide", "Schieben"),
-            ("projector", "Projektor"));
+            ("zoom", "Sanfter Zoom"), ("slide", "Schieben"));
         _duration = Number(fields, "Übergangsdauer (ms)", _values.TransitionMilliseconds);
         _border = Toggle(fields, "Weißer Rahmen", _values.WhiteBorder);
         _borderSize = Number(fields, "Rahmenbreite (px)", _values.BorderWidth);
