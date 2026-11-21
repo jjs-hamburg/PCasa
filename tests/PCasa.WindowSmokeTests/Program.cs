@@ -2107,9 +2107,33 @@ internal static class Program
                 if (incomingFrame.RenderTransform is not TransformGroup transforms ||
                     !transforms.Children.Contains(shift))
                     throw new Exception("Slide transform is not attached to its image.");
-                if (!DependencyPropertyHelper.GetValueSource(
-                        shift, TranslateTransform.XProperty).IsAnimated)
-                    throw new Exception("Slide is not driven by a WPF render clock.");
+                // BeginAnimation queues its clock for the NEXT composition
+                // pass. Querying IsAnimated before pumping the STA dispatcher
+                // races WPF and spuriously reports that there is no clock.
+                // Verify actual interpolation instead of merely relaxing
+                // the check: both the attached clock and moving pixels are
+                // required while the transition is active.
+                var observedClock = false;
+                var observedMotion = false;
+                var highestX = shift.X;
+                var animationDeadline = DateTime.UtcNow.AddMilliseconds(550);
+                while (DateTime.UtcNow < animationDeadline)
+                {
+                    Flush(sliding);
+                    observedClock |= DependencyPropertyHelper.GetValueSource(
+                        shift, TranslateTransform.XProperty).IsAnimated;
+                    var currentX = shift.X;
+                    highestX = Math.Max(highestX, currentX);
+                    if (highestX > 8 && currentX < highestX - 5 &&
+                        currentX > 0)
+                        observedMotion = true;
+                    if (observedClock && observedMotion) break;
+                    System.Threading.Thread.Sleep(15);
+                }
+                if (!observedClock || !observedMotion)
+                    throw new Exception(
+                        "Slide did not animate an attached WPF transform " +
+                        $"(clock={observedClock}, moving={observedMotion}, x={shift.X:F1}).");
                 Until(sliding, () =>
                     typeof(SlideshowWindow).GetField("_transitioning", flags)!
                         .GetValue(sliding) is false,
