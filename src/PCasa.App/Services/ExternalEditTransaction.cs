@@ -198,6 +198,8 @@ public static class ExternalEditTransaction
         }
         var before = Path.Combine(root, ".pcasa-before");
         if (Directory.Exists(before)) TryCleanupFolder(before);
+        var internalCopy = Path.Combine(root, ".pcasa-internal");
+        if (Directory.Exists(internalCopy)) TryCleanupFolder(internalCopy);
         foreach (var folder in Directory.EnumerateDirectories(root, "session-*"))
         {
             var name = Path.GetFileName(folder);
@@ -215,6 +217,7 @@ public static class ExternalEditTransaction
             Path.GetFileName(file) is not
                 ("session.json" or FlatExchangeMarker));
         var before = Directory.Exists(Path.Combine(root, ".pcasa-before")) ? 1 : 0;
+        if (Directory.Exists(Path.Combine(root, ".pcasa-internal"))) before++;
         var sessions = Directory.EnumerateDirectories(root, "session-*")
             .Count(dir => Guid.TryParseExact(
                 Path.GetFileName(dir)["session-".Length..], "N", out _));
@@ -537,8 +540,23 @@ public static class ExternalEditTransaction
             if (session.Finalizing is { } choice && choice != decision &&
                 !(choice == ExternalEditDecision.SaveCopy &&
                   decision == ExternalEditDecision.Save))
+            {
+                // If an earlier Save/Copy was marked finalizing but failed
+                // before publishing anything, Cancel must remain a safe
+                // escape route. NEVER undo a file that was already published.
+                if (decision == ExternalEditDecision.Cancel &&
+                    !OriginalChanged(session) &&
+                    (session.FinalTarget is null ||
+                     session.FinalTarget.Equals(session.OriginalPath,
+                         StringComparison.OrdinalIgnoreCase) ||
+                     !File.Exists(session.FinalTarget)))
+                {
+                    Finish(session);
+                    return null;
+                }
                 throw new InvalidOperationException(
                     "Die externe Bearbeitung wird bereits abgeschlossen.");
+            }
             if (decision == ExternalEditDecision.Cancel)
             {
                 // Nothing has ever changed the source image. No restore and
@@ -563,8 +581,15 @@ public static class ExternalEditTransaction
                 RequiresNewFile(session.OriginalPath, source))
                 throw new NotSupportedException(UiLanguage.T(
                     "Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
-            if (!Path.GetDirectoryName(source)!.Equals(
-                    session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+            var resultDirectory = Path.GetDirectoryName(source)!;
+            var ownedInternalCopy = Path.Combine(session.DirectoryPath,
+                ".pcasa-internal");
+            var privateResult = resultDirectory.Equals(ownedInternalCopy,
+                    StringComparison.OrdinalIgnoreCase) &&
+                Path.GetFileNameWithoutExtension(source).Equals(
+                    "result", StringComparison.OrdinalIgnoreCase);
+            if (!resultDirectory.Equals(session.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase) && !privateResult)
                 throw new InvalidOperationException(
                     "ExternalEdit: Ergebnis liegt nicht im Arbeitsverzeichnis.");
             if (VideoFormats.IsVideo(session.OriginalPath)
