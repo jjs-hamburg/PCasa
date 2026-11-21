@@ -148,41 +148,49 @@ public static class PanoramaTransaction
         }
     }
 
+    // Exactly ONE session-owned exchange directory is authoritative.
+    // The output can be a newly exported file OR a staged input overwritten
+    // by the external editor. A byte-for-byte unchanged staged copy is NEVER
+    // an output; timestamps alone are not evidence of image changes.
     public static string? FindResult(PanoramaSession session)
     {
         if (!Directory.Exists(session.Directory)) return null;
         var inputs = session.Inputs.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var results = Directory.EnumerateFiles(session.Directory)
+        var exports = Directory.EnumerateFiles(session.Directory)
             .Where(path => !inputs.Contains(path) &&
                 EditableImageFormats.SupportsExternalResult(path) &&
                 new FileInfo(path).Length > 0)
             .ToArray();
-        if (results.Length > 1)
+        if (exports.Length > 1)
             throw new InvalidDataException(
                 "Mehrere Panoramaergebnisse gefunden; keine automatische Zuordnung möglich.");
-        if (results.Length == 1) return results[0];
+        if (exports.Length == 1) return exports[0];
 
-        // Some editors default to PCasa's established ExternalEdit root
-        // instead of respecting the temporary panorama WorkingDirectory.
-        // This is the ONLY alternative directory we know, not an arbitrary
-        // scan of the user's filesystem. Never import an old export based
-        // merely on its name and never pick between multiple new files.
-        var externalRoot = ExternalEditTransaction.DirectoryPath;
-        if (!System.IO.Directory.Exists(externalRoot)) return null;
-        var sessionCreatedUtc = System.IO.Directory.GetCreationTimeUtc(session.Directory);
-        var earliest = sessionCreatedUtc.AddSeconds(-2);
-        var candidates = System.IO.Directory.EnumerateFiles(externalRoot)
-            .Where(path =>
-            {
-                if (!EditableImageFormats.SupportsExternalResult(path))
-                    return false;
-                var info = new FileInfo(path);
-                return info.Length > 0 &&
-                    (info.LastWriteTimeUtc >= earliest ||
-                     info.CreationTimeUtc >= earliest);
-            })
+        // An unchanged copy of every source is expected after Begin().
+        // Only a hash difference makes a same-name overwritten input valid.
+        var changedInputs = Enumerable.Range(0, session.Inputs.Length)
+            .Where(index =>
+                File.Exists(session.Inputs[index]) &&
+                EditableImageFormats.SupportsExternalResult(session.Inputs[index]) &&
+                InputWasModified(session, index))
             .ToArray();
-        return candidates.Length == 1 ? candidates[0] : null;
+        if (changedInputs.Length > 1)
+            throw new InvalidDataException(
+                "Mehrere geänderte Panorama-Arbeitsdateien; Ergebnis nicht eindeutig.");
+        return changedInputs.Length == 1
+            ? session.Inputs[changedInputs[0]] : null;
+    }
+
+    private static bool InputWasModified(PanoramaSession session, int index)
+    {
+        var hashes = session.InputHashes;
+        if (hashes is null || index < 0 || index >= hashes.Length)
+            return false;
+        var path = session.Inputs[index];
+        using var stream = new FileStream(path, FileMode.Open,
+            FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        return !Convert.ToHexString(SHA256.HashData(stream)).Equals(
+            hashes[index], StringComparison.OrdinalIgnoreCase);
     }
 
     // A batch editor may change the working inputs in-place or create new
@@ -208,13 +216,7 @@ public static class PanoramaTransaction
                 continue;
             var input = session.Inputs[index];
             if (!File.Exists(input)) continue;
-            var previous = session.InputHashes is { } hashes && index < hashes.Length
-                ? hashes[index] : null;
-            if (previous is null) continue;
-            using var source = new FileStream(input, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            var current = Convert.ToHexString(SHA256.HashData(source));
-            if (!current.Equals(previous, StringComparison.OrdinalIgnoreCase))
+            if (InputWasModified(session, index))
                 exports.Add(new ExternalBatchOutput(index, input));
         }
         return exports.ToArray();
@@ -323,10 +325,16 @@ public static class PanoramaTransaction
         token.ThrowIfCancellationRequested();
         var fullResult = Path.GetFullPath(result);
         if (!Path.GetDirectoryName(fullResult)!.Equals(session.Directory,
-                StringComparison.OrdinalIgnoreCase) ||
-            session.Inputs.Any(input => input.Equals(fullResult,
-                StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("Panoramaergebnis liegt nicht im Sitzungsordner.");
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Panoramaergebnis liegt nicht im Sitzungsordner.");
+        // A changed input is also a valid output, but an untouched input
+        // must never masquerade as a panorama.
+        var sourceIndex = Array.FindIndex(session.Inputs, input =>
+            input.Equals(fullResult, StringComparison.OrdinalIgnoreCase));
+        if (sourceIndex >= 0 && !InputWasModified(session, sourceIndex))
+            throw new InvalidOperationException(
+                "Unveränderte Arbeitskopie ist kein Panoramaergebnis.");
         EditableImageFormats.ValidateStillImage(fullResult);
         var externalModifiedUtc = File.GetLastWriteTimeUtc(fullResult);
         var originalCreatedUtc = File.GetCreationTimeUtc(session.Sources[0]);
