@@ -454,6 +454,9 @@ internal static class ExternalEditSmokeFlow
                 isPanorama: false, workspaceRoot: batchRoot);
             try
             {
+                if (PanoramaTransaction.FindMultipleResults(batch).Length != 0)
+                    throw new Exception(
+                        "Unchanged copied inputs were reported as external batch results.");
                 WriteJpeg(batch.Inputs[0], 205);
                 var secondExport = Path.Combine(batch.Directory,
                     Path.GetFileNameWithoutExtension(batch.Inputs[1]) +
@@ -507,34 +510,65 @@ internal static class ExternalEditSmokeFlow
             }
             finally { PanoramaTransaction.Cleanup(batch); }
 
-            // A program may place the panorama in PCasa's already-known
-            // ExternalEdit root, not inside its panorama session directory.
-            // Discover exactly one NEW result there, never a historic file.
+            // Only the explicit exchange directory is authoritative. A
+            // separate file with ANY filename is a panorama result; an
+            // unchanged input or a file in a foreign folder is NOT one.
             var panorama = PanoramaTransaction.Begin(
                 [(1L, photo), (2L, other)], [], null, null,
                 workspaceRoot: Path.Combine(root, "PanoramaTests"));
             try
             {
+                if (PanoramaTransaction.FindResult(panorama) is not null)
+                    throw new Exception(
+                        "Unchanged source copies were reported as a panorama.");
                 Directory.CreateDirectory(ExternalEditTransaction.DirectoryPath);
-                var stale = Path.Combine(ExternalEditTransaction.DirectoryPath,
-                    "historic-export.jpg");
-                WriteJpeg(stale, 21);
-                File.SetCreationTimeUtc(stale, DateTime.UtcNow.AddDays(-1));
-                File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-1));
-                var output = Path.Combine(ExternalEditTransaction.DirectoryPath,
-                    "topaz-panorama.jpg");
+                var foreign = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                    "outside-this-session.jpg");
+                WriteJpeg(foreign, 211);
+                if (PanoramaTransaction.FindResult(panorama) is not null)
+                    throw new Exception(
+                        "Panorama illegally imported an export outside its exchange directory.");
+                var output = Path.Combine(panorama.Directory, "arbitrary-output.jpg");
                 WriteJpeg(output, 211);
                 if (PanoramaTransaction.FindResult(panorama) != output)
                     throw new Exception(
-                        "Fresh panorama in known ExternalEdit root was not found.");
-                var competing = Path.Combine(ExternalEditTransaction.DirectoryPath,
+                        "New panorama with unrelated filename was not discovered.");
+                var competing = Path.Combine(panorama.Directory,
                     "second-panorama.jpg");
                 WriteJpeg(competing, 177);
-                if (PanoramaTransaction.FindResult(panorama) is not null)
+                try
+                {
+                    PanoramaTransaction.FindResult(panorama);
                     throw new Exception(
-                        "Ambiguous ExternalEdit exports were automatically accepted.");
+                        "Ambiguous panorama exports were silently assigned.");
+                }
+                catch (InvalidDataException) { }
             }
             finally { PanoramaTransaction.Cleanup(panorama); }
+
+            // The source may also be overwritten IN PLACE rather than
+            // exported under a different name. Import must accept precisely
+            // that changed local copy, and reject the other unchanged input.
+            var overwrittenPanorama = PanoramaTransaction.Begin(
+                [(1L, photo), (2L, other)], [], null, null,
+                workspaceRoot: Path.Combine(root, "PanoramaOverwrite"));
+            try
+            {
+                if (PanoramaTransaction.FindResult(overwrittenPanorama) is not null)
+                    throw new Exception("Untouched panorama input was treated as output.");
+                WriteJpeg(overwrittenPanorama.Inputs[0], 83);
+                if (PanoramaTransaction.FindResult(overwrittenPanorama) !=
+                    overwrittenPanorama.Inputs[0])
+                    throw new Exception(
+                        "Panorama result did not recognize overwritten same-name file.");
+                var savedPanorama = PanoramaTransaction.Import(
+                    overwrittenPanorama, overwrittenPanorama.Inputs[0]);
+                if (!File.Exists(savedPanorama) ||
+                    !File.ReadAllBytes(other).SequenceEqual(originals[1]))
+                    throw new Exception(
+                        "Overwritten panorama input was not published as a new result.");
+            }
+            finally { PanoramaTransaction.Cleanup(overwrittenPanorama); }
 
             // Alpha.49: never inherit Topaz's invented capture timestamps.
             // This regression exercises the real EXIF fields and real
