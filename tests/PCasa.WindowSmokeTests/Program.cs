@@ -2093,12 +2093,15 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Prefetched slideshow navigates from local cache and applies refined pixels after transition.");
 
-            // Projector has been retired. The slide transition must move
-            // cached whole-photo frames with an explicit gap, without
-            // scheduling an independent opacity transition on top.
+            // Alpha.50 restores the projector as a native Direct3D effect.
+            // Existing projector preferences must now remain selected,
+            // while unknown legacy values still normalize to a dissolve.
             if (new SlideshowSettings { Transition = "projector" }
+                    .Normalize().Transition != "projector" ||
+                new SlideshowSettings { Transition = "unknown-legacy" }
                     .Normalize().Transition != "fade")
-                throw new Exception("Legacy projector setting was not migrated.");
+                throw new Exception(
+                    "Restored projector or unknown transition normalization failed.");
             var sliding = new SlideshowWindow(window, slideshowSequence, 0,
                 slideshowDatabase, galleryBrush, new SlideshowSettings
                 {
