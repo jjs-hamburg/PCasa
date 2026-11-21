@@ -508,8 +508,12 @@ internal static class Program
                 normalizedSlideshow.Transition != "fade" ||
                 normalizedSlideshow.BackgroundMode != "gallery")
                 throw new Exception("Slideshow settings normalization is unsafe.");
+            foreach (var mode in new[] { "projector", "cube", "cards", "zoomfade",
+                "wipe-left", "wipe-right", "wipe-up", "wipe-down" })
+                if (new SlideshowSettings { Transition = mode }.Normalize().Transition != mode)
+                    throw new Exception("A GPU transition was discarded: " + mode);
             Console.WriteLine(
-                "PASS: Left-anchored slideshow Play, grouped options and inherited gallery texture.");
+                "PASS: Left-anchored slideshow Play, all GPU transitions and inherited gallery texture.");
 
             // The original tone sliders had no direction markings.
             // Each axis must display its endpoint meaning immediately below
@@ -1876,6 +1880,21 @@ internal static class Program
                     choice.IsDropDownOpen = false;
                     Flush(slideshowDialog);
                 }
+                var numericSliders = Descendants<Slider>(slideshowDialog).ToArray();
+                if (numericSliders.Length != 7 ||
+                    numericSliders.Any(slider =>
+                        Math.Abs(slider.Width - numericSliders[0].Width) > .01 ||
+                        !slider.IsSnapToTickEnabled) ||
+                    numericSliders.Any(slider => slider.Parent is not StackPanel row ||
+                        row.Children.LastOrDefault() is not TextBlock))
+                    throw new Exception(
+                        "Slideshow numeric settings need seven equally wide stepped sliders and readouts.");
+                numericSliders[0].Value = 90;
+                Flush(slideshowDialog);
+                if (numericSliders[0].Parent is not StackPanel sliderRow ||
+                    sliderRow.Children.LastOrDefault() is not TextBlock liveNumber ||
+                    !liveNumber.Text.Contains("90", StringComparison.Ordinal))
+                    throw new Exception("Slideshow slider readout did not update.");
                 var slideshowBackgroundPicker = (Microsoft.Win32.OpenFileDialog)
                     typeof(SlideshowSettingsWindow).GetMethod(
                         "CreateBackgroundPicker",
@@ -2150,6 +2169,29 @@ internal static class Program
                     if (Math.Abs(gap - (640 - 400) / 2.0) > .01)
                         throw new Exception(
                             "Slide image gap differs from previous right margin.");
+                    var exitMethod = gpu.GetType().GetMethod("SlideExitTravel")!;
+                    foreach (var photoWidth in new[] { 320.0, 400.0, 550.0, 620.0 })
+                    {
+                        const double screen = 640, shadowExtent = 65;
+                        var exitTravel = (double)exitMethod.Invoke(null,
+                            [screen, photoWidth, shadowExtent])!;
+                        var oldRightAfterSlide =
+                            (screen + photoWidth) / 2 - exitTravel + shadowExtent;
+                        if (oldRightAfterSlide >= 0)
+                            throw new Exception(
+                                "Wide outgoing slide/shadow still visible after transition.");
+                    }
+                    var shadowMethod = gpu.GetType().GetMethod("ShadowRect")!;
+                    var sharp = (ValueTuple<float,float,float,float>)shadowMethod.Invoke(null,
+                        [100f, 80f, 400f, 300f, 25f, 0f])!;
+                    var broad = (ValueTuple<float,float,float,float>)shadowMethod.Invoke(null,
+                        [100f, 80f, 400f, 300f, 25f, 40f])!;
+                    if (sharp.Item1 != 125 || sharp.Item2 != 105 ||
+                        sharp.Item3 != 400 || sharp.Item4 != 300 ||
+                        broad.Item1 != sharp.Item1 || broad.Item2 != sharp.Item2 ||
+                        broad.Item3 != 440 || broad.Item4 != 340)
+                        throw new Exception(
+                            "Shadow expanded above/left or sharp shadow lost its offset.");
                 }
                 else if (!observedClock || !observedMotion)
                     throw new Exception(
@@ -2166,7 +2208,7 @@ internal static class Program
             }
             finally { sliding.Close(); }
             Console.WriteLine(
-                "PASS: Picture-to-picture slide uses GPU translation with a visible gap; projector removed.");
+                "PASS: GPU slide fully ejects wide photo, preserves entry gap and has right-bottom-only shadows.");
 
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
