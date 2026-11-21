@@ -43,6 +43,8 @@
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-MIT-Microsoft.txt" Link="Licenses/MIT-Microsoft.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSES-MIT-Vortice.txt" Link="Licenses/MIT-Vortice.txt"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-MIT-NetVips.txt" Link="Licenses/MIT-NetVips.txt"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../LICENSES-LGPL-3.0.txt" Link="Licenses/LGPL-3.0.txt"
