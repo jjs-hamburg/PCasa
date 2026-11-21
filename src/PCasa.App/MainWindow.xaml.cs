@@ -93,8 +93,11 @@ public partial class MainWindow : Window
             PCasaDiagnostics.WriteMessage("Rename.FolderNeedsReview",
                 $"Rename from {unresolved.Source} to {unresolved.Target} " +
                 "could not be verified. The durable receipt is retained.");
-        // Recovery must own the scheduler pause before the Loaded handler
-        // activates the background scanner.
+        // Alpha.47: only the CURRENT process may own an external edit.
+        // Abandoned files from a crash are discarded, never resurrected as
+        // a task that would suspend the startup/background scanner.
+        try { ExternalEditTransaction.RetirePreviousProcessSession(); }
+        catch (Exception ex) { PCasaDiagnostics.Write("ExternalEdit.StartupCleanup", ex); }
         RecoverExternalEditSchedulerLease();
         ScheduleExternalCleanup();
         _ = WarmExternalEditorIconsAsync();

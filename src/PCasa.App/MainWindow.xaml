@@ -1811,41 +1811,21 @@
                                 </Grid>
                                 <Canvas Background="Transparent">
                                     <primitives:Thumb x:Name="EditCompareSplitHandle"
-                                                      Width="30" Cursor="SizeWE"
+                                                      Width="24" Cursor="SizeWE"
                                                       Height="1"
                                                       DragStarted="EditCompareSplit_DragStarted"
                                                       DragDelta="EditCompareSplit_DragDelta"
-                                                      DragCompleted="EditCompareSplit_DragCompleted"
-                                                      ToolTip="{loc:Tr Key='Original und Bearbeitung mit Schieber'}">
+                                                      DragCompleted="EditCompareSplit_DragCompleted">
                                         <primitives:Thumb.Template>
                                             <ControlTemplate TargetType="{x:Type primitives:Thumb}">
-                                                <!-- The entire vertical line captures mouse input.
-                                                     WPF Thumb retains capture even outside the line. -->
+                                                <!-- Only the thin divider is drawn. The 24px
+                                                     transparent hit area changes the mouse
+                                                     to the native horizontal resize cursor;
+                                                     no detached grip follows the divider. -->
                                                 <Grid Background="#01000000">
                                                     <Border Width="2" HorizontalAlignment="Center"
                                                             Background="#F0F0F0"/>
-                                                    <Border x:Name="DragGrip" Width="28" Height="32"
-                                                            Visibility="Collapsed"
-                                                            VerticalAlignment="Center"
-                                                            HorizontalAlignment="Center"
-                                                            BorderBrush="#F0F0F0"
-                                                            BorderThickness="1"
-                                                            Background="#CC232323"
-                                                            CornerRadius="5">
-                                                        <Canvas Width="24" Height="26">
-                                                            <Path Stroke="#F5F5F5" StrokeThickness="1.5"
-                                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"
-                                                                  Data="M 9,6 L 3,13 L 9,20 M 15,6 L 21,13 L 15,20"/>
-                                                            <Path Stroke="#F5F5F5" StrokeThickness="1.3"
-                                                                  Data="M 11,6 L 11,20 M 13,6 L 13,20"/>
-                                                        </Canvas>
-                                                    </Border>
                                                 </Grid>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsDragging" Value="True">
-                                                        <Setter TargetName="DragGrip" Property="Visibility" Value="Visible"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </primitives:Thumb.Template>
                                     </primitives:Thumb>

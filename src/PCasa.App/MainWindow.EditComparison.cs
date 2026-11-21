@@ -167,18 +167,20 @@ public partial class MainWindow
             var pending = GetPendingLiveEditStep();
             if (pending is not null)
             {
-                // Crop/straighten are visual overlays in the main viewer.
-                // Render their actual output from the very same pending
-                // recipe that Save will apply, without accessing the NAS.
+                // Render the active preview and the original's matching
+                // geometric crop from ONE recipe. A crop must not stretch
+                // the complete original across the cropped edit frame.
+                var aligned = await Task.Run(() => live.RenderAlignedOriginal(pending));
                 var accepted = live.Render();
                 var edited = await Task.Run(() =>
                     PhotoEditSession.Render(accepted, [pending]));
-                return (live.Original, edited);
+                return (aligned, edited);
             }
             if (live.HasChanges)
             {
+                var aligned = await Task.Run(() => live.RenderAlignedOriginal());
                 var edited = PhotoViewerImage.Source as BitmapSource ?? live.Render();
-                return (live.Original, edited);
+                return (aligned, edited);
             }
         }
         var external = _externalEditReview;
@@ -267,7 +269,7 @@ public partial class MainWindow
             session.ImageId != _editCompareImageId ||
             (!session.HasChanges && GetPendingLiveEditStep() is null))
             return;
-        _editCompareOriginal = session.Original;
+        _editCompareOriginal = session.RenderAlignedOriginal(GetPendingLiveEditStep());
         _editCompareEdited = PhotoViewerImage.Source as BitmapSource ?? session.Render();
         EditCompareSideOriginal.Source = _editCompareOriginal;
         EditCompareSideEdited.Source = _editCompareEdited;

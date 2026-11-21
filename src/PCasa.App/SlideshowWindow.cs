@@ -34,7 +34,10 @@ public sealed class SlideshowWindow : Window
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch
             };
-            RenderOptions.SetBitmapScalingMode(Picture, BitmapScalingMode.HighQuality);
+            // BitmapCache and the compositor animate this layer. During
+            // crossfades avoid costly high-quality resampling of a full
+            // screen image on the UI render path.
+            RenderOptions.SetBitmapScalingMode(Picture, BitmapScalingMode.LowQuality);
             var transforms = new TransformGroup();
             transforms.Children.Add(Scale);
             transforms.Children.Add(Shift);
@@ -93,6 +96,8 @@ public sealed class SlideshowWindow : Window
     private bool _awaitingPixels;
     private bool _closed;
     private DateTime _lastChangeUtc = DateTime.UtcNow;
+    private DateTime _transitionStartedUtc;
+    private int _transitionRenderedFrames;
 
     public int CurrentImageIndex => _index;
     public bool IsPaused => _paused;
@@ -143,6 +148,9 @@ public sealed class SlideshowWindow : Window
             Interval = TimeSpan.FromMilliseconds(100)
         };
         _clock.Tick += ClockTick;
+        // Measure actual compositor frame delivery during transitions.
+        // A timer tick is NOT a rendered animation frame.
+        CompositionTarget.Rendering += CountTransitionFrame;
         PreviewKeyDown += SlideshowKeyDown;
         // Just as a click on PCasa's ordinary picture viewer leaves that
         // view. Key commands still control the slideshow independently.
@@ -165,6 +173,7 @@ public sealed class SlideshowWindow : Window
         {
             _closed = true;
             _clock.Stop();
+            CompositionTarget.Rendering -= CountTransitionFrame;
             _currentDecode?.Cancel();
             _aheadDecode?.Cancel();
             _currentDecode?.Dispose();
@@ -214,12 +223,14 @@ public sealed class SlideshowWindow : Window
             layer.Frame.Effect = new DropShadowEffect
             {
                 Color = Colors.Black,
-                BlurRadius = _options.ShadowWidth,
+                // A denser, tighter shadow is more legible on textured
+                // backgrounds and cheaper to rasterize than a broad blur.
+                BlurRadius = _options.ShadowWidth * .8,
                 ShadowDepth = _options.ShadowOffset,
                 // WPF's 315° casts the shadow down and right: the
                 // virtual light source is in the top-left, as in thumbnails.
                 Direction = 315,
-                Opacity = _options.ShadowOpacity / 100.0
+                Opacity = Math.Min(1, _options.ShadowOpacity * 1.35 / 100.0)
             };
         }
     }
@@ -300,6 +311,11 @@ public sealed class SlideshowWindow : Window
         }
     }
 
+    private void CountTransitionFrame(object? sender, EventArgs args)
+    {
+        if (_transitioning) _transitionRenderedFrames++;
+    }
+
     private void ClockTick(object? sender, EventArgs args)
     {
         if (_paused || _transitioning || _awaitingPixels ||
@@ -368,7 +384,15 @@ public sealed class SlideshowWindow : Window
         int revision, CancellationToken token, BitmapSource? localFallback)
     {
         BitmapSource? bitmap = null;
-        try { bitmap = await DecodeAsync(id, token); }
+        try
+        {
+            // The low-resolution LOCAL preview is already on screen. Avoid
+            // competing 4K decode/resize work while WPF animates the cached
+            // frames. The next prefetched original takes priority when ready.
+            if (localFallback is not null && _transitioning)
+                await Task.Delay(_options.TransitionMilliseconds, token);
+            bitmap = await DecodeAsync(id, token);
+        }
         catch (OperationCanceledException) { return; }
         catch (Exception ex) { PCasaDiagnostics.Write("Slideshow.Decode", ex); }
         if (token.IsCancellationRequested || revision != _requestVersion ||
@@ -487,6 +511,8 @@ public sealed class SlideshowWindow : Window
         }
 
         _transitioning = true;
+        _transitionStartedUtc = DateTime.UtcNow;
+        _transitionRenderedFrames = 0;
         var serial = ++_transitionVersion;
         var duration = TimeSpan.FromMilliseconds(_options.TransitionMilliseconds);
         var width = _stage.ActualWidth > 0 ? _stage.ActualWidth : 1000;
@@ -544,6 +570,11 @@ public sealed class SlideshowWindow : Window
         if (!_transitioning) return;
         ++_transitionVersion;
         _transitioning = false;
+        var elapsed = (DateTime.UtcNow - _transitionStartedUtc).TotalSeconds;
+        if (elapsed > 0.01)
+            PCasaDiagnostics.WriteMessage("Slideshow.TransitionFrames",
+                $"mode={_options.Transition}; frames={_transitionRenderedFrames}; " +
+                $"seconds={elapsed:F2}; fps={_transitionRenderedFrames / elapsed:F1}");
         SwapLayers();
     }
 

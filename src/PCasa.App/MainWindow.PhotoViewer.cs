@@ -931,6 +931,15 @@ public partial class MainWindow
                 return;
 
             var id = _viewerSequence.At(_viewerCurrentIndex).ImageId;
+            // A zoom-quality refinement may ONLY replace gallery-original
+            // pixels. While a live edit or external Topaz result is visible,
+            // that original must never overwrite the edited preview (the
+            // source of the long-press Before/After zoom regression).
+            if ((_photoEditSession is { } edit && edit.ImageId == id &&
+                    (edit.HasChanges || GetPendingLiveEditStep() is not null)) ||
+                (_externalEditReview is { Ready: true, ResultPath: not null } external &&
+                    external.ImageId == id))
+                return;
             if (TryGetViewerOriginal(id, required, out var bitmap) && bitmap is not null)
             {
                 SetViewerBitmap(bitmap);
@@ -1303,16 +1312,11 @@ public partial class MainWindow
             return;
         }
 
-        // Normal Fit retains instant one-click return. In zoomed mode the
-        // second click must have time to trigger Fit without closing the viewer.
-        if (_viewerFitToScreen)
-        {
-            ClosePhotoViewer();
-        }
-        else
-        {
-            ClosePhotoViewerAfterDoubleClickWindow();
-        }
+        // A Fit-mode double-click must do NOTHING, not leave the viewer:
+        // defer the first click's gallery return until we know it was not
+        // followed by the second click. The double-click handler cancels it.
+        // The same rule applies in zoomed mode, where double-click means Fit.
+        ClosePhotoViewerAfterDoubleClickWindow();
     }
 
     private void PhotoViewerPanel_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
