@@ -2505,6 +2505,39 @@ internal static class Program
                 syntheticTimer?.Stop();
                 scrollType.GetField("_catalogPublicationPending", scrollFlags)!
                     .SetValue(window, 0);
+                // A timer tick may ALREADY have dispatched an async catalog
+                // snapshot before Stop() ran. The synthetic images are not
+                // in the real (empty) test database. Invalidate its request,
+                // drain any in-flight publisher and then restore the fixture
+                // before checking the real ScrollViewer's folder edge.
+                // Never relax the folder-edge assertions themselves.
+                browseInitializedField.SetValue(window, false);
+                ((LatestViewRequest)scrollType.GetField(
+                    "_browseRefreshRequests", scrollFlags)!.GetValue(window)!)
+                    .Invalidate();
+                var edgePublisherField = scrollType.GetField(
+                    "_galleryRefreshCompletion", scrollFlags)!;
+                for (var retry = 0; retry < 100; retry++)
+                {
+                    Flush(window);
+                    if (edgePublisherField.GetValue(window) is not Task pending ||
+                        pending.IsCompleted)
+                        break;
+                    System.Threading.Thread.Sleep(20);
+                }
+                if (edgePublisherField.GetValue(window) is Task edgePublisher &&
+                    !edgePublisher.IsCompleted)
+                    throw new Exception(
+                        "Catalog publisher did not settle before live folder-edge probe.");
+                syntheticTimer?.Stop();
+                scrollType.GetField("_catalogPublicationPending", scrollFlags)!
+                    .SetValue(window, 0);
+                pages.SetIndex(synthetic);
+                surface.SetData(synthetic, groups, pages);
+                Flush(window);
+                if (Math.Abs((surface.GetFolderOffset(200) ?? -1) - secondStart) > 1)
+                    throw new Exception(
+                        "Synthetic second-folder offset changed before live-edge probe.");
                 scroller.ScrollToVerticalOffset(secondStart - 60);
                 Flush(window);
                 if (scroller.VerticalOffset <= 2 ||
