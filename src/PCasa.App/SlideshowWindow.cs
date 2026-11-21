@@ -527,8 +527,8 @@ public sealed class SlideshowWindow : Window
             // distance must include HALF of each frame plus a visible
             // right-hand gap. One screen width makes unequal aspect-ratio
             // pictures touch or overlap during the push.
-            var distance = (_active.Frame.ActualWidth +
-                _incoming.Frame.ActualWidth) / 2 +
+            var distance = (_active.Frame.Width +
+                _incoming.Frame.Width) / 2 +
                 Math.Max(16, _options.BorderWidth + 12);
             _incoming.Frame.BeginAnimation(UIElement.OpacityProperty, null);
             _incoming.Frame.Opacity = 1;
