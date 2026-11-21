@@ -1303,16 +1303,11 @@ public partial class MainWindow
             return;
         }
 
-        // Normal Fit retains instant one-click return. In zoomed mode the
-        // second click must have time to trigger Fit without closing the viewer.
-        if (_viewerFitToScreen)
-        {
-            ClosePhotoViewer();
-        }
-        else
-        {
-            ClosePhotoViewerAfterDoubleClickWindow();
-        }
+        // A Fit-mode double-click must do NOTHING, not leave the viewer:
+        // defer the first click's gallery return until we know it was not
+        // followed by the second click. The double-click handler cancels it.
+        // The same rule applies in zoomed mode, where double-click means Fit.
+        ClosePhotoViewerAfterDoubleClickWindow();
     }
 
     private void PhotoViewerPanel_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
