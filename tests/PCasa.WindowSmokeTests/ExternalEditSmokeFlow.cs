@@ -183,6 +183,23 @@ internal static class ExternalEditSmokeFlow
             if (File.Exists(unchanged.BackupPath))
                 throw new Exception("Unchanged workspace was not cleaned.");
 
+            // A crash discards the unfinished work on next process start.
+            // The edited bytes must never flow into the original implicitly.
+            var stableOriginal = File.ReadAllBytes(photo);
+            var crashed = ExternalEditTransaction.Begin(photo);
+            WriteJpeg(crashed.BackupPath, 192);
+            if (!ExternalEditTransaction.RetirePreviousProcessSession() ||
+                ExternalEditTransaction.FindPending() is not null ||
+                File.Exists(crashed.BackupPath) ||
+                !File.ReadAllBytes(photo).SequenceEqual(stableOriginal))
+                throw new Exception("Crash recovery preserved an abandoned editor session.");
+            var resumed = ExternalEditTransaction.Begin(photo);
+            if (Directory.EnumerateDirectories(
+                    ExternalEditTransaction.DirectoryPath, "session-*").Any())
+                throw new Exception("New external session created a nested directory.");
+            ExternalEditTransaction.Commit(resumed, null, ExternalEditDecision.Cancel);
+            Console.WriteLine("PASS: Restart drops work, original safe, one flat exchange folder.");
+
             // A configurable dedicated exchange root itself is the workspace.
             // Unrelated user subdirectories must never be deleted.
             var exchangeRoot = Path.Combine(root, "User-exchange");
