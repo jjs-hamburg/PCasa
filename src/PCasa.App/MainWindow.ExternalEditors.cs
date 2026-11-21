@@ -185,6 +185,7 @@ public partial class MainWindow
         // The shared full-resolution writer stages these steps only ONCE.
         // Retrying a failed outer file commit must not crop twice.
         public bool InternalEditsStaged { get; set; }
+        public string? InternalResultPath { get; set; }
     }
 
     private ExternalEditReview? _externalEditReview;
@@ -527,6 +528,13 @@ public partial class MainWindow
                 // shares the old edit-buffer identity with a new result.
                 if (_photoEditSession?.ImageId == review.ImageId)
                     _photoEditSession = null;
+                // An editor re-export invalidates the private internal copy;
+                // never import old straighten/crop steps over newer pixels.
+                if (!review.Busy)
+                {
+                    review.InternalResultPath = null;
+                    review.InternalEditsStaged = false;
+                }
             }
             review.ResultPath = result;
             review.ResultSize = metadata.Length;
@@ -682,6 +690,7 @@ public partial class MainWindow
                     SchedulerPriority.ManualAction, token =>
                     {
                         var result = decision == ExternalEditDecision.Cancel ? null :
+                            review.InternalResultPath ??
                             ExternalEditTransaction.DetectResult(review.Snapshot);
                         if (result is not null && internalSteps.Length > 0 &&
                             !review.InternalEditsStaged)
@@ -696,10 +705,12 @@ public partial class MainWindow
                                 detected.LastWriteTimeUtc != review.ResultWriteUtc)
                                 throw new IOException(
                                     "Das externe Ergebnis wurde nach der internen Bearbeitung geändert. Bitte Ergebnis erneut prüfen.");
-                            JpegCropWriter.EditExternalWorkspaceResult(
+                            var staged = JpegCropWriter.EditExternalWorkspaceResult(
                                 result, review.Snapshot.DirectoryPath,
                                 internalSteps, token);
+                            review.InternalResultPath = staged;
                             review.InternalEditsStaged = true;
+                            result = staged;
                         }
                         _scheduler.ReportProgress(saveKey,
                             UiLanguage.T("Externe Bearbeitung"), 0, 100,

@@ -189,12 +189,24 @@ internal static class ExternalEditSmokeFlow
             var oldRetired = Path.Combine(root, "ExternalEditRetired");
             Directory.CreateDirectory(oldRetired);
             File.WriteAllText(Path.Combine(oldRetired, "obsolete-session.json"), "{}");
+            var legacyPanoramaRoot = Path.Combine(root, "Panorama");
+            var legacySession = Path.Combine(legacyPanoramaRoot,
+                "session-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(legacySession);
+            File.WriteAllText(Path.Combine(legacySession, "old-copy.jpg"), "old");
+            var unrelatedPanoramaFolder = Path.Combine(
+                legacyPanoramaRoot, "manual-folder");
+            Directory.CreateDirectory(unrelatedPanoramaFolder);
+            File.WriteAllText(Path.Combine(
+                unrelatedPanoramaFolder, "keep.txt"), "untouched");
             var crashed = ExternalEditTransaction.Begin(photo);
             WriteJpeg(crashed.BackupPath, 192);
             if (!ExternalEditTransaction.RetirePreviousProcessSession() ||
                 ExternalEditTransaction.FindPending() is not null ||
                 File.Exists(crashed.BackupPath) ||
                 Directory.Exists(oldRetired) ||
+                Directory.Exists(legacySession) ||
+                !File.Exists(Path.Combine(unrelatedPanoramaFolder, "keep.txt")) ||
                 !File.ReadAllBytes(photo).SequenceEqual(stableOriginal))
                 throw new Exception("Crash recovery preserved an abandoned editor session.");
             var resumed = ExternalEditTransaction.Begin(photo);
@@ -316,6 +328,102 @@ internal static class ExternalEditSmokeFlow
             if (!File.ReadAllBytes(cameraRaw).SequenceEqual(cameraBytes) ||
                 ExternalEditTransaction.FindPending() is not null)
                 throw new Exception("Cancel modified camera RAW or left active session.");
+
+            // An internal crop/straighten must stage a PRIVATE file, even
+            // while the external editor still holds its export without
+            // FILE_SHARE_DELETE. The original export is immutable.
+            var inner = ExternalEditTransaction.Begin(photo);
+            // The real full-resolution edit renderer rejects tiny thumbnails.
+            // Test the private workspace with a valid 64px editable output.
+            WriteJpeg(inner.BackupPath, 101, 64);
+            var exportedBytes = File.ReadAllBytes(inner.BackupPath);
+            var editStager = typeof(JpegCropWriter).GetMethod(
+                "EditExternalWorkspaceResult",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Private internal-result staging missing.");
+            string stagedPath;
+            using (var editorHeld = new FileStream(inner.BackupPath,
+                       FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                try
+                {
+                    stagedPath = (string)editStager.Invoke(null, [
+                        inner.BackupPath, inner.DirectoryPath,
+                        new PhotoEditStep[] {
+                            new("brightness", Amount: 0.2)
+                        }, CancellationToken.None])!;
+                }
+                catch (System.Reflection.TargetInvocationException ex)
+                    when (ex.InnerException is not null)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                        .Capture(ex.InnerException).Throw();
+                    throw;
+                }
+                if (!Path.GetDirectoryName(stagedPath)!.EndsWith(
+                        ".pcasa-internal", StringComparison.OrdinalIgnoreCase) ||
+                    !File.ReadAllBytes(inner.BackupPath).SequenceEqual(exportedBytes) ||
+                    !File.Exists(stagedPath))
+                    throw new Exception(
+                        "Internal edit modified an editor-owned external result.");
+                var privateCopy = ExternalEditTransaction.Commit(inner, stagedPath,
+                    ExternalEditDecision.SaveCopy, undoOptions: undoOptions);
+                if (privateCopy is null || !File.Exists(privateCopy) ||
+                    File.ReadAllBytes(privateCopy).SequenceEqual(exportedBytes))
+                    throw new Exception(
+                        "External Save Copy ignored the isolated internal edit.");
+            }
+            ExternalEditTransaction.CleanupCompletedWorkspaces();
+
+            // A failed Save may persist its finalization intent before it
+            // writes a byte. Cancel must be able to exit safely, without
+            // applying that unfinished operation to the real original.
+            var suspended = ExternalEditTransaction.Begin(photo);
+            var preAbort = File.ReadAllBytes(photo);
+            var writePending = typeof(ExternalEditTransaction).GetMethod(
+                "WritePending", System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            writePending.Invoke(null, [suspended with {
+                Finalizing = ExternalEditDecision.Save,
+                FinalTarget = photo
+            }]);
+            ExternalEditTransaction.Commit(suspended, null,
+                ExternalEditDecision.Cancel);
+            if (ExternalEditTransaction.FindPending() is not null ||
+                !File.ReadAllBytes(photo).SequenceEqual(preAbort))
+                throw new Exception(
+                    "Canceled failed finalization trapped the editor or changed source.");
+
+            // Panorama is the SAME flat workspace as a single external
+            // session: no extra Panorama root and no session-GUID folder.
+            var flatPano = PanoramaTransaction.Begin(
+                [(1L, photo), (2L, other)], [], null, null);
+            if (!flatPano.Directory.Equals(
+                    ExternalEditTransaction.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(Path.Combine(flatPano.Directory,
+                    ".pcasa-batch-session")) ||
+                Directory.EnumerateDirectories(flatPano.Directory,
+                    "session-*").Any())
+                throw new Exception(
+                    "Panorama did not share the one flat exchange directory.");
+            try
+            {
+                ExternalEditTransaction.Begin(photo);
+                throw new Exception(
+                    "Single editor was launched over an active panorama.");
+            }
+            catch (InvalidOperationException) { }
+            PanoramaTransaction.Cleanup(flatPano);
+            if (File.Exists(Path.Combine(flatPano.Directory,
+                    ".pcasa-batch-session")))
+                throw new Exception("Panorama marker was not released.");
+            var following = ExternalEditTransaction.Begin(photo);
+            ExternalEditTransaction.Commit(following, null,
+                ExternalEditDecision.Cancel);
+            Console.WriteLine(
+                "PASS: Locked editor output receives isolated internal edits; unfinished finalization cancels; flat shared panorama.");
 
             // Panorama and batch-edit program capabilities are independent.
             var panoramic = new ExternalEditorProgram("Pano", "pano.exe",
@@ -467,9 +575,10 @@ internal static class ExternalEditSmokeFlow
         stream.Flush(true);
     }
 
-    private static void WriteJpeg(string path, byte brightness)
+    private static void WriteJpeg(string path, byte brightness, int size = 8)
     {
-        const int width = 8, height = 8;
+        var width = size;
+        var height = size;
         var pixels = new byte[width * height * 4];
         for (var i = 0; i < pixels.Length; i += 4)
         {

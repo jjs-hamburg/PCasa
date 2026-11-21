@@ -13,7 +13,7 @@ public sealed class SlideshowSettings
 
     public int IntervalSeconds { get; set; } = 5;
     public bool PreloadNext { get; set; } = true;
-    public string Transition { get; set; } = "projector";
+    public string Transition { get; set; } = "fade";
     public int TransitionMilliseconds { get; set; } = 700;
     public string DisplayMode { get; set; } = "gallery";
     public int GalleryPercent { get; set; } = 85;
@@ -37,8 +37,10 @@ public sealed class SlideshowSettings
         ShadowWidth = Math.Clamp(ShadowWidth, 0, 150);
         ShadowOffset = Math.Clamp(ShadowOffset, 0, 100);
         ShadowOpacity = Math.Clamp(ShadowOpacity, 0, 100);
-        Transition = Transition is "none" or "fade" or "zoom" or "slide" or "projector"
-            ? Transition : "projector";
+        // Older settings may still contain the removed projector effect.
+        // Migrate it to an inexpensive dissolve rather than exposing it again.
+        Transition = Transition is "none" or "fade" or "zoom" or "slide"
+            ? Transition : "fade";
         DisplayMode = DisplayMode is "gallery" or "fullscreen"
             ? DisplayMode : "gallery";
         BackgroundMode = BackgroundMode is "gallery" or "black" or "custom"

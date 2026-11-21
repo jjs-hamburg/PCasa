@@ -845,9 +845,28 @@ public partial class MainWindow
         }
     }
 
-    private async Task DeleteSelectedImagesAsync()
+    private async Task DeleteSelectedImagesAsync(long[]? imageIds = null)
     {
-        if (_selectedImageIds.Count == 0) return;
+        // Viewer Delete always operates on the displayed photo, not on
+        // a potentially stale multi-selection in the hidden gallery.
+        var ids = imageIds ?? _selectedImageIds.ToArray();
+        if (ids.Length == 0) return;
+        var viewerDeleting = imageIds is not null && _viewerOpen &&
+            _viewerSequence is { } viewerSeq && _viewerCurrentIndex >= 0 &&
+            _viewerCurrentIndex < viewerSeq.Count &&
+            ids.Contains(viewerSeq.At(_viewerCurrentIndex).ImageId);
+        long? nextViewerId = null;
+        if (viewerDeleting && _viewerSequence is { } oldSequence)
+        {
+            for (var offset = 1; offset < oldSequence.Count; offset++)
+            {
+                var candidate = oldSequence.At(
+                    oldSequence.Move(_viewerCurrentIndex, offset)).ImageId;
+                if (ids.Contains(candidate)) continue;
+                nextViewerId = candidate;
+                break;
+            }
+        }
         (long Id, string Path)[] selected;
         bool anyNetwork;
         try
@@ -856,7 +875,7 @@ public partial class MainWindow
             // the common case. A missing tier uses a P0 catalog lookup:
             // confirmation for a MANUAL delete cannot queue behind scanning.
             selected = await SelectedGalleryImagePathsAsync(
-                _selectedImageIds.ToArray(), SchedulerPriority.ManualAction);
+                ids, SchedulerPriority.ManualAction);
             if (selected.Length == 0) return;
             // No scheduler work and no network provider lookup before the
             // user's confirmation. Actual existence, identity and deletion
@@ -892,6 +911,28 @@ public partial class MainWindow
             if (_selectedImageIds.Count == 0) _gallerySelection.Reset();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);
             ApplyGallerySelection();
+            if (viewerDeleting && succeeded.Any(id => ids.Contains(id)) && _viewerOpen)
+            {
+                // Recreate the sequence from the just-published gallery,
+                // preserving the same scope and order. Never show a deleted
+                // viewer entry or navigate to a stale index.
+                var next = nextViewerId is long id &&
+                    _displayedBrowseIndex.Any(item => item.ImageId == id)
+                    ? PhotoSequence.Create(_displayedBrowseIndex,
+                        BrowseSurface.HiddenFolderIds, id,
+                        _viewerSettings.SequenceScope)
+                    : null;
+                var newIndex = nextViewerId is long survivor && next is not null
+                    ? next.IndexOfImage(survivor) : -1;
+                if (next is not null && newIndex >= 0)
+                {
+                    _viewerSequence = next;
+                    _viewerCurrentIndex = newIndex;
+                    SelectViewerImage(next.At(newIndex).ImageId);
+                    ShowViewerImage();
+                }
+                else ClosePhotoViewer();
+            }
             StatusText.Text = $"{succeeded.Count:N0} Datei(en) gelöscht" +
                 (errors.Count == 0 ? "" : $" · {errors.Count:N0} Fehler");
             if (errors.Count > 0)

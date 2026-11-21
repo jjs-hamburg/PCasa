@@ -6,7 +6,8 @@ namespace PCasa.App.Services;
 /// <summary>
 /// A panorama uses immutable copies of multiple source images. Unlike an
 /// in-place editor there is no source replacement, undo or resume/replay.
-/// The external application owns only the local session folder.
+/// One dedicated flat exchange directory is shared by single-image edits,
+/// panoramas and batches, but only ONE workflow may own it at a time.
 /// </summary>
 public sealed record PanoramaSession(
     Guid Id, long[] ImageIds, string[] Sources, string[] Inputs,
@@ -19,9 +20,39 @@ public sealed record ExternalBatchOutput(int SourceIndex, string Path);
 
 public static class PanoramaTransaction
 {
-    public static string SessionRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PCasa", "Panorama");
+    public static string SessionRoot => ExternalEditTransaction.DirectoryPath;
+    internal const string BatchMarker = ".pcasa-batch-session";
+
+    // Previous releases used %LocalAppData%/PCasa/Panorama/session-GUID.
+    // Abandoned copies must not accumulate after upgrading to the shared
+    // flat workspace. Delete ONLY our exact legacy session names, leaving
+    // any unrelated user files or folders untouched.
+    public static void CleanupLegacySessions()
+    {
+        var legacy = Path.Combine(
+            Path.GetDirectoryName(ExternalEditTransaction.DirectoryPath)!,
+            "Panorama");
+        if (!Directory.Exists(legacy)) return;
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(
+                         legacy, "session-*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(dir);
+                if (name.Length != 40 || !name.StartsWith("session-",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !Guid.TryParseExact(name[8..], "N", out _))
+                    continue;
+                try { Directory.Delete(dir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { PCasaDiagnostics.Write("Panorama.LegacyCleanup", ex); }
+            }
+            if (!Directory.EnumerateFileSystemEntries(legacy).Any())
+                Directory.Delete(legacy);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { PCasaDiagnostics.Write("Panorama.LegacyCleanup", ex); }
+    }
 
     public static PanoramaSession Begin(
         (long Id, string Path)[] images, string[] tags,
@@ -35,9 +66,38 @@ public static class PanoramaTransaction
             throw new NotSupportedException("Videos können keine Panoramabilder bilden.");
         token.ThrowIfCancellationRequested();
         var id = Guid.NewGuid();
-        var directory = Path.Combine(workspaceRoot ?? SessionRoot,
-            "session-" + id.ToString("N"));
+        var directory = Path.GetFullPath(workspaceRoot ?? SessionRoot);
+        if (Path.GetPathRoot(directory) == directory)
+            throw new ArgumentException("Ein Laufwerksstamm ist kein Austauschverzeichnis.");
+        if (images.Any(image => Path.GetFullPath(image.Path).StartsWith(
+                Path.TrimEndingDirectorySeparator(directory) +
+                Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("Die Originale dürfen nicht im Austauschordner liegen.");
         Directory.CreateDirectory(directory);
+        if (ExternalEditTransaction.FindPending() is not null ||
+            File.Exists(Path.Combine(directory, BatchMarker)))
+            throw new InvalidOperationException(
+                "Bitte die laufende externe Bearbeitung zuerst abschließen.");
+        // Before starting, discard old exports from PCasa's dedicated
+        // workspace. Legacy nested session directories are not created
+        // again; ownership of a custom root must first be established.
+        var custom = !directory.Equals(SessionRoot,
+            StringComparison.OrdinalIgnoreCase);
+        var owner = Path.Combine(directory, ".pcasa-exchange-root");
+        if (custom && !File.Exists(owner) &&
+            Directory.EnumerateFiles(directory).Any())
+            throw new IOException(
+                "Das Austauschverzeichnis enthält fremde Dateien; bitte einen eigenen Ordner wählen.");
+        if (!custom)
+            ExternalEditTransaction.CleanupCompletedWorkspaces();
+        else if (File.Exists(owner))
+            foreach (var stale in Directory.EnumerateFiles(directory))
+            {
+                if (stale.Equals(owner, StringComparison.OrdinalIgnoreCase)) continue;
+                File.Delete(stale);
+            }
+        if (custom) File.WriteAllText(owner, "PCasa external exchange");
+        File.WriteAllText(Path.Combine(directory, BatchMarker), id.ToString("N"));
         var staged = new List<string>();
         var stagedHashes = new List<string>();
         try
@@ -81,9 +141,9 @@ public static class PanoramaTransaction
         }
         catch
         {
-            try { Directory.Delete(directory, recursive: true); }
-            catch (IOException) { }
-            catch (UnauthorizedAccessException) { }
+            Cleanup(new PanoramaSession(id, images.Select(x => x.Id).ToArray(),
+                images.Select(x => x.Path).ToArray(), staged.ToArray(),
+                directory, tags, latitude, longitude, isPanorama));
             throw;
         }
     }
@@ -489,8 +549,25 @@ public static class PanoramaTransaction
 
     public static void Cleanup(PanoramaSession session)
     {
-        try { if (Directory.Exists(session.Directory)) Directory.Delete(
-            session.Directory, recursive: true); }
+        // A shared flat exchange root must never be deleted. Its ownership
+        // marker gates other sessions until cleanup is attempted.
+        if (!Directory.Exists(session.Directory)) return;
+        var marker = Path.Combine(session.Directory, BatchMarker);
+        if (!File.Exists(marker) ||
+            !File.ReadAllText(marker).Equals(session.Id.ToString("N"),
+                StringComparison.OrdinalIgnoreCase))
+            return;
+        foreach (var file in Directory.EnumerateFiles(session.Directory))
+        {
+            if (file.Equals(marker, StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(file).Equals(".pcasa-exchange-root",
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            try { File.Delete(file); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        try { File.Delete(marker); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }

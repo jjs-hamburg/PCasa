@@ -81,7 +81,16 @@ public static class ExternalEditTransaction
                 File.Delete(SessionFile);
             }
             if (previous is not null) CleanupWorkspaceContents(previous.DirectoryPath);
+            // Panorama/batch sessions have no durable manifest: after a
+            // process restart their exchange marker is stale. Remove the
+            // marker before cleaning, never on normal Activate/Save.
+            foreach (var root in new[] { DirectoryPath }.Concat(KnownCustomRoots()))
+            {
+                var marker = Path.Combine(root, PanoramaTransaction.BatchMarker);
+                if (File.Exists(marker)) File.Delete(marker);
+            }
             CleanupCompletedWorkspaces();
+            PanoramaTransaction.CleanupLegacySessions();
             // Prior alphas archived inert GUID manifests outside ExternalEdit.
             // These have no purpose once crash recovery is intentionally gone.
             var retired = Path.Combine(Path.GetDirectoryName(DirectoryPath)!,
@@ -182,7 +191,9 @@ public static class ExternalEditTransaction
 
     private static void CleanupWorkspaceContents(string root)
     {
-        if (!Directory.Exists(root)) return;
+        if (!Directory.Exists(root) ||
+            File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)))
+            return;
         var defaultRoot = !IsCustomRoot(root);
         foreach (var file in Directory.EnumerateFiles(root))
         {
@@ -198,6 +209,8 @@ public static class ExternalEditTransaction
         }
         var before = Path.Combine(root, ".pcasa-before");
         if (Directory.Exists(before)) TryCleanupFolder(before);
+        var internalCopy = Path.Combine(root, ".pcasa-internal");
+        if (Directory.Exists(internalCopy)) TryCleanupFolder(internalCopy);
         foreach (var folder in Directory.EnumerateDirectories(root, "session-*"))
         {
             var name = Path.GetFileName(folder);
@@ -215,6 +228,7 @@ public static class ExternalEditTransaction
             Path.GetFileName(file) is not
                 ("session.json" or FlatExchangeMarker));
         var before = Directory.Exists(Path.Combine(root, ".pcasa-before")) ? 1 : 0;
+        if (Directory.Exists(Path.Combine(root, ".pcasa-internal"))) before++;
         var sessions = Directory.EnumerateDirectories(root, "session-*")
             .Count(dir => Guid.TryParseExact(
                 Path.GetFileName(dir)["session-".Length..], "N", out _));
@@ -241,8 +255,9 @@ public static class ExternalEditTransaction
             var active = ReadPending();
             foreach (var root in new[] { DirectoryPath }.Concat(KnownCustomRoots())
                 .Distinct(StringComparer.OrdinalIgnoreCase))
-                if (active is null || !root.Equals(
-                    active.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+                if ((active is null || !root.Equals(
+                    active.DirectoryPath, StringComparison.OrdinalIgnoreCase)) &&
+                    !File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)))
                     CleanupWorkspaceContents(root);
             return PendingCleanupCount();
         }
@@ -270,7 +285,9 @@ public static class ExternalEditTransaction
         lock (Gate)
         {
             token.ThrowIfCancellationRequested();
-            if (File.Exists(SessionFile))
+            if (File.Exists(SessionFile) ||
+                File.Exists(Path.Combine(DirectoryPath,
+                    PanoramaTransaction.BatchMarker)))
                 throw new InvalidOperationException(
                     UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
             Directory.CreateDirectory(DirectoryPath);
@@ -283,6 +300,9 @@ public static class ExternalEditTransaction
                     StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Das Original liegt im Austauschverzeichnis.");
             Directory.CreateDirectory(root);
+            if (File.Exists(Path.Combine(root, PanoramaTransaction.BatchMarker)))
+                throw new InvalidOperationException(
+                    UiLanguage.T("Bitte die laufende externe Bearbeitung zuerst abschließen."));
             var marker = Path.Combine(root, FlatExchangeMarker);
             if (IsCustomRoot(root) && !File.Exists(marker) &&
                 Directory.EnumerateFiles(root).Any())
@@ -537,8 +557,23 @@ public static class ExternalEditTransaction
             if (session.Finalizing is { } choice && choice != decision &&
                 !(choice == ExternalEditDecision.SaveCopy &&
                   decision == ExternalEditDecision.Save))
+            {
+                // If an earlier Save/Copy was marked finalizing but failed
+                // before publishing anything, Cancel must remain a safe
+                // escape route. NEVER undo a file that was already published.
+                if (decision == ExternalEditDecision.Cancel &&
+                    !OriginalChanged(session) &&
+                    (session.FinalTarget is null ||
+                     session.FinalTarget.Equals(session.OriginalPath,
+                         StringComparison.OrdinalIgnoreCase) ||
+                     !File.Exists(session.FinalTarget)))
+                {
+                    Finish(session);
+                    return null;
+                }
                 throw new InvalidOperationException(
                     "Die externe Bearbeitung wird bereits abgeschlossen.");
+            }
             if (decision == ExternalEditDecision.Cancel)
             {
                 // Nothing has ever changed the source image. No restore and
@@ -563,8 +598,15 @@ public static class ExternalEditTransaction
                 RequiresNewFile(session.OriginalPath, source))
                 throw new NotSupportedException(UiLanguage.T(
                     "Anderes Ausgabeformat: bitte 'Als Kopie speichern' wählen."));
-            if (!Path.GetDirectoryName(source)!.Equals(
-                    session.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+            var resultDirectory = Path.GetDirectoryName(source)!;
+            var ownedInternalCopy = Path.Combine(session.DirectoryPath,
+                ".pcasa-internal");
+            var privateResult = resultDirectory.Equals(ownedInternalCopy,
+                    StringComparison.OrdinalIgnoreCase) &&
+                Path.GetFileNameWithoutExtension(source).Equals(
+                    "result", StringComparison.OrdinalIgnoreCase);
+            if (!resultDirectory.Equals(session.DirectoryPath,
+                    StringComparison.OrdinalIgnoreCase) && !privateResult)
                 throw new InvalidOperationException(
                     "ExternalEdit: Ergebnis liegt nicht im Arbeitsverzeichnis.");
             if (VideoFormats.IsVideo(session.OriginalPath)

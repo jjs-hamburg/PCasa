@@ -627,7 +627,12 @@ public partial class MainWindow
             return;
         }
         FocusGpsPhotoForDisplay(item.Id);
-        GpsPhotoPopup.Visibility = Visibility.Collapsed;
+        // WPF may deliver a deferred SelectionChanged after a map marker
+        // rebuilt the filmstrip. Do not dismiss the popup for that SAME
+        // marker: it was explicitly opened by the user's map click.
+        // A genuinely different filmstrip photo still closes the old popup.
+        if (GpsPhotoPopup.Tag is not long popupId || popupId != item.Id)
+            GpsPhotoPopup.Visibility = Visibility.Collapsed;
         _gpsFilmstripFocusActive = true;
         _ = RefreshGpsMapAsync();
         // Only an ALREADY OPEN image follows a source click. The normal

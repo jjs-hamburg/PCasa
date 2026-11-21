@@ -16,6 +16,9 @@ public partial class MainWindow
 
     private EditCompareMode _editCompareMode = EditCompareMode.Single;
     private BitmapSource? _editCompareOriginal;
+    // Whole uncropped source for side-by-side and click-and-hold.
+    // The swipe intentionally uses the geometrically aligned crop instead.
+    private BitmapSource? _editCompareUncroppedOriginal;
     private BitmapSource? _editCompareEdited;
     private BitmapSource? _editCompareHeldEdited;
     private long _editCompareImageId = -1;
@@ -158,7 +161,8 @@ public partial class MainWindow
     private async void EditCompareSplit_Click(object sender, RoutedEventArgs e)
         => await ShowEditComparisonAsync(EditCompareMode.Split);
 
-    private async Task<(BitmapSource Original, BitmapSource Edited)?>
+    private async Task<(BitmapSource Original, BitmapSource Edited,
+        BitmapSource Uncropped)?>
         LoadEditComparisonPairAsync(long imageId)
     {
         var live = _photoEditSession;
@@ -174,13 +178,13 @@ public partial class MainWindow
                 var accepted = live.Render();
                 var edited = await Task.Run(() =>
                     PhotoEditSession.Render(accepted, [pending]));
-                return (aligned, edited);
+                return (aligned, edited, live.Original);
             }
             if (live.HasChanges)
             {
                 var aligned = await Task.Run(() => live.RenderAlignedOriginal());
                 var edited = PhotoViewerImage.Source as BitmapSource ?? live.Render();
-                return (aligned, edited);
+                return (aligned, edited, live.Original);
             }
         }
         var external = _externalEditReview;
@@ -199,7 +203,7 @@ public partial class MainWindow
                     _latestExternalComparison = captured;
             }
             return captured is not null
-                ? (captured.Before, captured.After) : null;
+                ? (captured.Before, captured.After, captured.Before) : null;
         }
         // Save/Cancel ends the decision. Neither the latest Undo snapshot
         // nor a previous external session may masquerade as a fresh edit.
@@ -225,6 +229,7 @@ public partial class MainWindow
                 return;
             }
             _editCompareOriginal = pair.Value.Original;
+            _editCompareUncroppedOriginal = pair.Value.Uncropped;
             _editCompareEdited = pair.Value.Edited;
             _editCompareImageId = id;
             // Never silently switch the requested split into side-by-side.
@@ -232,7 +237,9 @@ public partial class MainWindow
             // even when their source aspect ratios are visually identical.
             // Two uniformly fitted images share the same full-size viewport.
             _editCompareMode = requested;
-            EditCompareSideOriginal.Source = _editCompareOriginal;
+            // Side-by-side must show the WHOLE original, especially after
+            // cropping. Only the slider has pixel-aligned crop geometry.
+            EditCompareSideOriginal.Source = _editCompareUncroppedOriginal;
             EditCompareSideEdited.Source = _editCompareEdited;
             EditCompareSwipeOriginal.Source = _editCompareOriginal;
             EditCompareSwipeEdited.Source = _editCompareEdited;
@@ -270,8 +277,9 @@ public partial class MainWindow
             (!session.HasChanges && GetPendingLiveEditStep() is null))
             return;
         _editCompareOriginal = session.RenderAlignedOriginal(GetPendingLiveEditStep());
+        _editCompareUncroppedOriginal = session.Original;
         _editCompareEdited = PhotoViewerImage.Source as BitmapSource ?? session.Render();
-        EditCompareSideOriginal.Source = _editCompareOriginal;
+        EditCompareSideOriginal.Source = _editCompareUncroppedOriginal;
         EditCompareSideEdited.Source = _editCompareEdited;
         EditCompareSwipeOriginal.Source = _editCompareOriginal;
         EditCompareSwipeEdited.Source = _editCompareEdited;
@@ -297,7 +305,8 @@ public partial class MainWindow
             availableHeight / _editCompareEdited.PixelHeight);
         if (side)
         {
-            var before = _editCompareOriginal ?? _editCompareEdited;
+            var before = _editCompareUncroppedOriginal ??
+                _editCompareOriginal ?? _editCompareEdited;
             var beforeFit = Math.Min(availableWidth / before.PixelWidth,
                 availableHeight / before.PixelHeight);
             EditCompareSideOriginal.Width = before.PixelWidth * beforeFit;
@@ -556,7 +565,8 @@ public partial class MainWindow
                 else if (_editCompareOriginal is not null &&
                     _editCompareImageId == info.Id)
                 {
-                    DisplayHoldPixelsWithoutRelayout(_editCompareOriginal);
+                    DisplayHoldPixelsWithoutRelayout(
+                        _editCompareUncroppedOriginal ?? _editCompareOriginal);
                 }
                 else
                     _ = ShowSavedOriginalWhileHeldAsync(info.Id);
@@ -575,7 +585,8 @@ public partial class MainWindow
                 pair is null) return;
             _editCompareImageId = imageId;
             _editCompareOriginal = pair.Value.Original;
-            DisplayHoldPixelsWithoutRelayout(pair.Value.Original);
+            _editCompareUncroppedOriginal = pair.Value.Uncropped;
+            DisplayHoldPixelsWithoutRelayout(pair.Value.Uncropped);
         }
         catch (Exception ex)
         {
@@ -583,12 +594,17 @@ public partial class MainWindow
         }
     }
 
-    // Press-and-hold must NEVER recalculate image geometry or zoom.
+    // Keep the zoom MODE and explicit zoom percentage unchanged, but use
+    // each bitmap's OWN aspect ratio. Otherwise a cropped After picture
+    // stretches the full Before picture into the cropped frame, hiding
+    // precisely the material the user wants to assess.
     private void DisplayHoldPixelsWithoutRelayout(BitmapSource pixels)
     {
+        if (_viewerOpen) _viewerPendingImageCenter = CaptureViewerCenter();
         PhotoViewerImage.Source = pixels;
         if (_viewerFullscreenImage is not null)
             _viewerFullscreenImage.Source = pixels;
+        if (_viewerOpen) ApplyViewerImageLayout();
     }
 
     private bool EndEditOriginalHold(MouseButtonEventArgs e)
@@ -620,7 +636,8 @@ public partial class MainWindow
         _editComparePanX = _editComparePanY = 0;
         _editCompareMode = EditCompareMode.Single;
         _editCompareHoldingOriginal = false;
-        _editCompareOriginal = _editCompareEdited = _editCompareHeldEdited = null;
+        _editCompareOriginal = _editCompareUncroppedOriginal =
+            _editCompareEdited = _editCompareHeldEdited = null;
         _editCompareImageId = -1;
         EditCompareSideOriginal.Source = EditCompareSideEdited.Source = null;
         EditCompareSwipeOriginal.Source = EditCompareSwipeEdited.Source = null;

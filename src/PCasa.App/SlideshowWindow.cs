@@ -515,7 +515,6 @@ public sealed class SlideshowWindow : Window
         _transitionRenderedFrames = 0;
         var serial = ++_transitionVersion;
         var duration = TimeSpan.FromMilliseconds(_options.TransitionMilliseconds);
-        var width = _stage.ActualWidth > 0 ? _stage.ActualWidth : 1000;
         if (type == "zoom")
         {
             // Zoom inward so the next border never peeks outside first.
@@ -524,17 +523,31 @@ public sealed class SlideshowWindow : Window
         }
         else if (type == "slide")
         {
-            Animate(_incoming.Shift, TranslateTransform.XProperty, width, 0, duration);
-            Animate(_active.Shift, TranslateTransform.XProperty, 0, -width, duration);
-        }
-        else if (type == "projector")
-        {
-            // A collapsing old frame and expanding new frame with horizontal
-            // push, rather than a second static dissolve.
-            Animate(_incoming.Scale, ScaleTransform.ScaleYProperty, .12, 1, duration);
-            Animate(_incoming.Shift, TranslateTransform.XProperty, width * .18, 0, duration);
-            Animate(_active.Scale, ScaleTransform.ScaleYProperty, 1, .12, duration);
-            Animate(_active.Shift, TranslateTransform.XProperty, 0, -width * .18, duration);
+            // Both pictures are centered in the same stage. The travel
+            // distance must include HALF of each frame plus a visible
+            // right-hand gap. One screen width makes unequal aspect-ratio
+            // pictures touch or overlap during the push.
+            var distance = (_active.Frame.Width +
+                _incoming.Frame.Width) / 2 +
+                Math.Max(16, _options.BorderWidth + 12);
+            _incoming.Frame.BeginAnimation(UIElement.OpacityProperty, null);
+            _incoming.Frame.Opacity = 1;
+            _incoming.Shift.BeginAnimation(TranslateTransform.XProperty, null);
+            _incoming.Shift.X = distance;
+            var slide = new DoubleAnimation(distance, 0, duration)
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            slide.Completed += (_, _) =>
+            {
+                if (_transitioning && serial == _transitionVersion)
+                    FinishTransition();
+            };
+            _incoming.Shift.BeginAnimation(TranslateTransform.XProperty, slide);
+            Animate(_active.Shift, TranslateTransform.XProperty, 0, -distance, duration);
+            // Translate the two cached frames on the compositor, without
+            // a second full-screen alpha animation over the textured stage.
+            return;
         }
 
         // Cached compositor layers prevent repeated high-quality picture
