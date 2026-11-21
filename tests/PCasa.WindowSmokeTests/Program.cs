@@ -508,8 +508,12 @@ internal static class Program
                 normalizedSlideshow.Transition != "fade" ||
                 normalizedSlideshow.BackgroundMode != "gallery")
                 throw new Exception("Slideshow settings normalization is unsafe.");
+            foreach (var mode in new[] { "projector", "cube", "cards", "zoomfade",
+                "wipe-left", "wipe-right", "wipe-up", "wipe-down" })
+                if (new SlideshowSettings { Transition = mode }.Normalize().Transition != mode)
+                    throw new Exception("A GPU transition was discarded: " + mode);
             Console.WriteLine(
-                "PASS: Left-anchored slideshow Play, grouped options and inherited gallery texture.");
+                "PASS: Left-anchored slideshow Play, all GPU transitions and inherited gallery texture.");
 
             // The original tone sliders had no direction markings.
             // Each axis must display its endpoint meaning immediately below
@@ -1876,6 +1880,21 @@ internal static class Program
                     choice.IsDropDownOpen = false;
                     Flush(slideshowDialog);
                 }
+                var numericSliders = Descendants<Slider>(slideshowDialog).ToArray();
+                if (numericSliders.Length != 7 ||
+                    numericSliders.Any(slider =>
+                        Math.Abs(slider.Width - numericSliders[0].Width) > .01 ||
+                        !slider.IsSnapToTickEnabled) ||
+                    numericSliders.Any(slider => slider.Parent is not StackPanel row ||
+                        row.Children.OfType<UIElement>().LastOrDefault() is not TextBlock))
+                    throw new Exception(
+                        "Slideshow numeric settings need seven equally wide stepped sliders and readouts.");
+                numericSliders[0].Value = 90;
+                Flush(slideshowDialog);
+                if (numericSliders[0].Parent is not StackPanel sliderRow ||
+                    sliderRow.Children.OfType<UIElement>().LastOrDefault() is not TextBlock liveNumber ||
+                    !liveNumber.Text.Contains("90", StringComparison.Ordinal))
+                    throw new Exception("Slideshow slider readout did not update.");
                 var slideshowBackgroundPicker = (Microsoft.Win32.OpenFileDialog)
                     typeof(SlideshowSettingsWindow).GetMethod(
                         "CreateBackgroundPicker",
@@ -2074,12 +2093,15 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Prefetched slideshow navigates from local cache and applies refined pixels after transition.");
 
-            // Projector has been retired. The slide transition must move
-            // cached whole-photo frames with an explicit gap, without
-            // scheduling an independent opacity transition on top.
+            // Alpha.50 restores the projector as a native Direct3D effect.
+            // Existing projector preferences must now remain selected,
+            // while unknown legacy values still normalize to a dissolve.
             if (new SlideshowSettings { Transition = "projector" }
+                    .Normalize().Transition != "projector" ||
+                new SlideshowSettings { Transition = "unknown-legacy" }
                     .Normalize().Transition != "fade")
-                throw new Exception("Legacy projector setting was not migrated.");
+                throw new Exception(
+                    "Restored projector or unknown transition normalization failed.");
             var sliding = new SlideshowWindow(window, slideshowSequence, 0,
                 slideshowDatabase, galleryBrush, new SlideshowSettings
                 {
@@ -2150,6 +2172,29 @@ internal static class Program
                     if (Math.Abs(gap - (640 - 400) / 2.0) > .01)
                         throw new Exception(
                             "Slide image gap differs from previous right margin.");
+                    var exitMethod = gpu.GetType().GetMethod("SlideExitTravel")!;
+                    foreach (var photoWidth in new[] { 320.0, 400.0, 550.0, 620.0 })
+                    {
+                        const double screen = 640, shadowExtent = 65;
+                        var exitTravel = (double)exitMethod.Invoke(null,
+                            [screen, photoWidth, shadowExtent])!;
+                        var oldRightAfterSlide =
+                            (screen + photoWidth) / 2 - exitTravel + shadowExtent;
+                        if (oldRightAfterSlide >= 0)
+                            throw new Exception(
+                                "Wide outgoing slide/shadow still visible after transition.");
+                    }
+                    var shadowMethod = gpu.GetType().GetMethod("ShadowRect")!;
+                    var sharp = (ValueTuple<float,float,float,float>)shadowMethod.Invoke(null,
+                        [100f, 80f, 400f, 300f, 25f, 0f])!;
+                    var broad = (ValueTuple<float,float,float,float>)shadowMethod.Invoke(null,
+                        [100f, 80f, 400f, 300f, 25f, 40f])!;
+                    if (sharp.Item1 != 125 || sharp.Item2 != 105 ||
+                        sharp.Item3 != 400 || sharp.Item4 != 300 ||
+                        broad.Item1 != sharp.Item1 || broad.Item2 != sharp.Item2 ||
+                        broad.Item3 != 440 || broad.Item4 != 340)
+                        throw new Exception(
+                            "Shadow expanded above/left or sharp shadow lost its offset.");
                 }
                 else if (!observedClock || !observedMotion)
                     throw new Exception(
@@ -2166,7 +2211,7 @@ internal static class Program
             }
             finally { sliding.Close(); }
             Console.WriteLine(
-                "PASS: Picture-to-picture slide uses GPU translation with a visible gap; projector removed.");
+                "PASS: GPU slide fully ejects wide photo, preserves entry gap and has right-bottom-only shadows.");
 
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
@@ -2184,6 +2229,44 @@ internal static class Program
             }
             Console.WriteLine("PASS: One persistent image-sequence setting switches both modes.");
 
+            var syntheticFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var syntheticType = typeof(PCasa.App.MainWindow);
+            var syntheticInitializedField = syntheticType.GetField(
+                "_browseInitialized", syntheticFlags)!;
+            var beforeSyntheticBrowseInitialized =
+                (bool)syntheticInitializedField.GetValue(window)!;
+            // This fixture lives only in memory; the real test SQLite
+            // catalogue is deliberately empty. With longer GPU slideshow
+            // checks, a startup/pending async publisher can otherwise replace
+            // the artificial folder positions after the fixture is installed.
+            // Quiesce the production publisher IN THE TEST ONLY before any
+            // gallery navigation assertions, rather than hiding a missing
+            // folder behind Nullable<T>.Value or changing app behavior.
+            syntheticInitializedField.SetValue(window, false);
+            ((LatestViewRequest)syntheticType.GetField(
+                "_browseRefreshRequests", syntheticFlags)!.GetValue(window)!)
+                .Invalidate();
+            var syntheticPublicationTimer = (DispatcherTimer?)syntheticType.GetField(
+                "_catalogPublicationTimer", syntheticFlags)!.GetValue(window);
+            syntheticPublicationTimer?.Stop();
+            syntheticType.GetField("_catalogPublicationPending", syntheticFlags)!
+                .SetValue(window, 0);
+            var pendingSyntheticPublisher = syntheticType.GetField(
+                "_galleryRefreshCompletion", syntheticFlags)!;
+            for (var attempt = 0; attempt < 100; attempt++)
+            {
+                Flush(window);
+                if (pendingSyntheticPublisher.GetValue(window) is not Task pending ||
+                    pending.IsCompleted)
+                    break;
+                System.Threading.Thread.Sleep(20);
+            }
+            if (pendingSyntheticPublisher.GetValue(window) is Task unfinished &&
+                !unfinished.IsCompleted)
+                throw new Exception(
+                    "Catalog publisher still running before gallery navigation test.");
+
             pages.SetIndex(synthetic);
             var surface = (BrowseGallerySurface?)window.FindName("BrowseSurface")
                 ?? throw new Exception("Actual browse surface not found.");
@@ -2191,6 +2274,10 @@ internal static class Program
                 ?? throw new Exception("Actual browse scroll viewer not found.");
             surface.SetData(synthetic, groups, pages);
             Flush(window);
+            if (surface.GetFolderOffset(100) is null ||
+                surface.GetFolderOffset(200) is null)
+                throw new Exception(
+                    "Synthetic gallery navigation fixture did not expose both folders.");
 
             // Real regression: a GPS-marked photo in folder 100 must never
             // pull the gallery back after the user explicitly enters folder
@@ -2297,6 +2384,24 @@ internal static class Program
                 Flush(window);
             }
 
+            // The synthetic gallery deliberately keeps production catalog
+            // publication disabled. Real button handlers require an initialized
+            // browse state, so enable it only for their synchronous click and
+            // immediately restore the isolated fixture before dispatcher work.
+            void ClickSyntheticGalleryButton(Button button)
+            {
+                syntheticInitializedField.SetValue(window, true);
+                try
+                {
+                    button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
+                }
+                finally
+                {
+                    syntheticInitializedField.SetValue(window, false);
+                }
+                Flush(window);
+            }
+
             // The bookmark is a toggle, not a new scheduler/navigation stack.
             // It must restore a stable arbitrary picture-relative position
             // without selecting a thumbnail.
@@ -2315,15 +2420,11 @@ internal static class Program
             if (returnToDeparture.IsEnabled)
                 throw new Exception("Back to departure must be disabled before jumping to bookmark.");
             var departureOffset = scroller.VerticalOffset;
-            returnToRemembered.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToRemembered));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToRemembered);
             if (Math.Abs(scroller.VerticalOffset - markedOffset) > 3 ||
                 !returnToDeparture.IsEnabled)
                 throw new Exception("Bookmark jump failed or did not enable return to departure.");
-            returnToDeparture.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToDeparture));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToDeparture);
             if (Math.Abs(scroller.VerticalOffset - departureOffset) > 3 ||
                 returnToDeparture.IsEnabled || !returnToRemembered.IsEnabled ||
                 remembered.IsChecked != true)
@@ -2334,15 +2435,11 @@ internal static class Program
             scroller.ScrollToVerticalOffset(1530);
             Flush(window);
             var secondOrigin = scroller.VerticalOffset;
-            returnToRemembered.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToRemembered));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToRemembered);
             if (!returnToDeparture.IsEnabled ||
                 Math.Abs(scroller.VerticalOffset - markedOffset) > 3)
                 throw new Exception("Second bookmark jump did not capture a new departure.");
-            returnToDeparture.RaiseEvent(new RoutedEventArgs(
-                Button.ClickEvent, returnToDeparture));
-            Flush(window);
+            ClickSyntheticGalleryButton(returnToDeparture);
             if (Math.Abs(scroller.VerticalOffset - secondOrigin) > 3 ||
                 returnToDeparture.IsEnabled)
                 throw new Exception("Return used stale departure instead of second origin.");
@@ -2359,8 +2456,7 @@ internal static class Program
             {
                 var button = (Button)window.FindName(
                     "GalleryNavigate" + action + "Button")!;
-                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, button));
-                Flush(window);
+                ClickSyntheticGalleryButton(button);
             }
             Navigate("GalleryEnd");
             if (scroller.VerticalOffset < 100)
@@ -2434,7 +2530,12 @@ internal static class Program
             var previousTierForScanner = tierForScanner.GetValue(window);
             var browseInitializedField = scrollType.GetField(
                 "_browseInitialized", scrollFlags)!;
-            var wasBrowseInitialized = (bool)browseInitializedField.GetValue(window)!;
+            var wasBrowseInitialized = beforeSyntheticBrowseInitialized;
+            // Restore production notification handling for the scanner
+            // deferral checks, after the isolated bookmark/navigation tests.
+            // Those checks intentionally exercise REAL OnCatalogImageIndexed,
+            // rather than the disabled fixture-only catalogue publisher.
+            browseInitializedField.SetValue(window, wasBrowseInitialized);
             try
             {
                 folderBeforeScroll.SetValue(window, (long?)100);

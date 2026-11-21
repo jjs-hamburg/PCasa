@@ -37,9 +37,12 @@ public sealed class SlideshowSettings
         ShadowWidth = Math.Clamp(ShadowWidth, 0, 150);
         ShadowOffset = Math.Clamp(ShadowOffset, 0, 100);
         ShadowOpacity = Math.Clamp(ShadowOpacity, 0, 100);
-        // Older settings may still contain the removed projector effect.
-        // Migrate it to an inexpensive dissolve rather than exposing it again.
+        // Every mode is implemented by the Direct3D renderer. Older
+        // projector selections are valid again; unknown values still fall
+        // back to the safe dissolve.
         Transition = Transition is "none" or "fade" or "zoom" or "slide"
+            or "projector" or "cube" or "cards" or "zoomfade"
+            or "wipe-left" or "wipe-right" or "wipe-up" or "wipe-down"
             ? Transition : "fade";
         DisplayMode = DisplayMode is "gallery" or "fullscreen"
             ? DisplayMode : "gallery";

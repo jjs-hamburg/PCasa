@@ -252,6 +252,29 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         return (oldWidth + nextWidth) / 2 + oldRightMargin;
     }
 
+    /// <summary>Travel required for the OLD (possibly wide) photo and
+    /// its right-hand shadow to disappear completely off the left edge.</summary>
+    public static double SlideExitTravel(double windowWidth, double oldWidth,
+        double shadowRightExtent = 0)
+    {
+        if (!(windowWidth > 0) || !(oldWidth >= 0)) return 0;
+        return (windowWidth + oldWidth) / 2 +
+            Math.Max(0, shadowRightExtent) + 1;
+    }
+
+    // Only the right/bottom sides grow: no negative padding or symmetrical
+    // blur layer may extend a shadow beyond the upper or left photo edge.
+    public static (float X, float Y, float Width, float Height) ShadowRect(
+        float x, float y, float width, float height,
+        float offset, float rightBottomExpansion) =>
+        (x + Math.Max(0, offset),
+         y + Math.Max(0, offset),
+         width + Math.Max(0, rightBottomExpansion),
+         height + Math.Max(0, rightBottomExpansion));
+
+    private float ShadowExtent => _shadow
+        ? (float)(Math.Max(0, _shadowOffset) + Math.Max(0, _shadowWidth)) : 0;
+
     private static Pixels CopyPixels(BitmapSource source)
     {
         // WPF objects are accessed only from their originating dispatcher.
@@ -392,30 +415,101 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         if (_active is not null)
         {
             var a = Frame(_active);
-            float activeShift = 0;
-            if (_next is not null && _transition == "slide")
+            var b = _next is null ? a : Frame(_next);
+            if (_next is null)
             {
-                var b = Frame(_next);
-                activeShift = (float)(-SlideTravel(_width, a.W, b.W) * t);
+                DrawPhoto(_active, a, 0, 1, 1);
             }
-            DrawPhoto(_active, a, activeShift, 1, 1);
-        }
-        if (_next is not null)
-        {
-            var b = Frame(_next);
-            float shift = 0, alpha = 1, zoom = 1;
-            if (_transition == "slide")
+            else if (_transition == "cards")
             {
-                var a = Frame(_active!);
-                shift = (float)(SlideTravel(_width, a.W, b.W) * (1 - t));
+                // Incoming card lies underneath. The outgoing card glides
+                // away; no WPF storyboard or additional image decoding.
+                DrawPhoto(_next, b, 0, 1, .95f + .05f * t);
+                DrawPhoto(_active, a, (float)(_width * .85 * t),
+                    Math.Clamp(1f - t * 1.3f, 0, 1), 1f - .08f * t);
             }
-            else if (_transition == "fade") alpha = t;
-            else if (_transition == "zoom")
+            else if (_transition == "projector")
             {
-                alpha = t;
-                zoom = .97f + .03f * t;
+                // Film projector: held frame, a brief black shutter interval,
+                // then the next frame appears with a restrained light pulse.
+                // Entire effect is GPU geometry/alpha, not WPF animation.
+                if (t < .44f)
+                    DrawPhoto(_active, a, 0, 1, 1f + .012f * t);
+                else if (t >= .58f)
+                {
+                    DrawPhoto(_next, b, 0, 1, 1.008f - .008f * t);
+                    var flicker = (float)(Math.Sin((t - .58f) * 40) *
+                        Math.Exp(-(t - .58f) * 12));
+                    if (flicker > 0)
+                        Draw(_white!, 0, 0, _width, _height, .11f * flicker);
+                }
+                if (t >= .40f && t < .59f)
+                    Draw(_black!, 0, 0, _width, _height, 1);
             }
-            DrawPhoto(_next, b, shift, alpha, zoom);
+            else if (_transition == "cube")
+            {
+                // Two perspective-like faces of a horizontal rotating cube.
+                // Each face collapses around an outer edge then the next
+                // face opens; the picture, frame and shadow stay aligned.
+                if (t < .5f)
+                {
+                    var fraction = (float)Math.Cos(Math.PI * t);
+                    DrawPhoto(_active, a, -a.W * (1f - fraction) / 2,
+                        1, 1, horizontalScale: fraction);
+                }
+                else
+                {
+                    var fraction = (float)Math.Sin(Math.PI * (t - .5f));
+                    DrawPhoto(_next, b, b.W * (1f - fraction) / 2,
+                        1, 1, horizontalScale: fraction);
+                }
+            }
+            else
+            {
+                // The slide uses two independent distances with ONE clock:
+                // the next image starts with the requested right-hand gap,
+                // while a wider outgoing image really exits the viewport.
+                var oldShift = _transition == "slide"
+                    ? (float)(-Math.Max(SlideTravel(_width, a.W, b.W),
+                        SlideExitTravel(_width, a.W, ShadowExtent)) * t)
+                    : 0;
+                var oldAlpha = _transition == "zoomfade" ? 1 - t : 1;
+                var oldZoom = _transition == "zoomfade" ? 1f + .045f * t : 1;
+                if (_transition != "slide" || t < 1)
+                    DrawPhoto(_active, a, oldShift, oldAlpha, oldZoom);
+
+                float shiftX = 0, shiftY = 0, alpha = 1, zoom = 1;
+                switch (_transition)
+                {
+                    case "slide":
+                        shiftX = (float)(SlideTravel(_width, a.W, b.W) * (1 - t));
+                        break;
+                    case "fade":
+                        alpha = t;
+                        break;
+                    case "zoom":
+                        alpha = t;
+                        zoom = .97f + .03f * t;
+                        break;
+                    case "zoomfade":
+                        alpha = t;
+                        zoom = 1.05f - .05f * t;
+                        break;
+                    case "wipe-left":
+                        shiftX = _width * (1 - t);
+                        break;
+                    case "wipe-right":
+                        shiftX = -_width * (1 - t);
+                        break;
+                    case "wipe-up":
+                        shiftY = _height * (1 - t);
+                        break;
+                    case "wipe-down":
+                        shiftY = -_height * (1 - t);
+                        break;
+                }
+                DrawPhoto(_next, b, shiftX, alpha, zoom, shiftY);
+            }
         }
         _swapChain!.Present(1, PresentFlags.None).CheckError();
         if (_next is not null) _drawnTransitionFrames++;
@@ -424,30 +518,50 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     }
 
     private void DrawPhoto(Texture image, (float X, float Y, float W, float H) rect,
-        float shift, float alpha, float zoom)
+        float shift, float alpha, float zoom, float shiftY = 0,
+        float horizontalScale = 1)
     {
-        var w = rect.W * zoom;
+        var w = rect.W * zoom * horizontalScale;
         var h = rect.H * zoom;
+        if (w <= 0 || h <= 0 || alpha <= 0) return;
         var x = rect.X + (rect.W - w) / 2 + shift;
-        var y = rect.Y + (rect.H - h) / 2;
-        if (_shadow)
+        var y = rect.Y + (rect.H - h) / 2 + shiftY;
+        if (_shadow && _shadowOpacity > 0)
         {
-            // Low-cost GPU translucent shadow layers, not WPF DropShadowEffect.
-            var spread = (float)Math.Clamp(_shadowWidth, 1, 40);
-            for (var layer = 3; layer >= 1; layer--)
+            var offset = (float)Math.Max(0, _shadowOffset);
+            var spread = (float)Math.Max(0, _shadowWidth);
+            // A zero-width shadow is the sharp translated silhouette, not
+            // a 1px blur. Positive width grows ONLY right and down.
+            if (spread <= 0)
             {
-                var pad = spread * layer / 3;
-                Draw(_black!, x + (float)_shadowOffset - pad,
-                    y + (float)_shadowOffset - pad,
-                    w + 2 * pad, h + 2 * pad,
-                    alpha * (float)_shadowOpacity * .17f);
+                var sharp = ShadowRect(x, y, w, h, offset, 0);
+                Draw(_black!, sharp.X, sharp.Y, sharp.Width, sharp.Height,
+                    alpha * (float)_shadowOpacity);
+            }
+            else
+            {
+                // Twelve GPU-only nested steps produce a much softer
+                // one-sided falloff than the old three hard rectangles.
+                // No expensive WPF DropShadowEffect runs per frame.
+                for (var layer = 12; layer >= 1; layer--)
+                {
+                    var shadow = ShadowRect(x, y, w, h,
+                        offset, spread * layer / 12);
+                    Draw(_black!, shadow.X, shadow.Y,
+                        shadow.Width, shadow.Height,
+                        alpha * (float)_shadowOpacity * .065f);
+                }
+                var core = ShadowRect(x, y, w, h, offset, 0);
+                Draw(_black!, core.X, core.Y, core.Width, core.Height,
+                    alpha * (float)_shadowOpacity * .30f);
             }
         }
         if (_border > 0)
             Draw(_white!, x, y, w, h, alpha);
-        var inset = (float)_border * zoom;
-        Draw(image, x + inset, y + inset,
-            Math.Max(1, w - 2 * inset), Math.Max(1, h - 2 * inset), alpha);
+        var insetX = (float)_border * zoom * horizontalScale;
+        var insetY = (float)_border * zoom;
+        Draw(image, x + insetX, y + insetY,
+            Math.Max(1, w - 2 * insetX), Math.Max(1, h - 2 * insetY), alpha);
     }
 
     private void Draw(Texture image, float x, float y, float width, float height,

@@ -16,13 +16,14 @@ public sealed class SlideshowSettingsWindow : Window
     private readonly ComboBox _background;
     private readonly ComboBox _transition;
     private readonly TextBox _customFile;
-    private readonly TextBox _interval;
-    private readonly TextBox _duration;
-    private readonly TextBox _gallerySize;
-    private readonly TextBox _borderSize;
-    private readonly TextBox _shadowSize;
-    private readonly TextBox _shadowOffset;
-    private readonly TextBox _shadowOpacity;
+    private readonly Slider _interval;
+    private readonly Slider _duration;
+    private readonly Slider _gallerySize;
+    private readonly Slider _borderSize;
+    private readonly Slider _shadowSize;
+    private readonly Slider _shadowOffset;
+    private readonly Slider _shadowOpacity;
+    private const double NumericSliderWidth = 258;
     private readonly CheckBox _preload;
     private readonly CheckBox _border;
     private readonly CheckBox _shadow;
@@ -33,9 +34,9 @@ public sealed class SlideshowSettingsWindow : Window
     {
         _values = current.Copy().Normalize();
         Title = UiLanguage.T("Slideshow-Einstellungen");
-        Width = 550;
-        Height = 680;
-        MinWidth = 470;
+        Width = 680;
+        Height = 720;
+        MinWidth = 630;
         MinHeight = 500;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.CanResize;
@@ -80,7 +81,8 @@ public sealed class SlideshowSettingsWindow : Window
         scroll.Content = fields;
         _display = Choice(fields, "Darstellung", _values.DisplayMode,
             ("gallery", "Galerie"), ("fullscreen", "Vollbild"));
-        _gallerySize = Number(fields, "Galeriegröße (%)", _values.GalleryPercent);
+        _gallerySize = Number(fields, "Galeriegröße (%)", _values.GalleryPercent,
+            50, 100, 1, "%");
         _background = Choice(fields, "Hintergrund", _values.BackgroundMode,
             ("gallery", "Wie Galerie (Textur)"), ("black", "Schwarz"),
             ("custom", "Eigenes Bild"));
@@ -107,18 +109,30 @@ public sealed class SlideshowSettingsWindow : Window
         };
         fileRow.Children.Add(_customFile);
         fileRow.Children.Add(browse);
-        _interval = Number(fields, "Bildwechsel (Sekunden)", _values.IntervalSeconds);
+        _interval = Number(fields, "Bildwechsel (Sekunden)", _values.IntervalSeconds,
+            1, 3600, 1, "s");
         _preload = Toggle(fields, "Nächstes Bild vorausladen", _values.PreloadNext);
         _transition = Choice(fields, "Übergang", _values.Transition,
             ("none", "Aus"), ("fade", "Überblenden"),
-            ("zoom", "Sanfter Zoom"), ("slide", "Schieben"));
-        _duration = Number(fields, "Übergangsdauer (ms)", _values.TransitionMilliseconds);
+            ("zoom", "Sanfter Zoom"), ("slide", "Schieben"),
+            ("projector", "Projektor"), ("cube", "3D-Würfelrotation"),
+            ("cards", "Kartenwechsel"), ("zoomfade", "Zoom-Überblendung"),
+            ("wipe-left", "Wischen nach links"),
+            ("wipe-right", "Wischen nach rechts"),
+            ("wipe-up", "Wischen nach oben"),
+            ("wipe-down", "Wischen nach unten"));
+        _duration = Number(fields, "Übergangsdauer (ms)", _values.TransitionMilliseconds,
+            0, 3000, 50, "ms");
         _border = Toggle(fields, "Weißer Rahmen", _values.WhiteBorder);
-        _borderSize = Number(fields, "Rahmenbreite (px)", _values.BorderWidth);
+        _borderSize = Number(fields, "Rahmenbreite (px)", _values.BorderWidth,
+            0, 100, 1, "px");
         _shadow = Toggle(fields, "Schatten", _values.Shadow);
-        _shadowSize = Number(fields, "Schattenbreite (px)", _values.ShadowWidth);
-        _shadowOffset = Number(fields, "Schattenversatz (px)", _values.ShadowOffset);
-        _shadowOpacity = Number(fields, "Schattenstärke (%)", _values.ShadowOpacity);
+        _shadowSize = Number(fields, "Schattenbreite (px)", _values.ShadowWidth,
+            0, 150, 1, "px");
+        _shadowOffset = Number(fields, "Schattenversatz (px)", _values.ShadowOffset,
+            0, 100, 1, "px");
+        _shadowOpacity = Number(fields, "Schattenstärke (%)", _values.ShadowOpacity,
+            0, 100, 1, "%");
     }
 
     internal static OpenFileDialog CreateBackgroundPicker() => new()
@@ -305,17 +319,38 @@ public sealed class SlideshowSettingsWindow : Window
     private static string Chosen(ComboBox choice)
         => (choice.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
 
-    private static TextBox Number(StackPanel fields, string label, int value)
+    // Exactly the same slider width in every numeric row. The number
+    // alongside the track is a live readout, not a second editable value.
+    // Keyboard arrows retain single-step precision for long intervals.
+    private static Slider Number(StackPanel fields, string label, int value,
+        int minimum, int maximum, int step, string unit)
     {
         var row = Row(fields, label);
-        var text = new TextBox
+        var slider = new Slider
         {
-            Text = value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Width = 78, Height = 27,
-            VerticalContentAlignment = VerticalAlignment.Center
+            Width = NumericSliderWidth, Height = 29,
+            Minimum = minimum, Maximum = maximum,
+            Value = Math.Clamp(value, minimum, maximum),
+            TickFrequency = step, SmallChange = step,
+            LargeChange = step * 10,
+            IsSnapToTickEnabled = true,
+            AutoToolTipPlacement = AutoToolTipPlacement.TopLeft,
+            AutoToolTipPrecision = 0,
+            VerticalAlignment = VerticalAlignment.Center
         };
-        row.Children.Add(text);
-        return text;
+        var valueLabel = new TextBlock
+        {
+            Width = 75, Margin = new Thickness(12, 0, 0, 0),
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        valueLabel.SetBinding(TextBlock.TextProperty, new Binding(nameof(Slider.Value))
+        {
+            Source = slider, StringFormat = "{0:0} " + unit
+        });
+        row.Children.Add(slider);
+        row.Children.Add(valueLabel);
+        return slider;
     }
 
     private static CheckBox Toggle(StackPanel fields, string label, bool value)
@@ -329,13 +364,13 @@ public sealed class SlideshowSettingsWindow : Window
         return toggle;
     }
 
-    private static int ReadInt(TextBox box, int fallback) =>
-        int.TryParse(box.Text, out var number) ? number : fallback;
+    private static int ReadInt(Slider slider) =>
+        (int)Math.Round(slider.Value, MidpointRounding.AwayFromZero);
 
     private void Save()
     {
         _values.DisplayMode = Chosen(_display);
-        _values.GalleryPercent = ReadInt(_gallerySize, 85);
+        _values.GalleryPercent = ReadInt(_gallerySize);
         _values.BackgroundMode = Chosen(_background);
         _values.CustomBackgroundPath = string.IsNullOrWhiteSpace(_customFile.Text)
             ? null : _customFile.Text.Trim();
@@ -348,16 +383,16 @@ public sealed class SlideshowSettingsWindow : Window
                 MessageBoxImage.Warning);
             return;
         }
-        _values.IntervalSeconds = ReadInt(_interval, 5);
+        _values.IntervalSeconds = ReadInt(_interval);
         _values.PreloadNext = _preload.IsChecked == true;
         _values.Transition = Chosen(_transition);
-        _values.TransitionMilliseconds = ReadInt(_duration, 700);
+        _values.TransitionMilliseconds = ReadInt(_duration);
         _values.WhiteBorder = _border.IsChecked == true;
-        _values.BorderWidth = ReadInt(_borderSize, 10);
+        _values.BorderWidth = ReadInt(_borderSize);
         _values.Shadow = _shadow.IsChecked == true;
-        _values.ShadowWidth = ReadInt(_shadowSize, 26);
-        _values.ShadowOffset = ReadInt(_shadowOffset, 12);
-        _values.ShadowOpacity = ReadInt(_shadowOpacity, 60);
+        _values.ShadowWidth = ReadInt(_shadowSize);
+        _values.ShadowOffset = ReadInt(_shadowOffset);
+        _values.ShadowOpacity = ReadInt(_shadowOpacity);
         _values.Normalize();
         try { _values.Save(); }
         catch (Exception ex)

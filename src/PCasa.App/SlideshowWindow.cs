@@ -627,7 +627,14 @@ public sealed class SlideshowWindow : Window
                     FinishTransition();
             };
             _incoming.Shift.BeginAnimation(TranslateTransform.XProperty, slide);
-            Animate(_active.Shift, TranslateTransform.XProperty, 0, -distance, duration);
+            // A wider outgoing frame needs a longer exit than the narrower
+            // incoming frame. Include the right-only shadow extent too.
+            var shadowExtent = _options.DisplayMode == "gallery" && _options.Shadow
+                ? _options.ShadowOffset + _options.ShadowWidth : 0;
+            var exitDistance = Direct3DSlideshowSurface.SlideExitTravel(
+                _root.ActualWidth, _active.Frame.Width, shadowExtent);
+            Animate(_active.Shift, TranslateTransform.XProperty,
+                0, -exitDistance, duration);
             // Translate the two cached frames on the compositor, without
             // a second full-screen alpha animation over the textured stage.
             return;

@@ -21,7 +21,9 @@ public partial class MainWindow
     private bool _panoramaImportRunning;
     private bool _panoramaLaunchPending;
     private bool _panoramaActivationHooked;
-    private DateTime _panoramaLastResultDialogUtc = DateTime.MinValue;
+    // The launched external process is tracked until its session ends.
+    // A mere Alt+Tab back to PCasa must NOT be treated as editor exit.
+    private Process? _panoramaEditorProcess;
 
     private async Task StartPanoramaSelectionAsync(long[] imageIds)
     {
@@ -49,7 +51,9 @@ public partial class MainWindow
         _panoramaActivationHooked = true;
         Activated += async (_, _) =>
         {
-            if (_panoramaSession is { } session && !_panoramaImportRunning)
+            if (_panoramaSession is { } session &&
+                !_panoramaImportRunning && !_panoramaLaunchPending &&
+                ExternalBatchEditorHasExited())
             {
                 try { await TryImportPanoramaAsync(session); }
                 catch (Exception ex)
@@ -134,11 +138,10 @@ public partial class MainWindow
                 // output must be exported into this isolated working folder.
                 foreach (var path in session.Inputs)
                     start.ArgumentList.Add(path);
-                await Task.Run(() =>
-                {
-                    using var launched = Process.Start(start)
-                        ?? throw new IOException("Panoramaprogramm konnte nicht gestartet werden.");
-                });
+                _panoramaEditorProcess = await Task.Run(() =>
+                    Process.Start(start)
+                        ?? throw new IOException(
+                            "Panoramaprogramm konnte nicht gestartet werden."));
                 StatusText.Text = UiLanguage.T(isPanorama
                     ? "Panorama erstellen" : "Mehrfachbearbeitung") + " · " +
                     program.Name;
@@ -147,6 +150,7 @@ public partial class MainWindow
             {
                 _panoramaSession = null;
                 _externalBatchReview = null;
+                ReleasePanoramaEditorProcess();
                 PanoramaTransaction.Cleanup(session);
                 UpdateEditControls();
                 throw;
@@ -197,27 +201,36 @@ public partial class MainWindow
         return (tags, latitude, longitude);
     }
 
-    // A dismissed output chooser is not an implicit successful edit.
-    // Let users explicitly cancel the whole session; stale local copies
-    // are best-effort cleaned without touching any original or foreign export.
-    private bool OfferCancelMultipleSession(PanoramaSession session)
+    private bool ExternalBatchEditorHasExited()
     {
-        var answer = MessageBox.Show(this,
-            UiLanguage.T("Externe Mehrfachbearbeitung abbrechen? Originalbilder bleiben unverändert."),
-            UiLanguage.T(session.IsPanorama ? "Panorama erstellen" : "Mehrfachbearbeitung"),
-            MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes) return false;
-        if (!ReferenceEquals(_panoramaSession, session)) return false;
+        try { return _panoramaEditorProcess?.HasExited == true; }
+        catch (InvalidOperationException) { return false; }
+        catch (System.ComponentModel.Win32Exception) { return false; }
+    }
+
+    private void ReleasePanoramaEditorProcess()
+    {
+        // Dispose the process handle, never terminate a user's external app.
+        var process = _panoramaEditorProcess;
+        _panoramaEditorProcess = null;
+        process?.Dispose();
+    }
+
+    private void CompleteUnchangedExternalBatch(PanoramaSession session)
+    {
+        if (!ReferenceEquals(_panoramaSession, session) ||
+            !ExternalBatchEditorHasExited()) return;
         _panoramaSession = null;
         _externalBatchReview = null;
+        ReleasePanoramaEditorProcess();
         ResumeSchedulerAfterExternalEdit();
         PanoramaTransaction.Cleanup(session);
-        // Never leave a batch preview displayed under the first source's name.
         if (_viewerOpen && _viewerImageInfo?.Id == session.ImageIds[0])
             ShowViewerImage();
         UpdateEditControls();
-        StatusText.Text = UiLanguage.T("Externe Bearbeitung abgebrochen.");
-        return true;
+        // No Windows file picker, no confirmation dialog, no fake result.
+        // Normal exit with no output is not an error and needs no new UI.
+        StatusText.Text = "";
     }
 
     private async Task PresentExternalBatchReviewAsync(
@@ -288,7 +301,8 @@ public partial class MainWindow
             return;
         }
         if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session) ||
-            _externalBatchReview is { Outputs.Length: > 0 })
+            _externalBatchReview is { Outputs.Length: > 0 } ||
+            !ExternalBatchEditorHasExited())
             return;
         _panoramaImportRunning = true;
         try
@@ -297,33 +311,10 @@ public partial class MainWindow
             if (!ReferenceEquals(_panoramaSession, session)) return;
             if (resultPath is null)
             {
-                // Autopano's output directory is user-controlled. Do not
-                // search arbitrary folders or invent a destination. On
-                // returning to PCasa, choose the actual rendered result.
-                // A canceled chooser leaves the session intact for the next
-                // user return, but must not immediately reopen on activation.
-                if (DateTime.UtcNow - _panoramaLastResultDialogUtc <
-                    TimeSpan.FromSeconds(2)) return;
-                var picker = new Microsoft.Win32.OpenFileDialog
-                {
-                    Title = UiLanguage.T("Panoramaergebnis auswählen"),
-                    Filter = UiLanguage.T("Bilder") +
-                        "|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd|" +
-                        UiLanguage.T("Alle Dateien") + "|*.*",
-                    CheckFileExists = true,
-                    Multiselect = false,
-                    InitialDirectory = session.Directory
-                };
-                try
-                {
-                    if (picker.ShowDialog(this) != true)
-                    {
-                        OfferCancelMultipleSession(session);
-                        return;
-                    }
-                    resultPath = picker.FileName;
-                }
-                finally { _panoramaLastResultDialogUtc = DateTime.UtcNow; }
+                // An unchanged exchange folder is a normal editor exit.
+                // No native Windows picker or confirmation is permissible.
+                CompleteUnchangedExternalBatch(session);
+                return;
             }
             await PresentExternalBatchReviewAsync(session,
                 [new ExternalBatchOutput(0, resultPath)]);
@@ -334,7 +325,8 @@ public partial class MainWindow
     private async Task TryImportMultipleAsync(PanoramaSession session)
     {
         if (_panoramaImportRunning || !ReferenceEquals(_panoramaSession, session) ||
-            _externalBatchReview is { Outputs.Length: > 0 })
+            _externalBatchReview is { Outputs.Length: > 0 } ||
+            !ExternalBatchEditorHasExited())
             return;
         _panoramaImportRunning = true;
         try
@@ -344,33 +336,8 @@ public partial class MainWindow
             if (!ReferenceEquals(_panoramaSession, session)) return;
             if (outputs.Length == 0)
             {
-                // Some editors export into a user-selected folder. Ask for
-                // every output, but never assign files to inputs by list order.
-                if (DateTime.UtcNow - _panoramaLastResultDialogUtc <
-                    TimeSpan.FromSeconds(2)) return;
-                var picker = new Microsoft.Win32.OpenFileDialog
-                {
-                    Title = UiLanguage.T("Ergebnisse der Mehrfachbearbeitung auswählen"),
-                    Filter = UiLanguage.T("Bilder") +
-                        "|*.jpg;*.jpeg;*.tif;*.tiff;*.png;*.bmp;*.webp;*.heic;*.heif;*.avif;*.jxl;*.psd;*.dng|" +
-                        UiLanguage.T("Alle Dateien") + "|*.*",
-                    CheckFileExists = true,
-                    Multiselect = true,
-                    InitialDirectory = session.Directory
-                };
-                try
-                {
-                    if (picker.ShowDialog(this) != true)
-                    {
-                        OfferCancelMultipleSession(session);
-                        return;
-                    }
-                    outputs = picker.FileNames.Select(path =>
-                        new ExternalBatchOutput(
-                            PanoramaTransaction.MatchSourceIndex(session, path),
-                            path)).ToArray();
-                }
-                finally { _panoramaLastResultDialogUtc = DateTime.UtcNow; }
+                CompleteUnchangedExternalBatch(session);
+                return;
             }
             await PresentExternalBatchReviewAsync(session, outputs);
         }
@@ -400,6 +367,7 @@ public partial class MainWindow
             {
                 _externalBatchReview = null;
                 _panoramaSession = null;
+                ReleasePanoramaEditorProcess();
                 ResumeSchedulerAfterExternalEdit();
                 PanoramaTransaction.Cleanup(session);
                 if (_viewerOpen && _viewerImageInfo?.Id == session.ImageIds[0])
@@ -511,6 +479,7 @@ public partial class MainWindow
             }
             _externalBatchReview = null;
             _panoramaSession = null;
+            ReleasePanoramaEditorProcess();
             ResumeSchedulerAfterExternalEdit();
             PanoramaTransaction.Cleanup(session);
             UpdateEditControls();
