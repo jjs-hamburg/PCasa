@@ -321,7 +321,9 @@ internal static class ExternalEditSmokeFlow
             // while the external editor still holds its export without
             // FILE_SHARE_DELETE. The original export is immutable.
             var inner = ExternalEditTransaction.Begin(photo);
-            WriteJpeg(inner.BackupPath, 101);
+            // The real full-resolution edit renderer rejects tiny thumbnails.
+            // Test the private workspace with a valid 64px editable output.
+            WriteJpeg(inner.BackupPath, 101, 64);
             var exportedBytes = File.ReadAllBytes(inner.BackupPath);
             var editStager = typeof(JpegCropWriter).GetMethod(
                 "EditExternalWorkspaceResult",
@@ -561,9 +563,10 @@ internal static class ExternalEditSmokeFlow
         stream.Flush(true);
     }
 
-    private static void WriteJpeg(string path, byte brightness)
+    private static void WriteJpeg(string path, byte brightness, int size = 8)
     {
-        const int width = 8, height = 8;
+        var width = size;
+        var height = size;
         var pixels = new byte[width * height * 4];
         for (var i = 0; i < pixels.Length; i += 4)
         {
