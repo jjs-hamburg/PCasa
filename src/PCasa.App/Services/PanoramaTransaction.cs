@@ -333,6 +333,7 @@ public static class PanoramaTransaction
         // Transfer complete capture metadata from the FIRST image. Then use
         // independent first-with-tags and first-with-GPS selections.
         ExternalResultMetadata.CopyAll(session.Sources[0], fullResult, token);
+        ExifDateMetadata.Preserve(session.Sources[0], fullResult, token);
         if (session.Tags.Length > 0)
         {
             using var writer = new ExifToolKeywordWriter.Session();
@@ -451,6 +452,7 @@ public static class PanoramaTransaction
                 // binary payload must not be rewritten by PCasa.
                 if (!RawImageSource.IsRawPath(output.Path))
                     ExternalResultMetadata.CopyAll(source, output.Path, token);
+                ExifDateMetadata.Preserve(source, output.Path, token);
 
                 var desired = Path.Combine(Path.GetDirectoryName(source)!,
                     Path.GetFileNameWithoutExtension(source) + Path.GetExtension(output.Path));
