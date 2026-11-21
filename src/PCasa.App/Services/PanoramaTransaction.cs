@@ -23,6 +23,37 @@ public static class PanoramaTransaction
     public static string SessionRoot => ExternalEditTransaction.DirectoryPath;
     internal const string BatchMarker = ".pcasa-batch-session";
 
+    // Previous releases used %LocalAppData%/PCasa/Panorama/session-GUID.
+    // Abandoned copies must not accumulate after upgrading to the shared
+    // flat workspace. Delete ONLY our exact legacy session names, leaving
+    // any unrelated user files or folders untouched.
+    public static void CleanupLegacySessions()
+    {
+        var legacy = Path.Combine(
+            Path.GetDirectoryName(ExternalEditTransaction.DirectoryPath)!,
+            "Panorama");
+        if (!Directory.Exists(legacy)) return;
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(
+                         legacy, "session-*", SearchOption.TopDirectoryOnly))
+            {
+                var name = Path.GetFileName(dir);
+                if (name.Length != 40 || !name.StartsWith("session-",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !Guid.TryParseExact(name[8..], "N", out _))
+                    continue;
+                try { Directory.Delete(dir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { PCasaDiagnostics.Write("Panorama.LegacyCleanup", ex); }
+            }
+            if (!Directory.EnumerateFileSystemEntries(legacy).Any())
+                Directory.Delete(legacy);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        { PCasaDiagnostics.Write("Panorama.LegacyCleanup", ex); }
+    }
+
     public static PanoramaSession Begin(
         (long Id, string Path)[] images, string[] tags,
         double? latitude, double? longitude,
