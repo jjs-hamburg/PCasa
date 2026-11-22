@@ -2305,21 +2305,21 @@ internal static class Program
                 (6000f, 4000f), (3000f, 6000f),
                 (8000f, 900f), (900f, 8000f) })
             {
-                var fit = ((float U, float V, float Width, float Height))
+                var shadowFit = ((float U, float V, float Width, float Height))
                     withMargin.Invoke(null, [900f, 600f,
                         dimensions.Item1, dimensions.Item2, 10f, 38f])!;
                 var shadow = ((float U, float V, float Width, float Height))
                     cubeShadow.Invoke(null, [
-                        fit.U - 10f / 900f, fit.V - 10f / 600f,
-                        fit.Width + 20f / 900f, fit.Height + 20f / 600f,
+                        shadowFit.U - 10f / 900f, shadowFit.V - 10f / 600f,
+                        shadowFit.Width + 20f / 900f, shadowFit.Height + 20f / 600f,
                         12f / 900f, 12f / 600f, 26f / 900f, 26f / 600f])!;
-                var photoRight = fit.U + fit.Width + 10f / 900f;
-                var photoBottom = fit.V + fit.Height + 10f / 600f;
+                var photoRight = shadowFit.U + shadowFit.Width + 10f / 900f;
+                var photoBottom = shadowFit.V + shadowFit.Height + 10f / 600f;
                 if (shadow.U + shadow.Width <= photoRight + .005f ||
                     shadow.V + shadow.Height <= photoBottom + .005f ||
                     shadow.U + shadow.Width > 1.0001f ||
                     shadow.V + shadow.Height > 1.0001f ||
-                    Math.Abs((fit.Width * 900 / (fit.Height * 600)) -
+                    Math.Abs((shadowFit.Width * 900 / (shadowFit.Height * 600)) -
                         dimensions.Item1 / dimensions.Item2) > .0001f)
                     throw new Exception(
                         "Cube still clips its right or lower photo shadow for " +
