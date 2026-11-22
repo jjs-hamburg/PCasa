@@ -12,13 +12,29 @@ namespace PCasa.App.Services;
 internal sealed class Direct3DSlideshowHost : HwndHost
 {
     private const int WsChild = 0x40000000;
-    private const int WsVisible = 0x10000000;
+    private const int SwShow = 5;
     private const int WsClipSiblings = 0x04000000;
     private const int WsClipChildren = 0x02000000;
     private const int WmLButtonDown = 0x0201;
     private const int WmKeyDown = 0x0100;
+    private const int WmPaint = 0x000F;
+    private const int WmEraseBackground = 0x0014;
+    private const int WmSetCursor = 0x0020;
 
     private IntPtr _child;
+    private bool _surfaceRevealed;
+
+    // A fresh native STATIC window otherwise flashes its white GDI surface
+    // while Direct3D is still building its first swap-chain frame. Keep it
+    // hidden until the GPU has actually presented the configured backdrop.
+    public void RevealRenderedSurface()
+    {
+        if (_surfaceRevealed || _child == IntPtr.Zero) return;
+        _surfaceRevealed = true;
+        ShowWindow(_child, SwShow);
+    }
+
+    internal bool IsSurfaceRevealed => _surfaceRevealed;
 
     public event Action? Clicked;
     public event Action<int>? NativeKeyDown;
@@ -40,12 +56,13 @@ internal sealed class Direct3DSlideshowHost : HwndHost
     protected override HandleRef BuildWindowCore(HandleRef hwndParent)
     {
         _child = CreateWindowExW(0, "STATIC", "",
-            WsChild | WsVisible | WsClipSiblings | WsClipChildren,
+            WsChild | WsClipSiblings | WsClipChildren,
             0, 0, 1, 1, hwndParent.Handle,
             IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
         if (_child == IntPtr.Zero)
             throw new Win32Exception(Marshal.GetLastWin32Error(),
                 "Direct3D slideshow HWND could not be created.");
+        _surfaceRevealed = false;
         return new HandleRef(this, _child);
     }
 
@@ -54,11 +71,33 @@ internal sealed class Direct3DSlideshowHost : HwndHost
         if (hwnd.Handle != IntPtr.Zero)
             DestroyWindow(hwnd.Handle);
         _child = IntPtr.Zero;
+        _surfaceRevealed = false;
     }
 
     protected override IntPtr WndProc(IntPtr hwnd, int message,
         IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (message == WmSetCursor)
+        {
+            // WPF's Cursor=None does not cross the HwndHost airspace boundary.
+            SetCursor(IntPtr.Zero);
+            handled = true;
+            return new IntPtr(1);
+        }
+        if (message == WmEraseBackground)
+        {
+            // Direct3D owns every pixel; never let STATIC erase to white.
+            handled = true;
+            return new IntPtr(1);
+        }
+        if (message == WmPaint)
+        {
+            // GDI painting of the native host would overwrite a valid GPU
+            // frame with the class' default white STATIC background.
+            ValidateRect(hwnd, IntPtr.Zero);
+            handled = true;
+            return IntPtr.Zero;
+        }
         if (message == WmLButtonDown)
         {
             handled = true;
@@ -73,6 +112,16 @@ internal sealed class Direct3DSlideshowHost : HwndHost
         }
         return base.WndProc(hwnd, message, wParam, lParam, ref handled);
     }
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hwnd, int showCommand);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetCursor(IntPtr cursor);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ValidateRect(IntPtr hwnd, IntPtr rect);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ClientRect
