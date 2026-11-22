@@ -1506,13 +1506,12 @@ public partial class MainWindow
         if (tag.PhotoFolderId is long ownId) return ownId;
         var descendants = PhotoFoldersBelowTreePath(tag.FullPath,
             _photoFolders, CaptureGalleryFolderOrder());
-        // Prefer a cached visible section. A parent click should not trigger
-        // an unnecessary full 500k-entry catalog reload if any descendant
-        // already has a usable thumbnail position.
-        foreach (var candidate in descendants)
-            if (BrowseSurface.GetFolderOffset(candidate) is not null)
-                return candidate;
-        return descendants.FirstOrDefault();
+        // Prefer an already-published child section. A single indexed
+        // layout pass stays responsive even for an S:\\ root containing
+        // thousands of photo folders; missing candidates use one fallback.
+        if (descendants.Count == 0) return null;
+        return BrowseSurface.GetFirstVisibleFolderId(descendants.ToHashSet())
+            ?? descendants[0];
     }
 
     internal static IReadOnlyList<long> PhotoFoldersBelowTreePath(
