@@ -2340,12 +2340,12 @@ internal static class Program
                 System.Reflection.BindingFlags.Public)
                 ?? throw new Exception("Parent/drive navigation resolver missing.");
             var sFolders = new[] {
-                new PhotoFolderSummary(901, 1, @"S:\\Albums\\First",
-                    @"S:\\Albums\\First", "First", 20),
-                new PhotoFolderSummary(902, 1, @"S:\\Albums\\Second",
-                    @"S:\\Albums\\Second", "Second", 40),
-                new PhotoFolderSummary(903, 2, @"G:\\Photos",
-                    @"G:\\Photos", "Other drive", 12)
+                new PhotoFolderSummary(901, 1, @"S:\Albums\First",
+                    @"S:\Albums\First", "First", 20),
+                new PhotoFolderSummary(902, 1, @"S:\Albums\Second",
+                    @"S:\Albums\Second", "Second", 40),
+                new PhotoFolderSummary(903, 2, @"G:\Photos",
+                    @"G:\Photos", "Other drive", 12)
             };
             var sPositions = new Dictionary<long, int> {
                 [902] = 0, [901] = 1, [903] = 2
@@ -2353,11 +2353,11 @@ internal static class Program
             IReadOnlyList<long> ForRoot(string path) =>
                 (IReadOnlyList<long>)descendantsMethod.Invoke(null,
                     [path, sFolders, sPositions])!;
-            if (!ForRoot(@"S:\\").SequenceEqual(new long[] { 902, 901 }) ||
-                !ForRoot(@"S:\\Albums").SequenceEqual(new long[] { 902, 901 }) ||
-                !ForRoot(@"S:\\Albums\\First").SequenceEqual(new long[] { 901 }) ||
-                ForRoot(@"S:\\Albums\\Missing").Count != 0 ||
-                !ForRoot(@"G:\\").SequenceEqual(new long[] { 903 }))
+            if (!ForRoot(@"S:\").SequenceEqual(new long[] { 902, 901 }) ||
+                !ForRoot(@"S:\Albums").SequenceEqual(new long[] { 902, 901 }) ||
+                !ForRoot(@"S:\Albums\First").SequenceEqual(new long[] { 901 }) ||
+                ForRoot(@"S:\Albums\Missing").Count != 0 ||
+                !ForRoot(@"G:\").SequenceEqual(new long[] { 903 }))
                 throw new Exception(
                     "Drive and parent folder clicks resolve to missing/wrong cached photo folders.");
             Console.WriteLine(
