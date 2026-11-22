@@ -69,7 +69,9 @@ public sealed class ForegroundReadService
                     RecurseSubdirectories = false,
                     IgnoreInaccessible = true,
                     ReturnSpecialDirectories = false,
-                    AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System
+                    // All physical folders are visible, including system
+                    // folders; linked trees are not traversed.
+                    AttributesToSkip = FileAttributes.ReparsePoint
                 };
                 var result = Directory.GetDirectories(folder, "*", options)
                     .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase)

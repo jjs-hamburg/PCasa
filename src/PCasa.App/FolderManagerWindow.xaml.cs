@@ -187,7 +187,7 @@ public partial class FolderManagerWindow : Window
             selected.IsSelected = true;
 
         RefreshMonitoredRootsList();
-        UpdateSelectedDetails();
+        UpdateLoadedCheckboxes();
     }
 
     private static IEnumerable<string> ConfiguredPathHierarchy(string path)
@@ -255,7 +255,13 @@ public partial class FolderManagerWindow : Window
     {
         if (!_uncheckedRoots.Remove(rootId, out var previous)) return;
         _monitoredRoots = _monitoredRoots.Append(previous.Root).ToArray();
-        _exclusions[rootId] = previous.Exclusions;
+        _exclusions[rootId] = previous.Exclusions
+            .Concat(_monitoredRoots
+                .Where(root => root.Id != rootId &&
+                    FolderExclusionRules.IsAtOrBelow(root.LocalPath,
+                        previous.Root.LocalPath))
+                .Select(root => root.LocalPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         _inclusions[rootId] = previous.Inclusions;
         Reload();
     }
