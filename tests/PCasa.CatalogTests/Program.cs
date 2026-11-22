@@ -134,6 +134,8 @@ internal static class Program
         Run("Failed image decoding does not block safe rename pruning", DecodeFailureStillReconcilesKnownMissingPaths, failures);
         Run("Excluded subtree has no catalog or gallery entries", ExcludedSubtreeIsRemoved, failures);
         Run("Re-inclusion after atomic exclusion restores original catalog through scan", ReincludeAfterExclusionRestoresCatalogOnScan, failures);
+        Run("Nested folder inclusion preserves catalog and scanner traversal",
+            NestedFolderRulesPreserveIncludedImages, failures);
         Run("Source generation survives remove and re-add", SourceGenerationSurvivesReAdd, failures);
         Run("User-added empty root is immediately persisted and resumes initial import after restart", NewlyAddedFolderInitialImportSurvivesRestart, failures);
         Run("Folder manager changes are atomic on OK with no staged side effects", FolderManagerSelectionCommitsAtomically, failures);
@@ -5568,6 +5570,65 @@ internal static class Program
         command.Parameters.AddWithValue("$prefix", renamed + "%");
         if (Convert.ToInt32(command.ExecuteScalar()) != 2)
             throw new Exception("Directory rename did not update both image locations.");
+    }
+
+    private static void NestedFolderRulesPreserveIncludedImages()
+    {
+        using var sandbox = new Sandbox();
+        var parent = Path.Combine(sandbox.Images, "Parent");
+        var included = Path.Combine(parent, "Included");
+        var excludedAgain = Path.Combine(included, "Private");
+        var hidden = Path.Combine(parent, "Hidden");
+        Directory.CreateDirectory(excludedAgain);
+        Directory.CreateDirectory(hidden);
+        WriteJpeg(Path.Combine(sandbox.Images, "outside.jpg"));
+        WriteJpeg(Path.Combine(parent, "parent.jpg"));
+        WriteJpeg(Path.Combine(included, "keep.jpg"));
+        WriteJpeg(Path.Combine(excludedAgain, "private.jpg"));
+        WriteJpeg(Path.Combine(hidden, "hidden.jpg"));
+
+        var (db, root, scanner) = sandbox.Prepare();
+        scanner.Scan(root);
+        Require(db, 5);
+
+        var choice = new FolderManagerSelection(new[]
+        {
+            new FolderManagerRootChoice(root.LocalPath,
+                new[] { parent, excludedAgain }, false, new[] { included })
+        }, BackgroundScanEnabled: false);
+        var service = new FolderManagerSelectionService(db);
+        if (!service.Apply(choice))
+            throw new Exception("Nested inclusion selection did not commit.");
+        Require(db, 2); // outside and explicitly included only
+
+        var repo = new FolderRepository(db);
+        if (repo.GetIncludedPaths(root.Id).Count != 1 ||
+            !FolderExclusionRules.IsExcluded(parent, repo.GetExcludedPaths(root.Id),
+                repo.GetIncludedPaths(root.Id)) ||
+            FolderExclusionRules.IsExcluded(included, repo.GetExcludedPaths(root.Id),
+                repo.GetIncludedPaths(root.Id)) ||
+            !FolderExclusionRules.IsExcluded(excludedAgain,
+                repo.GetExcludedPaths(root.Id), repo.GetIncludedPaths(root.Id)))
+            throw new Exception("Nearest directory inclusion/exclusion rule lost.");
+        if (!FolderExclusionRules.MayContainIncludedDescendant(parent,
+                repo.GetIncludedPaths(root.Id)))
+            throw new Exception("Scanner skipped an included descendant of excluded parent.");
+
+        scanner.Scan(root);
+        Require(db, 2);
+        WriteJpeg(Path.Combine(included, "later.jpg"));
+        WriteJpeg(Path.Combine(hidden, "later-hidden.jpg"));
+        scanner.Scan(root);
+        Require(db, 3);
+
+        if (!service.Apply(new FolderManagerSelection(new[]
+            {
+                new FolderManagerRootChoice(root.LocalPath,
+                    Array.Empty<string>(), false, Array.Empty<string>())
+            }, BackgroundScanEnabled: false)))
+            throw new Exception("Removing nested exclusions had no effect.");
+        scanner.Scan(root);
+        Require(db, 7);
     }
 
     private static void ExcludedSubtreeNeverReappears()
