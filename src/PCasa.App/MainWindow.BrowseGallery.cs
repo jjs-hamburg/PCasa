@@ -684,6 +684,7 @@ public partial class MainWindow
         }
 
         var refresh = _browseRefreshRequests.Begin();
+        var countReadSerial = _liveFolderCountSerial;
 
         // Keep the old image visible until the new catalog index and layout
         // are applied. A tree reflow during the database await must not
@@ -728,7 +729,7 @@ public partial class MainWindow
 
         if (imageCount == 0)
         {
-            PublishPhotoFolderSnapshot(nextFolders, imageCount);
+            PublishPhotoFolderSnapshot(nextFolders, imageCount, countReadSerial);
             System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 0);
             _browseIndex = Array.Empty<BrowseThumbnailIndexEntry>();
             RebuildDragPublishedIndex();
@@ -850,7 +851,7 @@ public partial class MainWindow
             liveFolder is { } liveEdge && (liveEdge.AtStart || liveEdge.AtEnd)
                 ? liveEdge : null;
         var navigationVersion = _explicitGalleryNavigationVersion;
-        PublishPhotoFolderSnapshot(nextFolders, imageCount);
+        PublishPhotoFolderSnapshot(nextFolders, imageCount, countReadSerial);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
             nextIndex = _browseIndex;
         if (nextIndex is not null)
@@ -1002,14 +1003,18 @@ public partial class MainWindow
     // Numeric counts and discovered tree nodes are incremental; never rebuild
     // the entire TreeView merely because a photo moved.
     private void PublishPhotoFolderSnapshot(
-        IReadOnlyList<PhotoFolderSummary> folders, int imageCount)
+        IReadOnlyList<PhotoFolderSummary> folders, int imageCount,
+        long countReadSerial)
     {
         _photoFolders = folders;
-        // A completed full catalog read is now authoritative, including
-        // manual delete/move operations that may not emit ImageIndexed.
-        // Later scanner count reads will add newer overrides as needed.
-        _liveFolderCountSummaries.Clear();
-        _liveCatalogImageCount = null;
+        // Only an equally recent full read supersedes live tree-only
+        // counters. An earlier gallery request may finish after a newer
+        // scanner commit, and must NOT make that folder's number go backward.
+        if (countReadSerial == _liveFolderCountSerial)
+        {
+            _liveFolderCountSummaries.Clear();
+            _liveCatalogImageCount = null;
+        }
         _dragPublishedFolders = folders.ToDictionary(folder => folder.Id,
             folder => folder.LocalPath);
         _lastCatalogImageCount = imageCount;
