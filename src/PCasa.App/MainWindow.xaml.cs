@@ -489,10 +489,11 @@ public partial class MainWindow : Window
             RefreshVisibleFolderCounts();
 
         var affected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var published = _photoFolders.ToDictionary(folder => folder.Id);
         foreach (var (id, latest) in changes)
         {
             var previous = _liveFolderCountSummaries.TryGetValue(id, out var older)
-                ? older : _photoFolders.FirstOrDefault(folder => folder.Id == id);
+                ? older : published.GetValueOrDefault(id);
             if (previous is not null)
                 Accumulate(previous, -previous.ImageCount);
             if (latest is not null)
