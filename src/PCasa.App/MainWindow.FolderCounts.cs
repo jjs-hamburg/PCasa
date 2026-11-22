@@ -17,6 +17,9 @@ public partial class MainWindow
     private DispatcherTimer? _folderCountRefreshTimer;
     private bool _folderCountRefreshRunning;
     private int? _liveCatalogImageCount;
+    // A full gallery read can span a scanner count publication. Its earlier
+    // snapshot must not erase newer tree counters when it finally completes.
+    private long _liveFolderCountSerial;
 
     private void QueueLiveFolderCountUpdate(long photoFolderId)
     {
@@ -87,6 +90,7 @@ public partial class MainWindow
                         DiscoveredPhotoFolderPath: folder.LocalPath));
             }
             _liveCatalogImageCount = result.Total;
+            _liveFolderCountSerial++;
             RefreshVisibleFolderCounts();
         }
         catch (OperationCanceledException) { }
