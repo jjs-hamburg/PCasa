@@ -447,6 +447,19 @@ public sealed class BrowseGallerySurface : FrameworkElement
         return section?.Top;
     }
 
+    // A drive or photo-less parent can contain thousands of indexed folders.
+    // Find its first already-drawn child in ONE pass over local gallery
+    // sections; never repeatedly scan the layout or read SQLite/NAS.
+    public long? GetFirstVisibleFolderId(IReadOnlySet<long> folderIds)
+    {
+        ArgumentNullException.ThrowIfNull(folderIds);
+        EnsureLayout();
+        foreach (var section in _sections)
+            if (folderIds.Contains(section.Folder.Id))
+                return section.Folder.Id;
+        return null;
+    }
+
     // Null means no FIRST/LAST row is visible; it does NOT mean the
     // gallery is empty. Both sides of a folder boundary may share a viewport.
     public bool HasVisiblePhotoSections
