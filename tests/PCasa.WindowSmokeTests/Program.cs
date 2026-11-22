@@ -2384,6 +2384,36 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Collapsed NAS tree children expand without WPF realization or disk reads.");
 
+            // Alpha.56: a large S: library may contain thousands of closed
+            // parents. The visibility mask must inspect only each candidate's
+            // OWN ancestors (O(depth)), not every collapsed folder (O(N^2)).
+            var hiddenCheck = typeof(PCasa.App.MainWindow).GetMethod(
+                "IsDescendantOfCollapsedPath",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Public)
+                ?? throw new Exception("Exact collapsed-parent lookup missing.");
+            var closedPaths = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase) { @"S:\Albums" };
+            bool IsHidden(string path, IReadOnlySet<string> closed) =>
+                (bool)hiddenCheck.Invoke(null, [path, closed])!;
+            if (!IsHidden(@"S:\Albums\2026", closedPaths) ||
+                !IsHidden(@"S:\Albums\2026\Trip", closedPaths) ||
+                IsHidden(@"S:\Albums", closedPaths) ||
+                IsHidden(@"S:\AlbumsBackup\2026", closedPaths) ||
+                IsHidden(@"G:\Albums\2026", closedPaths))
+                throw new Exception(
+                    "Collapsed folder masks hide unrelated paths or own photos.");
+            var manyClosed = Enumerable.Range(0, 5000)
+                .Select(i => $@"S:\Other\Folder{i:D4}")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            manyClosed.Add(@"S:\Albums");
+            for (var i = 0; i < 500; i++)
+                if (IsHidden($@"S:\Albums\{i:D4}", manyClosed) != true)
+                    throw new Exception("Large NAS collapsed-mask lookup lost a photo folder.");
+            Console.WriteLine(
+                "PASS: Thousands of closed S: folders use exact ancestry rather than quadratic searches.");
+
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
             {
