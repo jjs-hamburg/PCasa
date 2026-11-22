@@ -21,7 +21,9 @@ public static class FolderTreeNavigation
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(target);
         var ancestors = new List<TreeViewItem>();
-        return Visit(root);
+        var changed = false;
+        Visit(root);
+        return changed;
 
         bool Visit(ItemsControl container)
         {
@@ -29,14 +31,13 @@ public static class FolderTreeNavigation
             {
                 if (ReferenceEquals(child, target))
                 {
-                    var changed = false;
                     foreach (var parent in ancestors)
                     {
                         if (parent.IsExpanded) continue;
                         parent.IsExpanded = true;
                         changed = true;
                     }
-                    return changed || ancestors.Count == 0;
+                    return true;
                 }
                 ancestors.Add(child);
                 if (Visit(child)) return true;
