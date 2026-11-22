@@ -271,9 +271,9 @@ public partial class MainWindow
                 {
                     Header = indexed is { ImageCount: > 0 }
                         ? $"{name} ({indexed.ImageCount:N0})" : name,
-                    ToolTip = child,
                     Tag = CreateFolderTreeTag(child, indexed?.Id)
                 };
+                ToolTipService.SetIsEnabled(newNode, false);
                 newNode.Items.Add(CreateExplorerExpanderSentinel());
                 _explorerInsertedPaths.Add(child);
                 // Insert alphabetically among *existing* catalog items.

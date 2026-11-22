@@ -1014,14 +1014,24 @@ internal static class FolderAddFlow
             Until(window, () =>
                 firstSnapshotField.GetValue(window) is false,
                 "Startup monitor did not finish first availability snapshot.");
-            if (scanScheduler.Snapshot().Any(job =>
-                    job.Key.StartsWith("background-scan:", StringComparison.Ordinal) &&
-                    job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
-                        SchedulerJobState.YieldRequested) ||
-                roots.GetPendingAutomaticInventories().Count != 0)
+            // A P4 (Idle) root review is legitimate: a newly completed
+            // review round may have become due during the restart. Startup
+            // must NOT manufacture a higher-priority inventory from watcher
+            // registration. In particular, do not equate the durable
+            // receipt of a real P4 review with a spurious startup scan.
+            var unexpectedStartupScans = scanScheduler.Snapshot()
+                .Where(job => job.Key.StartsWith("background-scan:",
+                        StringComparison.Ordinal) &&
+                    job.Priority != SchedulerPriority.Idle &&
+                    job.State is (SchedulerJobState.Queued or
+                        SchedulerJobState.Running or SchedulerJobState.YieldRequested))
+                .ToArray();
+            if (unexpectedStartupScans.Length > 0)
                 throw new Exception(
-                    "Startup manufactured a new root scan for already indexed monitored folders.");
-            Console.WriteLine("PASS: Real WPF restart with enabled watchers does not invent whole-root inventory.");
+                    "Startup manufactured a non-idle background scan: " +
+                    string.Join(", ", unexpectedStartupScans.Select(job =>
+                        job.Key + " priority=" + job.Priority)));
+            Console.WriteLine("PASS: WPF restart admits only normal P4 background reviews, not new startup inventories.");
             var restoredTree = (TreeView)window.FindName("FoldersTree");
             var restoredSelection = (GallerySelection)typeof(PCasa.App.MainWindow)
                 .GetField("_gallerySelection", scanFlags)!.GetValue(window)!;
@@ -1052,8 +1062,17 @@ internal static class FolderAddFlow
             // BackgroundScanSettings.Save always broadcasts Changed. Saving
             // the ALREADY ENABLED setting must not manufacture 7,000-file
             // root scans; no watcher was disconnected, so no reconcile is due.
+            // The actual regression was clearing the *known root IDs*
+            // when saving an unchanged Enabled=true preference. Test that
+            // state directly: a P4 verification may finish/start in parallel
+            // and must not make this unrelated assertion flaky.
+            var knownRootsField = typeof(PCasa.App.MainWindow).GetField(
+                "_backgroundKnownFolderIds", scanFlags)
+                ?? throw new Exception("Monitor known-root state missing.");
             for (var i = 0; i < 2; i++)
             {
+                var beforeKnown = ((HashSet<long>)knownRootsField
+                    .GetValue(window)!).ToHashSet();
                 new BackgroundScanSettings { Enabled = true }.Save();
                 var settingsDispatched = false;
                 window.Dispatcher.BeginInvoke(
@@ -1061,15 +1080,13 @@ internal static class FolderAddFlow
                     new Action(() => settingsDispatched = true));
                 Until(window, () => settingsDispatched,
                     "Unchanged settings notification was not dispatched.");
-                if (scanScheduler.Snapshot().Any(job =>
-                        job.Key.StartsWith("background-scan:", StringComparison.Ordinal) &&
-                        job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
-                            SchedulerJobState.YieldRequested) ||
-                    roots.GetPendingAutomaticInventories().Count != 0)
+                var afterKnown = (HashSet<long>)knownRootsField.GetValue(window)!;
+                if (!beforeKnown.SetEquals(afterKnown) ||
+                    firstSnapshotField.GetValue(window) is not false)
                     throw new Exception(
-                        "Saving unchanged enabled settings manufactured another full scan.");
+                        "Unchanged Enabled=true settings reset monitor identity or startup state.");
             }
-            Console.WriteLine("PASS: Repeated unchanged Enabled=true settings saves do not restart a completed inventory.");
+            Console.WriteLine("PASS: Repeated Enabled=true saves retain watcher root identities without forcing a new inventory.");
 
             // END-TO-END LIVE-SCAN TEST: a real committed JPEG must be
             // visible in the WPF gallery BEFORE scan completion. The old

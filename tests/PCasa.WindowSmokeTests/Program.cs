@@ -3347,6 +3347,11 @@ internal static class Program
                 Flush(manager);
                 var managedTree = (TreeView?)manager.FindName("FolderManagerTree")
                     ?? throw new Exception("Folder manager tree missing.");
+                var galleryFolderTree = (TreeView?)window.FindName("FoldersTree")
+                    ?? throw new Exception("Gallery folder tree missing.");
+                if (ToolTipService.GetIsEnabled(managedTree) ||
+                    ToolTipService.GetIsEnabled(galleryFolderTree))
+                    throw new Exception("Folder tree still allows hover tooltips.");
                 static string? ManagerPath(TreeViewItem item)
                     => item.Tag?.GetType().GetProperty("LocalPath")
                         ?.GetValue(item.Tag) as string;
@@ -3397,19 +3402,62 @@ internal static class Program
                     string.Equals(ManagerPath(item), fixtureChild,
                         StringComparison.OrdinalIgnoreCase));
                 if (physical.Header is not CheckBox physicalCheck ||
-                    !physicalCheck.IsEnabled || physicalCheck.IsChecked != true)
-                    throw new Exception("Non-indexed folder has no inclusion checkbox.");
+                    !physicalCheck.IsEnabled || physicalCheck.IsChecked != true ||
+                    physical.ToolTip is not null || physicalCheck.ToolTip is not null)
+                    throw new Exception("Non-indexed folder has tooltip or no inclusion checkbox.");
                 physicalCheck.IsChecked = false;
                 Flush(manager);
+                var rootSummaryCheckbox = (CheckBox)fixtureNode.Header;
+                if (rootSummaryCheckbox.IsChecked is not null)
+                    throw new Exception("Parent of excluded child must be partially checked.");
                 var temporarilyExcluded = manager.SelectedConfiguration.Roots.Single();
                 if (!temporarilyExcluded.ExcludedPaths.Any(path =>
                         string.Equals(path, fixtureChild, StringComparison.OrdinalIgnoreCase)) ||
                     !Convert.ToString(physicalCheck.Content)!.StartsWith("⊘"))
                     throw new Exception("Excluded physical folder lacked a persistent rule or marker.");
-                physicalCheck.IsChecked = true;
+                // A click on a gray box must mean "include ALL children",
+                // never the WPF default null -> unchecked cycle.
+                var toggle = typeof(PCasa.App.FolderManagerWindow).GetMethod(
+                    "ToggleInclusionCheckbox", System.Reflection.BindingFlags.Static |
+                    System.Reflection.BindingFlags.NonPublic)
+                    ?? throw new Exception("Explicit checkbox click handling is missing.");
+                toggle.Invoke(null, [rootSummaryCheckbox]);
                 Flush(manager);
-                if (manager.SelectedConfiguration.Roots.Single().ExcludedPaths.Count != 0)
-                    throw new Exception("Re-including a physical folder left the exclusion active.");
+                if (rootSummaryCheckbox.IsChecked != true ||
+                    physicalCheck.IsChecked != true ||
+                    manager.SelectedConfiguration.Roots.Single().ExcludedPaths.Count != 0)
+                    throw new Exception("Clicking mixed parent did not include the full subtree.");
+
+                // Explicitly exclude an indexed parent but then include a
+                // deeper child: both the broad root and the excluded parent
+                // become gray, while the re-included grandchild stays checked.
+                var ancestorPath = Path.GetDirectoryName(cataloguedChild)!;
+                var catalogAncestor = displayed.Single(item =>
+                    string.Equals(ManagerPath(item), ancestorPath,
+                        StringComparison.OrdinalIgnoreCase));
+                var catalogAncestorCheck = (CheckBox)catalogAncestor.Header;
+                catalogAncestorCheck.IsChecked = false;
+                Flush(manager);
+                if (catalogCheck.IsChecked != false)
+                    throw new Exception("Excluded parent did not exclude indexed descendants.");
+                catalogCheck.IsChecked = true;
+                Flush(manager);
+                var nestedSelection = manager.SelectedConfiguration.Roots.Single();
+                if (catalogAncestorCheck.IsChecked is not null ||
+                    rootSummaryCheckbox.IsChecked is not null ||
+                    catalogCheck.IsChecked != true ||
+                    !nestedSelection.ExcludedPaths.Any(path =>
+                        string.Equals(path, ancestorPath, StringComparison.OrdinalIgnoreCase)) ||
+                    !nestedSelection.IncludedPaths!.Any(path =>
+                        string.Equals(path, cataloguedChild, StringComparison.OrdinalIgnoreCase)))
+                    throw new Exception("Nested inclusion did not create partial parent states.");
+                toggle.Invoke(null, [catalogAncestorCheck]);
+                Flush(manager);
+                if (catalogAncestorCheck.IsChecked != true ||
+                    rootSummaryCheckbox.IsChecked != true ||
+                    manager.SelectedConfiguration.Roots.Single().ExcludedPaths.Count != 0 ||
+                    manager.SelectedConfiguration.Roots.Single().IncludedPaths!.Count != 0)
+                    throw new Exception("Re-checking partial ancestor did not remove nested rules.");
 
                 var configured = manager.SelectedConfiguration.Roots;
                 if (configured.Count != 1 ||
@@ -3418,7 +3466,7 @@ internal static class Program
                     throw new Exception(
                         "Read-only catalog projection changed monitored-root configuration.");
                 Console.WriteLine(
-                    "PASS: Manager shows catalogued and physical children with editable checkboxes.");
+                    "PASS: Alpha.52 folder trees have no tooltips, mixed parent boxes and binary subtree clicks.");
 
                 // Alpha.25: only the left tree owns the folder selection.
                 // Expanding one level must not expand nested levels. No
@@ -3435,6 +3483,8 @@ internal static class Program
                         StringComparison.OrdinalIgnoreCase));
                 if (intermediateItem.IsExpanded)
                     throw new Exception("Expanding one tree level automatically opened its descendants.");
+                // Alpha.52: the folder manager checkbox must never cycle
+                // into a user-created indeterminate state on a second click.
                 var oldRootCheck = (CheckBox)fixtureAfter.Header;
                 oldRootCheck.IsChecked = false;
                 Flush(manager);
@@ -4445,13 +4495,22 @@ internal static class Program
                     clusterField.SetValue(window,
                         new[] { new GpsPhotoCluster(1003, 28.416, -16.567,
                             new long[] { 1003 }) });
+                    // The map click is synchronous. Verify immediately
+                    // before pumping unrelated dispatcher callbacks: the
+                    // synthetic ID 1003 is deliberately absent from SQLite,
+                    // so pending real catalog refreshes may remove it.
                     clusterClick.Invoke(window, new object[] { 1003L, 77L });
-                    Flush(window);
                     var gpsMarkerPopup = (FrameworkElement?)window.FindName("GpsPhotoPopup")
                         ?? throw new Exception("GPS popup missing.");
                     if (strip.Items.Count != 1 ||
-                        gpsMarkerPopup.Tag is not long popupId || popupId != 1003)
-                        throw new Exception("Single-marker click failed to show its photo.");
+                        gpsMarkerPopup.Tag is not long popupId || popupId != 1003 ||
+                        gpsMarkerPopup.Visibility != Visibility.Visible)
+                        throw new Exception(
+                            "Single-marker click failed to show its photo immediately. " +
+                            $"Filmstrip={string.Join(",", strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().Select(x => x.Id))}; " +
+                            $"PopupTag={gpsMarkerPopup.Tag}; PopupVisibility={gpsMarkerPopup.Visibility}; " +
+                            $"MapVersion={versionField.GetValue(window)}; " +
+                            $"Fullscreen={viewerType.GetField("_gpsFullscreen", reflectFlags)!.GetValue(window)}");
                     Console.WriteLine(
                         "PASS: Map cluster clicks show photo IDs; singles open preview.");
 

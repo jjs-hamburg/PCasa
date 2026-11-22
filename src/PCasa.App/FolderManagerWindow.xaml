@@ -45,7 +45,7 @@
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{loc:Tr Key='Überwachte Ordner'}"
                                FontWeight="SemiBold" Margin="12,11,12,9" />
-                    <TreeView x:Name="FolderManagerTree"
+                    <TreeView x:Name="FolderManagerTree" ToolTipService.IsEnabled="False"
                               Background="Transparent"
                               BorderThickness="0"
                               Margin="5,0,5,5"

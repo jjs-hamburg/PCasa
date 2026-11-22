@@ -928,7 +928,7 @@
                             </Button>
                         </StackPanel>
                     </Grid>
-                    <TreeView x:Name="FoldersTree"
+                    <TreeView x:Name="FoldersTree" ToolTipService.IsEnabled="False"
                               Grid.Row="1"
                               Background="Transparent"
                               BorderThickness="0"

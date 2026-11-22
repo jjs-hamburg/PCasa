@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 using PCasa.App.Data;
@@ -223,7 +224,6 @@ public partial class FolderManagerWindow : Window
             var item = new TextBlock
             {
                 Text = root.LocalPath,
-                ToolTip = root.LocalPath,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 4, 0, 4)
             };
@@ -290,13 +290,12 @@ public partial class FolderManagerWindow : Window
         {
             Content = node.CatalogImageCount > 0
                 ? $"{name} ({node.CatalogImageCount:N0})" : name,
-            ToolTip = node.CatalogImageCount > 0
-                ? $"{node.LocalPath} · {node.CatalogImageCount:N0} katalogisierte Bilder"
-                : node.LocalPath,
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(1, 0, 1, 0),
             IsChecked = DisplayIncludedState(node),
-            IsThreeState = false,
+            // Three visual states; interaction intentionally toggles only
+            // fully included / fully excluded. Mixed is never a saved rule.
+            IsThreeState = true,
             IsEnabled = CanToggle(node)
         };
         checkbox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
@@ -306,15 +305,19 @@ public partial class FolderManagerWindow : Window
             Header = checkbox,
             HeaderTemplate = (DataTemplate)FolderManagerTree.Resources[
                 "ManagerFolderHeaderTemplate"],
-            Tag = node,
-            ToolTip = node.LocalPath
+            Tag = node
         };
 
+        ToolTipService.SetIsEnabled(item, false);
+        ToolTipService.SetIsEnabled(checkbox, false);
         // Physical children are read only when THIS node expands.
         item.Expanded += Folder_Expanded;
         checkbox.Tag = item;
+        checkbox.PreviewMouseLeftButtonDown += InclusionCheckbox_PreviewMouseLeftButtonDown;
+        checkbox.PreviewKeyDown += InclusionCheckbox_PreviewKeyDown;
         checkbox.Checked += InclusionCheckbox_Changed;
         checkbox.Unchecked += InclusionCheckbox_Changed;
+        checkbox.Indeterminate += InclusionCheckbox_Indeterminate;
         if (!_enumeratedPaths.Contains(node.LocalPath))
             item.Items.Add(new TreeViewItem
             {
@@ -327,19 +330,36 @@ public partial class FolderManagerWindow : Window
     private bool IsIncluded(ManagedNode node)
         => node.Root is not null && !IsExcluded(node);
 
-    // All loaded physical folders have a checkbox. Inside a monitored
-    // root the most-specific exclusion/inclusion rule controls its state.
+    // Compute the state from the effective directory ownership and the
+    // persisted/staged rule boundaries. Never enumerate a NAS hierarchy to
+    // determine the gray (partially included) state.
     private bool CanToggle(ManagedNode node) => !_busy;
+
+    private bool EffectivelyIncluded(string path)
+    {
+        var owner = FindCoveringRoot(path);
+        return owner is not null && !FolderExclusionRules.IsExcluded(
+            path,
+            _exclusions.GetValueOrDefault(owner.Id) ?? Array.Empty<string>(),
+            _inclusions.GetValueOrDefault(owner.Id) ?? Array.Empty<string>());
+    }
 
     private bool? DisplayIncludedState(ManagedNode node)
     {
-        var root = FindCoveringRoot(node.LocalPath);
-        if (root is not null)
-            return !FolderExclusionRules.IsExcluded(node.LocalPath,
-                _exclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>(),
-                _inclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>());
-        return node.IsRoot && node.Root is { } old &&
-            _monitoredRoots.Any(current => current.Id == old.Id);
+        var baseIncluded = EffectivelyIncluded(node.LocalPath);
+        // An ancestor is mixed whenever a deeper rule changes the effective
+        // inclusion, including a re-included child of an excluded directory
+        // or a separately monitored subtree below an unmonitored drive.
+        foreach (var boundary in _monitoredRoots.Select(root => root.LocalPath)
+            .Concat(_exclusions.Values.SelectMany(paths => paths))
+            .Concat(_inclusions.Values.SelectMany(paths => paths)))
+        {
+            if (FolderExclusionRules.IsAtOrBelow(boundary, node.LocalPath) &&
+                !PathEquals(boundary, node.LocalPath) &&
+                EffectivelyIncluded(boundary) != baseIncluded)
+                return null;
+        }
+        return baseIncluded;
     }
 
     private bool IsExcluded(ManagedNode node)
@@ -347,6 +367,37 @@ public partial class FolderManagerWindow : Window
            FolderExclusionRules.IsExcluded(node.LocalPath,
                _exclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>(),
                _inclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>());
+
+    // An indeterminate checkbox is a visual summary, never an extra option
+    // in the user's click cycle: mixed -> checked -> unchecked -> checked.
+    private static void ToggleInclusionCheckbox(CheckBox box)
+        => box.IsChecked = box.IsChecked != true;
+
+    private void InclusionCheckbox_PreviewMouseLeftButtonDown(
+        object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not CheckBox { IsEnabled: true } box) return;
+        e.Handled = true;
+        box.Focus();
+        ToggleInclusionCheckbox(box);
+    }
+
+    private void InclusionCheckbox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Space || sender is not CheckBox { IsEnabled: true } box)
+            return;
+        e.Handled = true;
+        ToggleInclusionCheckbox(box);
+    }
+
+    private void InclusionCheckbox_Indeterminate(object sender, RoutedEventArgs e)
+    {
+        // Keyboard/mouse use the binary toggle above. Automation clients
+        // that cycle to indeterminate still trigger a real exclusion rather
+        // than silently modifying a third, unsupported user choice.
+        if (!_updatingChecks && sender is CheckBox box)
+            box.IsChecked = false;
+    }
 
     private void StageSubtreeRule(MonitoredFolder root, string path, bool include)
     {
@@ -368,6 +419,70 @@ public partial class FolderManagerWindow : Window
             exclusions.Add(normalized);
         _exclusions[root.Id] = exclusions.ToArray();
         _inclusions[root.Id] = inclusions.ToArray();
+    }
+
+    private void StageEntireSubtreeIncluded(string path)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        var owner = FindCoveringRoot(normalized);
+        if (owner is not null)
+            StageSubtreeRule(owner, normalized, include: true);
+        else
+            StageNewRoot(normalized);
+
+        // Multiple explicit scanner roots may already live under the chosen
+        // directory. Keep their source ownership independent but reset any
+        // nested exclusion exceptions, so "checked" really means EVERY
+        // descendant is included.
+        foreach (var root in _monitoredRoots.Where(root =>
+                     FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized)))
+        {
+            _inclusions[root.Id] = Array.Empty<string>();
+            _exclusions[root.Id] = _monitoredRoots
+                .Where(nested => nested.Id != root.Id &&
+                    FolderExclusionRules.IsAtOrBelow(nested.LocalPath, root.LocalPath))
+                .Select(nested => nested.LocalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        // A selected path can be nested inside a broad monitored root.
+        // Retain the rule protecting separately monitored child sources so
+        // they are not indexed twice after clearing the parent's exclusion.
+        if (owner is not null)
+        {
+            var nestedPaths = _monitoredRoots
+                .Where(root => root.Id != owner.Id &&
+                    FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized))
+                .Select(root => root.LocalPath);
+            _exclusions[owner.Id] = (_exclusions.GetValueOrDefault(owner.Id)
+                    ?? Array.Empty<string>())
+                .Concat(nestedPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+    }
+
+    private void StageEntireSubtreeExcluded(string path)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        var owner = FindCoveringRoot(normalized);
+        var coveredRoots = _monitoredRoots.Where(root =>
+                FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized))
+            .ToArray();
+        foreach (var root in coveredRoots)
+        {
+            if (root.Id > 0)
+                _uncheckedRoots[root.Id] = (root,
+                    _exclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>(),
+                    _inclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>());
+            _monitoredRoots = _monitoredRoots
+                .Where(candidate => candidate.Id != root.Id).ToArray();
+            _exclusions.Remove(root.Id);
+            _inclusions.Remove(root.Id);
+        }
+        // If the clicked folder lies WITHIN a still-monitored parent, its
+        // subtree must be excluded there. Removed nested root choices remain
+        // available for restoration until OK.
+        if (owner is not null && coveredRoots.All(root => root.Id != owner.Id))
+            StageSubtreeRule(owner, normalized, include: false);
     }
 
     private async void Folder_Expanded(object sender, RoutedEventArgs e)
@@ -486,14 +601,15 @@ public partial class FolderManagerWindow : Window
     {
         if (item.Tag is ManagedNode node && item.Header is CheckBox checkBox)
         {
-            var excluded = IsExcluded(node);
-            checkBox.IsChecked = DisplayIncludedState(node);
+            var state = DisplayIncludedState(node);
+            checkBox.IsChecked = state;
             checkBox.IsEnabled = CanToggle(node);
-            // The ⊘ marker is legible without distinguishing colors.
+            // The mixed state is identified by its filled gray square, not
+            // by a crossed-out name. Keep ⊘ only for fully excluded paths.
             var name = node.Label ?? Path.GetFileName(
                 Path.TrimEndingDirectorySeparator(node.LocalPath));
             if (string.IsNullOrEmpty(name)) name = node.LocalPath;
-            checkBox.Content = (excluded ? "⊘ " : "") +
+            checkBox.Content = (state == false && IsExcluded(node) ? "⊘ " : "") +
                 (node.CatalogImageCount > 0
                     ? $"{name} ({node.CatalogImageCount:N0})" : name);
             checkBox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
@@ -511,24 +627,31 @@ public partial class FolderManagerWindow : Window
 
         item.IsSelected = true;
         var include = box.IsChecked == true;
-        if (node.IsRoot && node.Root is { } root)
+        if (include && node.IsRoot && node.Root is { } root &&
+            !_monitoredRoots.Any(current => current.Id == root.Id))
         {
-            if (include)
-            {
-                if (!_monitoredRoots.Any(candidate => candidate.Id == root.Id))
-                    RestoreStagedRoot(root.Id);
-            }
-            else RemoveStagedRoot(root.Id);
-        }
-        else if (FindCoveringRoot(node.LocalPath) is { } owner)
-        {
-            StageSubtreeRule(owner, node.LocalPath, include);
+            RestoreStagedRoot(root.Id);
+            StageEntireSubtreeIncluded(node.LocalPath);
             UpdateLoadedCheckboxes();
+            return;
         }
-        else if (include)
+
+        if (include)
         {
-            StageNewRoot(node.LocalPath);
-            Reload(expandSystemFolder: node.LocalPath);
+            var wasCovered = FindCoveringRoot(node.LocalPath) is not null;
+            StageEntireSubtreeIncluded(node.LocalPath);
+            if (wasCovered) UpdateLoadedCheckboxes();
+            else Reload(expandSystemFolder: node.LocalPath);
+        }
+        else
+        {
+            // A fully checked parent excludes ALL descendants, including
+            // any nested explicitly monitored roots, without touching disk.
+            var hasNestedRoots = _monitoredRoots.Any(root =>
+                FolderExclusionRules.IsAtOrBelow(root.LocalPath, node.LocalPath));
+            StageEntireSubtreeExcluded(node.LocalPath);
+            if (hasNestedRoots) Reload(expandSystemFolder: node.LocalPath);
+            else UpdateLoadedCheckboxes();
         }
     }
 
