@@ -1504,8 +1504,23 @@ public partial class MainWindow
     private long? ResolveTreePhotoFolder(FolderTreeTag tag)
     {
         if (tag.PhotoFolderId is long ownId) return ownId;
+        // During a scan the tree counters can be newer than the deliberately
+        // deferred gallery index. Include those already CONFIRMED SQLite
+        // folder identities so S:\\ root clicks still find their descendants,
+        // even before a full gallery refresh is permitted.
+        IReadOnlyList<PhotoFolderSummary> known = _photoFolders;
+        if (_liveFolderCountSummaries.Count > 0)
+        {
+            var latest = _photoFolders.ToDictionary(folder => folder.Id);
+            foreach (var (id, folder) in _liveFolderCountSummaries)
+            {
+                if (folder is null) latest.Remove(id);
+                else latest[id] = folder;
+            }
+            known = latest.Values.ToArray();
+        }
         var descendants = PhotoFoldersBelowTreePath(tag.FullPath,
-            _photoFolders, CaptureGalleryFolderOrder());
+            known, CaptureGalleryFolderOrder());
         // Prefer an already-published child section. A single indexed
         // layout pass stays responsive even for an S:\\ root containing
         // thousands of photo folders; missing candidates use one fallback.
