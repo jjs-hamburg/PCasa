@@ -421,6 +421,70 @@ public partial class FolderManagerWindow : Window
         _inclusions[root.Id] = inclusions.ToArray();
     }
 
+    private void StageEntireSubtreeIncluded(string path)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        var owner = FindCoveringRoot(normalized);
+        if (owner is not null)
+            StageSubtreeRule(owner, normalized, include: true);
+        else
+            StageNewRoot(normalized);
+
+        // Multiple explicit scanner roots may already live under the chosen
+        // directory. Keep their source ownership independent but reset any
+        // nested exclusion exceptions, so "checked" really means EVERY
+        // descendant is included.
+        foreach (var root in _monitoredRoots.Where(root =>
+                     FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized)))
+        {
+            _inclusions[root.Id] = Array.Empty<string>();
+            _exclusions[root.Id] = _monitoredRoots
+                .Where(nested => nested.Id != root.Id &&
+                    FolderExclusionRules.IsAtOrBelow(nested.LocalPath, root.LocalPath))
+                .Select(nested => nested.LocalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        // A selected path can be nested inside a broad monitored root.
+        // Retain the rule protecting separately monitored child sources so
+        // they are not indexed twice after clearing the parent's exclusion.
+        if (owner is not null)
+        {
+            var nestedPaths = _monitoredRoots
+                .Where(root => root.Id != owner.Id &&
+                    FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized))
+                .Select(root => root.LocalPath);
+            _exclusions[owner.Id] = (_exclusions.GetValueOrDefault(owner.Id)
+                    ?? Array.Empty<string>())
+                .Concat(nestedPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+    }
+
+    private void StageEntireSubtreeExcluded(string path)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        var owner = FindCoveringRoot(normalized);
+        var coveredRoots = _monitoredRoots.Where(root =>
+                FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized))
+            .ToArray();
+        foreach (var root in coveredRoots)
+        {
+            if (root.Id > 0)
+                _uncheckedRoots[root.Id] = (root,
+                    _exclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>(),
+                    _inclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>());
+            _monitoredRoots = _monitoredRoots
+                .Where(candidate => candidate.Id != root.Id).ToArray();
+            _exclusions.Remove(root.Id);
+            _inclusions.Remove(root.Id);
+        }
+        // If the clicked folder lies WITHIN a still-monitored parent, its
+        // subtree must be excluded there. Removed nested root choices remain
+        // available for restoration until OK.
+        if (owner is not null && coveredRoots.All(root => root.Id != owner.Id))
+            StageSubtreeRule(owner, normalized, include: false);
+    }
+
     private async void Folder_Expanded(object sender, RoutedEventArgs e)
     {
         if (sender is not TreeViewItem item ||
@@ -563,24 +627,31 @@ public partial class FolderManagerWindow : Window
 
         item.IsSelected = true;
         var include = box.IsChecked == true;
-        if (node.IsRoot && node.Root is { } root)
+        if (include && node.IsRoot && node.Root is { } root &&
+            !_monitoredRoots.Any(current => current.Id == root.Id))
         {
-            if (include)
-            {
-                if (!_monitoredRoots.Any(candidate => candidate.Id == root.Id))
-                    RestoreStagedRoot(root.Id);
-            }
-            else RemoveStagedRoot(root.Id);
-        }
-        else if (FindCoveringRoot(node.LocalPath) is { } owner)
-        {
-            StageSubtreeRule(owner, node.LocalPath, include);
+            RestoreStagedRoot(root.Id);
+            StageEntireSubtreeIncluded(node.LocalPath);
             UpdateLoadedCheckboxes();
+            return;
         }
-        else if (include)
+
+        if (include)
         {
-            StageNewRoot(node.LocalPath);
-            Reload(expandSystemFolder: node.LocalPath);
+            var wasCovered = FindCoveringRoot(node.LocalPath) is not null;
+            StageEntireSubtreeIncluded(node.LocalPath);
+            if (wasCovered) UpdateLoadedCheckboxes();
+            else Reload(expandSystemFolder: node.LocalPath);
+        }
+        else
+        {
+            // A fully checked parent excludes ALL descendants, including
+            // any nested explicitly monitored roots, without touching disk.
+            var hasNestedRoots = _monitoredRoots.Any(root =>
+                FolderExclusionRules.IsAtOrBelow(root.LocalPath, node.LocalPath));
+            StageEntireSubtreeExcluded(node.LocalPath);
+            if (hasNestedRoots) Reload(expandSystemFolder: node.LocalPath);
+            else UpdateLoadedCheckboxes();
         }
     }
 
