@@ -223,7 +223,9 @@ public sealed class FolderScanner
             _folderRepository.GetScanEpoch(folder.CanonicalPath);
         if (resume is not null) resume.ScanEpoch = scanEpoch;
         var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
-        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions))
+        var inclusions = _folderRepository.GetIncludedPaths(folder.Id);
+        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions, inclusions) &&
+            !FolderExclusionRules.MayContainIncludedDescendant(scanRoot, inclusions))
             return new ScanResult(0, 0, 0, 0);
 
         var imageFilesSeen = resume?.ImageFilesSeen ?? regularCheckpoint?.Checked ?? 0;
@@ -390,7 +392,7 @@ public sealed class FolderScanner
         var enumerator = resume?.Enumerator ??
             (specificFile is null
                 ? EnumerateIncludedFiles(
-                    scanRoot, recursive, exclusions, CancellationToken.None,
+                    scanRoot, recursive, exclusions, inclusions, CancellationToken.None,
                     completedDirectories,
                     fileCursors,
                     indexedFirstPassPaths,
@@ -835,6 +837,7 @@ public sealed class FolderScanner
         string scanRoot,
         bool recursive,
         IReadOnlyCollection<string> exclusions,
+        IReadOnlyCollection<string> inclusions,
         CancellationToken token,
         IReadOnlySet<string>? completedDirectories = null,
         IReadOnlyDictionary<string, string>? fileCursors = null,
@@ -857,10 +860,14 @@ public sealed class FolderScanner
         {
             token.ThrowIfCancellationRequested();
             var directory = pending.Pop();
-            if (FolderExclusionRules.IsExcluded(directory, exclusions)) continue;
+            var directoryExcluded = FolderExclusionRules.IsExcluded(
+                directory, exclusions, inclusions);
+            if (directoryExcluded &&
+                !FolderExclusionRules.MayContainIncludedDescendant(directory, inclusions))
+                continue;
 
             var previouslyCompleted = completedDirectories?.Contains(directory) == true;
-            if (previouslyCompleted && alreadyIndexedPaths is not null)
+            if (!directoryExcluded && previouslyCompleted && alreadyIndexedPaths is not null)
             {
                 // Completion means the expensive first import finished here;
                 // not that future new files should be invisible to P0.
@@ -879,7 +886,7 @@ public sealed class FolderScanner
                         yield return file;
                 }
             }
-            else if (!previouslyCompleted)
+            else if (!directoryExcluded && !previouslyCompleted)
             {
                 // First-import filename cursors need deterministic sorting.
                 // Ordinary reconciliation does not: stream NAS directory entries
@@ -963,10 +970,9 @@ public sealed class FolderScanner
             if (!previouslyCompleted) onDirectoryComplete?.Invoke(directory);
             foreach (var child in children.Reverse())
             {
-                if (!FolderExclusionRules.IsExcluded(child, exclusions))
-                {
+                if (!FolderExclusionRules.IsExcluded(child, exclusions, inclusions) ||
+                    FolderExclusionRules.MayContainIncludedDescendant(child, inclusions))
                     pending.Push(child);
-                }
             }
         }
     }

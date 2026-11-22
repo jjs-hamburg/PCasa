@@ -10,4 +10,5 @@ public sealed record FolderManagerSelection(
 public sealed record FolderManagerRootChoice(
     string LocalPath,
     IReadOnlyList<string> ExcludedPaths,
-    bool ServerSyncEnabled);
+    bool ServerSyncEnabled,
+    IReadOnlyList<string>? IncludedPaths = null);

@@ -68,21 +68,21 @@ public sealed class FolderRepository
         using var db = _database.OpenConnection();
         using var command = db.CreateCommand();
         command.CommandText = """
-            SELECT c.local_path FROM created_photo_directories c
+            SELECT c.monitored_folder_id, c.local_path
+            FROM created_photo_directories c
             JOIN monitored_folders m ON m.id = c.monitored_folder_id
-            WHERE NOT EXISTS (
-                SELECT 1 FROM excluded_folders e
-                WHERE e.monitored_folder_id = c.monitored_folder_id
-                  AND (c.local_path = e.local_path COLLATE NOCASE
-                    OR substr(c.local_path, 1, length(e.local_path) + 1) =
-                        e.local_path || char(92) COLLATE NOCASE)
-            )
             ORDER BY c.local_path COLLATE NOCASE;
             """;
-        using var reader = command.ExecuteReader();
-        var result = new List<string>();
-        while (reader.Read()) result.Add(reader.GetString(0));
-        return result;
+        var rows = new List<(long RootId, string Path)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) rows.Add((reader.GetInt64(0), reader.GetString(1)));
+        var rules = rows.Select(row => row.RootId).Distinct().ToDictionary(
+            id => id, id => (Excluded: GetExcludedPaths(id),
+                           Included: GetIncludedPaths(id)));
+        return rows.Where(row =>
+            !FolderExclusionRules.IsExcluded(row.Path,
+                rules[row.RootId].Excluded, rules[row.RootId].Included))
+            .Select(row => row.Path).ToArray();
     }
 
     // The file system owns existence. A directory made through PCasa is
@@ -1372,6 +1372,22 @@ public sealed class FolderRepository
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT local_path FROM excluded_folders
+            WHERE monitored_folder_id = $id
+            ORDER BY local_path COLLATE NOCASE;
+            """;
+        command.Parameters.AddWithValue("$id", monitoredFolderId);
+        using var reader = command.ExecuteReader();
+        var result = new List<string>();
+        while (reader.Read()) result.Add(reader.GetString(0));
+        return result;
+    }
+
+    public IReadOnlyList<string> GetIncludedPaths(long monitoredFolderId)
+    {
+        using var connection = _database.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT local_path FROM included_folders
             WHERE monitored_folder_id = $id
             ORDER BY local_path COLLATE NOCASE;
             """;
