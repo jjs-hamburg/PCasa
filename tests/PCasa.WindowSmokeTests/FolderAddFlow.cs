@@ -1491,27 +1491,41 @@ internal static class FolderAddFlow
                             "Folder manager opened without persisted Explorer parent.");
                     actualRoot.IsExpanded = true;
 
-                    // A catalogued child MUST be visible under its existing
-                    // monitored root, even when the scheduler P0 is blocked.
-                    // Visibility does not mean the child is a second root:
-                    // its checkbox is informational and cannot alter source
-                    // identity, scanner membership, image IDs or thumbnails.
+                    // A catalogued child remains owned by the original
+                    // monitored root, even while another P0 is blocked.
+                    // Alpha.51 deliberately makes its checkbox interactive
+                    // for subtree exclusions; checking must NOT create a
+                    // second monitored root or change image identity.
                     var indexedChild = Walk(tree).SingleOrDefault(item =>
                         SamePath(ManagedPath(item), explorerAddedPath));
                     if (indexedChild?.Tag is null ||
                         indexedChild.Tag.GetType().GetProperty("IsRoot")?
                             .GetValue(indexedChild.Tag) is not false ||
                         indexedChild.Header is not CheckBox childCheck ||
-                        childCheck.IsEnabled || childCheck.IsChecked != true)
+                        !childCheck.IsEnabled || childCheck.IsChecked != true)
                         throw new Exception(
-                            "Indexed Explorer child missing or exposed as a new monitoring root.");
+                            "Indexed Explorer child missing, not editable, or exposed as a new monitoring root.");
+                    // Toggling the child only stages an exclusion on the
+                    // existing root, and Cancel must leave SQLite untouched.
+                    childCheck.IsChecked = false;
+                    var staged = manager.SelectedConfiguration.Roots;
+                    if (!staged.Any(root =>
+                            SamePath(root.LocalPath, rootPath) &&
+                            root.ExcludedPaths.Any(path =>
+                                SamePath(path, explorerAddedPath))) ||
+                        staged.Any(root => SamePath(root.LocalPath, explorerAddedPath)))
+                        throw new Exception(
+                            "Child checkbox created a second root or failed to stage a subtree exclusion.");
+                    childCheck.IsChecked = true;
                     var selectedRoots = manager.SelectedConfiguration.Roots;
                     if (!selectedRoots.Any(root =>
-                            SamePath(root.LocalPath, rootPath)) ||
+                            SamePath(root.LocalPath, rootPath) &&
+                            !root.ExcludedPaths.Any(path =>
+                                SamePath(path, explorerAddedPath))) ||
                         selectedRoots.Any(root =>
                             SamePath(root.LocalPath, explorerAddedPath)))
                         throw new Exception(
-                            "Read-only catalog folder changed monitored root membership.");
+                            "Child re-inclusion modified root membership or retained its exclusion.");
                     completed = true;
                     ((Button)manager.FindName("CancelButton")).RaiseEvent(
                         new RoutedEventArgs(Button.ClickEvent));
