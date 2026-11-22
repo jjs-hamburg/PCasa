@@ -3312,10 +3312,9 @@ internal static class Program
                 progressWindow.Finish();
             }
 
-            // Manager must project only configured monitoring roots and
-            // catalogued image folders, WITHOUT enumerating the filesystem.
-            // A drive monitored as a single root still has visible nested
-            // photo folders (even when that drive is offline).
+            // Manager shows the full physical tree on demand, including
+            // non-indexed directories, without reading the entire NAS at launch.
+            // Known indexed folders stay visible even while disconnected.
             var fixtureDirectory = Path.Combine(Path.GetTempPath(),
                 "PCasa-ManagerForeground-" + Guid.NewGuid().ToString("N"));
             var fixtureChild = Path.Combine(fixtureDirectory, "NeverIndexed");
@@ -3365,11 +3364,10 @@ internal static class Program
                         fixtureDirectory, StringComparison.OrdinalIgnoreCase));
                 fixtureNode.IsExpanded = true;
                 Flush(manager);
-                if (NestedManagerItems(managedTree).Any(item =>
+                Until(manager, () => NestedManagerItems(managedTree).Any(item =>
                         string.Equals(ManagerPath(item), fixtureChild,
-                            StringComparison.OrdinalIgnoreCase)))
-                    throw new Exception(
-                        "Manager unexpectedly enumerated an unmonitored physical child.");
+                            StringComparison.OrdinalIgnoreCase)),
+                    "Manager failed to enumerate physical non-indexed child.");
                 var displayed = NestedManagerItems(managedTree)
                     .Where(item => item.Tag is not null).ToArray();
                 if (displayed.Length == 0 ||
@@ -3382,17 +3380,37 @@ internal static class Program
                         StringComparison.OrdinalIgnoreCase));
                 if (catalogItem is null ||
                     catalogItem.Header is not CheckBox catalogCheck ||
-                    catalogCheck.IsEnabled ||
+                    !catalogCheck.IsEnabled ||
                     catalogCheck.IsChecked != true ||
                     !Convert.ToString(catalogCheck.Content)!.Contains("37"))
                     throw new Exception(
-                        "Catalogued child should be visible with its count, " +
-                        "included under the root but not a second monitoring checkbox.");
+                        "Catalogued child must have an enabled checkbox " +
+                        "within its monitored parent.");
                 if (!displayed.Any(item => string.Equals(
                         ManagerPath(item),
                         Path.GetDirectoryName(cataloguedChild),
                         StringComparison.OrdinalIgnoreCase)))
                     throw new Exception("Catalogued folder hierarchy missing intermediate node.");
+                // Explicitly exclude/re-include a NEVER-indexed physical
+                // child, without mutating catalog or creating a second root.
+                var physical = displayed.Single(item =>
+                    string.Equals(ManagerPath(item), fixtureChild,
+                        StringComparison.OrdinalIgnoreCase));
+                if (physical.Header is not CheckBox physicalCheck ||
+                    !physicalCheck.IsEnabled || physicalCheck.IsChecked != true)
+                    throw new Exception("Non-indexed folder has no inclusion checkbox.");
+                physicalCheck.IsChecked = false;
+                Flush(manager);
+                var temporarilyExcluded = manager.SelectedConfiguration.Roots.Single();
+                if (!temporarilyExcluded.ExcludedPaths.Any(path =>
+                        string.Equals(path, fixtureChild, StringComparison.OrdinalIgnoreCase)) ||
+                    !Convert.ToString(physicalCheck.Content)!.StartsWith("⊘"))
+                    throw new Exception("Excluded physical folder lacked a persistent rule or marker.");
+                physicalCheck.IsChecked = true;
+                Flush(manager);
+                if (manager.SelectedConfiguration.Roots.Single().ExcludedPaths.Count != 0)
+                    throw new Exception("Re-including a physical folder left the exclusion active.");
+
                 var configured = manager.SelectedConfiguration.Roots;
                 if (configured.Count != 1 ||
                     !string.Equals(configured[0].LocalPath,
@@ -3400,8 +3418,7 @@ internal static class Program
                     throw new Exception(
                         "Read-only catalog projection changed monitored-root configuration.");
                 Console.WriteLine(
-                    "PASS: Manager shows indexed children under one monitored root, " +
-                    "without inventing roots, scanning folders or changing catalog identities.");
+                    "PASS: Manager shows catalogued and physical children with editable checkboxes.");
 
                 // Alpha.25: only the left tree owns the folder selection.
                 // Expanding one level must not expand nested levels. No
