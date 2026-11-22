@@ -373,8 +373,9 @@ public partial class MainWindow
         if (!maintenanceOnly)
         {
         IReadOnlyList<PhotoFolderSummary> initialFolders = Array.Empty<PhotoFolderSummary>();
-        IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> initialConfiguration =
-            Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
+        IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
+            IReadOnlyList<string> IncludedPaths)> initialConfiguration =
+            Array.Empty<(MonitoredFolder, IReadOnlyList<string>, IReadOnlyList<string>)>();
         IReadOnlyList<string> createdDirectories = Array.Empty<string>();
         // Durable first-import completion is the only existing proof of a
         // previously FULL root inventory. Read it in the SAME catalog job.
@@ -410,7 +411,7 @@ public partial class MainWindow
         if (initialProjectionOnly)
             _startupFolderSnapshot = (initialFolders, imageCount);
         _dropTargetProjection = initialConfiguration;
-        foreach (var (root, _) in initialConfiguration)
+        foreach (var (root, _, _) in initialConfiguration)
         {
             if (!pendingInitialRootIds.Contains(root.Id))
                 _folderScanStatuses.SeedCompletedInitialImport(root.LocalPath);
@@ -1322,9 +1323,13 @@ public partial class MainWindow
                 });
             if (Dispatcher.HasShutdownStarted) return;
             var window = new FolderManagerWindow(
-                folderSnapshot.Configuration, _foregroundReadService,
+                folderSnapshot.Configuration.Select(root =>
+                    (root.Folder, root.ExcludedPaths)).ToArray(),
+                _foregroundReadService,
                 serverDatabaseConfigured: false,
-                catalogPhotoFolders: folderSnapshot.CatalogFolders)
+                catalogPhotoFolders: folderSnapshot.CatalogFolders,
+                includedByRoot: folderSnapshot.Configuration.ToDictionary(
+                    root => root.Folder.Id, root => root.IncludedPaths))
             {
                 Owner = this
             };
@@ -1363,8 +1368,9 @@ public partial class MainWindow
                     var modified = new FolderManagerSelectionService(_database)
                         .Apply(selection, token);
                     durableCommitted = true;
-                    IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> snapshot =
-                        Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
+                    IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
+                        IReadOnlyList<string> IncludedPaths)> snapshot =
+                        Array.Empty<(MonitoredFolder, IReadOnlyList<string>, IReadOnlyList<string>)>();
                     if (modified)
                         snapshot = ReadFolderTreeConfigurationSnapshot();
 
@@ -1425,7 +1431,8 @@ public partial class MainWindow
         => StatusText.Text = message;
 
     private void OnFolderExclusionCommitted(long folderId, string path,
-        bool excluded, IReadOnlyList<string>? committedRules = null)
+        bool excluded, IReadOnlyList<string>? committedRules = null,
+        IReadOnlyList<string>? committedInclusions = null)
     {
         // Stop any running scan of this monitored root before modifying its
         // stored index; without cancellation it could re-add excluded photos.
@@ -1438,9 +1445,13 @@ public partial class MainWindow
         // block WPF on a second SQLite read during publication.
         var rules = committedRules ?? _folderRepository.GetExcludedPaths(folderId);
         _backgroundExcludedPaths[folderId] = rules;
+        var inclusions = committedInclusions ?? _dropTargetProjection
+            .FirstOrDefault(entry => entry.Folder.Id == folderId).IncludedPaths
+            ?? Array.Empty<string>();
+        _backgroundIncludedPaths[folderId] = inclusions;
         _dropTargetProjection = _dropTargetProjection
             .Select(entry => entry.Folder.Id == folderId
-                ? (entry.Folder, ExcludedPaths: rules)
+                ? (entry.Folder, ExcludedPaths: rules, IncludedPaths: inclusions)
                 : entry)
             .ToArray();
         _dragTargetValidity.Clear();
