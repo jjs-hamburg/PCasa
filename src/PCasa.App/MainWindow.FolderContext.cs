@@ -20,6 +20,10 @@ public partial class MainWindow
         => _dropTargetProjection.FirstOrDefault(entry =>
             entry.Folder.Id == folderId).ExcludedPaths ?? Array.Empty<string>();
 
+    private IReadOnlyList<string> DisplayedIncludedPaths(long folderId)
+        => _dropTargetProjection.FirstOrDefault(entry =>
+            entry.Folder.Id == folderId).IncludedPaths ?? Array.Empty<string>();
+
     private FolderTreeTag? ContextFolder()
         => FoldersTree.SelectedItem is TreeViewItem { Tag: FolderTreeTag tag }
             ? tag : null;
@@ -121,7 +125,8 @@ public partial class MainWindow
             var owner = FolderExclusionRules.FindOwner(
                 destination, _folderRepository.GetAll());
             if (owner is null || FolderExclusionRules.IsExcluded(
-                destination, _folderRepository.GetExcludedPaths(owner.Id)))
+                destination, _folderRepository.GetExcludedPaths(owner.Id),
+                _folderRepository.GetIncludedPaths(owner.Id)))
                 throw new IOException("Zielordner wird nicht überwacht.");
             if (File.Exists(destination))
                 throw new IOException("Eine Datei mit diesem Namen existiert.");
@@ -295,7 +300,7 @@ public partial class MainWindow
         var total = folders.Sum(f => f.ImageCount);
         var excluded = root is not null &&
             FolderExclusionRules.IsExcluded(tag.FullPath,
-                DisplayedExcludedPaths(root.Id));
+                DisplayedExcludedPaths(root.Id), DisplayedIncludedPaths(root.Id));
         var state = root is null ? UiLanguage.T("Nicht überwacht") :
             excluded ? UiLanguage.T("Im Ordnermanager deaktiviert") : UiLanguage.T("Überwacht");
         PcasaDialog.Show(this,
@@ -318,7 +323,7 @@ public partial class MainWindow
         }
         var path = FolderExclusionRules.Normalize(tag.FullPath);
         if (FolderExclusionRules.IsExcluded(path,
-                DisplayedExcludedPaths(root.Id)))
+                DisplayedExcludedPaths(root.Id), DisplayedIncludedPaths(root.Id)))
         {
             PcasaDialog.Show(this, UiLanguage.T("Der Ordner ist bereits deaktiviert."),
                 "PCasa", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -393,7 +398,7 @@ public partial class MainWindow
         var root = DisplayedMonitoredRoot(tag.FullPath);
         var covered = root is not null &&
             !FolderExclusionRules.IsExcluded(tag.FullPath,
-                DisplayedExcludedPaths(root.Id));
+                DisplayedExcludedPaths(root.Id), DisplayedIncludedPaths(root.Id));
         add.Visibility = covered ? Visibility.Collapsed : Visibility.Visible;
         remove.Visibility = covered ? Visibility.Visible : Visibility.Collapsed;
         rename.Visibility = covered ? Visibility.Visible : Visibility.Collapsed;
