@@ -2295,11 +2295,73 @@ internal static class Program
                 clippedShadow.U + clippedShadow.Width > 1.0001f ||
                 clippedShadow.V + clippedShadow.Height > 1.0001f)
                 throw new Exception("Cube shadow protrudes past its photo face.");
+            // Alpha.55 regression: both right AND lower shadow borders
+            // must survive for landscape, portrait and panorama images.
+            // The old centered-on-full-face geometry clipped one of them.
+            var withMargin = cubeType.GetMethod(
+                "CubeImageRectWithShadow", cubeFlags)
+                ?? throw new Exception("Cube does not reserve both shadow margins.");
+            foreach (var dimensions in new[] {
+                (6000f, 4000f), (3000f, 6000f),
+                (8000f, 900f), (900f, 8000f) })
+            {
+                var fit = ((float U, float V, float Width, float Height))
+                    withMargin.Invoke(null, [900f, 600f,
+                        dimensions.Item1, dimensions.Item2, 10f, 38f])!;
+                var shadow = ((float U, float V, float Width, float Height))
+                    cubeShadow.Invoke(null, [
+                        fit.U - 10f / 900f, fit.V - 10f / 600f,
+                        fit.Width + 20f / 900f, fit.Height + 20f / 600f,
+                        12f / 900f, 12f / 600f, 26f / 900f, 26f / 600f])!;
+                var photoRight = fit.U + fit.Width + 10f / 900f;
+                var photoBottom = fit.V + fit.Height + 10f / 600f;
+                if (shadow.U + shadow.Width <= photoRight + .005f ||
+                    shadow.V + shadow.Height <= photoBottom + .005f ||
+                    shadow.U + shadow.Width > 1.0001f ||
+                    shadow.V + shadow.Height > 1.0001f ||
+                    Math.Abs((fit.Width * 900 / (fit.Height * 600)) -
+                        dimensions.Item1 / dimensions.Item2) > .0001f)
+                    throw new Exception(
+                        "Cube still clips its right or lower photo shadow for " +
+                        $"{dimensions.Item1}x{dimensions.Item2}.");
+            }
             Console.WriteLine(
-                "PASS: Real perspective cube has common hinge, centered formats and a bounded shadow per picture.");
+                "PASS: Cube reserves both right and lower shadow margins for every photo format.");
 
             Console.WriteLine(
                 "PASS: GPU slide fully ejects wide photo, preserves entry gap and has right-bottom-only shadows.");
+
+            // S: and other drive/parent nodes do not own a photo-folder ID.
+            // They must navigate to their FIRST indexed descendant without
+            // any filesystem probe; an unrelated drive is never eligible.
+            var descendantsMethod = typeof(PCasa.App.MainWindow).GetMethod(
+                "PhotoFoldersBelowTreePath", System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Public)
+                ?? throw new Exception("Parent/drive navigation resolver missing.");
+            var sFolders = new[] {
+                new PhotoFolderSummary(901, 1, @"S:\\Albums\\First",
+                    @"S:\\Albums\\First", "First", 20),
+                new PhotoFolderSummary(902, 1, @"S:\\Albums\\Second",
+                    @"S:\\Albums\\Second", "Second", 40),
+                new PhotoFolderSummary(903, 2, @"G:\\Photos",
+                    @"G:\\Photos", "Other drive", 12)
+            };
+            var sPositions = new Dictionary<long, int> {
+                [902] = 0, [901] = 1, [903] = 2
+            };
+            IReadOnlyList<long> ForRoot(string path) =>
+                (IReadOnlyList<long>)descendantsMethod.Invoke(null,
+                    [path, sFolders, sPositions])!;
+            if (!ForRoot(@"S:\\").SequenceEqual(new long[] { 902, 901 }) ||
+                !ForRoot(@"S:\\Albums").SequenceEqual(new long[] { 902, 901 }) ||
+                !ForRoot(@"S:\\Albums\\First").SequenceEqual(new long[] { 901 }) ||
+                ForRoot(@"S:\\Albums\\Missing").Count != 0 ||
+                !ForRoot(@"G:\\").SequenceEqual(new long[] { 903 }))
+                throw new Exception(
+                    "Drive and parent folder clicks resolve to missing/wrong cached photo folders.");
+            Console.WriteLine(
+                "PASS: Drive S: and parent folders resolve indexed children without source IO.");
 
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
@@ -2366,6 +2428,14 @@ internal static class Program
                 surface.GetFolderOffset(200) is null)
                 throw new Exception(
                     "Synthetic gallery navigation fixture did not expose both folders.");
+            if (surface.GetFirstVisibleFolderId(
+                    new HashSet<long> { 100, 200 }) != 100 ||
+                surface.GetFirstVisibleFolderId(
+                    new HashSet<long> { 200 }) != 200 ||
+                surface.GetFirstVisibleFolderId(
+                    new HashSet<long> { 999 }) is not null)
+                throw new Exception(
+                    "Photo-less folder navigation cannot find its first local gallery section.");
 
             // Real regression: a GPS-marked photo in folder 100 must never
             // pull the gallery back after the user explicitly enters folder
