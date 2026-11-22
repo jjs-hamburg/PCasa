@@ -133,7 +133,15 @@ public sealed class SlideshowWindow : Window
         ShowInTaskbar = false;
         Focusable = true;
         Background = ResolveBackground(galleryBackground);
-        Cursor = Cursors.Arrow;
+        // WPF owns the background until the first GPU swap-chain frame is
+        // ready. Never expose an uninitialized white native child window.
+        _root.Background = Background;
+        Cursor = Cursors.None;
+        ForceCursor = true;
+        _root.Cursor = Cursors.None;
+        _root.ForceCursor = true;
+        _stage.Cursor = Cursors.None;
+        _gpuHost.Cursor = Cursors.None;
         Content = _root;
 
         _root.Children.Add(_stage);
@@ -211,7 +219,11 @@ public sealed class SlideshowWindow : Window
 
     private void InitializeGpu()
     {
-        var renderer = new Direct3DSlideshowSurface(Dispatcher);
+        var renderer = new Direct3DSlideshowSurface(Dispatcher, () =>
+        {
+            if (!_closed && _gpu is { IsReady: true })
+                _gpuHost.RevealRenderedSurface();
+        });
         try
         {
             var (width, height) = _gpuHost.ClientSize;
