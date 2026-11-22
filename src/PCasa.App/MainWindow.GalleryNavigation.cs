@@ -59,10 +59,13 @@ public partial class MainWindow
             if (revision != _explicitGalleryScrollRevision ||
                 navigationVersion != _explicitGalleryNavigationVersion ||
                 Dispatcher.HasShutdownStarted) return;
-            var current = BrowseSurface.GetFolderOffset(folderId);
-            if (current is double latest)
+            // The same explicit scroll helper is used by remembered
+            // picture-relative gallery bookmarks. Never replace the saved
+            // requested position with the folder HEADER offset.
+            // A folder click already supplied its header as 'offset'.
+            if (BrowseSurface.GetFolderOffset(folderId) is not null)
             {
-                var target = Math.Clamp(latest, 0,
+                var target = Math.Clamp(offset, 0,
                     Math.Max(0, BrowseScrollViewer.ScrollableHeight));
                 if (Math.Abs(BrowseScrollViewer.VerticalOffset - target) > 2)
                 {
