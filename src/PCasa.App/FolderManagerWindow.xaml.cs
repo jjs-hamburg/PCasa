@@ -304,6 +304,8 @@ public partial class FolderManagerWindow : Window
             ToolTip = node.LocalPath
         };
 
+        // Physical children are read only when THIS node expands.
+        item.Expanded += Folder_Expanded;
         checkbox.Tag = item;
         checkbox.Checked += InclusionCheckbox_Changed;
         checkbox.Unchecked += InclusionCheckbox_Changed;
