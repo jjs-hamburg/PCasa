@@ -158,6 +158,13 @@ public partial class MainWindow
         folders[change.TargetFolder.Id] = change.TargetFolder;
         _photoFolders = folders.Values.OrderBy(folder => folder.CanonicalPath,
             StringComparer.OrdinalIgnoreCase).ToArray();
+        // A manual P0 transfer has newer source/target counts than any
+        // previously queued scanner-only counter read. Do not let its
+        // independent tree-only summaries overwrite this committed move.
+        _liveFolderCountSummaries.Remove(change.TargetFolder.Id);
+        if (change.PreviousFolderId is long updatedSourceId)
+            _liveFolderCountSummaries.Remove(updatedSourceId);
+        _liveCatalogImageCount = null;
         _lastCatalogImageCount = change.CatalogImageCount;
 
         if (!_folderTreeItems.ContainsKey(change.TargetFolder.Id))
