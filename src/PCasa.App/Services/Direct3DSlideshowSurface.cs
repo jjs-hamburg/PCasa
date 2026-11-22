@@ -563,8 +563,21 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         var faceWidth = (float)(_width * (_fullscreen ? 1.0 : _galleryPercent / 100.0));
         var faceHeight = (float)(_height * (_fullscreen ? 1.0 : _galleryPercent / 100.0));
         var t = Math.Clamp(progress, 0f, 1f);
-        DrawCubeFace(outgoing, incomingFace: false, t, faceWidth, faceHeight);
-        DrawCubeFace(incoming, incomingFace: true, t, faceWidth, faceHeight);
+        // Back-facing surfaces must not bleed past the silhouette. The
+        // camera is centered in front of the cube, 3.5 face widths away.
+        if (CubeFaceIsVisible(incomingFace: false, t))
+            DrawCubeFace(outgoing, incomingFace: false, t, faceWidth, faceHeight);
+        if (CubeFaceIsVisible(incomingFace: true, t))
+            DrawCubeFace(incoming, incomingFace: true, t, faceWidth, faceHeight);
+    }
+
+    internal static bool CubeFaceIsVisible(bool incomingFace, float progress)
+    {
+        var angle = (float)(-Math.PI * .5 * Math.Clamp(progress, 0f, 1f));
+        // Signed camera-facing dot product divided by face width.
+        return incomingFace
+            ? -3.5f * MathF.Sin(angle) > .5f
+            : 3.5f * MathF.Cos(angle) > .5f;
     }
 
     // Pure geometry for regression tests. At t=0 the outgoing face is
