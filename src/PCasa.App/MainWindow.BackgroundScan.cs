@@ -43,6 +43,7 @@ public partial class MainWindow
         new(StringComparer.OrdinalIgnoreCase);
     private const int MaxNewFileYieldsPerRootReview = 3;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
+    private readonly Dictionary<long, IReadOnlyList<string>> _backgroundIncludedPaths = new();
 
     private BackgroundFolderMonitor? _backgroundFolderMonitor;
     private BackgroundScanSettings? _backgroundScanSettings;
@@ -290,7 +291,7 @@ public partial class MainWindow
         {
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
-            var (folders, availability, exclusions, pendingInitialIds,
+            var (folders, availability, exclusions, inclusions, pendingInitialIds,
                 interruptedInventories, dueRootReviews, reviewRound,
                 reconnectedFolderIds, urgentReviews) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
@@ -302,6 +303,9 @@ public partial class MainWindow
                     var rules = roots.ToDictionary(
                         folder => folder.Id,
                         folder => _folderRepository.GetExcludedPaths(folder.Id));
+                    var includedRules = roots.ToDictionary(
+                        folder => folder.Id,
+                        folder => _folderRepository.GetIncludedPaths(folder.Id));
                     var states = monitor.Refresh(roots, enabled);
                     // An SMB share may return before an old six-hour retry
                     // window expires. Clear that deadline immediately after
@@ -330,7 +334,7 @@ public partial class MainWindow
                     var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
                     var round = _folderRepository.GetReviewRoundStatus(DateTime.UtcNow);
                     var urgent = _folderRepository.GetUrgentRootReviewIds();
-                    return (roots, states, rules, pending, inventories, due,
+                    return (roots, states, rules, includedRules, pending, inventories, due,
                         round, reconnected, urgent);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
@@ -364,7 +368,10 @@ public partial class MainWindow
                     !FolderExclusionRules.IsAtOrBelow(
                         request.Path, owner.LocalPath) ||
                     exclusions.TryGetValue(owner.Id, out var excluded) &&
-                    FolderExclusionRules.IsExcluded(request.Path, excluded))
+                    FolderExclusionRules.IsExcluded(request.Path, excluded,
+                        inclusions.GetValueOrDefault(owner.Id) ?? Array.Empty<string>()) &&
+                    !FolderExclusionRules.MayContainIncludedDescendant(request.Path,
+                        inclusions.GetValueOrDefault(owner.Id) ?? Array.Empty<string>()))
                     continue;
                 QueueBackgroundChange(request);
             }
@@ -394,9 +401,12 @@ public partial class MainWindow
                 QueuePendingInitialScans();
 
             _backgroundExcludedPaths.Clear();
+            _backgroundIncludedPaths.Clear();
             foreach (var (folderId, excluded) in exclusions)
             {
                 _backgroundExcludedPaths[folderId] = excluded;
+                _backgroundIncludedPaths[folderId] = inclusions.GetValueOrDefault(folderId)
+                    ?? Array.Empty<string>();
             }
 
             var offlineRoots = folders
@@ -1061,7 +1071,12 @@ public partial class MainWindow
 
         if (_backgroundExcludedPaths.TryGetValue(
                 change.MonitoredFolderId, out var excludedPaths) &&
-            FolderExclusionRules.IsExcluded(normalized, excludedPaths))
+            FolderExclusionRules.IsExcluded(normalized, excludedPaths,
+                _backgroundIncludedPaths.GetValueOrDefault(change.MonitoredFolderId)
+                    ?? Array.Empty<string>()) &&
+            !FolderExclusionRules.MayContainIncludedDescendant(normalized,
+                _backgroundIncludedPaths.GetValueOrDefault(change.MonitoredFolderId)
+                    ?? Array.Empty<string>()))
         {
             return;
         }
@@ -1283,7 +1298,12 @@ public partial class MainWindow
 
                 if (_backgroundExcludedPaths.TryGetValue(
                         folder.Id, out var currentExclusions) &&
-                    FolderExclusionRules.IsExcluded(request.Path, currentExclusions))
+                    FolderExclusionRules.IsExcluded(request.Path, currentExclusions,
+                        _backgroundIncludedPaths.GetValueOrDefault(folder.Id)
+                            ?? Array.Empty<string>()) &&
+                    !FolderExclusionRules.MayContainIncludedDescendant(request.Path,
+                        _backgroundIncludedPaths.GetValueOrDefault(folder.Id)
+                            ?? Array.Empty<string>()))
                 {
                     continue;
                 }
