@@ -2210,6 +2210,47 @@ internal static class Program
                     throw new Exception("Slide completion lost the destination.");
             }
             finally { sliding.Close(); }
+            // Geometry-only assertions also run when CI has no D3D device.
+            var cubeType = typeof(SlideshowWindow).Assembly.GetType(
+                "PCasa.App.Services.Direct3DSlideshowSurface")!;
+            var cubeFlags = System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic;
+            var cubePoint = cubeType.GetMethod("CubePoint", cubeFlags)!;
+            var cubeRect = cubeType.GetMethod("CubeImageRect", cubeFlags)!;
+            (float X, float Y, float W) Point(float u, float v,
+                bool incoming, float progress)
+                => ((float, float, float))cubePoint.Invoke(null,
+                    [900f, 600f, u, v, incoming, progress])!;
+            foreach (var position in new[] { 0f, .15f, .5f, .85f, 1f })
+            {
+                var aHinge = Point(1, .5f, false, position);
+                var bHinge = Point(0, .5f, true, position);
+                if (Math.Abs(aHinge.X - bHinge.X) > .005f ||
+                    Math.Abs(aHinge.Y - bHinge.Y) > .005f ||
+                    Math.Abs(aHinge.W - bHinge.W) > .005f)
+                    throw new Exception("Cube faces separated at common 3D hinge.");
+            }
+            if (Math.Abs(Point(0, .5f, false, 0).X + 450) > .01 ||
+                Math.Abs(Point(1, .5f, true, 1).X - 450) > .01 ||
+                Math.Abs(Point(0, .5f, false, .5f).W -
+                         Point(1, .5f, false, .5f).W) < .1f)
+                throw new Exception("Cube is still a flat accordion.");
+            foreach (var size in new[] { (6000f, 4000f), (3000f, 6000f),
+                                         (8000f, 900f), (900f, 8000f) })
+            {
+                var fit = ((float U, float V, float Width, float Height))
+                    cubeRect.Invoke(null, [900f, 600f, size.Item1, size.Item2, 10f])!;
+                if (Math.Abs(fit.U + fit.Width * .5f - .5f) > .0001 ||
+                    Math.Abs(fit.V + fit.Height * .5f - .5f) > .0001 ||
+                    Math.Abs((fit.Width * 900 / (fit.Height * 600)) -
+                             size.Item1 / size.Item2) > .0001 ||
+                    fit.Width > 1 || fit.Height > 1)
+                    throw new Exception("Cube distorted or mis-centered photo.");
+            }
+            Console.WriteLine(
+                "PASS: Real perspective cube has common hinge and centered mixed photo formats.");
+
             Console.WriteLine(
                 "PASS: GPU slide fully ejects wide photo, preserves entry gap and has right-bottom-only shadows.");
 
