@@ -4495,13 +4495,22 @@ internal static class Program
                     clusterField.SetValue(window,
                         new[] { new GpsPhotoCluster(1003, 28.416, -16.567,
                             new long[] { 1003 }) });
+                    // The map click is synchronous. Verify immediately
+                    // before pumping unrelated dispatcher callbacks: the
+                    // synthetic ID 1003 is deliberately absent from SQLite,
+                    // so pending real catalog refreshes may remove it.
                     clusterClick.Invoke(window, new object[] { 1003L, 77L });
-                    Flush(window);
                     var gpsMarkerPopup = (FrameworkElement?)window.FindName("GpsPhotoPopup")
                         ?? throw new Exception("GPS popup missing.");
                     if (strip.Items.Count != 1 ||
-                        gpsMarkerPopup.Tag is not long popupId || popupId != 1003)
-                        throw new Exception("Single-marker click failed to show its photo.");
+                        gpsMarkerPopup.Tag is not long popupId || popupId != 1003 ||
+                        gpsMarkerPopup.Visibility != Visibility.Visible)
+                        throw new Exception(
+                            "Single-marker click failed to show its photo immediately. " +
+                            $"Filmstrip={string.Join(",", strip.Items.Cast<PCasa.App.MainWindow.GpsFilmstripEntry>().Select(x => x.Id))}; " +
+                            $"PopupTag={gpsMarkerPopup.Tag}; PopupVisibility={gpsMarkerPopup.Visibility}; " +
+                            $"MapVersion={versionField.GetValue(window)}; " +
+                            $"Fullscreen={viewerType.GetField("_gpsFullscreen", reflectFlags)!.GetValue(window)}");
                     Console.WriteLine(
                         "PASS: Map cluster clicks show photo IDs; singles open preview.");
 
