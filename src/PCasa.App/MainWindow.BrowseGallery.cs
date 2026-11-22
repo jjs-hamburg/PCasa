@@ -1388,6 +1388,13 @@ public partial class MainWindow
                         {
                             _initialScanAttempted.Clear();
                             _dropTargetProjection = snapshot;
+                            _backgroundExcludedPaths.Clear();
+                            _backgroundIncludedPaths.Clear();
+                            foreach (var rule in snapshot)
+                            {
+                                _backgroundExcludedPaths[rule.Folder.Id] = rule.ExcludedPaths;
+                                _backgroundIncludedPaths[rule.Folder.Id] = rule.IncludedPaths;
+                            }
                             _dragTargetValidity.Clear();
                             RefreshFolderTree(preserveGalleryAnchor: true);
                             StatusText.Text =
