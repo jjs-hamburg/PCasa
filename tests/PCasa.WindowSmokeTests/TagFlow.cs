@@ -2426,11 +2426,22 @@ internal static class TagFlow
             {
                 seed.CommandText = """
                     INSERT OR REPLACE INTO recent_tags(tag,last_used_utc)
-                    VALUES ('PCasa UI M Keyboard Alpha', '2026-10-28T20:00:01Z'),
-                           ('PCasa UI M Keyboard Beta', '2026-10-28T20:00:02Z');
+                    -- Force these test-only entries into the nine most
+                    -- recent tags, independent of other CI fixtures.
+                    VALUES ('PCasa UI M Keyboard Alpha', '9999-12-30T20:00:01Z'),
+                           ('PCasa UI M Keyboard Beta', '9999-12-30T20:00:02Z');
                     """;
                 seed.ExecuteNonQuery();
             }
+            var keyboardCandidates = new ImageTagRepository(db)
+                .SuggestExistingTags("PCasa UI M", 8);
+            if (!keyboardCandidates.Contains("PCasa UI M Keyboard Alpha",
+                    StringComparer.Ordinal) ||
+                !keyboardCandidates.Contains("PCasa UI M Keyboard Beta",
+                    StringComparer.Ordinal))
+                throw new Exception(
+                    "Seeded keyboard Tags are missing from the SQLite suggestion vocabulary: " +
+                    string.Join(", ", keyboardCandidates));
             tagInput.Focus();
             Keyboard.Focus(tagInput);
             tagInput.Text = "PCasa UI M";
