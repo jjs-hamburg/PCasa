@@ -61,6 +61,13 @@ public partial class MainWindow
             if (registration.Changed)
             {
                 _dropTargetProjection = registration.Snapshot;
+                _backgroundExcludedPaths.Clear();
+                _backgroundIncludedPaths.Clear();
+                foreach (var rule in registration.Snapshot)
+                {
+                    _backgroundExcludedPaths[rule.Folder.Id] = rule.ExcludedPaths;
+                    _backgroundIncludedPaths[rule.Folder.Id] = rule.IncludedPaths;
+                }
                 _dragTargetValidity.Clear();
                 PromoteExplorerMonitoredPath(directory);
             }
