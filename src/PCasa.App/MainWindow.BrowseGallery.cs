@@ -1005,6 +1005,11 @@ public partial class MainWindow
         IReadOnlyList<PhotoFolderSummary> folders, int imageCount)
     {
         _photoFolders = folders;
+        // A completed full catalog read is now authoritative, including
+        // manual delete/move operations that may not emit ImageIndexed.
+        // Later scanner count reads will add newer overrides as needed.
+        _liveFolderCountSummaries.Clear();
+        _liveCatalogImageCount = null;
         _dragPublishedFolders = folders.ToDictionary(folder => folder.Id,
             folder => folder.LocalPath);
         _lastCatalogImageCount = imageCount;
