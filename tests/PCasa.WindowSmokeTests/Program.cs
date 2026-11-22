@@ -2279,8 +2279,24 @@ internal static class Program
                     cubeFit.Width > 1 || cubeFit.Height > 1)
                     throw new Exception("Cube distorted or mis-centered photo.");
             }
+            // Alpha.54: each cube photograph gets its OWN bounded shadow.
+            // Shadows cannot protrude onto a different perspective face.
+            var cubeShadow = cubeType.GetMethod("CubeShadowRect", cubeFlags)
+                ?? throw new Exception("Cube faces have no photo shadow geometry.");
+            var photoShadow = ((float U, float V, float Width, float Height))
+                cubeShadow.Invoke(null, [.1f, .2f, .6f, .5f,
+                    .02f, .03f, .1f, .1f])!;
+            var clippedShadow = ((float U, float V, float Width, float Height))
+                cubeShadow.Invoke(null, [.8f, .85f, .2f, .15f,
+                    .03f, .04f, .1f, .1f])!;
+            if (Math.Abs(photoShadow.U - .12f) > .0001 ||
+                Math.Abs(photoShadow.V - .23f) > .0001 ||
+                photoShadow.Width <= .6f || photoShadow.Height <= .5f ||
+                clippedShadow.U + clippedShadow.Width > 1.0001f ||
+                clippedShadow.V + clippedShadow.Height > 1.0001f)
+                throw new Exception("Cube shadow protrudes past its photo face.");
             Console.WriteLine(
-                "PASS: Real perspective cube has common hinge and centered mixed photo formats.");
+                "PASS: Real perspective cube has common hinge, centered formats and a bounded shadow per picture.");
 
             Console.WriteLine(
                 "PASS: GPU slide fully ejects wide photo, preserves entry gap and has right-bottom-only shadows.");
@@ -2389,6 +2405,16 @@ internal static class Program
                     ?? throw new Exception("Synthetic destination folder missing.");
                 navMarkMethod.Invoke(window, [(long?)200]);
                 navScrollMethod.Invoke(window, [200L, newFolderStart]);
+                // WPF may apply ScrollViewer.VerticalOffset in a later
+                // dispatcher pass. Request the destination's thumbnail page
+                // NOW, before the old scroll position can monopolize cache IO.
+                var galleryViewport = (double)typeof(BrowseGallerySurface)
+                    .GetField("_viewportTop", System.Reflection.BindingFlags.NonPublic |
+                        System.Reflection.BindingFlags.Instance)!
+                    .GetValue(surface)!;
+                if (Math.Abs(galleryViewport - newFolderStart) > 1)
+                    throw new Exception(
+                        "Folder click still requests OLD thumbnail pages before the target viewport.");
                 Flush(window);
                 var destination = scroller.VerticalOffset;
                 if (Math.Abs(destination - newFolderStart) > 3 ||
