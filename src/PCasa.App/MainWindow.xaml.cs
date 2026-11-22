@@ -180,22 +180,25 @@ public partial class MainWindow : Window
 
     // The tree's read-only drop eligibility projection. SQLite remains the
     // sole authority; it is rechecked in each scheduled mutation.
-    private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)>
-        _dropTargetProjection = Array.Empty<(MonitoredFolder, IReadOnlyList<string>)>();
+    private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
+        IReadOnlyList<string> IncludedPaths)> _dropTargetProjection =
+        Array.Empty<(MonitoredFolder, IReadOnlyList<string>, IReadOnlyList<string>)>();
 
 
     // ONE immutable view of monitored roots and exclusions, read by a
     // background catalog reader. Folder-tree layout, context menus and the
     // folder-manager dialog consume this projection without UI-thread SQLite I/O.
-    private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)>
-        ReadFolderTreeConfigurationSnapshot()
+    private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
+        IReadOnlyList<string> IncludedPaths)> ReadFolderTreeConfigurationSnapshot()
     {
         var roots = _folderRepository.GetAll();
         return roots
             .Select(root => (
                 Folder: root,
                 ExcludedPaths: (IReadOnlyList<string>)_folderRepository
-                    .GetExcludedPaths(root.Id).ToArray()))
+                    .GetExcludedPaths(root.Id).ToArray(),
+                IncludedPaths: (IReadOnlyList<string>)_folderRepository
+                    .GetIncludedPaths(root.Id).ToArray()))
             .ToArray();
     }
 
@@ -230,7 +233,7 @@ public partial class MainWindow : Window
         var rootsWithExclusions = _dropTargetProjection
             .Where(root => !IsPendingFolderRemovalHidden(root.Folder.LocalPath) &&
                 !FolderExclusionRules.IsExcluded(
-                    root.Folder.LocalPath, root.ExcludedPaths))
+                    root.Folder.LocalPath, root.ExcludedPaths, root.IncludedPaths))
             .ToArray();
         var monitoredFolders = rootsWithExclusions
             .Select(root => root.Folder).ToArray();
@@ -259,13 +262,17 @@ public partial class MainWindow : Window
                      folder => monitoredFolderIds.Contains(folder.MonitoredFolderId) &&
                          !IsPendingFolderRemovalHidden(folder.LocalPath)))
         {
+            var owner = rootsWithExclusions.FirstOrDefault(root =>
+                root.Folder.Id == folder.MonitoredFolderId);
+            if (owner.Folder is null ||
+                FolderExclusionRules.IsExcluded(
+                    folder.LocalPath, owner.ExcludedPaths, owner.IncludedPaths))
+                continue;
             AddFolderTreePath(
-                roots,
-                nodesByPath,
-                folder.LocalPath,
-                folder.CanonicalPath,
-                folder.Id,
-                folder.ImageCount);
+                roots, nodesByPath, folder.LocalPath, folder.CanonicalPath,
+                folder.Id, folder.ImageCount,
+                path => !FolderExclusionRules.IsExcluded(
+                    path, owner.ExcludedPaths, owner.IncludedPaths));
         }
 
         // Targets created through the context menu stay in the folder tree
@@ -274,7 +281,8 @@ public partial class MainWindow : Window
             .Where(path => !IsPendingFolderRemovalHidden(path) &&
                 rootsWithExclusions.Any(root =>
                     FolderExclusionRules.IsAtOrBelow(path, root.Folder.LocalPath) &&
-                    !FolderExclusionRules.IsExcluded(path, root.ExcludedPaths))))
+                    !FolderExclusionRules.IsExcluded(path,
+                         root.ExcludedPaths, root.IncludedPaths))))
             AddFolderTreePath(roots, nodesByPath, empty, empty, null, 0);
 
         foreach (var root in roots.Values)
@@ -485,14 +493,25 @@ public partial class MainWindow : Window
         string localPath,
         string canonicalPath,
         long? photoFolderId,
-        int imageCount)
+        int imageCount,
+        Func<string, bool>? includeAncestor = null)
     {
         FolderTreeNode? parent = null;
+        var skipped = new List<string>();
         foreach (var part in GetFolderPathHierarchy(localPath))
         {
+            if (includeAncestor is not null && !includeAncestor(part.FullPath))
+            {
+                skipped.Add(part.DisplayName);
+                continue;
+            }
             if (!nodesByPath.TryGetValue(part.FullPath, out var node))
             {
-                node = new FolderTreeNode(part.DisplayName, part.FullPath);
+                // A re-included descendant must be reachable without a
+                // visible tree node for its excluded ancestor.
+                var label = skipped.Count == 0 ? part.DisplayName :
+                    string.Join("\\", skipped.Append(part.DisplayName));
+                node = new FolderTreeNode(label, part.FullPath);
                 nodesByPath.Add(part.FullPath, node);
 
                 if (parent is null)
@@ -506,6 +525,7 @@ public partial class MainWindow : Window
             }
 
             parent = node;
+            skipped.Clear();
         }
 
         if (parent is null)
