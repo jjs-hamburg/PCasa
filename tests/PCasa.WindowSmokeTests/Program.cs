@@ -1978,9 +1978,40 @@ internal static class Program
                 if (slideshow.Content is not Grid slideRoot ||
                     slideRoot.Children.Count != 2 ||
                     slideRoot.Children[0] is not Grid ||
-                    slideRoot.Children[1] is not System.Windows.Interop.HwndHost)
+                    slideRoot.Children[1] is not System.Windows.Interop.HwndHost gpuElement)
                     throw new Exception(
                         "Slideshow added an unexpected overlay or is missing its GPU surface.");
+                // Alpha.53: no pointer in either WPF or native GPU airspace,
+                // and the gallery brush must cover the host until Direct3D
+                // has presented its first frame (never show a white HWND).
+                if (slideshow.Cursor != System.Windows.Input.Cursors.None ||
+                    !slideshow.ForceCursor ||
+                    slideRoot.Cursor != System.Windows.Input.Cursors.None ||
+                    !slideRoot.ForceCursor ||
+                    gpuElement.Cursor != System.Windows.Input.Cursors.None ||
+                    !ReferenceEquals(slideRoot.Background, galleryBrush))
+                    throw new Exception(
+                        "Slideshow cursor is visible or startup gallery backdrop is missing.");
+                var hostMessage = gpuElement.GetType().GetMethod(
+                    "WndProc", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)
+                    ?? throw new Exception("Native slideshow message handler missing.");
+                var eraseArgs = new object[] {
+                    IntPtr.Zero, 0x0014, IntPtr.Zero, IntPtr.Zero, false
+                };
+                if (hostMessage.Invoke(gpuElement, eraseArgs) is not IntPtr eraseResult ||
+                    eraseResult != new IntPtr(1) || eraseArgs[4] is not true)
+                    throw new Exception(
+                        "Native slideshow host can still paint a white GDI background.");
+                var cursorArgs = new object[] {
+                    IntPtr.Zero, 0x0020, IntPtr.Zero, IntPtr.Zero, false
+                };
+                if (hostMessage.Invoke(gpuElement, cursorArgs) is not IntPtr cursorResult ||
+                    cursorResult != new IntPtr(1) || cursorArgs[4] is not true)
+                    throw new Exception(
+                        "Native Direct3D host does not suppress Windows' mouse cursor.");
+                Console.WriteLine(
+                    "PASS: Slideshow uses original backdrop before first GPU frame; no mouse cursor or white native paint.");
                 var slidesFlags = System.Reflection.BindingFlags.Instance |
                     System.Reflection.BindingFlags.NonPublic;
                 var currentLayerField = typeof(SlideshowWindow).GetField(
