@@ -2239,13 +2239,13 @@ internal static class Program
             foreach (var size in new[] { (6000f, 4000f), (3000f, 6000f),
                                          (8000f, 900f), (900f, 8000f) })
             {
-                var fit = ((float U, float V, float Width, float Height))
+                var cubeFit = ((float U, float V, float Width, float Height))
                     cubeRect.Invoke(null, [900f, 600f, size.Item1, size.Item2, 10f])!;
-                if (Math.Abs(fit.U + fit.Width * .5f - .5f) > .0001 ||
-                    Math.Abs(fit.V + fit.Height * .5f - .5f) > .0001 ||
-                    Math.Abs((fit.Width * 900 / (fit.Height * 600)) -
+                if (Math.Abs(cubeFit.U + cubeFit.Width * .5f - .5f) > .0001 ||
+                    Math.Abs(cubeFit.V + cubeFit.Height * .5f - .5f) > .0001 ||
+                    Math.Abs((cubeFit.Width * 900 / (cubeFit.Height * 600)) -
                              size.Item1 / size.Item2) > .0001 ||
-                    fit.Width > 1 || fit.Height > 1)
+                    cubeFit.Width > 1 || cubeFit.Height > 1)
                     throw new Exception("Cube distorted or mis-centered photo.");
             }
             Console.WriteLine(
