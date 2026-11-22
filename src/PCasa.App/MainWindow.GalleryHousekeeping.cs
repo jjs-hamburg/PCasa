@@ -195,21 +195,37 @@ public partial class MainWindow
     {
         if (!_appearance.HideCollapsedFolders)
             return new HashSet<long>();
-        var collapsedPaths = new List<string>();
+        var paths = new List<string>();
         foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
-            GatherCollapsedPaths(root, collapsedPaths);
+            GatherCollapsedPaths(root, paths);
+        if (paths.Count == 0) return new HashSet<long>();
 
-        // A collapsed folder's OWN pictures stay visible. Only descendants
-        // are hidden; independent of whether a search is currently running.
+        var collapsed = paths.Select(FolderExclusionRules.Normalize)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The old nested Any() probed every collapsed node for every photo
+        // directory (O(folders * collapsed folders)). On large S: trees
+        // this ran millions of GetFullPath checks ON the WPF thread after
+        // a click and made the gallery look completely unresponsive.
+        // A photo can only be hidden by its actual path ancestors.
         return _photoFolders
-            .Where(folder => collapsedPaths.Any(path =>
-                !string.Equals(
-                    FolderExclusionRules.Normalize(folder.LocalPath),
-                    FolderExclusionRules.Normalize(path),
-                    StringComparison.OrdinalIgnoreCase) &&
-                IsInside(folder.LocalPath, path)))
+            .Where(folder => IsDescendantOfCollapsedPath(
+                folder.LocalPath, collapsed))
             .Select(folder => folder.Id)
             .ToHashSet();
+    }
+
+    // Exact directory components, not arbitrary string prefixes: collapsing
+    // S:\\Photos hides S:\\Photos\\2026 but not S:\\PhotosBackup. The
+    // collapsed node's OWN pictures remain visible.
+    internal static bool IsDescendantOfCollapsedPath(
+        string photoPath, IReadOnlySet<string> collapsedPaths)
+    {
+        var ancestors = GetFolderPathHierarchy(photoPath);
+        for (var i = 0; i < ancestors.Count - 1; i++)
+            if (collapsedPaths.Contains(
+                FolderExclusionRules.Normalize(ancestors[i].FullPath)))
+                return true;
+        return false;
     }
 
     private void UpdateGalleryFolderVisibility(bool preserveGalleryAnchor = true)

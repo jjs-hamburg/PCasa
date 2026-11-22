@@ -1551,7 +1551,16 @@ public partial class MainWindow
             return;
         }
 
+        var clickStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var destinationId = ResolveTreePhotoFolder(tag);
+        var resolutionMs = System.Diagnostics.Stopwatch
+            .GetElapsedTime(clickStarted).TotalMilliseconds;
+        if (destinationId is null || resolutionMs > 150)
+            PCasaDiagnostics.WriteMessage("Gallery.FolderClick",
+                $"path={tag.FullPath}; selected={destinationId?.ToString() ?? "none"}; " +
+                $"catalogFolders={_photoFolders.Count}; " +
+                $"visiblePhotos={_displayedBrowseIndex.Count}; " +
+                $"resolveMs={resolutionMs:F0}");
 
         // Inversion is a folder-local toggle, never a global permanent
         // selection mode. Reset its visual state on a tree-folder change,
@@ -1644,7 +1653,7 @@ public partial class MainWindow
                 // visible gallery section.
                 var visualTarget = _folderTreeItems.TryGetValue(
                     photoFolderId, out var photoItem) ? photoItem : item;
-                FolderTreeNavigation.ExpandAncestors(visualTarget);
+                FolderTreeNavigation.ExpandAncestors(FoldersTree, visualTarget);
             }
             finally { _bulkFolderExpansion = false; }
             UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
@@ -1667,9 +1676,11 @@ public partial class MainWindow
             return;
         }
 
-        // No cached section exists: a newly imported folder needs a SINGLE
-        // asynchronous catalog fetch. A filtered-out folder has no matching
-        // thumbnails; do not fetch the same already-filtered index again.
+        // This folder was committed after the last gallery projection, or
+        // was omitted while its ancestors were collapsed. A complete SQLite
+        // scan of hundreds of thousands of photos used to run here, could
+        // remain pending through concurrent NAS indexing, and made S: appear
+        // unresponsive. Load ONLY this folder's indexed local thumbnail rows.
         if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text))
         {
             StatusText.Text = "Keine Filtertreffer in diesem Ordner. " +
@@ -1677,10 +1688,10 @@ public partial class MainWindow
             return;
         }
         if (!_browseInitialized || _folderRemovalPending) return;
-        _scanGalleryPublicationDeferred = false;
-        await RefreshBrowseGalleryAsync(forceIndexReload: true,
-            warmViewport: false);
-        if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
+
+        var published = await PublishSelectedFolderIndexAsync(
+            photoFolderId, navigationVersion);
+        if (!published || Dispatcher.HasShutdownStarted || _shutdownStarted ||
             navigationVersion != _explicitGalleryNavigationVersion ||
             (FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
             FolderTreeTag selectedTag ||
@@ -1688,11 +1699,99 @@ public partial class MainWindow
                 FolderExclusionRules.IsAtOrBelow(
                     folder.LocalPath, selectedTag.FullPath)))
             return;
+
         if (BrowseSurface.GetFolderOffset(photoFolderId) is double fresh)
         {
             ScrollToExplicitGalleryFolder(photoFolderId, fresh);
             UpdateActiveFolderDisplay(photoFolderId,
                 updateTreeSelection: false);
+        }
+    }
+
+    private async Task<bool> PublishSelectedFolderIndexAsync(
+        long photoFolderId, long navigationVersion)
+    {
+        if (_browseCacheRepository is null || _activeBrowseTier is not int tier)
+            return false;
+        try
+        {
+            // Read-only, bounded foreground lane; neither NAS file I/O nor
+            // a queued background scan is allowed in this click path.
+            var snapshot = await _galleryCatalogReader.ReadAsync(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                var images = _browseCacheRepository.GetGalleryFolderIndex(
+                    tier, photoFolderId);
+                var folder = _imageCatalog.GetPhotoFolderSummary(photoFolderId);
+                return (Images: images, Folder: folder);
+            });
+            if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
+                navigationVersion != _explicitGalleryNavigationVersion ||
+                snapshot.Folder is null || snapshot.Images.Count == 0)
+            {
+                if (navigationVersion == _explicitGalleryNavigationVersion)
+                    PCasaDiagnostics.WriteMessage("Gallery.ClickedFolderProjection",
+                        $"folderId={photoFolderId}; no indexed SQLite photos; " +
+                        $"catalogFolder={snapshot.Folder is not null}; " +
+                        $"fetched={snapshot.Images.Count}");
+                return false;
+            }
+
+            // The selected folder has changed since the older full-gallery
+            // index was published. Replace its local section exactly once
+            // without replacing every other photo in the gallery.
+            var folder = snapshot.Folder;
+            var order = CaptureGalleryFolderOrder();
+            var options = CurrentGallerySort;
+            var comparer = GalleryFolderOrdering.CreateComparer(order, options);
+            var added = GalleryFolderOrdering.Order(snapshot.Images, order, options);
+            var retained = _browseIndex
+                .Where(image => image.PhotoFolderId != photoFolderId)
+                .ToArray();
+            if (_publishedGallerySort != options)
+                retained = GalleryFolderOrdering.Order(retained, order, options)
+                    .ToArray();
+            var insert = Array.BinarySearch(retained, added[0], comparer);
+            if (insert < 0) insert = ~insert;
+            var result = new BrowseThumbnailIndexEntry[
+                retained.Length + added.Count];
+            Array.Copy(retained, 0, result, 0, insert);
+            for (var i = 0; i < added.Count; i++)
+                result[insert + i] = added[i];
+            Array.Copy(retained, insert, result, insert + added.Count,
+                retained.Length - insert);
+
+            // Fence an older in-flight full-index projection. It must never
+            // overwrite this explicit S: click with its stale folder set.
+            _browseRefreshRequests.Invalidate();
+            _browseIndex = result;
+            _publishedGallerySort = options;
+            _photoFolders = _photoFolders
+                .Where(existing => existing.Id != photoFolderId)
+                .Append(folder)
+                .OrderBy(existing => existing.CanonicalPath,
+                    StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            _dragPublishedFolders[folder.Id] = folder.LocalPath;
+            if (!_folderTreeItems.ContainsKey(folder.Id))
+                ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
+                    DiscoveredPhotoFolderId: folder.Id,
+                    DiscoveredPhotoFolderPath: folder.LocalPath));
+            await ApplyTagFilterAsync();
+            if (navigationVersion != _explicitGalleryNavigationVersion)
+                return false;
+            BrowseScrollViewer.UpdateLayout();
+            PCasaDiagnostics.WriteMessage("Gallery.ClickedFolderProjection",
+                $"folderId={photoFolderId}; fetched={snapshot.Images.Count}; " +
+                $"published={_browseIndex.Count}; " +
+                $"offset={BrowseSurface.GetFolderOffset(photoFolderId)?.ToString("F0") ?? "none"}");
+            return true;
+        }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception ex)
+        {
+            PCasaDiagnostics.Write("Gallery.ClickedFolderProjection", ex);
+            return false;
         }
     }
 

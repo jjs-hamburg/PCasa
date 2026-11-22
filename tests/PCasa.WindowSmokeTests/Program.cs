@@ -2363,6 +2363,57 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Drive S: and parent folders resolve indexed children without source IO.");
 
+            // Alpha.56: offscreen S: children may have NO realized WPF
+            // LogicalTree parent. Their already-catalogued thumbnails still
+            // need a deterministic navigation path: expand by ItemsControl
+            // membership, never by LogicalTreeHelper.GetParent(target).
+            var nasTree = new TreeView();
+            var nasRoot = new TreeViewItem { Header = "S:", IsExpanded = false };
+            var nasParent = new TreeViewItem {
+                Header = "Albums", IsExpanded = false
+            };
+            var nasChild = new TreeViewItem { Header = "2026" };
+            nasRoot.Items.Add(nasParent);
+            nasParent.Items.Add(nasChild);
+            nasTree.Items.Add(nasRoot);
+            if (!FolderTreeNavigation.ExpandAncestors(nasTree, nasChild) ||
+                !nasRoot.IsExpanded || !nasParent.IsExpanded ||
+                FolderTreeNavigation.ExpandAncestors(nasTree, nasChild))
+                throw new Exception(
+                    "Unrealized S: descendants could not expand without NAS I/O.");
+            Console.WriteLine(
+                "PASS: Collapsed NAS tree children expand without WPF realization or disk reads.");
+
+            // Alpha.56: a large S: library may contain thousands of closed
+            // parents. The visibility mask must inspect only each candidate's
+            // OWN ancestors (O(depth)), not every collapsed folder (O(N^2)).
+            var hiddenCheck = typeof(PCasa.App.MainWindow).GetMethod(
+                "IsDescendantOfCollapsedPath",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Public)
+                ?? throw new Exception("Exact collapsed-parent lookup missing.");
+            var closedPaths = new HashSet<string>(
+                StringComparer.OrdinalIgnoreCase) { @"S:\Albums" };
+            bool IsHidden(string path, IReadOnlySet<string> closed) =>
+                (bool)hiddenCheck.Invoke(null, [path, closed])!;
+            if (!IsHidden(@"S:\Albums\2026", closedPaths) ||
+                !IsHidden(@"S:\Albums\2026\Trip", closedPaths) ||
+                IsHidden(@"S:\Albums", closedPaths) ||
+                IsHidden(@"S:\AlbumsBackup\2026", closedPaths) ||
+                IsHidden(@"G:\Albums\2026", closedPaths))
+                throw new Exception(
+                    "Collapsed folder masks hide unrelated paths or own photos.");
+            var manyClosed = Enumerable.Range(0, 5000)
+                .Select(i => $@"S:\Other\Folder{i:D4}")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            manyClosed.Add(@"S:\Albums");
+            for (var i = 0; i < 500; i++)
+                if (IsHidden($@"S:\Albums\{i:D4}", manyClosed) != true)
+                    throw new Exception("Large NAS collapsed-mask lookup lost a photo folder.");
+            Console.WriteLine(
+                "PASS: Thousands of closed S: folders use exact ancestry rather than quadratic searches.");
+
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
             {

@@ -81,17 +81,9 @@ public partial class MainWindow
                 return (Folders: counts, Total: _imageCatalog.CountAll());
             });
             if (Dispatcher.HasShutdownStarted || _shutdownStarted) return;
-            foreach (var (id, folder) in result.Folders)
-            {
-                _liveFolderCountSummaries[id] = folder;
-                if (folder is not null && !_folderTreeItems.ContainsKey(id))
-                    ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
-                        DiscoveredPhotoFolderId: id,
-                        DiscoveredPhotoFolderPath: folder.LocalPath));
-            }
-            _liveCatalogImageCount = result.Total;
-            _liveFolderCountSerial++;
-            RefreshVisibleFolderCounts();
+            // Apply exact committed deltas to the changed folder and its
+            // ancestors. No synchronous full-tree walk on the WPF thread.
+            ApplyLiveFolderCounts(result.Folders, result.Total);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)

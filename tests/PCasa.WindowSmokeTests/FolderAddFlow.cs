@@ -191,6 +191,24 @@ internal static class FolderAddFlow
                 "Completed scan did not expose its second JPEG and updated folder count.");
             Console.WriteLine("PASS: Full catalog/gallery and parent count complete without background monitoring.");
 
+            // A click on a newly indexed S: photo directory must fetch ONLY
+            // its own locally committed catalog rows, without re-reading
+            // every other folder. The same SQL projection must preserve
+            // missing packed-cache entries via local legacy thumbnails.
+            var localIndexReader = new BrowseCacheRepository(db);
+            var targeted = localIndexReader.GetGalleryFolderIndex(192, later.Id);
+            var other = localIndexReader.GetGalleryFolderIndex(192, firstFolder.Id);
+            var full = localIndexReader.GetGalleryIndex(192);
+            if (targeted.Count != 1 || other.Count != 1 ||
+                full.Count != targeted.Count + other.Count ||
+                targeted.Any(image => image.PhotoFolderId != later.Id) ||
+                other.Any(image => image.PhotoFolderId != firstFolder.Id))
+                throw new Exception(
+                    "Local folder-specific browse query included foreign images " +
+                    "or omitted uncached imported photos.");
+            Console.WriteLine(
+                "PASS: On-demand folder index reads only committed target images.");
+
             // The previous Edit-menu command is now an icon-only toggle
             // immediately left of the property Filter. Both edges must call
             // the SAME folder inversion and undo on the second click.

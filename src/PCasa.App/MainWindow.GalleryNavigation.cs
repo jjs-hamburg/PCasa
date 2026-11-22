@@ -38,17 +38,43 @@ public partial class MainWindow
         _explicitGalleryFolderTargetId = folderId;
         _scrollingToExplicitGalleryFolder = true;
         var revision = ++_explicitGalleryScrollRevision;
-        // The ScrollViewer accepts a new offset asynchronously. Feeding its
-        // OLD VerticalOffset back into the virtual gallery used to request
-        // thumbnail pages for the PREVIOUS folder until WPF delivered
-        // ScrollChanged. Prime the target's cached pages immediately instead.
+        var navigationVersion = _explicitGalleryNavigationVersion;
+        // A newly projected NAS folder can be far beyond WPF's PREVIOUS
+        // scroll extent. Update it BEFORE issuing the scroll; otherwise WPF
+        // clamps the click to the old maximum, and the user sees no change.
+        if (offset > BrowseScrollViewer.ScrollableHeight + 1)
+            BrowseScrollViewer.UpdateLayout();
+        var destination = Math.Clamp(offset, 0,
+            Math.Max(0, BrowseScrollViewer.ScrollableHeight));
         PicasaGalleryScrollBar.StopMotion();
-        BrowseSurface.SetViewport(offset,
+        BrowseSurface.SetViewport(destination,
             Math.Max(1, BrowseScrollViewer.ViewportHeight));
-        BrowseScrollViewer.ScrollToVerticalOffset(offset);
-        // ScrollChanged is also raised by programmatic navigation. It must
-        // not be misclassified as fresh wheel input which would invalidate
-        // the destination folder before its pending layout settles.
+        BrowseScrollViewer.ScrollToVerticalOffset(destination);
+        // ScrollChanged and final extent measurement may be delayed until
+        // the next WPF layout. Verify once at Loaded and repair a stale
+        // offset without retrying a catalog request. Never override a NEW
+        // click or genuine wheel input in the meantime.
+        _ = Dispatcher.BeginInvoke(() =>
+        {
+            if (revision != _explicitGalleryScrollRevision ||
+                navigationVersion != _explicitGalleryNavigationVersion ||
+                Dispatcher.HasShutdownStarted) return;
+            // The same explicit scroll helper is used by remembered
+            // picture-relative gallery bookmarks. Never replace the saved
+            // requested position with the folder HEADER offset.
+            // A folder click already supplied its header as 'offset'.
+            if (BrowseSurface.GetFolderOffset(folderId) is not null)
+            {
+                var target = Math.Clamp(offset, 0,
+                    Math.Max(0, BrowseScrollViewer.ScrollableHeight));
+                if (Math.Abs(BrowseScrollViewer.VerticalOffset - target) > 2)
+                {
+                    BrowseScrollViewer.ScrollToVerticalOffset(target);
+                    BrowseSurface.SetViewport(target,
+                        Math.Max(1, BrowseScrollViewer.ViewportHeight));
+                }
+            }
+        }, DispatcherPriority.Loaded);
         _ = Dispatcher.BeginInvoke(() =>
         {
             if (revision == _explicitGalleryScrollRevision)

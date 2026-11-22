@@ -98,6 +98,15 @@ public sealed class BrowseCacheRepository
     public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryIndex(int tier)
         => ReadIndex(tier, imageId: null, includeMissing: true);
 
+    // A clicked folder that was indexed AFTER the last gallery publication
+    // must not await another 500k-image materialization. Read only this
+    // folder's locally committed images using idx_images_photo_folder_name.
+    // The query shares the EXACT full-gallery projection and cache fallbacks.
+    public IReadOnlyList<BrowseThumbnailIndexEntry> GetGalleryFolderIndex(
+        int tier, long photoFolderId)
+        => ReadIndex(tier, imageId: null, includeMissing: true,
+            photoFolderId: photoFolderId);
+
     // A completed file transfer needs ONE prepared image, not a reload of a
     // half-million-entry gallery. Uses the SAME index SQL and cache validity
     // rules as the normal full projection.
@@ -105,7 +114,8 @@ public sealed class BrowseCacheRepository
         => ReadIndex(tier, imageId, includeMissing: false).FirstOrDefault();
 
     private IReadOnlyList<BrowseThumbnailIndexEntry> ReadIndex(
-        int tier, long? imageId, bool includeMissing)
+        int tier, long? imageId, bool includeMissing,
+        long? photoFolderId = null)
     {
         using var connection = _database.OpenConnection();
         using var command = connection.CreateCommand();
@@ -148,7 +158,9 @@ public sealed class BrowseCacheRepository
             LEFT JOIN image_tags t ON t.image_id = i.id
                 AND t.source_modified_utc_ticks = i.modified_utc_ticks
             WHERE i.photo_folder_id IS NOT NULL
-            """ + (imageId is long ? " AND i.id = $imageId " : " ") + """
+            """ + (imageId is long ? " AND i.id = $imageId " : " ")
+                + (photoFolderId is long
+                    ? " AND i.photo_folder_id = $photoFolderId " : " ") + """
             ORDER BY
                 pf.canonical_path COLLATE NOCASE,
                 i.file_name COLLATE NOCASE,
@@ -157,6 +169,8 @@ public sealed class BrowseCacheRepository
         command.Parameters.AddWithValue("$tier", tier);
         if (imageId is long requestedId)
             command.Parameters.AddWithValue("$imageId", requestedId);
+        if (photoFolderId is long requestedFolderId)
+            command.Parameters.AddWithValue("$photoFolderId", requestedFolderId);
 
         using var reader = command.ExecuteReader();
         var result = new List<BrowseThumbnailIndexEntry>();

@@ -10,6 +10,43 @@ namespace PCasa.App.Services;
 /// </summary>
 public static class FolderTreeNavigation
 {
+    /// <summary>
+    /// Expand ancestors by the actual ItemsControl object graph. LogicalTreeHelper
+    /// cannot reliably see descendants of a collapsed or not-yet-realized
+    /// TreeViewItem; on large NAS roots this left the destination hidden and
+    /// forced repeated full catalog reads instead of navigating it.
+    /// </summary>
+    public static bool ExpandAncestors(ItemsControl root, TreeViewItem target)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(target);
+        var ancestors = new List<TreeViewItem>();
+        var changed = false;
+        Visit(root);
+        return changed;
+
+        bool Visit(ItemsControl container)
+        {
+            foreach (var child in container.Items.OfType<TreeViewItem>())
+            {
+                if (ReferenceEquals(child, target))
+                {
+                    foreach (var parent in ancestors)
+                    {
+                        if (parent.IsExpanded) continue;
+                        parent.IsExpanded = true;
+                        changed = true;
+                    }
+                    return true;
+                }
+                ancestors.Add(child);
+                if (Visit(child)) return true;
+                ancestors.RemoveAt(ancestors.Count - 1);
+            }
+            return false;
+        }
+    }
+
     public static bool ExpandAncestors(TreeViewItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
