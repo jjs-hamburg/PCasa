@@ -631,16 +631,41 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             w / faceWidth, h / faceHeight);
     }
 
+    // Leave room INSIDE both right and bottom edges of a 3D cube face.
+    // Centering in the FULL face previously let a landscape photo reach
+    // the right boundary, or a portrait photo reach the bottom boundary,
+    // so clamping erased one of the two shadow edges.
+    internal static (float U, float V, float Width, float Height)
+        CubeImageRectWithShadow(float faceWidth, float faceHeight,
+            float pixelWidth, float pixelHeight, float border, float shadowExtent)
+    {
+        var margin = Math.Clamp(shadowExtent, 0f,
+            Math.Min(faceWidth, faceHeight) * .25f);
+        var availableWidth = Math.Max(1f, faceWidth - margin);
+        var availableHeight = Math.Max(1f, faceHeight - margin);
+        var fitted = CubeImageRect(availableWidth, availableHeight,
+            pixelWidth, pixelHeight, border);
+        return (fitted.U * availableWidth / faceWidth,
+            fitted.V * availableHeight / faceHeight,
+            fitted.Width * availableWidth / faceWidth,
+            fitted.Height * availableHeight / faceHeight);
+    }
+
     private void DrawCubeFace(Texture photo, bool incomingFace, float progress,
         float faceWidth, float faceHeight)
     {
-        // The perspective itself defines the cube. A dark opaque-looking
-        // panel plus an offset photo shadow made the two rotated faces
-        // visually collide, especially with portrait/landscape changes.
-        // Render only each correctly centered photograph and its frame;
-        // other slideshow effects retain the user's shadow settings.
-        var inner = CubeImageRect(faceWidth, faceHeight,
-            photo.Width, photo.Height, (float)_border);
+        // The perspective cube face stays transparent outside the photo.
+        // Reserve the same right/down space for every incoming and outgoing
+        // picture, regardless of landscape or portrait orientation.
+        var requestedShadow = _shadow && _shadowOpacity > 0
+            ? (float)(Math.Max(0, _shadowOffset) + Math.Max(0, _shadowWidth))
+            : 0f;
+        var reservedShadow = Math.Min(requestedShadow,
+            Math.Min(faceWidth, faceHeight) * .25f);
+        var shadowScale = requestedShadow > 0
+            ? reservedShadow / requestedShadow : 1f;
+        var inner = CubeImageRectWithShadow(faceWidth, faceHeight,
+            photo.Width, photo.Height, (float)_border, reservedShadow);
         var frameX = (float)(_border / faceWidth);
         var frameY = (float)(_border / faceHeight);
         if (_shadow && _shadowOpacity > 0)
@@ -653,10 +678,16 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             var top = inner.V - frameY;
             var width = inner.Width + 2 * frameX;
             var height = inner.Height + 2 * frameY;
-            var offsetX = (float)(Math.Max(0, _shadowOffset) / faceWidth);
-            var offsetY = (float)(Math.Max(0, _shadowOffset) / faceHeight);
-            var blurX = (float)(Math.Max(0, _shadowWidth) / faceWidth);
-            var blurY = (float)(Math.Max(0, _shadowWidth) / faceHeight);
+            // Small cube faces scale shadow geometry down together instead
+            // of clipping away one edge. The offset remains down AND right.
+            var offsetX = (float)(Math.Max(0, _shadowOffset) / faceWidth)
+                * shadowScale;
+            var offsetY = (float)(Math.Max(0, _shadowOffset) / faceHeight)
+                * shadowScale;
+            var blurX = (float)(Math.Max(0, _shadowWidth) / faceWidth)
+                * shadowScale;
+            var blurY = (float)(Math.Max(0, _shadowWidth) / faceHeight)
+                * shadowScale;
             for (var layer = 6; layer >= 1; layer--)
             {
                 var shadow = CubeShadowRect(left, top, width, height,
