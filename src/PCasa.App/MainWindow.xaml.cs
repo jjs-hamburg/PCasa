@@ -408,6 +408,10 @@ public partial class MainWindow : Window
         ApplyFolderAvailabilityToTree();
         UpdateGalleryFolderVisibility(preserveGalleryAnchor);
         ExplorerCatalogTreeRebuilt();
+        // Rebuild counter identities only when the *tree* is rebuilt.
+        // The live scan path below patches affected ancestors instead of
+        // re-walking every NAS folder for each 200-ms count notification.
+        RefreshVisibleFolderCounts();
         }
         finally
         {
@@ -416,9 +420,16 @@ public partial class MainWindow : Window
         }
     }
 
-    // A catalog refresh must update existing tree-node counts as well as new
-    // nodes. Never rebuild the TreeView for a numeric change: that would lose
-    // expansion, selection and the gallery's scroll anchor during ingestion.
+    // An initial catalog projection or explicit tree rebuild can calculate
+    // all counters once. Continuous scanner progress is intentionally NOT
+    // allowed to run this O(all folders + all tree nodes) routine every 200ms.
+    private readonly Dictionary<string, int> _folderCountTotals =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TreeViewItem> _folderCountItems =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _folderCountLabels =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private void UpdateFolderImageTotal()
     {
         if (FolderImageTotalText is not null)
@@ -429,42 +440,103 @@ public partial class MainWindow : Window
     private void RefreshVisibleFolderCounts()
     {
         UpdateFolderImageTotal();
-        var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        // Scanner events can publish folder-only counts while the existing
-        // gallery index stays frozen in the middle of a long photo sequence.
-        // Latest confirmed SQLite summaries override the last full gallery
-        // snapshot for the TREE ONLY, never the gallery's section geometry.
+        _folderCountTotals.Clear();
         var folderCounts = _photoFolders.ToDictionary(folder => folder.Id);
         foreach (var (id, latest) in _liveFolderCountSummaries)
         {
             if (latest is null) folderCounts.Remove(id);
             else folderCounts[id] = latest;
         }
-        foreach (var photoFolder in folderCounts.Values)
-        {
-            foreach (var part in GetFolderPathHierarchy(photoFolder.LocalPath))
-            {
-                totals.TryGetValue(part.FullPath, out var count);
-                totals[part.FullPath] = count + photoFolder.ImageCount;
-            }
-        }
 
-        UpdateNodes(FoldersTree);
-        void UpdateNodes(ItemsControl container)
+        foreach (var folder in folderCounts.Values)
+            foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
+            {
+                _folderCountTotals.TryGetValue(part.FullPath, out var count);
+                _folderCountTotals[part.FullPath] = count + folder.ImageCount;
+            }
+
+        _folderCountItems.Clear();
+        _folderCountLabels.Clear();
+        IndexNodes(FoldersTree);
+        void IndexNodes(ItemsControl container)
         {
             foreach (var item in container.Items.OfType<TreeViewItem>())
             {
                 if (item.Tag is FolderTreeTag tag)
                 {
-                    totals.TryGetValue(tag.FullPath, out var count);
                     var name = GetFolderPathHierarchy(tag.FullPath)[^1].DisplayName;
-                    var expected = count > 0
-                        ? $"{name} ({count:N0})" : name;
+                    _folderCountItems[tag.FullPath] = item;
+                    _folderCountLabels[tag.FullPath] = name;
+                    _folderCountTotals.TryGetValue(tag.FullPath, out var count);
+                    var expected = count > 0 ? $"{name} ({count:N0})" : name;
                     if (!string.Equals(item.Header as string, expected,
                         StringComparison.Ordinal))
                         item.Header = expected;
                 }
-                UpdateNodes(item);
+                IndexNodes(item);
+            }
+        }
+    }
+
+    // A scanner commit changes only ONE photo-folder identity. The entire
+    // folder tree may contain thousands of nested NAS folders: update that
+    // photo-folder's ancestors instead of re-enumerating every other folder
+    // and rebuilding all WPF labels in response to a single image.
+    private void ApplyLiveFolderCounts(
+        IReadOnlyDictionary<long, PhotoFolderSummary?> changes, int imageCount)
+    {
+        if (_folderCountItems.Count == 0 && FoldersTree.Items.Count > 0)
+            RefreshVisibleFolderCounts();
+
+        var affected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, latest) in changes)
+        {
+            var previous = _liveFolderCountSummaries.TryGetValue(id, out var older)
+                ? older : _photoFolders.FirstOrDefault(folder => folder.Id == id);
+            if (previous is not null)
+                Accumulate(previous, -previous.ImageCount);
+            if (latest is not null)
+                Accumulate(latest, latest.ImageCount);
+
+            _liveFolderCountSummaries[id] = latest;
+            if (latest is not null && !_folderTreeItems.ContainsKey(id))
+                ShowScannedPhotoFolder(new ScanProgress(0, 0, 0, 0, null,
+                    DiscoveredPhotoFolderId: id,
+                    DiscoveredPhotoFolderPath: latest.LocalPath));
+        }
+
+        _liveCatalogImageCount = imageCount;
+        _liveFolderCountSerial++;
+        UpdateFolderImageTotal();
+        foreach (var path in affected)
+        {
+            if (!_folderCountItems.TryGetValue(path, out var item))
+            {
+                item = FindFolderTreeItemByPath(FoldersTree, path);
+                if (item is null) continue;
+                _folderCountItems[path] = item;
+            }
+            if (!_folderCountLabels.TryGetValue(path, out var label))
+            {
+                label = GetFolderPathHierarchy(path)[^1].DisplayName;
+                _folderCountLabels[path] = label;
+            }
+
+            _folderCountTotals.TryGetValue(path, out var count);
+            var expected = count > 0 ? $"{label} ({count:N0})" : label;
+            if (!string.Equals(item.Header as string, expected,
+                StringComparison.Ordinal))
+                item.Header = expected;
+        }
+
+        void Accumulate(PhotoFolderSummary folder, int delta)
+        {
+            if (delta == 0) return;
+            foreach (var part in GetFolderPathHierarchy(folder.LocalPath))
+            {
+                _folderCountTotals.TryGetValue(part.FullPath, out var earlier);
+                _folderCountTotals[part.FullPath] = Math.Max(0, earlier + delta);
+                affected.Add(part.FullPath);
             }
         }
     }
