@@ -89,6 +89,8 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     private readonly AutoResetEvent _wake = new(false);
     private readonly ManualResetEventSlim _started = new(false);
     private readonly Dispatcher _dispatcher;
+    private readonly Action? _firstFrameReady;
+    private bool _firstFrameReported;
     private Thread? _worker;
     private volatile bool _stopping;
     private volatile bool _ready;
@@ -130,9 +132,11 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     public bool IsReady => _ready;
     public Exception? StartupError => _startupError;
 
-    public Direct3DSlideshowSurface(Dispatcher dispatcher)
+    public Direct3DSlideshowSurface(Dispatcher dispatcher,
+        Action? firstFrameReady = null)
     {
         _dispatcher = dispatcher;
+        _firstFrameReady = firstFrameReady;
     }
 
     public bool Start(IntPtr hwnd, int width, int height,
@@ -503,6 +507,17 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             }
         }
         _swapChain!.Present(1, PresentFlags.None).CheckError();
+        // Do not expose the native HWND while it still contains the white
+        // default STATIC contents. The first fully rendered background is
+        // already available in the flip chain before asking WPF to reveal it.
+        // This also handles slow NAS decodes: the gallery texture shows
+        // while the first photo is being loaded.
+        if (!_firstFrameReported && _background is not null)
+        {
+            _firstFrameReported = true;
+            if (_firstFrameReady is not null && !_dispatcher.HasShutdownStarted)
+                _dispatcher.BeginInvoke(_firstFrameReady);
+        }
         if (_next is not null) _drawnTransitionFrames++;
         if (_next is not null && t >= 1)
             EndTransition(reportCompletion: true);
