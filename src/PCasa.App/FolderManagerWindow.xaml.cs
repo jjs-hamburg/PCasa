@@ -22,11 +22,13 @@ public partial class FolderManagerWindow : Window
     // no NAS directory enumeration.
     private readonly IReadOnlyList<PhotoFolderSummary> _catalogPhotoFolders;
     private readonly Dictionary<long, IReadOnlyList<string>> _exclusions = new();
+    private readonly Dictionary<long, IReadOnlyList<string>> _inclusions = new();
     // Roots unchecked during the dialog remain available for rechecking in
     // the right pane, with their original IDs and exclusion rules intact.
     // Only OK persists the final staged selection.
     private readonly Dictionary<long,
-        (MonitoredFolder Root, IReadOnlyList<string> Exclusions)> _uncheckedRoots = new();
+        (MonitoredFolder Root, IReadOnlyList<string> Exclusions,
+         IReadOnlyList<string> Inclusions)> _uncheckedRoots = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly IReadOnlyList<(string Name, string Path)> _systemFolders;
     private IReadOnlyList<MonitoredFolder> _monitoredRoots = Array.Empty<MonitoredFolder>();
@@ -46,20 +48,28 @@ public partial class FolderManagerWindow : Window
             root.LocalPath,
             _exclusions.TryGetValue(root.Id, out var excluded)
                 ? excluded.ToArray() : Array.Empty<string>(),
-            root.ServerSyncEnabled)).ToArray(),
+            root.ServerSyncEnabled,
+            _inclusions.TryGetValue(root.Id, out var included)
+                ? included.ToArray() : Array.Empty<string>())).ToArray(),
         true);
 
     public FolderManagerWindow(
         IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths)> configuration,
         ForegroundReadService foregroundReadService, bool serverDatabaseConfigured,
-        IReadOnlyList<PhotoFolderSummary>? catalogPhotoFolders = null)
+        IReadOnlyList<PhotoFolderSummary>? catalogPhotoFolders = null,
+        IReadOnlyDictionary<long, IReadOnlyList<string>>? includedByRoot = null)
     {
         InitializeComponent();
         _catalogPhotoFolders = catalogPhotoFolders ?? Array.Empty<PhotoFolderSummary>();
         _foregroundReadService = foregroundReadService;
         _monitoredRoots = configuration.Select(item => item.Folder).ToArray();
         foreach (var (folder, excludedPaths) in configuration)
+        {
             _exclusions[folder.Id] = excludedPaths;
+            _inclusions[folder.Id] = includedByRoot is not null &&
+                includedByRoot.TryGetValue(folder.Id, out var included)
+                    ? included : Array.Empty<string>();
+        }
 
         ServerSyncCheckBox.Visibility = serverDatabaseConfigured
             ? Visibility.Visible : Visibility.Collapsed;
@@ -96,10 +106,13 @@ public partial class FolderManagerWindow : Window
             .Where(entry => entry.Value.IsExpanded)
             .Select(entry => entry.Key)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var previouslyVisible = _folderNodes.Keys.ToArray();
+        var previouslyEnumerated = _enumeratedPaths.ToArray();
         _selected = null;
         FolderManagerTree.Items.Clear();
         _folderNodes.Clear();
         _enumeratedPaths.Clear();
+        foreach (var path in previouslyEnumerated) _enumeratedPaths.Add(path);
 
         // Keep unchecked old roots and their indexed children visible for
         // staging a new selection. No filesystem/SMB enumeration required.
@@ -132,7 +145,15 @@ public partial class FolderManagerWindow : Window
         // Sorting by path LENGTH previously put short drive roots (S:\)
         // before C:\ or G:\. Build the tree in natural path order so drive
         // letters and siblings are alphabetical, independent of depth.
-        var visiblePaths = rootsByPath.Keys.Concat(catalogByPath.Keys)
+        // Root volumes are cheap to list; physical children load lazily.
+        // Excluded/included rule paths stay visible even on an offline NAS.
+        var visiblePaths = DriveInfo.GetDrives().Select(drive => drive.Name)
+            .Concat(_systemFolders.Select(folder => folder.Path))
+            .Concat(rootsByPath.Keys)
+            .Concat(catalogByPath.Keys)
+            .Concat(_exclusions.Values.SelectMany(paths => paths))
+            .Concat(_inclusions.Values.SelectMany(paths => paths))
+            .Concat(previouslyVisible)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
         foreach (var visiblePath in visiblePaths)
@@ -144,7 +165,8 @@ public partial class FolderManagerWindow : Window
                 {
                     rootsByPath.TryGetValue(path, out var exact);
                     catalogByPath.TryGetValue(path, out var count);
-                    item = CreateItem(new ManagedNode(exact, path,
+                    item = CreateItem(new ManagedNode(
+                        exact ?? FindCoveringRoot(path), path,
                         IsRoot: exact is not null, CatalogImageCount: count));
                     _folderNodes[path] = item;
                     if (parent is null) FolderManagerTree.Items.Add(item);
@@ -165,7 +187,7 @@ public partial class FolderManagerWindow : Window
             selected.IsSelected = true;
 
         RefreshMonitoredRootsList();
-        UpdateSelectedDetails();
+        UpdateLoadedCheckboxes();
     }
 
     private static IEnumerable<string> ConfiguredPathHierarchy(string path)
@@ -220,10 +242,12 @@ public partial class FolderManagerWindow : Window
         // it is simply a cancellation, not a second unchecked root row.
         if (root.Id > 0)
             _uncheckedRoots[rootId] = (root,
-                _exclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>());
+                _exclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>(),
+                _inclusions.GetValueOrDefault(rootId) ?? Array.Empty<string>());
         _monitoredRoots = _monitoredRoots
             .Where(candidate => candidate.Id != rootId).ToArray();
         _exclusions.Remove(rootId);
+        _inclusions.Remove(rootId);
         Reload();
     }
 
@@ -231,7 +255,14 @@ public partial class FolderManagerWindow : Window
     {
         if (!_uncheckedRoots.Remove(rootId, out var previous)) return;
         _monitoredRoots = _monitoredRoots.Append(previous.Root).ToArray();
-        _exclusions[rootId] = previous.Exclusions;
+        _exclusions[rootId] = previous.Exclusions
+            .Concat(_monitoredRoots
+                .Where(root => root.Id != rootId &&
+                    FolderExclusionRules.IsAtOrBelow(root.LocalPath,
+                        previous.Root.LocalPath))
+                .Select(root => root.LocalPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        _inclusions[rootId] = previous.Inclusions;
         Reload();
     }
 
@@ -265,7 +296,7 @@ public partial class FolderManagerWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(1, 0, 1, 0),
             IsChecked = DisplayIncludedState(node),
-            IsThreeState = true,
+            IsThreeState = false,
             IsEnabled = CanToggle(node)
         };
         checkbox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
@@ -279,51 +310,65 @@ public partial class FolderManagerWindow : Window
             ToolTip = node.LocalPath
         };
 
+        // Physical children are read only when THIS node expands.
+        item.Expanded += Folder_Expanded;
         checkbox.Tag = item;
         checkbox.Checked += InclusionCheckbox_Changed;
         checkbox.Unchecked += InclusionCheckbox_Changed;
-        // Excluded and unrelated physical folders do not appear here.
-        // No red folder names or surprise filesystem children.
+        if (!_enumeratedPaths.Contains(node.LocalPath))
+            item.Items.Add(new TreeViewItem
+            {
+                Visibility = Visibility.Collapsed,
+                IsEnabled = false
+            });
         return item;
     }
 
     private bool IsIncluded(ManagedNode node)
         => node.Root is not null && !IsExcluded(node);
 
-    // A catalog branch covered by a broad root is informational; otherwise
-    // it can become its own monitored root. Original roots can always be
-    // unchecked/restored. Drive grouping nodes are never toggles.
-    private bool CanToggle(ManagedNode node)
-        => !_busy && (node.IsRoot ||
-            (node.CatalogImageCount > 0 &&
-             FindCoveringRoot(node.LocalPath) is null));
+    // All loaded physical folders have a checkbox. Inside a monitored
+    // root the most-specific exclusion/inclusion rule controls its state.
+    private bool CanToggle(ManagedNode node) => !_busy;
 
     private bool? DisplayIncludedState(ManagedNode node)
     {
-        var owner = FindCoveringRoot(node.LocalPath);
-        if (owner is not null &&
-            !FolderExclusionRules.IsExcluded(node.LocalPath,
-                _exclusions.GetValueOrDefault(owner.Id) ??
-                    Array.Empty<string>()))
-            return true;
-        if (node.IsRoot && node.Root is not null)
-            return _monitoredRoots.Any(root => root.Id == node.Root.Id);
-        return node.CatalogImageCount > 0 ? false : null;
+        var root = FindCoveringRoot(node.LocalPath);
+        if (root is not null)
+            return !FolderExclusionRules.IsExcluded(node.LocalPath,
+                _exclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>(),
+                _inclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>());
+        return node.IsRoot && node.Root is { } old &&
+            _monitoredRoots.Any(current => current.Id == old.Id);
     }
 
     private bool IsExcluded(ManagedNode node)
-        => node.Root is not null &&
-           _exclusions.TryGetValue(node.Root.Id, out var paths) &&
-           FolderExclusionRules.IsExcluded(node.LocalPath, paths);
+        => FindCoveringRoot(node.LocalPath) is { } root &&
+           FolderExclusionRules.IsExcluded(node.LocalPath,
+               _exclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>(),
+               _inclusions.GetValueOrDefault(root.Id) ?? Array.Empty<string>());
 
-    private bool HasExcludedAncestor(ManagedNode node)
-        => node.Root is not null &&
-           _exclusions.TryGetValue(node.Root.Id, out var paths) &&
-           paths.Any(path =>
-               FolderExclusionRules.IsAtOrBelow(node.LocalPath, path) &&
-               !string.Equals(FolderExclusionRules.Normalize(node.LocalPath),
-                   FolderExclusionRules.Normalize(path),
-                   StringComparison.OrdinalIgnoreCase));
+    private void StageSubtreeRule(MonitoredFolder root, string path, bool include)
+    {
+        var normalized = FolderExclusionRules.Normalize(path);
+        var exclusions = (_exclusions.GetValueOrDefault(root.Id) ??
+            Array.Empty<string>()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var inclusions = (_inclusions.GetValueOrDefault(root.Id) ??
+            Array.Empty<string>()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // A parent checkbox owns its entire subtree. Explicitly checking
+        // one of its children later creates a deeper inclusion exception.
+        exclusions.RemoveWhere(value => FolderExclusionRules.IsAtOrBelow(value, normalized));
+        inclusions.RemoveWhere(value => FolderExclusionRules.IsAtOrBelow(value, normalized));
+        if (include)
+        {
+            if (FolderExclusionRules.IsExcluded(normalized, exclusions, inclusions))
+                inclusions.Add(normalized);
+        }
+        else if (!FolderExclusionRules.IsExcluded(normalized, exclusions, inclusions))
+            exclusions.Add(normalized);
+        _exclusions[root.Id] = exclusions.ToArray();
+        _inclusions[root.Id] = inclusions.ToArray();
+    }
 
     private async void Folder_Expanded(object sender, RoutedEventArgs e)
     {
@@ -444,6 +489,13 @@ public partial class FolderManagerWindow : Window
             var excluded = IsExcluded(node);
             checkBox.IsChecked = DisplayIncludedState(node);
             checkBox.IsEnabled = CanToggle(node);
+            // The ⊘ marker is legible without distinguishing colors.
+            var name = node.Label ?? Path.GetFileName(
+                Path.TrimEndingDirectorySeparator(node.LocalPath));
+            if (string.IsNullOrEmpty(name)) name = node.LocalPath;
+            checkBox.Content = (excluded ? "⊘ " : "") +
+                (node.CatalogImageCount > 0
+                    ? $"{name} ({node.CatalogImageCount:N0})" : name);
             checkBox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
         }
 
@@ -468,10 +520,13 @@ public partial class FolderManagerWindow : Window
             }
             else RemoveStagedRoot(root.Id);
         }
-        else if (include && node.CatalogImageCount > 0)
+        else if (FindCoveringRoot(node.LocalPath) is { } owner)
         {
-            // No overlapping scanner roots: only offered once the previous
-            // parent root was unchecked. Commit still occurs ONLY on OK.
+            StageSubtreeRule(owner, node.LocalPath, include);
+            UpdateLoadedCheckboxes();
+        }
+        else if (include)
+        {
             StageNewRoot(node.LocalPath);
             Reload(expandSystemFolder: node.LocalPath);
         }
@@ -485,19 +540,8 @@ public partial class FolderManagerWindow : Window
         var covering = FindCoveringRoot(normalized);
         if (covering is not null)
         {
-            var excluded = _exclusions.GetValueOrDefault(covering.Id) ??
-                Array.Empty<string>();
-            var blocked = excluded.FirstOrDefault(path =>
-                FolderExclusionRules.IsAtOrBelow(normalized, path) &&
-                !PathEquals(path, normalized));
-            if (blocked is not null)
-                throw new InvalidOperationException(
-                    "Der übergeordnete Ordner ist ausgeschlossen: " + blocked);
-            // A child already belongs to its monitored root. If previously
-            // excluded explicitly, re-include just that subtree; never add
-            // an overlapping scanner root.
-            _exclusions[covering.Id] = excluded.Where(path =>
-                !PathEquals(path, normalized)).ToArray();
+            StageSubtreeRule(covering, normalized, include: true);
+            UpdateLoadedCheckboxes();
             return;
         }
         var prior = _uncheckedRoots.Values.FirstOrDefault(item =>
@@ -518,7 +562,13 @@ public partial class FolderManagerWindow : Window
             IsNetwork = normalized.StartsWith(@"\\", StringComparison.Ordinal)
         };
         _monitoredRoots = _monitoredRoots.Append(provisional).ToArray();
-        _exclusions[provisional.Id] = Array.Empty<string>();
+        // If a parent of a separately monitored root is chosen, never
+        // scan the existing child twice through overlapping roots.
+        _exclusions[provisional.Id] = _monitoredRoots
+            .Where(root => root.Id != provisional.Id &&
+                FolderExclusionRules.IsAtOrBelow(root.LocalPath, normalized))
+            .Select(root => root.LocalPath).ToArray();
+        _inclusions[provisional.Id] = Array.Empty<string>();
     }
 
     private void AddFolder_Click(object sender, RoutedEventArgs e)

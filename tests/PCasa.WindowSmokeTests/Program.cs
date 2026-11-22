@@ -2210,6 +2210,47 @@ internal static class Program
                     throw new Exception("Slide completion lost the destination.");
             }
             finally { sliding.Close(); }
+            // Geometry-only assertions also run when CI has no D3D device.
+            var cubeType = typeof(SlideshowWindow).Assembly.GetType(
+                "PCasa.App.Services.Direct3DSlideshowSurface")!;
+            var cubeFlags = System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic;
+            var cubePoint = cubeType.GetMethod("CubePoint", cubeFlags)!;
+            var cubeRect = cubeType.GetMethod("CubeImageRect", cubeFlags)!;
+            (float X, float Y, float W) Point(float u, float v,
+                bool incoming, float progress)
+                => ((float, float, float))cubePoint.Invoke(null,
+                    [900f, 600f, u, v, incoming, progress])!;
+            foreach (var position in new[] { 0f, .15f, .5f, .85f, 1f })
+            {
+                var aHinge = Point(1, .5f, false, position);
+                var bHinge = Point(0, .5f, true, position);
+                if (Math.Abs(aHinge.X - bHinge.X) > .005f ||
+                    Math.Abs(aHinge.Y - bHinge.Y) > .005f ||
+                    Math.Abs(aHinge.W - bHinge.W) > .005f)
+                    throw new Exception("Cube faces separated at common 3D hinge.");
+            }
+            if (Math.Abs(Point(0, .5f, false, 0).X + 450) > .01 ||
+                Math.Abs(Point(1, .5f, true, 1).X - 450) > .01 ||
+                Math.Abs(Point(0, .5f, false, .5f).W -
+                         Point(1, .5f, false, .5f).W) < .1f)
+                throw new Exception("Cube is still a flat accordion.");
+            foreach (var size in new[] { (6000f, 4000f), (3000f, 6000f),
+                                         (8000f, 900f), (900f, 8000f) })
+            {
+                var cubeFit = ((float U, float V, float Width, float Height))
+                    cubeRect.Invoke(null, [900f, 600f, size.Item1, size.Item2, 10f])!;
+                if (Math.Abs(cubeFit.U + cubeFit.Width * .5f - .5f) > .0001 ||
+                    Math.Abs(cubeFit.V + cubeFit.Height * .5f - .5f) > .0001 ||
+                    Math.Abs((cubeFit.Width * 900 / (cubeFit.Height * 600)) -
+                             size.Item1 / size.Item2) > .0001 ||
+                    cubeFit.Width > 1 || cubeFit.Height > 1)
+                    throw new Exception("Cube distorted or mis-centered photo.");
+            }
+            Console.WriteLine(
+                "PASS: Real perspective cube has common hinge and centered mixed photo formats.");
+
             Console.WriteLine(
                 "PASS: GPU slide fully ejects wide photo, preserves entry gap and has right-bottom-only shadows.");
 
@@ -3271,10 +3312,9 @@ internal static class Program
                 progressWindow.Finish();
             }
 
-            // Manager must project only configured monitoring roots and
-            // catalogued image folders, WITHOUT enumerating the filesystem.
-            // A drive monitored as a single root still has visible nested
-            // photo folders (even when that drive is offline).
+            // Manager shows the full physical tree on demand, including
+            // non-indexed directories, without reading the entire NAS at launch.
+            // Known indexed folders stay visible even while disconnected.
             var fixtureDirectory = Path.Combine(Path.GetTempPath(),
                 "PCasa-ManagerForeground-" + Guid.NewGuid().ToString("N"));
             var fixtureChild = Path.Combine(fixtureDirectory, "NeverIndexed");
@@ -3324,11 +3364,10 @@ internal static class Program
                         fixtureDirectory, StringComparison.OrdinalIgnoreCase));
                 fixtureNode.IsExpanded = true;
                 Flush(manager);
-                if (NestedManagerItems(managedTree).Any(item =>
+                Until(manager, () => NestedManagerItems(managedTree).Any(item =>
                         string.Equals(ManagerPath(item), fixtureChild,
-                            StringComparison.OrdinalIgnoreCase)))
-                    throw new Exception(
-                        "Manager unexpectedly enumerated an unmonitored physical child.");
+                            StringComparison.OrdinalIgnoreCase)),
+                    "Manager failed to enumerate physical non-indexed child.");
                 var displayed = NestedManagerItems(managedTree)
                     .Where(item => item.Tag is not null).ToArray();
                 if (displayed.Length == 0 ||
@@ -3341,17 +3380,37 @@ internal static class Program
                         StringComparison.OrdinalIgnoreCase));
                 if (catalogItem is null ||
                     catalogItem.Header is not CheckBox catalogCheck ||
-                    catalogCheck.IsEnabled ||
+                    !catalogCheck.IsEnabled ||
                     catalogCheck.IsChecked != true ||
                     !Convert.ToString(catalogCheck.Content)!.Contains("37"))
                     throw new Exception(
-                        "Catalogued child should be visible with its count, " +
-                        "included under the root but not a second monitoring checkbox.");
+                        "Catalogued child must have an enabled checkbox " +
+                        "within its monitored parent.");
                 if (!displayed.Any(item => string.Equals(
                         ManagerPath(item),
                         Path.GetDirectoryName(cataloguedChild),
                         StringComparison.OrdinalIgnoreCase)))
                     throw new Exception("Catalogued folder hierarchy missing intermediate node.");
+                // Explicitly exclude/re-include a NEVER-indexed physical
+                // child, without mutating catalog or creating a second root.
+                var physical = displayed.Single(item =>
+                    string.Equals(ManagerPath(item), fixtureChild,
+                        StringComparison.OrdinalIgnoreCase));
+                if (physical.Header is not CheckBox physicalCheck ||
+                    !physicalCheck.IsEnabled || physicalCheck.IsChecked != true)
+                    throw new Exception("Non-indexed folder has no inclusion checkbox.");
+                physicalCheck.IsChecked = false;
+                Flush(manager);
+                var temporarilyExcluded = manager.SelectedConfiguration.Roots.Single();
+                if (!temporarilyExcluded.ExcludedPaths.Any(path =>
+                        string.Equals(path, fixtureChild, StringComparison.OrdinalIgnoreCase)) ||
+                    !Convert.ToString(physicalCheck.Content)!.StartsWith("⊘"))
+                    throw new Exception("Excluded physical folder lacked a persistent rule or marker.");
+                physicalCheck.IsChecked = true;
+                Flush(manager);
+                if (manager.SelectedConfiguration.Roots.Single().ExcludedPaths.Count != 0)
+                    throw new Exception("Re-including a physical folder left the exclusion active.");
+
                 var configured = manager.SelectedConfiguration.Roots;
                 if (configured.Count != 1 ||
                     !string.Equals(configured[0].LocalPath,
@@ -3359,8 +3418,7 @@ internal static class Program
                     throw new Exception(
                         "Read-only catalog projection changed monitored-root configuration.");
                 Console.WriteLine(
-                    "PASS: Manager shows indexed children under one monitored root, " +
-                    "without inventing roots, scanning folders or changing catalog identities.");
+                    "PASS: Manager shows catalogued and physical children with editable checkboxes.");
 
                 // Alpha.25: only the left tree owns the folder selection.
                 // Expanding one level must not expand nested levels. No

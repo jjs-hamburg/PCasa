@@ -84,13 +84,16 @@ public partial class MainWindow
                     .ChangeAsync(folderId, normalized, excluded: true,
                         operationKey: key,
                         publish: async (id, changedPath, excluded, currentRules) =>
+                        {
+                            var included = _folderRepository.GetIncludedPaths(id);
                             await Dispatcher.InvokeAsync(async () =>
                             {
                                 OnFolderExclusionCommitted(id, changedPath,
-                                    excluded, currentRules);
+                                    excluded, currentRules, included);
                                 await RefreshBrowseGalleryAsync(forceIndexReload: true,
                                     warmViewport: false);
-                            }).Task.Unwrap());
+                            }).Task.Unwrap();
+                        });
             }
 
             // Both root and subtree operations now publish inside their

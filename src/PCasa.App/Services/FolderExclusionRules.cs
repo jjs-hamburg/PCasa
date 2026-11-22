@@ -33,7 +33,42 @@ public static class FolderExclusionRules
             .OrderByDescending(root => Normalize(root.LocalPath).Length)
             .FirstOrDefault();
 
+    // The most specific stored rule wins. This allows a child to be
+    // deliberately included inside an excluded ancestor (and vice versa).
     public static bool IsExcluded(
-        string path, IReadOnlyCollection<string> exclusions)
-        => exclusions.Any(excluded => IsAtOrBelow(path, excluded));
+        string path, IReadOnlyCollection<string> exclusions,
+        IReadOnlyCollection<string>? inclusions = null)
+    {
+        var normalized = Normalize(path);
+        var deepest = -1;
+        var excluded = false;
+        foreach (var rule in exclusions)
+        {
+            var root = Normalize(rule);
+            if (root.Length > deepest && IsAtOrBelow(normalized, root))
+            {
+                deepest = root.Length;
+                excluded = true;
+            }
+        }
+        if (inclusions is not null)
+        {
+            foreach (var rule in inclusions)
+            {
+                var root = Normalize(rule);
+                if (root.Length > deepest && IsAtOrBelow(normalized, root))
+                {
+                    deepest = root.Length;
+                    excluded = false;
+                }
+            }
+        }
+        return excluded;
+    }
+
+    // An excluded ancestor still needs minimal DIRECTORY traversal when
+    // a specifically re-included descendant is reachable below it.
+    public static bool MayContainIncludedDescendant(
+        string directory, IReadOnlyCollection<string> inclusions)
+        => inclusions.Any(path => IsAtOrBelow(path, directory));
 }

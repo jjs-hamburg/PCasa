@@ -61,6 +61,13 @@ public partial class MainWindow
             if (registration.Changed)
             {
                 _dropTargetProjection = registration.Snapshot;
+                _backgroundExcludedPaths.Clear();
+                _backgroundIncludedPaths.Clear();
+                foreach (var rule in registration.Snapshot)
+                {
+                    _backgroundExcludedPaths[rule.Folder.Id] = rule.ExcludedPaths;
+                    _backgroundIncludedPaths[rule.Folder.Id] = rule.IncludedPaths;
+                }
                 _dragTargetValidity.Clear();
                 PromoteExplorerMonitoredPath(directory);
             }
@@ -105,7 +112,8 @@ public partial class MainWindow
         // unregistered paths, but only the explicit Add command activates them.
         if (_allFolderProjectionRootPath is not null &&
             (DisplayedMonitoredRoot(directory) is not { } registered ||
-             FolderExclusionRules.IsExcluded(directory, DisplayedExcludedPaths(registered.Id))))
+             FolderExclusionRules.IsExcluded(directory, DisplayedExcludedPaths(registered.Id),
+                  DisplayedIncludedPaths(registered.Id))))
         {
             StatusText.Text = UiLanguage.T("Diesen Ordner zuerst zu PCasa hinzufügen.");
             return;
@@ -180,7 +188,8 @@ public partial class MainWindow
                             ?? throw new InvalidOperationException(
                                 "Dieser Ordner ist nicht in PCasa registriert.");
                         if (FolderExclusionRules.IsExcluded(directory,
-                            snapshot.First(x => x.Folder.Id == root.Id).ExcludedPaths))
+                            snapshot.First(x => x.Folder.Id == root.Id).ExcludedPaths,
+                             snapshot.First(x => x.Folder.Id == root.Id).IncludedPaths))
                             throw new InvalidOperationException(
                                 "Dieser Ordner ist im Ordnermanager deaktiviert.");
                         return root;
@@ -197,7 +206,7 @@ public partial class MainWindow
                 var owner = DisplayedMonitoredRoot(directory);
                 if (owner is null ||
                     FolderExclusionRules.IsExcluded(directory,
-                        DisplayedExcludedPaths(owner.Id)))
+                        DisplayedExcludedPaths(owner.Id), DisplayedIncludedPaths(owner.Id)))
                     throw new InvalidOperationException(
                         "Dieser Ordner muss zuerst im Ordnermanager ausgewählt werden.");
 
@@ -402,7 +411,8 @@ public partial class MainWindow
                 throw new OperationCanceledException(
                     "Der Erstimport wurde bereits durch einen neueren Scan erledigt.");
             if (FolderExclusionRules.IsExcluded(directory,
-                owner._folderRepository.GetExcludedPaths(folder.Id)))
+                owner._folderRepository.GetExcludedPaths(folder.Id),
+                 owner._folderRepository.GetIncludedPaths(folder.Id)))
                 throw new InvalidOperationException(
                     "Dieser Ordner ist im Ordnermanager ausgeschlossen.");
             if (!owner._scheduler.SourceAvailability.CanAccess(directory, token))

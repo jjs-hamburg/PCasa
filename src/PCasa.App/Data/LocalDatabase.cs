@@ -99,6 +99,17 @@ public sealed class LocalDatabase
                         REFERENCES monitored_folders(id) ON DELETE CASCADE
                 );
 
+                -- Child exceptions to excluded_folders. Existing databases
+                -- remain valid; an empty table preserves the old behavior.
+                CREATE TABLE IF NOT EXISTS included_folders (
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL COLLATE NOCASE,
+                    created_utc TEXT NOT NULL,
+                    PRIMARY KEY (monitored_folder_id, local_path),
+                    FOREIGN KEY (monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS thumbnail_entries (
                     image_id INTEGER NOT NULL,
                     tier INTEGER NOT NULL,
