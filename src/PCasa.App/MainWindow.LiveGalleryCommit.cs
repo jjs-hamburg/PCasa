@@ -26,6 +26,9 @@ public partial class MainWindow
     private void OnCatalogImageIndexed(string canonicalPath, long photoFolderId)
     {
         if (Dispatcher.HasShutdownStarted) return;
+        // Tree counters MUST update even when a scanner's gallery/index
+        // publication is deferred to protect an interior viewport.
+        QueueLiveFolderCountUpdate(photoFolderId);
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
             if (!_browseInitialized || _folderManagerOpen ||
