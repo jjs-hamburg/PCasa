@@ -290,7 +290,7 @@ public partial class FolderManagerWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(1, 0, 1, 0),
             IsChecked = DisplayIncludedState(node),
-            IsThreeState = true,
+            IsThreeState = false,
             IsEnabled = CanToggle(node)
         };
         checkbox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
