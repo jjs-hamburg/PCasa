@@ -1496,6 +1496,36 @@ public partial class MainWindow
         }
     }
 
+    // Tree nodes represent both actual photo directories AND parents such
+    // as S:\\ or an indexed root with pictures only in its descendants.
+    // A path-based target is mandatory: parent nodes deliberately have no
+    // photo-folder ID. Use only the already-published local catalog summary
+    // and visible tree order; never enumerate the disk or wait for a scan.
+    private long? ResolveTreePhotoFolder(FolderTreeTag tag)
+    {
+        if (tag.PhotoFolderId is long ownId) return ownId;
+        var descendants = PhotoFoldersBelowTreePath(tag.FullPath,
+            _photoFolders, CaptureGalleryFolderOrder());
+        // Prefer a cached visible section. A parent click should not trigger
+        // an unnecessary full 500k-entry catalog reload if any descendant
+        // already has a usable thumbnail position.
+        foreach (var candidate in descendants)
+            if (BrowseSurface.GetFolderOffset(candidate) is not null)
+                return candidate;
+        return descendants.FirstOrDefault();
+    }
+
+    internal static IReadOnlyList<long> PhotoFoldersBelowTreePath(
+        string path, IReadOnlyList<PhotoFolderSummary> folders,
+        IReadOnlyDictionary<long, int> treeOrder)
+        => folders.Where(folder =>
+                FolderExclusionRules.IsAtOrBelow(folder.LocalPath, path))
+            .OrderBy(folder => treeOrder.TryGetValue(folder.Id, out var position)
+                ? position : int.MaxValue)
+            .ThenBy(folder => folder.CanonicalPath,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(folder => folder.Id).ToArray();
+
     private async void BrowseFoldersTree_SelectedItemChanged(
         object sender,
         RoutedPropertyChangedEventArgs<object> e)
@@ -1507,17 +1537,19 @@ public partial class MainWindow
             return;
         }
 
+        var destinationId = ResolveTreePhotoFolder(tag);
+
         // Inversion is a folder-local toggle, never a global permanent
         // selection mode. Reset its visual state on a tree-folder change,
         // WITHOUT performing another inversion.
         if (_invertedGallerySelectionFolderId is long invertedId &&
-            tag.PhotoFolderId != invertedId)
+            destinationId != invertedId)
             ResetGalleryInvertSelectionToggle();
 
         // Register the new folder BEFORE clearing the old GPS photo
         // selection. Clearing it starts asynchronous map/filmstrip UI work;
         // none of that work can subsequently restore the old photo anchor.
-        MarkExplicitGalleryNavigation(tag.PhotoFolderId);
+        MarkExplicitGalleryNavigation(destinationId);
 
         // Explicit navigation to a different folder ends the previous
         // thumbnail selection. Scrolling does not alter the selection.
@@ -1546,15 +1578,16 @@ public partial class MainWindow
                 StatusText.Text = "Ordnerfilter konnte nicht aktualisiert werden.";
                 return;
             }
-            // The filtered result already presents this folder's content.
-            // Do not start a second catalog refresh for an empty result.
-            if (tag.PhotoFolderId is long filteredId &&
+            // Folder-scoped search also accepts a parent or drive node.
+            // Search results already contain the chosen subtree; never
+            // start a second catalog scan merely to navigate it.
+            if (destinationId is long filteredId &&
                 BrowseSurface.GetFolderOffset(filteredId) is double filteredTop)
-                BrowseScrollViewer.ScrollToVerticalOffset(filteredTop);
+                ScrollToExplicitGalleryFolder(filteredId, filteredTop);
             return;
         }
 
-        if (tag.PhotoFolderId is long photoFolderId)
+        if (destinationId is long photoFolderId)
             await NavigateToPhotoFolderAsync(item, photoFolderId);
     }
 
@@ -1566,7 +1599,8 @@ public partial class MainWindow
             FindAncestor<System.Windows.Controls.Primitives.ToggleButton>(source) is not null)
             return;
         var item = FindAncestor<TreeViewItem>(source);
-        if (item?.IsSelected == true && item.Tag is FolderTreeTag { PhotoFolderId: long folderId })
+        if (item?.IsSelected == true && item.Tag is FolderTreeTag tag &&
+            ResolveTreePhotoFolder(tag) is long folderId)
         {
             MarkExplicitGalleryNavigation(folderId);
             _ = NavigateToPhotoFolderAsync(item, folderId);
@@ -1588,7 +1622,16 @@ public partial class MainWindow
             string.IsNullOrWhiteSpace(TagSearchBox.Text))
         {
             _bulkFolderExpansion = true;
-            try { FolderTreeNavigation.ExpandAncestors(item); }
+            try
+            {
+                // A selected drive/parent is not necessarily the photo
+                // directory. Expand the ACTUAL target's ancestors, not just
+                // S:\\'s ancestors (there are none), before testing for a
+                // visible gallery section.
+                var visualTarget = _folderTreeItems.TryGetValue(
+                    photoFolderId, out var photoItem) ? photoItem : item;
+                FolderTreeNavigation.ExpandAncestors(visualTarget);
+            }
             finally { _bulkFolderExpansion = false; }
             UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
             offset = BrowseSurface.GetFolderOffset(photoFolderId);
@@ -1602,17 +1645,11 @@ public partial class MainWindow
             ScrollToExplicitGalleryFolder(photoFolderId, cached);
             UpdateActiveFolderDisplay(photoFolderId,
                 updateTreeSelection: false);
-            if (_scanGalleryPublicationDeferred)
-            {
-                _scanGalleryPublicationDeferred = false;
-                _ = Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    if (navigationVersion != _explicitGalleryNavigationVersion ||
-                        Dispatcher.HasShutdownStarted || _shutdownStarted) return;
-                    _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
-                        warmViewport: false);
-                }), DispatcherPriority.ContextIdle);
-            }
+            // Do not immediately start a full index refresh after a
+            // successful cached click. It previously reflowed S:\\ folders
+            // back to their OLD viewport and made the selection look dead.
+            // The existing live-edge publisher will reconcile scanner work
+            // when the user reaches an actual gallery edge.
             return;
         }
 
@@ -1632,8 +1669,10 @@ public partial class MainWindow
         if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
             navigationVersion != _explicitGalleryNavigationVersion ||
             (FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
-            FolderTreeTag { PhotoFolderId: long current } ||
-            current != photoFolderId)
+            FolderTreeTag selectedTag ||
+            !_photoFolders.Any(folder => folder.Id == photoFolderId &&
+                FolderExclusionRules.IsAtOrBelow(
+                    folder.LocalPath, selectedTag.FullPath)))
             return;
         if (BrowseSurface.GetFolderOffset(photoFolderId) is double fresh)
         {
