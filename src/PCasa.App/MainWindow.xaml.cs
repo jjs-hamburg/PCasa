@@ -621,21 +621,17 @@ public partial class MainWindow : Window
             ? $"{node.DisplayName} ({node.TotalImageCount:N0})"
             : node.DisplayName;
 
-        var tooltip = node.CanonicalPath is { Length: > 0 } canonicalPath &&
-                      !string.Equals(canonicalPath, node.FullPath, StringComparison.OrdinalIgnoreCase)
-            ? $"{node.FullPath}\n{canonicalPath}"
-            : node.FullPath;
-
         var item = new TreeViewItem
         {
             // Keep the header a string: the global TreeViewItem DataTemplate
             // already owns icons, folder names, status and clipping.
             Header = header,
-            ToolTip = tooltip,
             Tag = CreateFolderTreeTag(node.FullPath, node.PhotoFolderId),
             AllowDrop = true,
             IsExpanded = expandedPaths.Contains(node.FullPath)
         };
+
+        ToolTipService.SetIsEnabled(item, false);
 
         if (node.PhotoFolderId is long photoFolderId)
         {

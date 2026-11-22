@@ -619,22 +619,15 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     private void DrawCubeFace(Texture photo, bool incomingFace, float progress,
         float faceWidth, float faceHeight)
     {
-        // A quiet neutral face, not another user-selected texture.
-        DrawCubeQuad(_black!, incomingFace, progress, faceWidth, faceHeight,
-            0, 0, 1, 1, .54f);
+        // The perspective itself defines the cube. A dark opaque-looking
+        // panel plus an offset photo shadow made the two rotated faces
+        // visually collide, especially with portrait/landscape changes.
+        // Render only each correctly centered photograph and its frame;
+        // other slideshow effects retain the user's shadow settings.
         var inner = CubeImageRect(faceWidth, faceHeight,
             photo.Width, photo.Height, (float)_border);
         var frameX = (float)(_border / faceWidth);
         var frameY = (float)(_border / faceHeight);
-        if (_shadow && _shadowOpacity > 0)
-        {
-            var shiftX = (float)(_shadowOffset / faceWidth);
-            var shiftY = (float)(_shadowOffset / faceHeight);
-            DrawCubeQuad(_black!, incomingFace, progress, faceWidth, faceHeight,
-                inner.U + shiftX, inner.V + shiftY,
-                inner.Width + frameX * 2, inner.Height + frameY * 2,
-                (float)_shadowOpacity * .6f);
-        }
         if (_border > 0)
             DrawCubeQuad(_white!, incomingFace, progress, faceWidth, faceHeight,
                 inner.U - frameX, inner.V - frameY,
