@@ -1551,7 +1551,16 @@ public partial class MainWindow
             return;
         }
 
+        var clickStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var destinationId = ResolveTreePhotoFolder(tag);
+        var resolutionMs = System.Diagnostics.Stopwatch
+            .GetElapsedTime(clickStarted).TotalMilliseconds;
+        if (destinationId is null || resolutionMs > 150)
+            PCasaDiagnostics.WriteMessage("Gallery.FolderClick",
+                $"path={tag.FullPath}; selected={destinationId?.ToString() ?? "none"}; " +
+                $"catalogFolders={_photoFolders.Count}; " +
+                $"visiblePhotos={_displayedBrowseIndex.Count}; " +
+                $"resolveMs={resolutionMs:F0}");
 
         // Inversion is a folder-local toggle, never a global permanent
         // selection mode. Reset its visual state on a tree-folder change,
@@ -1719,7 +1728,14 @@ public partial class MainWindow
             if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
                 navigationVersion != _explicitGalleryNavigationVersion ||
                 snapshot.Folder is null || snapshot.Images.Count == 0)
+            {
+                if (navigationVersion == _explicitGalleryNavigationVersion)
+                    PCasaDiagnostics.WriteMessage("Gallery.ClickedFolderProjection",
+                        $"folderId={photoFolderId}; no indexed SQLite photos; " +
+                        $"catalogFolder={snapshot.Folder is not null}; " +
+                        $"fetched={snapshot.Images.Count}");
                 return false;
+            }
 
             // The selected folder has changed since the older full-gallery
             // index was published. Replace its local section exactly once
@@ -1765,6 +1781,10 @@ public partial class MainWindow
             if (navigationVersion != _explicitGalleryNavigationVersion)
                 return false;
             BrowseScrollViewer.UpdateLayout();
+            PCasaDiagnostics.WriteMessage("Gallery.ClickedFolderProjection",
+                $"folderId={photoFolderId}; fetched={snapshot.Images.Count}; " +
+                $"published={_browseIndex.Count}; " +
+                $"offset={BrowseSurface.GetFolderOffset(photoFolderId)?.ToString("F0") ?? "none"}");
             return true;
         }
         catch (OperationCanceledException) { return false; }
