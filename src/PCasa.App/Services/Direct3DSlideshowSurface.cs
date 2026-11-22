@@ -27,12 +27,13 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     private const string Shader = """
         Texture2D Photo : register(t0);
         SamplerState LinearSample : register(s0);
-        struct Input { float2 pos : POSITION; float2 uv : TEXCOORD0; float4 tint : COLOR0; };
+        struct Input { float3 pos : POSITION; float2 uv : TEXCOORD0; float4 tint : COLOR0; };
         struct Output { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; float4 tint : COLOR0; };
         Output VS(Input input)
         {
             Output output;
-            output.pos = float4(input.pos, 0.0, 1.0);
+            // Clip W carries perspective depth. Ordinary slideshow quads use W=1.
+            output.pos = float4(input.pos.xy, 0.0, input.pos.z);
             output.uv = input.uv;
             output.tint = input.tint;
             return output;
@@ -44,11 +45,12 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         """;
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct Vertex(float x, float y, float u, float v,
+    private struct Vertex(float x, float y, float w, float u, float v,
         float red, float green, float blue, float alpha)
     {
         public float X = x;
         public float Y = y;
+        public float W = w;
         public float U = u;
         public float V = v;
         public float Red = red;
@@ -357,11 +359,11 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         _pixelShader = _device.CreatePixelShader(ps.Span);
         _layout = _device.CreateInputLayout(
         [
-            new InputElementDescription("POSITION", 0, DxFormat.R32G32_Float, 0, 0),
-            new InputElementDescription("TEXCOORD", 0, DxFormat.R32G32_Float, 8, 0),
-            new InputElementDescription("COLOR", 0, DxFormat.R32G32B32A32_Float, 16, 0)
+            new InputElementDescription("POSITION", 0, DxFormat.R32G32B32_Float, 0, 0),
+            new InputElementDescription("TEXCOORD", 0, DxFormat.R32G32_Float, 12, 0),
+            new InputElementDescription("COLOR", 0, DxFormat.R32G32B32A32_Float, 20, 0)
         ], vs.Span);
-        _vertices = _device.CreateBuffer(6u * 32u, BindFlags.VertexBuffer);
+        _vertices = _device.CreateBuffer(6u * 36u, BindFlags.VertexBuffer);
         _sampler = _device.CreateSamplerState(SamplerDescription.LinearClamp);
         _blend = _device.CreateBlendState(BlendDescription.NonPremultiplied);
         _rasterizer = _device.CreateRasterizerState(new RasterizerDescription
@@ -401,7 +403,7 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         ctx.RSSetState(_rasterizer);
         ctx.IASetInputLayout(_layout);
         ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
-        ctx.IASetVertexBuffers(0, [_vertices!], [32], [0]);
+        ctx.IASetVertexBuffers(0, [_vertices!], [36], [0]);
         ctx.VSSetShader(_vertexShader);
         ctx.PSSetShader(_pixelShader);
         ctx.PSSetSampler(0, _sampler);
@@ -448,21 +450,10 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             }
             else if (_transition == "cube")
             {
-                // Two perspective-like faces of a horizontal rotating cube.
-                // Each face collapses around an outer edge then the next
-                // face opens; the picture, frame and shadow stay aligned.
-                if (t < .5f)
-                {
-                    var fraction = (float)Math.Cos(Math.PI * t);
-                    DrawPhoto(_active, a, -a.W * (1f - fraction) / 2,
-                        1, 1, horizontalScale: fraction);
-                }
-                else
-                {
-                    var fraction = (float)Math.Sin(Math.PI * (t - .5f));
-                    DrawPhoto(_next, b, b.W * (1f - fraction) / 2,
-                        1, 1, horizontalScale: fraction);
-                }
+                // Genuine two-face 3D rotation: shared hinge/depth and
+                // GPU perspective interpolation. Different photo aspect
+                // ratios are independently centered on equal-size panels.
+                DrawCubeTransition(_active, _next, t);
             }
             else
             {
@@ -564,6 +555,106 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             Math.Max(1, w - 2 * insetX), Math.Max(1, h - 2 * insetY), alpha);
     }
 
+    // The two photographs live on distinct faces of one rigid cuboid.
+    // Face width and height are fixed for the ENTIRE transition; the depth
+    // equals its width. Only each photograph's inner rectangle differs.
+    private void DrawCubeTransition(Texture outgoing, Texture incoming, float progress)
+    {
+        var faceWidth = (float)(_width * (_fullscreen ? 1.0 : _galleryPercent / 100.0));
+        var faceHeight = (float)(_height * (_fullscreen ? 1.0 : _galleryPercent / 100.0));
+        var t = Math.Clamp(progress, 0f, 1f);
+        DrawCubeFace(outgoing, incomingFace: false, t, faceWidth, faceHeight);
+        DrawCubeFace(incoming, incomingFace: true, t, faceWidth, faceHeight);
+    }
+
+    // Pure geometry for regression tests. At t=0 the outgoing face is
+    // front-facing; at t=1 the incoming face occupies the exact same plane.
+    // Both faces share their hinge at outgoing(u=1) / incoming(u=0).
+    internal static (float X, float Y, float ClipW) CubePoint(
+        float faceWidth, float faceHeight, float u, float v,
+        bool incomingFace, float progress)
+    {
+        var half = faceWidth * .5f;
+        var angle = (float)(-Math.PI * .5 * Math.Clamp(progress, 0f, 1f));
+        var cos = MathF.Cos(angle);
+        var sin = MathF.Sin(angle);
+        var x = incomingFace ? half : (u - .5f) * faceWidth;
+        var z = incomingFace ? half - u * faceWidth : half;
+        var y = (v - .5f) * faceHeight;
+        var rotatedX = x * cos + z * sin;
+        var rotatedZ = -x * sin + z * cos;
+        // Normalize to W=1 at both end frames; never clip the nearer hinge.
+        var distance = faceWidth * 3.5f;
+        var clipW = (distance - rotatedZ) / (distance - half);
+        return (rotatedX, y, clipW);
+    }
+
+    internal static (float U, float V, float Width, float Height) CubeImageRect(
+        float faceWidth, float faceHeight, float pixelWidth, float pixelHeight,
+        float border)
+    {
+        var roomWidth = Math.Max(1f, faceWidth - 2f * border);
+        var roomHeight = Math.Max(1f, faceHeight - 2f * border);
+        var scale = MathF.Min(roomWidth / pixelWidth, roomHeight / pixelHeight);
+        var w = pixelWidth * scale;
+        var h = pixelHeight * scale;
+        return ((faceWidth - w) / (2f * faceWidth),
+            (faceHeight - h) / (2f * faceHeight),
+            w / faceWidth, h / faceHeight);
+    }
+
+    private void DrawCubeFace(Texture photo, bool incomingFace, float progress,
+        float faceWidth, float faceHeight)
+    {
+        // A quiet neutral face, not another user-selected texture.
+        DrawCubeQuad(_black!, incomingFace, progress, faceWidth, faceHeight,
+            0, 0, 1, 1, .54f);
+        var inner = CubeImageRect(faceWidth, faceHeight,
+            photo.Width, photo.Height, (float)_border);
+        var frameX = (float)(_border / faceWidth);
+        var frameY = (float)(_border / faceHeight);
+        if (_shadow && _shadowOpacity > 0)
+        {
+            var shiftX = (float)(_shadowOffset / faceWidth);
+            var shiftY = (float)(_shadowOffset / faceHeight);
+            DrawCubeQuad(_black!, incomingFace, progress, faceWidth, faceHeight,
+                inner.U + shiftX, inner.V + shiftY,
+                inner.Width + frameX * 2, inner.Height + frameY * 2,
+                (float)_shadowOpacity * .6f);
+        }
+        if (_border > 0)
+            DrawCubeQuad(_white!, incomingFace, progress, faceWidth, faceHeight,
+                inner.U - frameX, inner.V - frameY,
+                inner.Width + 2 * frameX, inner.Height + 2 * frameY, 1);
+        DrawCubeQuad(photo, incomingFace, progress, faceWidth, faceHeight,
+            inner.U, inner.V, inner.Width, inner.Height, 1);
+    }
+
+    private void DrawCubeQuad(Texture texture, bool incomingFace, float progress,
+        float faceWidth, float faceHeight, float u, float v,
+        float width, float height, float alpha)
+    {
+        if (width <= 0 || height <= 0 || alpha <= 0) return;
+        Vertex Corner(float x, float y, float tu, float tv)
+        {
+            var point = CubePoint(faceWidth, faceHeight, x, y, incomingFace, progress);
+            return new Vertex(point.X * 2f / _width,
+                -point.Y * 2f / _height, point.ClipW, tu, tv, 1, 1, 1, alpha);
+        }
+        var topLeft = Corner(u, v, 0, 0);
+        var topRight = Corner(u + width, v, 1, 0);
+        var bottomRight = Corner(u + width, v + height, 1, 1);
+        var bottomLeft = Corner(u, v + height, 0, 1);
+        var vertices = new[]
+        {
+            topLeft, topRight, bottomRight,
+            topLeft, bottomRight, bottomLeft
+        };
+        _context!.UpdateSubresource(vertices, _vertices!);
+        _context.PSSetShaderResource(0, texture.View);
+        _context.Draw(6, 0);
+    }
+
     private void Draw(Texture image, float x, float y, float width, float height,
         float alpha)
     {
@@ -574,12 +665,12 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         float y1 = 1 - (y + height) * 2 / _height;
         var vertices = new[]
         {
-            new Vertex(x0,y0,0,0,1,1,1,alpha),
-            new Vertex(x1,y0,1,0,1,1,1,alpha),
-            new Vertex(x1,y1,1,1,1,1,1,alpha),
-            new Vertex(x0,y0,0,0,1,1,1,alpha),
-            new Vertex(x1,y1,1,1,1,1,1,alpha),
-            new Vertex(x0,y1,0,1,1,1,1,alpha)
+            new Vertex(x0,y0,1,0,0,1,1,1,alpha),
+            new Vertex(x1,y0,1,1,0,1,1,1,alpha),
+            new Vertex(x1,y1,1,1,1,1,1,1,alpha),
+            new Vertex(x0,y0,1,0,0,1,1,1,alpha),
+            new Vertex(x1,y1,1,1,1,1,1,1,alpha),
+            new Vertex(x0,y1,1,0,1,1,1,1,alpha)
         };
         _context!.UpdateSubresource(vertices, _vertices!);
         _context.PSSetShaderResource(0, image.View);
