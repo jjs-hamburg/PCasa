@@ -38,9 +38,14 @@ public partial class MainWindow
         _explicitGalleryFolderTargetId = folderId;
         _scrollingToExplicitGalleryFolder = true;
         var revision = ++_explicitGalleryScrollRevision;
-        BrowseScrollViewer.ScrollToVerticalOffset(offset);
-        BrowseSurface.SetViewport(BrowseScrollViewer.VerticalOffset,
+        // The ScrollViewer accepts a new offset asynchronously. Feeding its
+        // OLD VerticalOffset back into the virtual gallery used to request
+        // thumbnail pages for the PREVIOUS folder until WPF delivered
+        // ScrollChanged. Prime the target's cached pages immediately instead.
+        PicasaGalleryScrollBar.StopMotion();
+        BrowseSurface.SetViewport(offset,
             Math.Max(1, BrowseScrollViewer.ViewportHeight));
+        BrowseScrollViewer.ScrollToVerticalOffset(offset);
         // ScrollChanged is also raised by programmatic navigation. It must
         // not be misclassified as fresh wheel input which would invalidate
         // the destination folder before its pending layout settles.

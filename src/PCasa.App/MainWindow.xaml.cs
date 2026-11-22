@@ -422,14 +422,25 @@ public partial class MainWindow : Window
     private void UpdateFolderImageTotal()
     {
         if (FolderImageTotalText is not null)
-            FolderImageTotalText.Text = $"({_lastCatalogImageCount:N0})";
+            FolderImageTotalText.Text =
+                $"({(_liveCatalogImageCount ?? _lastCatalogImageCount):N0})";
     }
 
     private void RefreshVisibleFolderCounts()
     {
         UpdateFolderImageTotal();
         var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var photoFolder in _photoFolders)
+        // Scanner events can publish folder-only counts while the existing
+        // gallery index stays frozen in the middle of a long photo sequence.
+        // Latest confirmed SQLite summaries override the last full gallery
+        // snapshot for the TREE ONLY, never the gallery's section geometry.
+        var folderCounts = _photoFolders.ToDictionary(folder => folder.Id);
+        foreach (var (id, latest) in _liveFolderCountSummaries)
+        {
+            if (latest is null) folderCounts.Remove(id);
+            else folderCounts[id] = latest;
+        }
+        foreach (var photoFolder in folderCounts.Values)
         {
             foreach (var part in GetFolderPathHierarchy(photoFolder.LocalPath))
             {

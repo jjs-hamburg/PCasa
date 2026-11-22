@@ -643,12 +643,55 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             photo.Width, photo.Height, (float)_border);
         var frameX = (float)(_border / faceWidth);
         var frameY = (float)(_border / faceHeight);
+        if (_shadow && _shadowOpacity > 0)
+        {
+            // Each successive cube picture needs a shadow too. Apply it to
+            // the PHOTO silhouette, confined to its own perspective face.
+            // Unlike the removed dark cube panel this cannot collide with
+            // the neighboring face or hide different photo aspect ratios.
+            var left = inner.U - frameX;
+            var top = inner.V - frameY;
+            var width = inner.Width + 2 * frameX;
+            var height = inner.Height + 2 * frameY;
+            var offsetX = (float)(Math.Max(0, _shadowOffset) / faceWidth);
+            var offsetY = (float)(Math.Max(0, _shadowOffset) / faceHeight);
+            var blurX = (float)(Math.Max(0, _shadowWidth) / faceWidth);
+            var blurY = (float)(Math.Max(0, _shadowWidth) / faceHeight);
+            for (var layer = 6; layer >= 1; layer--)
+            {
+                var shadow = CubeShadowRect(left, top, width, height,
+                    offsetX, offsetY, blurX * layer / 6, blurY * layer / 6);
+                DrawCubeQuad(_black!, incomingFace, progress, faceWidth, faceHeight,
+                    shadow.U, shadow.V, shadow.Width, shadow.Height,
+                    (float)_shadowOpacity * .11f);
+            }
+            var core = CubeShadowRect(left, top, width, height,
+                offsetX, offsetY, 0, 0);
+            DrawCubeQuad(_black!, incomingFace, progress, faceWidth, faceHeight,
+                core.U, core.V, core.Width, core.Height,
+                (float)_shadowOpacity * .35f);
+        }
         if (_border > 0)
             DrawCubeQuad(_white!, incomingFace, progress, faceWidth, faceHeight,
                 inner.U - frameX, inner.V - frameY,
                 inner.Width + 2 * frameX, inner.Height + 2 * frameY, 1);
         DrawCubeQuad(photo, incomingFace, progress, faceWidth, faceHeight,
             inner.U, inner.V, inner.Width, inner.Height, 1);
+    }
+
+    // The shadow stays WITHIN the current cube face. No dark panel, no
+    // perspective spill onto the other face, and no dependence on whether
+    // this is the initial or a later photograph.
+    internal static (float U, float V, float Width, float Height) CubeShadowRect(
+        float u, float v, float width, float height,
+        float offsetX, float offsetY, float spreadX, float spreadY)
+    {
+        var left = Math.Clamp(u + offsetX, 0f, 1f);
+        var top = Math.Clamp(v + offsetY, 0f, 1f);
+        var right = Math.Clamp(u + width + offsetX + spreadX, 0f, 1f);
+        var bottom = Math.Clamp(v + height + offsetY + spreadY, 0f, 1f);
+        return (left, top, Math.Max(0, right - left),
+            Math.Max(0, bottom - top));
     }
 
     private void DrawCubeQuad(Texture texture, bool incomingFace, float progress,

@@ -684,6 +684,7 @@ public partial class MainWindow
         }
 
         var refresh = _browseRefreshRequests.Begin();
+        var countReadSerial = _liveFolderCountSerial;
 
         // Keep the old image visible until the new catalog index and layout
         // are applied. A tree reflow during the database await must not
@@ -728,7 +729,7 @@ public partial class MainWindow
 
         if (imageCount == 0)
         {
-            PublishPhotoFolderSnapshot(nextFolders, imageCount);
+            PublishPhotoFolderSnapshot(nextFolders, imageCount, countReadSerial);
             System.Threading.Volatile.Write(ref _galleryHasIndexedImages, 0);
             _browseIndex = Array.Empty<BrowseThumbnailIndexEntry>();
             RebuildDragPublishedIndex();
@@ -850,7 +851,7 @@ public partial class MainWindow
             liveFolder is { } liveEdge && (liveEdge.AtStart || liveEdge.AtEnd)
                 ? liveEdge : null;
         var navigationVersion = _explicitGalleryNavigationVersion;
-        PublishPhotoFolderSnapshot(nextFolders, imageCount);
+        PublishPhotoFolderSnapshot(nextFolders, imageCount, countReadSerial);
         if (nextIndex is null && _publishedGallerySort != CurrentGallerySort)
             nextIndex = _browseIndex;
         if (nextIndex is not null)
@@ -1002,9 +1003,18 @@ public partial class MainWindow
     // Numeric counts and discovered tree nodes are incremental; never rebuild
     // the entire TreeView merely because a photo moved.
     private void PublishPhotoFolderSnapshot(
-        IReadOnlyList<PhotoFolderSummary> folders, int imageCount)
+        IReadOnlyList<PhotoFolderSummary> folders, int imageCount,
+        long countReadSerial)
     {
         _photoFolders = folders;
+        // Only an equally recent full read supersedes live tree-only
+        // counters. An earlier gallery request may finish after a newer
+        // scanner commit, and must NOT make that folder's number go backward.
+        if (countReadSerial == _liveFolderCountSerial)
+        {
+            _liveFolderCountSummaries.Clear();
+            _liveCatalogImageCount = null;
+        }
         _dragPublishedFolders = folders.ToDictionary(folder => folder.Id,
             folder => folder.LocalPath);
         _lastCatalogImageCount = imageCount;
@@ -1565,76 +1575,72 @@ public partial class MainWindow
 
     private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
     {
-            var navigationVersion = _explicitGalleryNavigationVersion;
-            _activePhotoFolderId = photoFolderId;
-            // Fast path: the gallery index is already local. A click must
-            // display the selected folder NOW, never await a full 500k-photo
-            // catalog reload or any pending NAS scanner publication.
-            if (BrowseSurface.GetFolderOffset(photoFolderId) is double cachedOffset)
-            {
-                ScrollToExplicitGalleryFolder(photoFolderId, cachedOffset);
-                UpdateActiveFolderDisplay(photoFolderId,
-                    updateTreeSelection: false);
-                if (_scanGalleryPublicationDeferred)
-                {
-                    _scanGalleryPublicationDeferred = false;
-                    _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
-                        warmViewport: false);
-                }
-                return;
-            }
-            // An explicit folder choice is a deliberate navigation. The
-            // postponed scanner catalog is published BEFORE deriving the
-            // destination folder's current geometry, not after navigating.
+        var navigationVersion = _explicitGalleryNavigationVersion;
+        _activePhotoFolderId = photoFolderId;
+
+        // If "hide collapsed folders" omitted this indexed folder from the
+        // virtual layout, first reveal its existing ancestors. Previously we
+        // awaited one or even TWO complete catalog/index refreshes before
+        // trying this zero-I/O solution. During an active scan that appeared
+        // to make clicks on other folders stop working entirely.
+        var offset = BrowseSurface.GetFolderOffset(photoFolderId);
+        if (offset is null && _appearance.HideCollapsedFolders &&
+            string.IsNullOrWhiteSpace(TagSearchBox.Text))
+        {
+            _bulkFolderExpansion = true;
+            try { FolderTreeNavigation.ExpandAncestors(item); }
+            finally { _bulkFolderExpansion = false; }
+            UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
+            offset = BrowseSurface.GetFolderOffset(photoFolderId);
+        }
+
+        if (offset is double cached)
+        {
+            // Even if a background scanner has fresher counts, the existing
+            // thumbnail index must navigate IMMEDIATELY. Publishing those
+            // deferred changes can happen after WPF has painted this target.
+            ScrollToExplicitGalleryFolder(photoFolderId, cached);
+            UpdateActiveFolderDisplay(photoFolderId,
+                updateTreeSelection: false);
             if (_scanGalleryPublicationDeferred)
             {
                 _scanGalleryPublicationDeferred = false;
-                await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
-                if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
-                    navigationVersion != _explicitGalleryNavigationVersion) return;
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (navigationVersion != _explicitGalleryNavigationVersion ||
+                        Dispatcher.HasShutdownStarted || _shutdownStarted) return;
+                    _ = RefreshBrowseGalleryAsync(forceIndexReload: true,
+                        warmViewport: false);
+                }), DispatcherPriority.ContextIdle);
             }
-            var offset = BrowseSurface.GetFolderOffset(photoFolderId);
-            if (offset is null && _browseInitialized && !_folderRemovalPending)
-            {
-                // A newly committed folder can be selected while its parent
-                // scan is still running. The gallery fetches its own current
-                // catalog snapshot on USER navigation; this never restarts or
-                // waits for the scanner, nor does it rebuild the folder tree.
-                await RefreshBrowseGalleryAsync(forceIndexReload: true,
-                    warmViewport: false);
-                if (navigationVersion != _explicitGalleryNavigationVersion ||
-                    (FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
-                    FolderTreeTag { PhotoFolderId: long current } || current != photoFolderId)
-                    return;
-                offset = BrowseSurface.GetFolderOffset(photoFolderId);
-            }
-            if (offset is null && _appearance.HideCollapsedFolders &&
-                string.IsNullOrWhiteSpace(TagSearchBox.Text))
-            {
-                // A hidden folder becomes navigable by opening its actual tree
-                // ancestors, not by creating a permanent visibility override.
-                _bulkFolderExpansion = true;
-                try { FolderTreeNavigation.ExpandAncestors(item); }
-                finally { _bulkFolderExpansion = false; }
-                UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
-                BrowseScrollViewer.UpdateLayout();
-                offset = BrowseSurface.GetFolderOffset(photoFolderId);
-            }
+            return;
+        }
 
-            // With a tag filter the folder may simply have no matching images.
-            // Do not expose unrelated thumbnails in order to manufacture an
-            // offset for a folder that has no search results.
-            if (offset is not null)
-            {
-                ScrollToExplicitGalleryFolder(photoFolderId, offset.Value);
-                UpdateActiveFolderDisplay(photoFolderId, updateTreeSelection: false);
-            }
-            else if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text))
-            {
-                StatusText.Text = "Keine Filtertreffer in diesem Ordner. " +
-                    "Suchbereich ändern oder Filter löschen.";
-            }
+        // No cached section exists: a newly imported folder needs a SINGLE
+        // asynchronous catalog fetch. A filtered-out folder has no matching
+        // thumbnails; do not fetch the same already-filtered index again.
+        if (!string.IsNullOrWhiteSpace(TagSearchBox?.Text))
+        {
+            StatusText.Text = "Keine Filtertreffer in diesem Ordner. " +
+                "Suchbereich ändern oder Filter löschen.";
+            return;
+        }
+        if (!_browseInitialized || _folderRemovalPending) return;
+        _scanGalleryPublicationDeferred = false;
+        await RefreshBrowseGalleryAsync(forceIndexReload: true,
+            warmViewport: false);
+        if (Dispatcher.HasShutdownStarted || _shutdownStarted ||
+            navigationVersion != _explicitGalleryNavigationVersion ||
+            (FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
+            FolderTreeTag { PhotoFolderId: long current } ||
+            current != photoFolderId)
+            return;
+        if (BrowseSurface.GetFolderOffset(photoFolderId) is double fresh)
+        {
+            ScrollToExplicitGalleryFolder(photoFolderId, fresh);
+            UpdateActiveFolderDisplay(photoFolderId,
+                updateTreeSelection: false);
+        }
     }
 
     // One wheel event moves the gallery exactly once. No acceleration,
