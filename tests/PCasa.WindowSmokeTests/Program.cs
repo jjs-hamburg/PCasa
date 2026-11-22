@@ -2363,6 +2363,27 @@ internal static class Program
             Console.WriteLine(
                 "PASS: Drive S: and parent folders resolve indexed children without source IO.");
 
+            // Alpha.56: offscreen S: children may have NO realized WPF
+            // LogicalTree parent. Their already-catalogued thumbnails still
+            // need a deterministic navigation path: expand by ItemsControl
+            // membership, never by LogicalTreeHelper.GetParent(target).
+            var nasTree = new TreeView();
+            var nasRoot = new TreeViewItem { Header = "S:", IsExpanded = false };
+            var nasParent = new TreeViewItem {
+                Header = "Albums", IsExpanded = false
+            };
+            var nasChild = new TreeViewItem { Header = "2026" };
+            nasRoot.Items.Add(nasParent);
+            nasParent.Items.Add(nasChild);
+            nasTree.Items.Add(nasRoot);
+            if (!FolderTreeNavigation.ExpandAncestors(nasTree, nasChild) ||
+                !nasRoot.IsExpanded || !nasParent.IsExpanded ||
+                FolderTreeNavigation.ExpandAncestors(nasTree, nasChild))
+                throw new Exception(
+                    "Unrealized S: descendants could not expand without NAS I/O.");
+            Console.WriteLine(
+                "PASS: Collapsed NAS tree children expand without WPF realization or disk reads.");
+
             var savedScope = PhotoViewerSettings.Load().SequenceScope;
             try
             {
