@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Windows.Threading;
 using PCasa.App.Models;
 using PCasa.App.Services;
@@ -10,6 +11,8 @@ public partial class MainWindow
     // may defer the 500k-photo gallery index to preserve the user's viewport;
     // that must never freeze the numbers shown beside the folder names.
     private readonly HashSet<long> _pendingFolderCountIds = new();
+    private readonly ConcurrentDictionary<long, byte> _incomingFolderCountIds = new();
+    private int _folderCountDispatchQueued;
     private readonly Dictionary<long, PhotoFolderSummary?> _liveFolderCountSummaries = new();
     private DispatcherTimer? _folderCountRefreshTimer;
     private bool _folderCountRefreshRunning;
@@ -18,10 +21,19 @@ public partial class MainWindow
     private void QueueLiveFolderCountUpdate(long photoFolderId)
     {
         if (photoFolderId <= 0 || Dispatcher.HasShutdownStarted) return;
+        _incomingFolderCountIds[photoFolderId] = 0;
+        // One dispatcher callback per notification BURST, not per image.
+        // A 500k-photo scan must not inject 500k extra WPF UI callbacks.
+        if (System.Threading.Interlocked.Exchange(
+                ref _folderCountDispatchQueued, 1) != 0) return;
         _ = Dispatcher.BeginInvoke(new Action(() =>
         {
+            System.Threading.Volatile.Write(ref _folderCountDispatchQueued, 0);
             if (!_browseInitialized || _shutdownStarted) return;
-            _pendingFolderCountIds.Add(photoFolderId);
+            foreach (var id in _incomingFolderCountIds.Keys)
+                if (_incomingFolderCountIds.TryRemove(id, out _))
+                    _pendingFolderCountIds.Add(id);
+            if (_pendingFolderCountIds.Count == 0) return;
             _folderCountRefreshTimer ??= CreateFolderCountRefreshTimer();
             if (!_folderCountRefreshTimer.IsEnabled)
                 _folderCountRefreshTimer.Start();
