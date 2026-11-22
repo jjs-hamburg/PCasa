@@ -622,8 +622,10 @@ internal static class FolderAddFlow
             // uses the OLD cached inclusion state and starts a delayed
             // validation that can fail while Explorer Add is running.
             var committedProjection = roots.GetAll().Select(root =>
-                (Folder: root, ExcludedPaths:
-                    (IReadOnlyList<string>)roots.GetExcludedPaths(root.Id))).ToArray();
+                (Folder: root,
+                 ExcludedPaths: (IReadOnlyList<string>)roots.GetExcludedPaths(root.Id),
+                 IncludedPaths: (IReadOnlyList<string>)roots.GetIncludedPaths(root.Id)))
+                .ToArray();
             var projectionField = typeof(PCasa.App.MainWindow).GetField(
                 "_dropTargetProjection",
                 BindingFlags.Instance | BindingFlags.NonPublic)
