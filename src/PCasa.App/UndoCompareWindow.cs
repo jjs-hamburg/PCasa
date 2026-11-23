@@ -14,6 +14,8 @@ internal sealed class UndoCompareWindow : Window
 {
     private readonly IReadOnlyList<UndoVersion> _versions;
     private readonly Image _candidate = new() { Stretch = Stretch.Uniform };
+    private readonly TextBlock _candidateDimensions = MakeDimensionsLabel();
+    private readonly TextBlock _currentDimensions = MakeDimensionsLabel();
     private readonly Image _current = new() { Stretch = Stretch.Uniform };
     private readonly Image _splitCandidate = new() { Stretch = Stretch.Fill };
     private readonly Image _splitCurrent = new() { Stretch = Stretch.Fill };
@@ -93,8 +95,18 @@ internal sealed class UndoCompareWindow : Window
         root.Children.Add(panes);
         _candidate.LayoutTransform = _scaleLeft;
         _current.LayoutTransform = _scaleRight;
-        _leftScroll.Content = _candidate;
-        _rightScroll.Content = _current;
+        // Dimensions belong immediately BELOW their own image, not to a
+        // centered caption spanning the entire compare viewport.
+        var candidateImageWithDimensions = new StackPanel {
+            HorizontalAlignment = HorizontalAlignment.Center };
+        candidateImageWithDimensions.Children.Add(_candidate);
+        candidateImageWithDimensions.Children.Add(_candidateDimensions);
+        var currentImageWithDimensions = new StackPanel {
+            HorizontalAlignment = HorizontalAlignment.Center };
+        currentImageWithDimensions.Children.Add(_current);
+        currentImageWithDimensions.Children.Add(_currentDimensions);
+        _leftScroll.Content = candidateImageWithDimensions;
+        _rightScroll.Content = currentImageWithDimensions;
         _leftScroll.Background = Brushes.Black;
         _rightScroll.Background = Brushes.Black;
         panes.Children.Add(_leftScroll);
@@ -216,6 +228,7 @@ internal sealed class UndoCompareWindow : Window
         };
         _current.Source = Load(originalPath);
         _currentBitmap = (BitmapSource)_current.Source;
+        _currentDimensions.Text = FormatDimensions(_currentBitmap);
         _splitCurrent.Source = _current.Source;
         ShowVersion();
     }
@@ -245,6 +258,7 @@ internal sealed class UndoCompareWindow : Window
     private void ShowVersion()
     {
         _candidate.Source = Load(_versions[_index].SnapshotPath);
+        _candidateDimensions.Text = FormatDimensions((BitmapSource)_candidate.Source);
         _splitCandidate.Source = _candidate.Source;
         UpdateSplitGeometry();
         var version = _versions[_index];
@@ -290,6 +304,19 @@ internal sealed class UndoCompareWindow : Window
         button.Click += (_, _) => SetCompareMode(mode);
         parent.Children.Add(button);
     }
+
+    private static TextBlock MakeDimensionsLabel()
+        => new() {
+            FontSize = 11,
+            FontWeight = FontWeights.Light,
+            Foreground = Brushes.LightGray,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 5, 0, 1),
+            IsHitTestVisible = false
+        };
+
+    private static string FormatDimensions(BitmapSource image)
+        => $"{image.PixelWidth:N0} × {image.PixelHeight:N0} Pixel";
 
     private static Border MakeLabel(string caption, int column)
     {
