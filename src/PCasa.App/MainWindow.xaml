@@ -1788,8 +1788,7 @@
                                 SmallChange=".05" LargeChange=".5"
                                 TickFrequency=".05" IsSnapToTickEnabled="False"
                                 IsMoveToPointEnabled="True"
-                                ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"
-                                VerticalAlignment="Center"/>
+                                ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"/>
                         <!-- Original/edited comparison of ONE image. The split
                              clips identical, registered views rather than
                              stretching two halves into different proportions. -->
