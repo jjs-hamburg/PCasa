@@ -15,7 +15,7 @@ namespace PCasa.App;
 public sealed record AppearanceDialogValues(
     string Theme, string Background, string? Texture,
     string FolderStatus, bool RestorePosition, bool HideCollapsed,
-    bool FileNames, bool BoldFileNames, bool Icons, bool Shadows,
+    bool HideCollapsedInFlat, bool FileNames, bool BoldFileNames, bool Icons, bool Shadows,
     bool Tooltips, string SequenceScope, int CaptionSize, string ShadowStrength = "Aus");
 
 public sealed class AppearanceSettingsWindow : Window
@@ -29,6 +29,7 @@ public sealed class AppearanceSettingsWindow : Window
     public AppearanceDialogValues Values { get; private set; }
     public CheckBox RestorePositionCheck { get; } = new();
     public CheckBox HideCollapsedCheck { get; } = new();
+    public CheckBox HideCollapsedInFlatCheck { get; } = new();
     public CheckBox FileNamesCheck { get; } = new();
     public CheckBox BoldFileNamesCheck { get; } = new();
     public CheckBox IconsCheck { get; } = new();
@@ -185,6 +186,7 @@ public sealed class AppearanceSettingsWindow : Window
         var options = Section(right, "Galerieoptionen");
         AddCheck(options, RestorePositionCheck, "Galerieposition beim Start wiederherstellen", values.RestorePosition);
         AddCheck(options, HideCollapsedCheck, "Eingeklappte Ordner in Galerie ausblenden", values.HideCollapsed);
+        AddCheck(options, HideCollapsedInFlatCheck, "Eingeklappte Ordner in flacher Ansicht ausblenden", values.HideCollapsedInFlat);
         var shadows = new StackPanel { Orientation = Orientation.Horizontal };
         foreach (var (key, name) in new[] { ("Aus", "Aus"), ("Dezent", "Dezent"),
             ("Normal", "Normal"), ("Stark", "Stark") })
@@ -434,6 +436,7 @@ public sealed class AppearanceSettingsWindow : Window
             _choices[group + ":" + option].IsChecked = true;
         RestorePositionCheck.IsChecked = false;
         HideCollapsedCheck.IsChecked = false;
+        HideCollapsedInFlatCheck.IsChecked = false;
         FileNamesCheck.IsChecked = true;
         BoldFileNamesCheck.IsChecked = false;
         IconsCheck.IsChecked = true;
@@ -467,6 +470,7 @@ public sealed class AppearanceSettingsWindow : Window
             Choice("background", "Auto", "Dark", "Light", "Texture"),
             _texture, Choice("status", "Always", "Problems", "None"),
             RestorePositionCheck.IsChecked == true, HideCollapsedCheck.IsChecked == true,
+            HideCollapsedInFlatCheck.IsChecked == true,
             FileNamesCheck.IsChecked == true, BoldFileNamesCheck.IsChecked == true,
             IconsCheck.IsChecked == true,
             Choice("shadow", "Aus", "Dezent", "Normal", "Stark") != "Aus",
