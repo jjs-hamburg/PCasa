@@ -25,8 +25,7 @@ public partial class MainWindow
 
         var flat = ReferenceEquals(button, FolderFlatViewRadio);
         if (_appearance.FlatFolderView == flat) return;
-        if (!flat) { /* The actual tree was never removed. */ }
-        else
+        if (flat)
         {
             // Flat is strictly a presentation; the real TreeView's
             // children, expansion and vertical offset remain untouched.
