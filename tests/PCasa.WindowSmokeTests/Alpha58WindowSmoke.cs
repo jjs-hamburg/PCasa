@@ -23,8 +23,22 @@ internal static class Alpha58WindowSmoke
         if (tree is null || flat is null ||
             tree.GroupName != flat.GroupName || string.IsNullOrWhiteSpace(tree.GroupName))
             throw new Exception("Folder tree and flat view must use exclusive radio controls.");
-        if (window.FindName("FolderTreeToggleButton") is not null)
-            throw new Exception("Old folder-hierarchy control was not moved from the folder bar.");
+        if (window.FindName("FolderTreeToggleButton") is not Button)
+            throw new Exception("Original compressed/full path button missing.");
+        if (window.FindName("ShowAllFilesystemFoldersButton") is not Button)
+            throw new Exception("Original Explorer button missing.");
+        if (window.FindName("SlideshowStartButton") is not Button play ||
+            play.HorizontalAlignment != HorizontalAlignment.Left)
+            throw new Exception("Slideshow launcher must remain left aligned.");
+        if (window.FindName("FoldersTree") is not TreeView realTree ||
+            window.FindName("FlatFoldersTree") is not TreeView flatList ||
+            ReferenceEquals(realTree, flatList))
+            throw new Exception("Independent tree and flat folder controls missing.");
+        var originalItems = realTree.Items.Cast<object>().ToArray();
+        var originalState = originalItems.OfType<TreeViewItem>()
+            .Select(item => (Item: item, item.IsExpanded, item.IsSelected))
+            .ToArray();
+        var originalSelection = realTree.SelectedItem;
 
         var appearanceField = typeof(MainWindow).GetField("_appearance",
             System.Reflection.BindingFlags.NonPublic |
@@ -36,9 +50,25 @@ internal static class Alpha58WindowSmoke
                 .GetValue(settings)!;
         }
         flat.IsChecked = true;
-        if (!IsFlat()) throw new Exception("Flat folder radio did not switch the view.");
+        if (!IsFlat() || realTree.Visibility != Visibility.Hidden ||
+            flatList.Visibility != Visibility.Visible)
+            throw new Exception("Flat radio did not display the isolated flat list.");
+        if (!realTree.Items.Cast<object>().SequenceEqual(originalItems) ||
+            originalState.Any(state =>
+                state.Item.IsExpanded != state.IsExpanded ||
+                state.Item.IsSelected != state.IsSelected) ||
+            !ReferenceEquals(realTree.SelectedItem, originalSelection))
+            throw new Exception("Flat view changed tree nodes, expansion or selection.");
         tree.IsChecked = true;
-        if (IsFlat()) throw new Exception("Tree radio did not restore the tree view.");
+        if (IsFlat() || realTree.Visibility != Visibility.Visible ||
+            flatList.Visibility != Visibility.Collapsed)
+            throw new Exception("Tree radio did not restore the original tree.");
+        if (!realTree.Items.Cast<object>().SequenceEqual(originalItems) ||
+            originalState.Any(state =>
+                state.Item.IsExpanded != state.IsExpanded ||
+                state.Item.IsSelected != state.IsSelected) ||
+            !ReferenceEquals(realTree.SelectedItem, originalSelection))
+            throw new Exception("Returning from flat view rebuilt or changed the tree.");
 
         var slider = window.FindName("StraightenAngleSlider") as Slider;
         var viewer = window.FindName("PhotoViewerPanel") as Grid;
@@ -62,8 +92,11 @@ internal static class Alpha58WindowSmoke
                 throw new Exception("Missing selected-state button: " + name);
         }
 
+        Console.WriteLine("PASS: Alpha.59 keeps original tree objects and selection " +
+            "across flat/tree switching, retains both original folder tools, " +
+            "and anchors slideshow left.");
         Console.WriteLine(
             "PASS: Alpha.58 slideshow bounds, quick tags, radio folder modes, " +
-            "independent option, active buttons, and viewport slider placement.");
+            "independent option, selected buttons, and viewport slider placement.");
     }
 }
