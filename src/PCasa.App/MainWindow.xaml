@@ -182,6 +182,43 @@
             <Setter Property="Margin" Value="0,0,5,0"/>
             <Setter Property="Padding" Value="3,2"/>
         </Style>
+        <!-- Persistent state, separate from one-shot action buttons.
+             Active blue outline + depressed depth stays visible without hover. -->
+        <Style x:Key="PcasaFooterStateButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource PcasaFooterIconButtonStyle}">
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="StateBorder" CornerRadius="4"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Effect="{StaticResource PcasaButtonShadow}">
+                            <Grid>
+                                <Border x:Name="StateDepth" CornerRadius="3"
+                                        Background="{StaticResource PcasaButtonDepthBrush}"
+                                        IsHitTestVisible="False"/>
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Margin="{TemplateBinding Padding}"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="BorderThickness" Value="2">
+                                <Setter TargetName="StateDepth" Property="Opacity" Value="0.12"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="StateDepth" Property="Opacity" Value="0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="PcasaFolderIconButtonStyle" TargetType="Button"
                BasedOn="{StaticResource PcasaFooterIconButtonStyle}">
             <Setter Property="Width" Value="31"/>
@@ -2499,7 +2536,7 @@
                             ToolTip="{loc:Tr Key='Zwei ausgewählte Bilder vergleichen'}"
                             x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
                     <Button x:Name="FolderSidebarToggleButton"
-                            Style="{StaticResource PcasaFooterIconButtonStyle}"
+                            Style="{StaticResource PcasaFooterStateButtonStyle}"
                             ToolTip="{loc:Tr Key='Ordnerleiste ein-/ausblenden'}"
                             Click="FolderSidebarToggle_Click">
                         <Viewbox Width="22" Height="22"><Canvas Width="28" Height="28">
@@ -2515,7 +2552,7 @@
                                   StrokeThickness="2.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                         </Canvas></Viewbox>
                     </Button>
-                    <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                    <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterStateButtonStyle}"
                             ToolTip="{loc:Tr Key='Tags anzeigen'}" Tag="Tags" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
@@ -2526,7 +2563,7 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
-                    <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                    <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterStateButtonStyle}"
                             ToolTip="{loc:Tr Key='GPS-Informationen anzeigen'}" Tag="GPS" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
@@ -2537,7 +2574,7 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
-                    <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                    <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterStateButtonStyle}"
                             Margin="0,0,11,0" ToolTip="{loc:Tr Key='Bildinformationen anzeigen'}" Tag="Info" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
