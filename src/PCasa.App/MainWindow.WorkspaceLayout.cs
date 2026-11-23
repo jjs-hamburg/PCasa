@@ -33,7 +33,6 @@ public partial class MainWindow
         Loaded -= WorkspaceWindowLoaded;
         if (_sidebarMode is not null)
         {
-            if (_sidebarMode == "Tags") RefreshQuickTags();
             if (_sidebarMode == "GPS") ActivateGpsMap();
             _ = UpdateSidebarContentAsync();
         }
@@ -80,6 +79,10 @@ public partial class MainWindow
             ? _appearance.ViewerEditingSidebarVisible
             : _appearance.FolderSidebarVisible;
         var showFolder = paneVisible && !expanded;
+        SetFooterState(FolderSidebarToggleButton, showFolder);
+        SetFooterState(TagSidebarButton, _sidebarMode == "Tags");
+        SetFooterState(GpsSidebarButton, gps);
+        SetFooterState(InfoSidebarButton, _sidebarMode == "Info");
         var folderFraction = showFolder
             ? _viewerOpen
                 ? WorkspaceFraction(_appearance.ViewerEditingSidebarFraction, 0.22, 0.12, 0.42)
@@ -184,6 +187,17 @@ public partial class MainWindow
             ClearGpsEditorDraft();
         if (!gps && GpsFullscreenImageOverlay.Visibility == Visibility.Visible)
             CloseGpsFullscreenImage();
+    }
+
+    private static void SetFooterState(System.Windows.Controls.Button button, bool selected)
+    {
+        button.SetResourceReference(
+            System.Windows.Controls.Control.BackgroundProperty,
+            selected ? "PcasaSearchActiveBrush" : "PcasaPanelAltBrush");
+        button.SetResourceReference(
+            System.Windows.Controls.Control.BorderBrushProperty,
+            selected ? "PcasaAccentBrush" : "PcasaDividerBrush");
+        button.BorderThickness = new Thickness(selected ? 2 : 1);
     }
 
     // One photo overlay, two placements. Never transfer photo ownership to
