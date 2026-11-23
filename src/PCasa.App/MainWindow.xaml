@@ -603,7 +603,7 @@
                      Filters remain right-aligned and independently scrollable. -->
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition x:Name="SearchFolderToolbarColumn" Width="215"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Button x:Name="SlideshowStartButton" Grid.Column="0"
@@ -621,6 +621,32 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
+                    <StackPanel x:Name="FolderViewModeChoices" Grid.Column="0"
+                                Orientation="Horizontal" HorizontalAlignment="Right"
+                                VerticalAlignment="Center" Margin="0,0,6,0">
+                        <RadioButton x:Name="FolderTreeViewRadio" GroupName="FolderHierarchyMode"
+                                     Style="{StaticResource PcasaSearchChoiceStyle}" MinWidth="32"
+                                     Width="33" Height="28" Padding="3,1"
+                                     ToolTip="{loc:Tr Key='Baumstruktur'}"
+                                     Checked="FolderViewMode_Changed">
+                            <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                <Path Data="M3,3 H11 V8 H3 Z M5,8 V21 M5,13 H11 M5,19 H11"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                                <Path Data="M11,10 H22 V15 H11 Z M11,17 H22 V22 H11 Z"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                            </Canvas></Viewbox>
+                        </RadioButton>
+                        <RadioButton x:Name="FolderFlatViewRadio" GroupName="FolderHierarchyMode"
+                                     Style="{StaticResource PcasaSearchChoiceStyle}" MinWidth="32"
+                                     Width="33" Height="28" Padding="3,1"
+                                     ToolTip="{loc:Tr Key='Flache Ordneransicht'}"
+                                     Checked="FolderViewMode_Changed">
+                            <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                <Path Data="M3,3 H8 V8 H3 Z M11,5 H22 M3,10 H8 V15 H3 Z M11,12 H22 M3,17 H8 V22 H3 Z M11,19 H22"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                            </Canvas></Viewbox>
+                        </RadioButton>
+                    </StackPanel>
                 <ScrollViewer x:Name="SearchToolbarScrollViewer" Grid.Column="1"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled"
@@ -902,7 +928,8 @@
                 <ColumnDefinition x:Name="InfoSidebarColumn" Width="0" />
             </Grid.ColumnDefinitions>
 
-            <Border x:Name="FolderSidebarPanel" Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}">
+            <Border x:Name="FolderSidebarPanel" Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}"
+                    SizeChanged="FolderSidebarPanel_SizeChanged">
                 <Grid>
                     <Grid x:Name="FolderTreePanel">
                     <Grid.RowDefinitions>
@@ -947,13 +974,6 @@
                                     <Path Data="M 15,10 L 23,23 M 23,10 L 15,23"
                                           Stroke="#FFFFFF" StrokeThickness="0.6"
                                           StrokeStartLineCap="Round"/>
-                                </Canvas></Viewbox>
-                            </Button>
-                            <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Ordnerleiste aus- oder einklappen'}" Click="FolderTreeToggle_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
-                                    <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
-                                    <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9" Fill="Transparent"/>
-                                    <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Explorer Ansicht'}" Click="ShowAllFilesystemFolders_Click">
