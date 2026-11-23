@@ -142,13 +142,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     // Freeze new dispatch before waiting for already-running file mutations.
     // Never cancel an original-file writer while its atomic write is in flight.
-    public async Task PrepareGracefulShutdownAsync()
+    public void BeginGracefulShutdown()
     {
         lock (_gate)
         {
             _gracefulShutdownRequested = true;
             SignalController();
         }
+    }
+
+    public async Task PrepareGracefulShutdownAsync()
+    {
+        BeginGracefulShutdown();
         // Read the durable journal outside _gate; it owns its own SQLite locks.
         var fileKeys = _durableJournal?.Pending()
             .Where(p => p.Type is not
@@ -641,6 +646,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 // are required to notice a different durable queue state.
                 await _controllerWake.WaitAsync(TimeSpan.FromMilliseconds(150),
                     _shutdown.Token);
+                if (_gracefulShutdownRequested)
+                    continue; // Freeze arbitration and all preemptions mid-write.
                 if (_deferredRecoveryReady)
                 {
                     // Completed source probes are DATA, not execution decisions.
