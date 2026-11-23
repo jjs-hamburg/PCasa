@@ -35,6 +35,8 @@ internal static class Program
         if (args.Length == 2 &&
             string.Equals(args[0], "--chromium-credits", StringComparison.OrdinalIgnoreCase))
             return ChromiumCreditsFlow.Run(args[1]);
+        if (args.Contains("--alpha58-durable", StringComparer.OrdinalIgnoreCase))
+            return Alpha58DurableFlow.Run();
         if (args.Contains("--crop-flow", StringComparer.OrdinalIgnoreCase))
             return CropFlow.Run();
         if (args.Contains("--tag-flow", StringComparer.OrdinalIgnoreCase))
@@ -73,6 +75,7 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
+            Alpha58WindowSmoke.Run(window);
             // About has exactly one user-visible release identity: Version.
             var aboutDialogType = typeof(PCasa.App.MainWindow).Assembly
                 .GetType("PCasa.App.PcasaAboutWindow")!;
