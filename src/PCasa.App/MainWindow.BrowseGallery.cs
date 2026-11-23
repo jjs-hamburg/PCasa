@@ -1552,6 +1552,16 @@ public partial class MainWindow
 
         var clickStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var destinationId = ResolveTreePhotoFolder(tag);
+        // A flat list may expose a directory under a collapsed TREE ancestor.
+        // Explicit folder navigation still wins; do not alter the saved tree
+        // expansion state to make this folder's thumbnails reachable.
+        if (_appearance.FlatFolderView && destinationId is long flatId &&
+            _flatExplicitRevealId != flatId)
+        {
+            _flatExplicitRevealId = flatId;
+            if (_appearance.HideCollapsedFolders)
+                UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
+        }
         var resolutionMs = System.Diagnostics.Stopwatch
             .GetElapsedTime(clickStarted).TotalMilliseconds;
         if (destinationId is null || resolutionMs > 150)
