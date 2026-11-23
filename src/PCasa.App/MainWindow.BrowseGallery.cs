@@ -1591,8 +1591,13 @@ public partial class MainWindow
             _gallerySelection.Reset();
             ApplyGallerySelection();
         }
-        _appearance.SelectedTreePath = tag.FullPath;
-        SaveAppearance();
+        // A flat-folder click navigates the gallery but must NOT change
+        // the selected path of the independent tree (or its saved focus).
+        if (!_appearance.FlatFolderView)
+        {
+            _appearance.SelectedTreePath = tag.FullPath;
+            SaveAppearance();
+        }
 
         // A deliberate click changes the active search root in the two
         // folder-scoped modes. The previous implementation captured it only
@@ -1631,8 +1636,11 @@ public partial class MainWindow
     {
         if (_syncingFolderSelection || _rebuildingFolderTree) return;
         var source = e.OriginalSource as DependencyObject;
-        if (source is null ||
-            FindAncestor<System.Windows.Controls.Primitives.ToggleButton>(source) is not null)
+        if (source is null) return;
+        if (ReferenceEquals(sender, FoldersTree) &&
+            TryToggleMagneticTreeExpander(source, e))
+            return;
+        if (FindAncestor<System.Windows.Controls.Primitives.ToggleButton>(source) is not null)
             return;
         var item = FindAncestor<TreeViewItem>(source);
         if (item?.IsSelected == true && item.Tag is FolderTreeTag tag &&
@@ -1641,6 +1649,36 @@ public partial class MainWindow
             MarkExplicitGalleryNavigation(folderId);
             _ = NavigateToPhotoFolderAsync(item, folderId);
         }
+    }
+
+    // Enlarge the actual expander's hit zone to 24x24 without enlarging
+    // its visible triangle or stealing clicks from the folder label.
+    // Handle the tunnel event so a near miss cannot select a new folder.
+    private bool TryToggleMagneticTreeExpander(DependencyObject source,
+        MouseButtonEventArgs e)
+    {
+        var item = FindAncestor<TreeViewItem>(source);
+        if (item is null || item.Items.Count == 0 || item.Tag is not FolderTreeTag)
+            return false;
+        var expander = item.Template?.FindName("Expander", item)
+            as System.Windows.Controls.Primitives.ToggleButton;
+        if (expander is null || expander.ActualWidth <= 0 ||
+            expander.ActualHeight <= 0)
+            return false;
+        try
+        {
+            var center = expander.TransformToAncestor(FoldersTree)
+                .Transform(new Point(expander.ActualWidth / 2,
+                    expander.ActualHeight / 2));
+            var hit = e.GetPosition(FoldersTree);
+            if (Math.Abs(hit.X - center.X) > 12 ||
+                Math.Abs(hit.Y - center.Y) > 12)
+                return false;
+            e.Handled = true;
+            item.IsExpanded = !item.IsExpanded;
+            return true;
+        }
+        catch (InvalidOperationException) { return false; }
     }
 
     private async Task NavigateToPhotoFolderAsync(TreeViewItem item, long photoFolderId)
@@ -1664,6 +1702,7 @@ public partial class MainWindow
         // to make clicks on other folders stop working entirely.
         var offset = BrowseSurface.GetFolderOffset(photoFolderId);
         if (offset is null && _appearance.HideCollapsedFolders &&
+            !_appearance.FlatFolderView &&
             string.IsNullOrWhiteSpace(TagSearchBox.Text))
         {
             _bulkFolderExpansion = true;
@@ -1721,8 +1760,9 @@ public partial class MainWindow
             photoFolderId, navigationVersion);
         if (!published || Dispatcher.HasShutdownStarted || _shutdownStarted ||
             navigationVersion != _explicitGalleryNavigationVersion ||
-            (FoldersTree.SelectedItem as TreeViewItem)?.Tag is not
-            FolderTreeTag selectedTag ||
+            ((_appearance.FlatFolderView
+                ? FlatFoldersTree.SelectedItem : FoldersTree.SelectedItem)
+                as TreeViewItem)?.Tag is not FolderTreeTag selectedTag ||
             !_photoFolders.Any(folder => folder.Id == photoFolderId &&
                 FolderExclusionRules.IsAtOrBelow(
                     folder.LocalPath, selectedTag.FullPath)))

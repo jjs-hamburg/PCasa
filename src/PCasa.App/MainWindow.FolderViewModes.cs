@@ -14,7 +14,6 @@ public partial class MainWindow
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _flatFolderDisplayNames =
         new(StringComparer.OrdinalIgnoreCase);
-    private bool _restoringTreeFromFlat;
     private long? _flatExplicitRevealId;
     private bool _updatingFolderViewButtons;
 
@@ -26,14 +25,17 @@ public partial class MainWindow
 
         var flat = ReferenceEquals(button, FolderFlatViewRadio);
         if (_appearance.FlatFolderView == flat) return;
-        var wasFlat = _appearance.FlatFolderView;
-        if (!wasFlat) SaveFolderTreeState();
-
+        if (flat)
+        {
+            // Flat is strictly a presentation; the real TreeView's
+            // children, expansion and vertical offset remain untouched.
+            SaveFolderTreeState();
+            RefreshFlatFolderList();
+        }
         _appearance.FlatFolderView = flat;
         _flatExplicitRevealId = null;
-        _restoringTreeFromFlat = wasFlat;
-        try { RefreshFolderTree(); }
-        finally { _restoringTreeFromFlat = false; }
+        ApplyFolderViewVisibility();
+        UpdateGalleryFolderVisibility();
         SaveAppearance();
     }
 
@@ -48,6 +50,62 @@ public partial class MainWindow
             FolderFlatViewRadio.IsChecked = _appearance.FlatFolderView;
         }
         finally { _updatingFolderViewButtons = false; }
+    }
+
+    private void ApplyFolderViewVisibility()
+    {
+        if (FoldersTree is null || FlatFoldersTree is null) return;
+        // Hidden (not Collapsed) keeps the actual tree's scroll extent and
+        // pixel position measured while only the flat list receives clicks.
+        FoldersTree.Visibility = _appearance.FlatFolderView
+            ? Visibility.Hidden : Visibility.Visible;
+        FlatFoldersTree.Visibility = _appearance.FlatFolderView
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void UpdateFlatCollapsedPathsFromTree()
+    {
+        var collapsed = new List<string>();
+        foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
+            GatherCollapsedPaths(root, collapsed);
+        _collapsedTreePathsForFlat = collapsed
+            .Select(FolderExclusionRules.Normalize)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void RefreshFlatFolderList()
+    {
+        if (FlatFoldersTree is null) return;
+        UpdateFlatCollapsedPathsFromTree();
+        var previousId = (FlatFoldersTree.SelectedItem as TreeViewItem)?.Tag
+            is FolderTreeTag { PhotoFolderId: long selectedId }
+                ? selectedId : _activePhotoFolderId;
+        var oldScroll = FindTreeScrollViewer(FlatFoldersTree)?.VerticalOffset;
+        var roots = _dropTargetProjection
+            .Where(root => !IsPendingFolderRemovalHidden(root.Folder.LocalPath)
+                && !FolderExclusionRules.IsExcluded(root.Folder.LocalPath,
+                    root.ExcludedPaths, root.IncludedPaths))
+            .ToArray();
+        var monitored = roots.Select(root => root.Folder.Id).ToHashSet();
+        _syncingFolderSelection = true;
+        try
+        {
+            FlatFoldersTree.Items.Clear();
+            PopulateFlatFolderList(monitored, roots);
+            if (previousId is long id)
+            {
+                var selection = FlatFoldersTree.Items.OfType<TreeViewItem>()
+                    .FirstOrDefault(item =>
+                        item.Tag is FolderTreeTag { PhotoFolderId: long folderId } &&
+                        folderId == id);
+                if (selection is not null) selection.IsSelected = true;
+            }
+        }
+        finally { _syncingFolderSelection = false; }
+        if (oldScroll is double offset && offset > 0)
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+                FindTreeScrollViewer(FlatFoldersTree)?.ScrollToVerticalOffset(offset)),
+                System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void FolderSidebarPanel_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -124,29 +182,24 @@ public partial class MainWindow
                 AllowDrop = true
             };
             ToolTipService.SetIsEnabled(item, false);
-            _folderTreeItems[folder.Id] = item;
-            FoldersTree.Items.Add(item);
+            FlatFoldersTree.Items.Add(item);
         }
     }
 
     private void RefreshFlatFolderCounts()
     {
-        _folderCountItems.Clear();
-        _folderCountLabels.Clear();
         var catalog = _photoFolders.ToDictionary(folder => folder.Id);
         foreach (var (id, latest) in _liveFolderCountSummaries)
         {
             if (latest is null) catalog.Remove(id);
             else catalog[id] = latest;
         }
-        foreach (var item in FoldersTree.Items.OfType<TreeViewItem>())
+        foreach (var item in FlatFoldersTree.Items.OfType<TreeViewItem>())
         {
             if (item.Tag is not FolderTreeTag { PhotoFolderId: long id } tag ||
                 !catalog.TryGetValue(id, out var folder)) continue;
             var label = _flatFolderDisplayNames.GetValueOrDefault(tag.FullPath);
             if (label is null) continue;
-            _folderCountItems[tag.FullPath] = item;
-            _folderCountLabels[tag.FullPath] = label;
             var expected = $"{label} ({folder.ImageCount:N0})";
             if (!string.Equals(item.Header as string, expected,
                     StringComparison.Ordinal))

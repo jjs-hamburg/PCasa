@@ -137,6 +137,13 @@ public partial class MainWindow
             return;
         }
         SaveFolderTreeState();
+        // Tree buttons may modify the hidden tree while flat stays visible.
+        if (_appearance.FlatFolderView)
+        {
+            UpdateFlatCollapsedPathsFromTree();
+            if (_appearance.HideCollapsedInFlatView)
+                RefreshFlatFolderList();
+        }
         if (_appearance.HideCollapsedFolders)
             UpdateGalleryFolderVisibility();
         RefreshGallerySearchAfterTreeVisibilityChange();
@@ -161,6 +168,12 @@ public partial class MainWindow
         }
         finally { _bulkFolderExpansion = false; }
         SaveFolderTreeState();
+        if (_appearance.FlatFolderView)
+        {
+            UpdateFlatCollapsedPathsFromTree();
+            if (_appearance.HideCollapsedInFlatView)
+                RefreshFlatFolderList();
+        }
         UpdateGalleryFolderVisibility();
         RefreshGallerySearchAfterTreeVisibilityChange();
     }

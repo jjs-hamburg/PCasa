@@ -624,14 +624,13 @@ public partial class FolderManagerWindow : Window
             var state = DisplayIncludedState(node);
             checkBox.IsChecked = state;
             checkBox.IsEnabled = CanToggle(node);
-            // The mixed state is identified by its filled gray square, not
-            // by a crossed-out name. Keep ⊘ only for fully excluded paths.
+            // The checkbox itself indicates inclusion; never prefix
+            // excluded folder names with a second redundant symbol.
             var name = node.Label ?? Path.GetFileName(
                 Path.TrimEndingDirectorySeparator(node.LocalPath));
             if (string.IsNullOrEmpty(name)) name = node.LocalPath;
-            checkBox.Content = (state == false && IsExcluded(node) ? "⊘ " : "") +
-                (node.CatalogImageCount > 0
-                    ? $"{name} ({node.CatalogImageCount:N0})" : name);
+            checkBox.Content = node.CatalogImageCount > 0
+                ? $"{name} ({node.CatalogImageCount:N0})" : name;
             checkBox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
         }
 
