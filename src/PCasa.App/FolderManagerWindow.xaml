@@ -8,6 +8,45 @@
         ShowInTaskbar="False"
         Background="{DynamicResource PcasaWindowBrush}" Foreground="{DynamicResource PcasaTextBrush}">
     <Window.Resources>
+        <!-- Three genuinely different states in dark and light themes:
+             empty = background, selected = check, partial = gray square. -->
+        <Style x:Key="ManagerFolderCheckBoxStyle" TargetType="{x:Type CheckBox}">
+            <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type CheckBox}">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Grid Width="18" Height="18" VerticalAlignment="Center">
+                                <Border BorderThickness="1.5"
+                                        BorderBrush="{DynamicResource PcasaMutedTextBrush}"
+                                        Background="{DynamicResource PcasaPanelBrush}"/>
+                                <Path x:Name="CheckMark" Data="M3.5,9.5 L7.5,13 L14.5,5"
+                                      Stroke="{DynamicResource PcasaTextBrush}"
+                                      StrokeThickness="2.3" StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round" Visibility="Collapsed"/>
+                                <Rectangle x:Name="PartialMark" Width="10" Height="10"
+                                           Fill="#929292" Visibility="Collapsed"/>
+                            </Grid>
+                            <ContentPresenter Margin="6,0,0,0"
+                                              VerticalAlignment="Center"
+                                              RecognizesAccessKey="False"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="{x:Null}">
+                                <Setter TargetName="PartialMark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.60"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{DynamicResource PcasaTextBrush}" />
         </Style>
