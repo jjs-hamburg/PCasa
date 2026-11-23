@@ -191,6 +191,43 @@ internal static class FolderAddFlow
                 "Completed scan did not expose its second JPEG and updated folder count.");
             Console.WriteLine("PASS: Full catalog/gallery and parent count complete without background monitoring.");
 
+            // Alpha.59: the tree is its OWN persistent WPF instance. A
+            // populated catalog must never be rebuilt, expanded or scrolled
+            // merely because the flat radio is temporarily selected.
+            {
+                var flatRadio = (RadioButton)window.FindName("FolderFlatViewRadio");
+                var treeRadio = (RadioButton)window.FindName("FolderTreeViewRadio");
+                var flatTree = (TreeView)window.FindName("FlatFoldersTree");
+                var treeRoots = tree.Items.OfType<TreeViewItem>().ToArray();
+                var originalSelected = tree.SelectedItem;
+                var originalExpanded = Walk(tree).ToDictionary(
+                    node => node, node => node.IsExpanded);
+                var getScroll = typeof(PCasa.App.MainWindow).GetMethod(
+                    "FindTreeScrollViewer", BindingFlags.Static |
+                    BindingFlags.NonPublic)!;
+                var treeScroll = (ScrollViewer?)getScroll.Invoke(null, [tree]);
+                var originalOffset = treeScroll?.VerticalOffset ?? 0;
+                flatRadio.IsChecked = true;
+                window.UpdateLayout();
+                if (tree.Visibility != Visibility.Hidden ||
+                    flatTree.Visibility != Visibility.Visible ||
+                    flatTree.Items.Count < 2)
+                    throw new Exception("Flat radio did not show the independent catalog list.");
+                treeRadio.IsChecked = true;
+                window.UpdateLayout();
+                if (tree.Visibility != Visibility.Visible ||
+                    flatTree.Visibility != Visibility.Collapsed ||
+                    !tree.Items.OfType<TreeViewItem>().SequenceEqual(treeRoots) ||
+                    !ReferenceEquals(tree.SelectedItem, originalSelected) ||
+                    originalExpanded.Any(entry => entry.Key.IsExpanded != entry.Value) ||
+                    Math.Abs((treeScroll?.VerticalOffset ?? 0) - originalOffset) > 0.5)
+                    throw new Exception(
+                        "Flat/tree radio changed actual tree identity, expansion, focus or scroll.");
+                Console.WriteLine(
+                    "PASS: Alpha.59 flat/tree radio round trip preserves populated tree items, " +
+                    "all expanded flags, selected folder and scroll offset.");
+            }
+
             // A click on a newly indexed S: photo directory must fetch ONLY
             // its own locally committed catalog rows, without re-reading
             // every other folder. The same SQL projection must preserve
