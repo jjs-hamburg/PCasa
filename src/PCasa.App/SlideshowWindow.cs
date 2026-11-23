@@ -92,6 +92,10 @@ public sealed class SlideshowWindow : Window
     private int _transitionVersion;
     private int _index;
     private int _shownIndex = -1;
+    // Navigation direction belongs to the requested photo, not the effect.
+    // Automatic playback and Right are forward; Left reverses directional
+    // transitions without reversing the chronological playback clock.
+    private int _navigationDirection = +1;
     private int _failedInRow;
     private bool _paused;
     private bool _transitioning;
@@ -413,6 +417,7 @@ public sealed class SlideshowWindow : Window
         var next = NextStillIndex(_sequence, _index, direction);
         if (next < 0 || next == _index) return;
         FinishTransition();
+        _navigationDirection = direction < 0 ? -1 : +1;
         _index = next;
         _lastChangeUtc = DateTime.UtcNow;
         ShowCurrent();
@@ -609,14 +614,17 @@ public sealed class SlideshowWindow : Window
             {
                 if (_transitioning && serial == _transitionVersion)
                     FinishTransition();
-            });
+            }, _navigationDirection);
             return;
         }
         if (type == "zoom")
         {
             // Zoom inward so the next border never peeks outside first.
-            Animate(_incoming.Scale, ScaleTransform.ScaleXProperty, .97, 1, duration);
-            Animate(_incoming.Scale, ScaleTransform.ScaleYProperty, .97, 1, duration);
+            // Reverse playback approaches its destination from the
+            // opposite zoom direction rather than repeating zoom-in.
+            var fromScale = _navigationDirection > 0 ? .97 : 1.03;
+            Animate(_incoming.Scale, ScaleTransform.ScaleXProperty, fromScale, 1, duration);
+            Animate(_incoming.Scale, ScaleTransform.ScaleYProperty, fromScale, 1, duration);
         }
         else if (type == "slide")
         {
@@ -629,8 +637,9 @@ public sealed class SlideshowWindow : Window
             _incoming.Frame.BeginAnimation(UIElement.OpacityProperty, null);
             _incoming.Frame.Opacity = 1;
             _incoming.Shift.BeginAnimation(TranslateTransform.XProperty, null);
-            _incoming.Shift.X = distance;
-            var slide = new DoubleAnimation(distance, 0, duration)
+            var signedTravel = _navigationDirection * distance;
+            _incoming.Shift.X = signedTravel;
+            var slide = new DoubleAnimation(signedTravel, 0, duration)
             {
             };
             slide.Completed += (_, _) =>
@@ -646,7 +655,7 @@ public sealed class SlideshowWindow : Window
             var exitDistance = Direct3DSlideshowSurface.SlideExitTravel(
                 _root.ActualWidth, _active.Frame.Width, shadowExtent);
             Animate(_active.Shift, TranslateTransform.XProperty,
-                0, -exitDistance, duration);
+                0, -_navigationDirection * exitDistance, duration);
             // Translate the two cached frames on the compositor, without
             // a second full-screen alpha animation over the textured stage.
             return;
