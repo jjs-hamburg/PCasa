@@ -112,13 +112,28 @@ public static class ExifDateMetadata
         using (var writer = new ExifToolKeywordWriter.Session())
             writer.WriteExactExifDates(result, different, token);
 
+        // ExifTool normalizes malformed but real scanner date strings
+        // (e.g. yyyy/MM/dd) on write. Reinstating them using ExifTool
+        // cannot make a byte-exact copy. Restore only the ORIGINAL TIFF
+        // ASCII values in the PRIVATE staged JPEG, then verify with the
+        // full, independent ExifTool reader. No fallback on mismatch.
+        var rawRestored = JpegExifVerbatimDateRestorer.Restore(original, result);
+        if (rawRestored.Count != 0)
+            PCasaDiagnostics.WriteMessage("Image.Edit.ExifDateVerbatim",
+                "Restored original TIFF ASCII date bytes for: " +
+                string.Join(", ", rawRestored));
+
         // Reject before publication if the native writer failed, ignored a
         // format-specific tag, or unintentionally changed another date field.
         using var verifyReader = new ImageExifReader();
         var verified = ParseJson(verifyReader.Read(result, token).Json);
         if (!SameTags(sourceTags, verified))
+        {
+            ReportDateDifferences("Image.Edit.ExifDateRepairRemaining",
+                sourceTags, verified);
             throw new InvalidDataException(
                 "Exif-Aufnahmedaten des Originals konnten nicht vollständig wiederhergestellt werden.");
+        }
     }
 
     public static void VerifyUnchanged(string original, string result,
@@ -128,8 +143,12 @@ public static class ExifDateMetadata
         var expected = ParseJson(reader.Read(original, token).Json);
         var actual = ParseJson(reader.Read(result, token).Json);
         if (!SameTags(expected, actual))
+        {
+            ReportDateDifferences("Image.Edit.ExifDateMismatch",
+                expected, actual);
             throw new InvalidDataException(
                 "Bildbearbeitung hat EXIF-Aufnahme- oder Digitalisierungsdatum verändert.");
+        }
     }
 
     public static void SaveExplicit(string path, Fields updated,
@@ -203,6 +222,19 @@ public static class ExifDateMetadata
                         ? field.GetRawText() : null);
         }
         return tags;
+    }
+
+    private static void ReportDateDifferences(string eventName,
+        IReadOnlyDictionary<string, string?> expected,
+        IReadOnlyDictionary<string, string?> actual)
+    {
+        // Report only field NAMES, never embedded capture dates or paths.
+        var differing = ProtectedTags
+            .Where(t => !string.Equals(expected[t.WriteTag],
+                actual[t.WriteTag], StringComparison.Ordinal))
+            .Select(t => t.WriteTag);
+        PCasaDiagnostics.WriteMessage(eventName,
+            "Protected date tag mismatch: " + string.Join(", ", differing));
     }
 
     private static bool SameTags(IReadOnlyDictionary<string, string?> a,
