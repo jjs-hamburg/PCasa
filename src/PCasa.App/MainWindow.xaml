@@ -1463,16 +1463,9 @@
                                 <TextBlock Text="{loc:Tr Key='Winkel'}" FontSize="11"
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,11">
-                                    <Slider x:Name="StraightenAngleSlider" Width="192"
-                                            Minimum="-10" Maximum="10" Value="0"
-                                            SmallChange=".05" LargeChange=".5"
-                                            TickFrequency=".05" IsSnapToTickEnabled="False"
-                                            IsMoveToPointEnabled="True"
-                                            ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"
-                                            VerticalAlignment="Center"/>
                                     <TextBlock x:Name="StraightenAngleValue" Width="65"
-                                               Text="0,00°" TextAlignment="Right"
-                                               VerticalAlignment="Center" Margin="7,0,0,0"/>
+                                               Text="0,00°" TextAlignment="Left"
+                                               VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <CheckBox x:Name="StraightenWideRangeCheckBox"
                                           Content="{loc:Tr Key='Großer Bereich ±45°'}"
@@ -1748,6 +1741,18 @@
                                         Panel.ZIndex="3" IsHitTestVisible="False"/>
                             </Grid>
                         </ScrollViewer>
+                        <!-- Only the straightening ANGLE slider moves into the
+                             viewport. All other tools remain in their panel.
+                             This sibling overlay stays fixed during image zoom/pan. -->
+                        <Slider x:Name="StraightenAngleSlider" Visibility="Collapsed"
+                                Panel.ZIndex="10" HorizontalAlignment="Center"
+                                VerticalAlignment="Bottom" Margin="0,0,0,18" Width="192"
+                                Minimum="-10" Maximum="10" Value="0"
+                                SmallChange=".05" LargeChange=".5"
+                                TickFrequency=".05" IsSnapToTickEnabled="False"
+                                IsMoveToPointEnabled="True"
+                                ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"
+                                VerticalAlignment="Center"/>
                         <!-- Original/edited comparison of ONE image. The split
                              clips identical, registered views rather than
                              stretching two halves into different proportions. -->
