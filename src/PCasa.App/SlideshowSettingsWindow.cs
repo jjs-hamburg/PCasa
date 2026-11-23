@@ -110,7 +110,7 @@ public sealed class SlideshowSettingsWindow : Window
         fileRow.Children.Add(_customFile);
         fileRow.Children.Add(browse);
         _interval = Number(fields, "Bildwechsel (Sekunden)", _values.IntervalSeconds,
-            1, 3600, 1, "s");
+            1, 300, 1, "s");
         _preload = Toggle(fields, "Nächstes Bild vorausladen", _values.PreloadNext);
         _transition = Choice(fields, "Übergang", _values.Transition,
             ("none", "Aus"), ("fade", "Überblenden"),
