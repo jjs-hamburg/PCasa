@@ -94,38 +94,6 @@ public sealed class ImageTagRepository
             .Take(maximum).Select(kv => kv.Key).ToArray();
     }
 
-    public void RememberTag(string tag)
-    {
-        tag = tag.Trim();
-        if (tag.Length == 0) return;
-        using var db = _database.OpenConnection();
-        using var transaction = db.BeginTransaction();
-        using (var upsert = db.CreateCommand())
-        {
-            upsert.Transaction = transaction;
-            upsert.CommandText = """
-                INSERT INTO recent_tags(tag, last_used_utc) VALUES ($tag, $now)
-                ON CONFLICT(tag) DO UPDATE SET
-                    tag=excluded.tag, last_used_utc=excluded.last_used_utc;
-                """;
-            upsert.Parameters.AddWithValue("$tag", tag);
-            upsert.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-            upsert.ExecuteNonQuery();
-        }
-        using (var trim = db.CreateCommand())
-        {
-            trim.Transaction = transaction;
-            trim.CommandText = """
-                DELETE FROM recent_tags WHERE tag NOT IN (
-                    SELECT tag FROM recent_tags
-                    ORDER BY last_used_utc DESC, tag DESC LIMIT 9
-                );
-                """;
-            trim.ExecuteNonQuery();
-        }
-        transaction.Commit();
-    }
-
     public string? GetKeywords(long imageId)
     {
         using var db = _database.OpenConnection();
