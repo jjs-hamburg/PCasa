@@ -26,6 +26,20 @@ internal static class Alpha58WindowSmoke
         if (window.FindName("FolderTreeToggleButton") is not null)
             throw new Exception("Old folder-hierarchy control was not moved from the folder bar.");
 
+        var appearanceField = typeof(MainWindow).GetField("_appearance",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Instance)!;
+        bool IsFlat()
+        {
+            var settings = appearanceField.GetValue(window)!;
+            return (bool)settings.GetType().GetProperty("FlatFolderView")!
+                .GetValue(settings)!;
+        }
+        flat.IsChecked = true;
+        if (!IsFlat()) throw new Exception("Flat folder radio did not switch the view.");
+        tree.IsChecked = true;
+        if (IsFlat()) throw new Exception("Tree radio did not restore the tree view.");
+
         var slider = window.FindName("StraightenAngleSlider") as Slider;
         var viewer = window.FindName("PhotoViewerPanel") as Grid;
         if (slider is null || viewer is null ||
