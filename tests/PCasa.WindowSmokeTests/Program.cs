@@ -3703,8 +3703,8 @@ internal static class Program
                 var temporarilyExcluded = manager.SelectedConfiguration.Roots.Single();
                 if (!temporarilyExcluded.ExcludedPaths.Any(path =>
                         string.Equals(path, fixtureChild, StringComparison.OrdinalIgnoreCase)) ||
-                    !Convert.ToString(physicalCheck.Content)!.StartsWith("⊘"))
-                    throw new Exception("Excluded physical folder lacked a persistent rule or marker.");
+                    Convert.ToString(physicalCheck.Content)!.StartsWith("⊘"))
+                    throw new Exception("Excluded folder lost its rule or retained the redundant marker.");
                 // A click on a gray box must mean "include ALL children",
                 // never the WPF default null -> unchecked cycle.
                 var toggle = typeof(PCasa.App.FolderManagerWindow).GetMethod(
