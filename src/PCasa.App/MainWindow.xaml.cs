@@ -856,7 +856,8 @@ public partial class MainWindow : Window
         // Active folder is highlighted in the folder tree itself.
         // No duplicate "Galerie / Sortierung" header occupies image space.
 
-        if (!updateTreeSelection || !_folderTreeItems.TryGetValue(photoFolderId, out var treeItem))
+        if (_appearance.FlatFolderView || !updateTreeSelection ||
+            !_folderTreeItems.TryGetValue(photoFolderId, out var treeItem))
         {
             return;
         }
