@@ -133,6 +133,73 @@ internal static class CropFlow
                 "-GPSLongitudeRef=E", "-Keywords=PCasaCropSmoke", path);
             var original = File.ReadAllBytes(path);
 
+            // Alpha.61 regression: a COLOR-ONLY edit must save normally
+            // AND as copy, with all protected EXIF/XMP/IPTC camera dates
+            // intact, not just DateTimeOriginal. Exercise real ExifTool
+            // transfer and MTA staging, including subsecond/timezone data.
+            var datedSource = Path.Combine(root, "dates-color.jpg");
+            File.Copy(path, datedSource);
+            RunExif(exif, "-overwrite_original",
+                "-EXIF:DateTimeOriginal=2026:11:21 10:11:12",
+                "-EXIF:CreateDate=2026:11:21 10:11:12",
+                "-EXIF:ModifyDate=2026:11:21 10:11:12",
+                "-EXIF:SubSecTimeOriginal=741",
+                "-EXIF:SubSecTimeDigitized=741",
+                "-EXIF:OffsetTimeOriginal=+01:00",
+                "-EXIF:OffsetTimeDigitized=+01:00",
+                "-XMP-exif:DateTimeOriginal=2026:11:21 10:11:12+01:00",
+                "-XMP-xmp:CreateDate=2026:11:21 10:11:12+01:00",
+                "-IPTC:DateCreated=2026:11:21",
+                "-IPTC:TimeCreated=10:11:12+01:00",
+                datedSource);
+            var reference = Path.Combine(root, "dates-reference.jpg");
+            File.Copy(datedSource, reference);
+            var referenceDates = ExifDateMetadata.ReadFields(reference);
+            if (referenceDates.DateTimeOriginal != "2026:11:21 10:11:12" ||
+                referenceDates.CreateDate != "2026:11:21 10:11:12")
+                throw new Exception("EXIF date-rich test fixture was not created.");
+
+            // Force precisely the failure class seen in Alpha.59/60: the
+            // staged metadata disagrees with the original, but the source
+            // must never be changed during the protected-dates repair.
+            var damaged = Path.Combine(root, "dates-damaged.jpg");
+            File.Copy(datedSource, damaged);
+            RunExif(exif, "-overwrite_original",
+                "-EXIF:DateTimeOriginal=2037:02:03 04:05:06",
+                "-EXIF:SubSecTimeOriginal=",
+                "-XMP-xmp:CreateDate=2037:02:03 04:05:06",
+                damaged);
+            var rejected = false;
+            try { ExifDateMetadata.VerifyUnchanged(datedSource, damaged); }
+            catch (InvalidDataException) { rejected = true; }
+            if (!rejected)
+                throw new Exception("Changed EXIF dates escaped strict validation.");
+            ExifDateMetadata.Preserve(datedSource, damaged);
+            ExifDateMetadata.VerifyUnchanged(datedSource, damaged);
+            if (!File.ReadAllBytes(reference).SequenceEqual(
+                    File.ReadAllBytes(datedSource)))
+                throw new Exception("Date repair modified the source image.");
+
+            var colorSteps = new[] { new PhotoEditStep("saturation", Amount: .2) };
+            var datedOriginalBytes = File.ReadAllBytes(datedSource);
+            var datedCopy = JpegCropWriter.GetAvailableCopyPath(datedSource);
+            Task.Run(() => JpegCropWriter.SaveAsCopy(datedSource, datedCopy,
+                colorSteps, CancellationToken.None)).GetAwaiter().GetResult();
+            ExifDateMetadata.VerifyUnchanged(reference, datedCopy);
+            if (!File.ReadAllBytes(datedSource).SequenceEqual(datedOriginalBytes))
+                throw new Exception("Color SaveCopy changed source bytes.");
+
+            Task.Run(() => JpegCropWriter.Save(datedSource, colorSteps,
+                CancellationToken.None)).GetAwaiter().GetResult();
+            ExifDateMetadata.VerifyUnchanged(reference, datedSource);
+            if (ExifDateMetadata.ReadFields(datedSource) != referenceDates)
+                throw new Exception("Color Save changed EXIF photo dates.");
+            if (Directory.GetFiles(root, ".pcasa-edit-*").Length != 0)
+                throw new Exception("Date-preserving color save left staged files.");
+            Console.WriteLine(
+                "PASS: Alpha.61 color-only Save/SaveCopy and staged-date repair preserve exact " +
+                "EXIF/XMP/IPTC capture dates, timezone and subseconds.");
+
             // Alpha.37: libvips must release native source handles when a
             // thumbnail has finished. Otherwise the viewer may keep Windows
             // File.Replace blocked even after the result was decoded.
