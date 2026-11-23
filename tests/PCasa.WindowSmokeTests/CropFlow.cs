@@ -220,43 +220,71 @@ internal static class CropFlow
                 throw new Exception(
                     "Noncanonical scanner EXIF test fixture was normalized on read.");
 
-            // First prove that the *existing* strict comparator detects
-            // the difference, and test raw restoration independently of
-            // ExifTool's metadata transfer and pixel writer.
+            // Different punctuation, identical date AND time: safe. The
+            // comparison is semantic, never a raw ASCII byte comparison.
             var canonicalCopy = Path.Combine(root, "scanner-canonical.jpg");
             File.Copy(scanner, canonicalCopy);
             PatchSingleAscii(canonicalCopy,
                 "2022/01/30 14:13:38", "2022:01:30 14:13:38");
-            var missingDateRejected = false;
-            try
-            {
-                ExifDateMetadata.VerifyUnchanged(scanner, canonicalCopy);
-            }
-            catch (InvalidDataException) { missingDateRejected = true; }
-            if (!missingDateRejected)
-                throw new Exception(
-                    "Strict EXIF comparator missed noncanonical CreateDate normalization.");
-            var restoreType = typeof(JpegCropWriter).Assembly.GetType(
-                "PCasa.App.Services.JpegExifVerbatimDateRestorer")
-                ?? throw new Exception("Raw EXIF date restorer missing.");
-            var restoreMethod = restoreType.GetMethod("Restore",
-                System.Reflection.BindingFlags.Static |
-                System.Reflection.BindingFlags.NonPublic)
-                ?? throw new Exception("EXIF date restorer entrypoint missing.");
-            var restoredDateTags = (IReadOnlyList<string>)restoreMethod.Invoke(
-                null, [scanner, canonicalCopy])!;
-            if (!restoredDateTags.Contains("EXIF:CreateDate"))
-                throw new Exception("Verbatim date repair did not patch CreateDate.");
             ExifDateMetadata.VerifyUnchanged(scanner, canonicalCopy);
+            if (ExifDateMetadata.ReadFields(canonicalCopy).CreateDate ==
+                ExifDateMetadata.ReadFields(scanner).CreateDate)
+                throw new Exception(
+                    "Date separator test did not create distinct raw values.");
+
+            // Safety: a true one-second change is NOT mere normalization.
+            var wrongTime = Path.Combine(root, "scanner-wrong-time.jpg");
+            File.Copy(canonicalCopy, wrongTime);
+            PatchSingleAscii(wrongTime,
+                "2022:01:30 14:13:38", "2022:01:30 14:13:39");
+            var changedTimeRejected = false;
+            try { ExifDateMetadata.VerifyUnchanged(scanner, wrongTime); }
+            catch (InvalidDataException) { changedTimeRejected = true; }
+            if (!changedTimeRejected)
+                throw new Exception(
+                    "Actual time change was incorrectly accepted as separators.");
+
+            // Also check that the narrowly scoped normalizer does not
+            // equate missing timestamps, changed offsets, altered fractions,
+            // invalid dates or changed calendar days. XMP ISO/EXIF native
+            // punctuation may differ without any timezone conversion.
+            var dateEquivalent = typeof(ExifDateMetadata).GetMethod(
+                "SameProtectedTag", System.Reflection.BindingFlags.Static |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Date equivalence comparator is missing.");
+            bool Equivalent(string tag, string? left, string? right)
+                => (bool)dateEquivalent.Invoke(null, [tag, left, right])!;
+            if (!Equivalent("EXIF:CreateDate",
+                    "2022/01/30 14:13:38", "2022:01:30 14:13:38") ||
+                !Equivalent("XMP-xmp:CreateDate",
+                    "2022:01:30 14:13:38+01:00",
+                    "2022-01-30T14:13:38+01:00") ||
+                !Equivalent("IPTC:DateCreated", "2022/01/30", "2022:01:30") ||
+                Equivalent("EXIF:CreateDate",
+                    "2022/01/30 14:13:38", "2022:01:30 14:13:39") ||
+                Equivalent("EXIF:CreateDate",
+                    "2022/01/30 14:13:38", null) ||
+                Equivalent("EXIF:CreateDate",
+                    "2022/02/30 14:13:38", "2022:02:30 14:13:38") ||
+                Equivalent("XMP-xmp:CreateDate",
+                    "2022/01/30 14:13:38+01:00",
+                    "2022:01:30 14:13:38+02:00") ||
+                Equivalent("EXIF:SubSecTimeOriginal", "007", "7") ||
+                Equivalent("EXIF:OffsetTimeOriginal", "+01:00", "+02:00") ||
+                Equivalent("IPTC:DateCreated", "2022/01/30", "2022:01:31"))
+                throw new Exception(
+                    "Protected date normalization accepted a changed date/time or " +
+                    "rejected equivalent separator formats.");
+
             if (!File.ReadAllBytes(scanner).SequenceEqual(
                     File.ReadAllBytes(scannerReference)))
-                throw new Exception("TIFF date repair changed the original JPEG.");
+                throw new Exception("EXIF comparison modified original JPEG.");
 
-            // Prove the precise breakage of the OLD pipeline using its
-            // actual encoder + native ExifTool -TagsFromFile step WITHOUT
-            // running the new date restorer yet. This must mismatch before
-            // we can claim our synthetic fixture reproduces the user report.
-            var untreatedStage = Path.Combine(root, "scanner-unrepaired-stage.jpg");
+            // Exercise the actual encoder and ExifTool metadata copy:
+            // no raw TIFF patching is required even when ExifTool chooses
+            // canonical separators on the staged JPEG. Reconcile only
+            // genuinely changed/missing fields and verify the dates again.
+            var untreatedStage = Path.Combine(root, "scanner-stage.jpg");
             var copyMetadataMethod = typeof(JpegCropWriter).GetMethod(
                 "CopyMetadata", System.Reflection.BindingFlags.Static |
                     System.Reflection.BindingFlags.NonPublic)
@@ -270,12 +298,8 @@ internal static class CropFlow
                     [scanner, untreatedStage, rendered.PixelWidth,
                         rendered.PixelHeight, CancellationToken.None]);
             }).GetAwaiter().GetResult();
-            var unmodifiedPipelineRejected = false;
-            try { ExifDateMetadata.VerifyUnchanged(scanner, untreatedStage); }
-            catch (InvalidDataException) { unmodifiedPipelineRejected = true; }
-            if (!unmodifiedPipelineRejected)
-                throw new Exception("Synthetic scanner did NOT reproduce the " +
-                    "pre-Alpha.62 EXIF date failure after ExifTool metadata copy.");
+            ExifDateMetadata.Preserve(scanner, untreatedStage);
+            ExifDateMetadata.VerifyUnchanged(scanner, untreatedStage);
             File.Delete(untreatedStage);
 
             // Both public save modes must succeed with this exact EXIF
@@ -291,15 +315,18 @@ internal static class CropFlow
             Task.Run(() => JpegCropWriter.Save(scanner, colorSteps,
                 CancellationToken.None)).GetAwaiter().GetResult();
             ExifDateMetadata.VerifyUnchanged(scannerReference, scanner);
-            if (ExifDateMetadata.ReadFields(scanner).CreateDate !=
-                "2022/01/30 14:13:38")
+            // The saved JPEG may legitimately contain either separator
+            // spelling; only the calendar date/time must match.
+            if (!Equivalent("EXIF:CreateDate",
+                ExifDateMetadata.ReadFields(scannerReference).CreateDate,
+                ExifDateMetadata.ReadFields(scanner).CreateDate))
                 throw new Exception(
-                    "Scanner's noncanonical native CreateDate was modified.");
+                    "Scanner's semantic EXIF CreateDate was modified.");
             if (Directory.GetFiles(root, ".pcasa-edit-*").Length != 0)
                 throw new Exception("Noncanonical EXIF save leaked staged files.");
             Console.WriteLine(
-                "PASS: Alpha.62 noncanonical scanner EXIF CreateDate stays byte-exact " +
-                "through color Save/SaveCopy and independent staged date repair.");
+                "PASS: Alpha.62 slash/colon EXIF dates compare by value for color " +
+                "Save/SaveCopy; changed times, offsets, fractions and missing dates fail.");
 
             // Alpha.37: libvips must release native source handles when a
             // thumbnail has finished. Otherwise the viewer may keep Windows
