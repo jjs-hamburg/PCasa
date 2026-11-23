@@ -117,6 +117,7 @@ public sealed class SlideshowSettingsWindow : Window
             ("zoom", "Sanfter Zoom"), ("slide", "Schieben"),
             ("projector", "Projektor"), ("cube", "3D-Würfelrotation"),
             ("cards", "Kartenwechsel"), ("zoomfade", "Zoom-Überblendung"),
+            ("viewmaster-a", "Viewmaster A"), ("viewmaster-b", "Viewmaster B"),
             ("wipe-left", "Wischen nach links"),
             ("wipe-right", "Wischen nach rechts"),
             ("wipe-up", "Wischen nach oben"),
