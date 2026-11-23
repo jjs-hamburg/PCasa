@@ -2241,6 +2241,34 @@ internal static class Program
                     throw new Exception("Slide did not restore its destination position.");
                 if (sliding.CurrentImageIndex != 2)
                     throw new Exception("Slide completion lost the destination.");
+
+                // Alpha.60: Left must reverse the travel of BOTH photos, not
+                // just decrease the sequence index. The native GPU uses the
+                // same signed direction; WPF fallback starts from negative X.
+                typeof(SlideshowWindow).GetMethod("Navigate", flags)!
+                    .Invoke(sliding, [-1]);
+                Flush(sliding);
+                if (sliding.CurrentImageIndex != 0 ||
+                    typeof(SlideshowWindow).GetField(
+                        "_navigationDirection", flags)!.GetValue(sliding) is not -1)
+                    throw new Exception("Left navigation did not reverse slideshow direction.");
+                if (gpu?.GetType().GetProperty("IsReady")?.GetValue(gpu) is not true)
+                {
+                    var reversedLayer = typeof(SlideshowWindow).GetField(
+                        "_incoming", flags)!.GetValue(sliding)!;
+                    var reversedShift = (TranslateTransform)reversedLayer.GetType()
+                        .GetField("Shift", System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.Public)!.GetValue(reversedLayer)!;
+                    if (reversedShift.X >= 0)
+                        throw new Exception(
+                            "WPF reverse slide still enters from the right.");
+                }
+                Until(sliding, () =>
+                    typeof(SlideshowWindow).GetField("_transitioning", flags)!
+                        .GetValue(sliding) is false,
+                    "Reverse slide transition never completed.");
+                Console.WriteLine(
+                    "PASS: Alpha.60 manual Left reverses slideshow navigation and slide travel.");
             }
             finally { sliding.Close(); }
             // Geometry-only assertions also run when CI has no D3D device.
@@ -2255,6 +2283,39 @@ internal static class Program
                 bool incoming, float progress)
                 => ((float, float, float))cubePoint.Invoke(null,
                     [900f, 600f, u, v, incoming, progress])!;
+            // The reversed cube must rotate around the opposite physical
+            // hinge without mirroring the PHOTO pixels. Forward geometry is
+            // unchanged; reverse maps u -> 1-u and negates only the X point.
+            var reverseCube = cubeType.GetMethod("CubePointWithDirection", cubeFlags)
+                ?? throw new Exception("GPU cube has no reverse-direction geometry.");
+            (float X, float Y, float W) ReversePoint(float u, float v,
+                bool incoming, float progress)
+                => ((float, float, float))reverseCube.Invoke(null,
+                    [900f, 600f, u, v, incoming, progress, -1])!;
+            foreach (var progress in new[] { 0f, .15f, .5f, .85f, 1f })
+            {
+                var outgoingHinge = ReversePoint(0, .5f, false, progress);
+                var incomingHinge = ReversePoint(1, .5f, true, progress);
+                if (Math.Abs(outgoingHinge.X - incomingHinge.X) > .005f ||
+                    Math.Abs(outgoingHinge.Y - incomingHinge.Y) > .005f ||
+                    Math.Abs(outgoingHinge.W - incomingHinge.W) > .005f)
+                    throw new Exception("Reversed cube faces separated at left hinge.");
+                foreach (var u in new[] { 0f, .2f, .8f, 1f })
+                {
+                    var reverse = ReversePoint(u, .5f, false, progress);
+                    var forwardMirror = Point(1f - u, .5f, false, progress);
+                    if (Math.Abs(reverse.X + forwardMirror.X) > .005f ||
+                        Math.Abs(reverse.W - forwardMirror.W) > .005f)
+                        throw new Exception("Reversed cube does not mirror 3D travel.");
+                }
+            }
+            if (Math.Abs(ReversePoint(0, .5f, false, 0).X + 450) > .01f ||
+                Math.Abs(ReversePoint(1, .5f, false, 0).X - 450) > .01f ||
+                Math.Abs(ReversePoint(0, .5f, true, 1).X + 450) > .01f ||
+                Math.Abs(ReversePoint(1, .5f, true, 1).X - 450) > .01f)
+                throw new Exception("Reversed cube mirrored the photo itself.");
+            Console.WriteLine(
+                "PASS: Alpha.60 reverse cube has opposite hinge, mirrored motion, upright photos.");
             foreach (var position in new[] { 0f, .15f, .5f, .85f, 1f })
             {
                 var aHinge = Point(1, .5f, false, position);
