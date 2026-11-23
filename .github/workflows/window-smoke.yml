@@ -32,6 +32,8 @@ jobs:
           $nativeDir >> $env:GITHUB_PATH
       - name: Exercise real WPF window and sidebar transitions
         run: dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release
+      - name: Verify graceful file checkpoint and durable restart without repeat
+        run: dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --alpha58-durable
       - name: Exercise actual folder-tree context menu removal and immediate visual update
         run: dotnet run --project tests/PCasa.WindowSmokeTests/PCasa.WindowSmokeTests.csproj --configuration Release -- --folder-removal
       - name: Exercise real tag search and folder-focus return

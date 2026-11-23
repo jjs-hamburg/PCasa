@@ -32,6 +32,8 @@ public partial class MainWindow
         // explicit Problems/None selection is always respected.
         public string FolderStatusMode { get; set; } = "Always";
         public bool HideCollapsedFolders { get; set; }
+        public bool HideCollapsedInFlatView { get; set; }
+        public bool FlatFolderView { get; set; }
         public bool SearchGalleryViewOnly { get; set; }
         public bool TooltipsEnabled { get; set; } = true;
         public double ThumbnailSpacing { get; set; } = 10;
@@ -202,6 +204,9 @@ public partial class MainWindow
         // A running import may still publish/reflow the gallery while waiting.
         SaveGalleryPosition();
         _shutdownStarted = true;
+        // Freeze new dispatch synchronously. The writer currently inside its
+        // original-file transaction will finish and checkpoint, then yield.
+        _scheduler.BeginGracefulShutdown();
         // Stop producers immediately. BackgroundScan_WindowClosed runs only
         // AFTER disposal and is too late to stop startup probes/inventories.
         _backgroundMonitorClosing = true;
@@ -249,6 +254,7 @@ public partial class MainWindow
                 // the application open just to wait for that read.
                 // Active manual mutations / native metadata writers DO require
                 // the normal full drain, to protect originals and package steps.
+                await _scheduler.PrepareGracefulShutdownAsync();
                 var criticalWorkActive = ExifToolKeywordWriter.HasLiveSessions ||
                     _scheduler.Snapshot().Any(job =>
                         job.WorkKind == SchedulerWorkKind.Catalog &&
@@ -313,18 +319,8 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
-            // The scheduler has drained all critical source mutations. Only
-            // persistent scan packages may resume when PCasa starts again.
-            // This is a journal state transition, not a filesystem operation.
-            try
-            {
-                var retired = new DurablePackageJournal(_database)
-                    .RetireUnfinishedFileJobs();
-                if (retired > 0)
-                    PCasaDiagnostics.WriteMessage("Shutdown.FileJobs",
-                        retired + " Dateioperationen mit der Sitzung beendet.");
-            }
-            catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Journal", ex); }
+            // The remaining original-file recipes and cursor positions stay
+            // in SQLite for the very next startup. Never retire them here.
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;
@@ -463,7 +459,8 @@ public partial class MainWindow
         var current = new AppearanceDialogValues(
             _appearance.Theme, _appearance.Background, _appearance.TextureFileName,
             _appearance.FolderStatusMode, _appearance.RestoreGalleryPosition,
-            _appearance.HideCollapsedFolders, _appearance.ShowThumbnailFileNames,
+            _appearance.HideCollapsedFolders, _appearance.HideCollapsedInFlatView,
+            _appearance.ShowThumbnailFileNames,
             _appearance.BoldThumbnailFileNames, _appearance.ShowThumbnailIcons,
             _appearance.ShowThumbnailShadows == true, _appearance.TooltipsEnabled,
             _viewerSettings.SequenceScope.ToString(),
@@ -479,6 +476,8 @@ public partial class MainWindow
         void Preview(AppearanceDialogValues candidate, bool persist)
         {
             var visibilityChanged = candidate.HideCollapsed != _appearance.HideCollapsedFolders;
+            var flatVisibilityChanged = _appearance.FlatFolderView &&
+                candidate.HideCollapsedInFlat != _appearance.HideCollapsedInFlatView;
             _pendingGalleryAnchor = originalGalleryAnchor;
             _restoringGalleryLayoutAnchor = true;
             _appearance.Theme = candidate.Theme;
@@ -487,6 +486,7 @@ public partial class MainWindow
             _appearance.FolderStatusMode = candidate.FolderStatus;
             _appearance.RestoreGalleryPosition = candidate.RestorePosition;
             _appearance.HideCollapsedFolders = candidate.HideCollapsed;
+            _appearance.HideCollapsedInFlatView = candidate.HideCollapsedInFlat;
             _appearance.ShowThumbnailFileNames = candidate.FileNames;
             _appearance.BoldThumbnailFileNames = candidate.BoldFileNames;
             _appearance.ShowThumbnailIcons = candidate.Icons;
@@ -501,6 +501,8 @@ public partial class MainWindow
                 UpdateGalleryFolderVisibility();
                 RefreshGallerySearchAfterTreeVisibilityChange();
             }
+            if (flatVisibilityChanged)
+                RefreshFolderTree();
             RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
                 originalGalleryOffset, originalNavigationVersion, originalActiveFolderId);
             _ = Dispatcher.BeginInvoke(new Action(() =>
@@ -775,7 +777,6 @@ public partial class MainWindow
         _appearance.ActiveSidebarMode = mode;
         UpdateWorkspaceLayoutPreservingGallery();
         SaveAppearance();
-        if (mode == "Tags") RefreshQuickTags();
         if (mode == "GPS") ActivateGpsMap();
         await UpdateSidebarContentAsync();
     }

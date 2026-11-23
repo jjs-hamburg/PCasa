@@ -195,6 +195,14 @@ public partial class MainWindow
     {
         if (!_appearance.HideCollapsedFolders)
             return new HashSet<long>();
+        // A flat list has no expandable ancestors. Preserve the ORIGINAL
+        // tree's collapsed state independently of the current projection.
+        if (_appearance.FlatFolderView)
+            return _photoFolders
+                .Where(folder => folder.Id != _flatExplicitRevealId &&
+                    IsDescendantOfCollapsedPath(
+                        folder.LocalPath, _collapsedTreePathsForFlat))
+                .Select(folder => folder.Id).ToHashSet();
         var paths = new List<string>();
         foreach (var root in FoldersTree.Items.OfType<TreeViewItem>())
             GatherCollapsedPaths(root, paths);

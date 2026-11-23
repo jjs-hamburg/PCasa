@@ -2158,8 +2158,8 @@ internal static class TagFlow
                 ?? throw new Exception("Tag addition button missing.");
             var tagRows = (StackPanel?)window.FindName("TagRowsPanel")
                 ?? throw new Exception("Tag rows panel missing.");
-            var quickTags = (WrapPanel?)window.FindName("TagQuickPanel")
-                ?? throw new Exception("Quick tags panel missing.");
+            if (window.FindName("TagQuickPanel") is not null)
+                throw new Exception("Removed quick-tag UI unexpectedly returned.");
             var tagAnd = (RadioButton?)window.FindName("TagLogicAnd")
                 ?? throw new Exception("Tag AND selector missing.");
             var tagOr = (RadioButton?)window.FindName("TagLogicOr")
@@ -2362,11 +2362,8 @@ internal static class TagFlow
             Until(window, () => tagRows.Children.OfType<DockPanel>()
                     .Any(row => row.Children.OfType<TextBlock>().Any(label =>
                         label.Text.Contains(editableTag, StringComparison.Ordinal) &&
-                        label.Text.Contains("[2]", StringComparison.Ordinal))) &&
-                quickTags.Children.OfType<Button>().Any(button =>
-                    string.Equals(button.Content?.ToString(), editableTag,
-                        StringComparison.Ordinal)),
-                "New tag was not immediately shown with multi-image frequency and quick tag.");
+                        label.Text.Contains("[2]", StringComparison.Ordinal))),
+                "New tag was not immediately shown with multi-image frequency.");
             // Existing keywords are suggested from the local DB and never
             // require another original JPEG/NAS read. A choice stages the tag
             // immediately, but it is not committed until the user presses OK.
@@ -3407,7 +3404,7 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: Tag-write P0 progress shows one real file and red marker clears after success.");
             Console.WriteLine(
-                "PASS: WPF two-image Unicode tag add/remove updates original JPEGs, counts and recent tags.");
+                "PASS: WPF two-image Unicode tag add/remove updates original JPEGs and counts.");
             // Regression: selecting ALL 5,200+ photos must send ALL stored
             // GPS coordinates, including records whose cached EXIF source
             // fingerprint temporarily differs after a metadata-only write.

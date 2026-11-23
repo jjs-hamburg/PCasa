@@ -107,6 +107,7 @@ public partial class MainWindow
         ViewerToolsOverview.Visibility = Visibility.Collapsed;
         ViewerCropOptions.Visibility = Visibility.Collapsed;
         ViewerStraightenOptions.Visibility = Visibility.Visible;
+        StraightenAngleSlider.Visibility = Visibility.Visible;
         ViewerStraightenGrid.Visibility = Visibility.Visible;
         RenderStraightenPreview();
         UpdateEditControls();
@@ -191,6 +192,7 @@ public partial class MainWindow
         _straightenActive = false;
         ViewerStraightenGrid.Visibility = Visibility.Collapsed;
         ViewerStraightenOptions.Visibility = Visibility.Collapsed;
+        StraightenAngleSlider.Visibility = Visibility.Collapsed;
         ViewerOnImageToolsBar.Visibility = Visibility.Collapsed;
         ViewerToolsOverview.Visibility = Visibility.Visible;
         if (_photoEditSession is not null)

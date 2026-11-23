@@ -14,6 +14,9 @@ public sealed class SchedulerTaskPackage
     private readonly List<Func<CancellationToken, Task>> _steps = new();
     private int _nextIndex;
     internal Action<int>? OnStepCompleted { get; set; }
+    // A graceful application exit yields only AFTER the current atomic
+    // original-file step AND its journal checkpoint have completed.
+    internal Func<bool>? ShouldYieldAfterStep { get; set; }
 
     internal void RestoreCursor(int step)
     {
@@ -60,6 +63,9 @@ public sealed class SchedulerTaskPackage
             await _steps[_nextIndex](token);
             _nextIndex++;
             OnStepCompleted?.Invoke(_nextIndex);
+            if (_nextIndex < _steps.Count && ShouldYieldAfterStep?.Invoke() == true)
+                throw new OperationCanceledException(
+                    "Auftrag beim sicheren Schreib-Checkpoint für den Neustart geparkt.");
         }
     }
 }

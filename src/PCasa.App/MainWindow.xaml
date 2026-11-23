@@ -182,6 +182,43 @@
             <Setter Property="Margin" Value="0,0,5,0"/>
             <Setter Property="Padding" Value="3,2"/>
         </Style>
+        <!-- Persistent state, separate from one-shot action buttons.
+             Active blue outline + depressed depth stays visible without hover. -->
+        <Style x:Key="PcasaFooterStateButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource PcasaFooterIconButtonStyle}">
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="StateBorder" CornerRadius="4"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Effect="{StaticResource PcasaButtonShadow}">
+                            <Grid>
+                                <Border x:Name="StateDepth" CornerRadius="3"
+                                        Background="{StaticResource PcasaButtonDepthBrush}"
+                                        IsHitTestVisible="False"/>
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  Margin="{TemplateBinding Padding}"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="BorderThickness" Value="2">
+                                <Setter TargetName="StateDepth" Property="Opacity" Value="0.12"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="StateDepth" Property="Opacity" Value="0"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="PcasaFolderIconButtonStyle" TargetType="Button"
                BasedOn="{StaticResource PcasaFooterIconButtonStyle}">
             <Setter Property="Width" Value="31"/>
@@ -566,7 +603,7 @@
                      Filters remain right-aligned and independently scrollable. -->
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition x:Name="SearchFolderToolbarColumn" Width="215"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Button x:Name="SlideshowStartButton" Grid.Column="0"
@@ -584,6 +621,32 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
+                    <StackPanel x:Name="FolderViewModeChoices" Grid.Column="0"
+                                Orientation="Horizontal" HorizontalAlignment="Right"
+                                VerticalAlignment="Center" Margin="0,0,6,0">
+                        <RadioButton x:Name="FolderTreeViewRadio" GroupName="FolderHierarchyMode"
+                                     Style="{StaticResource PcasaSearchChoiceStyle}" MinWidth="32"
+                                     Width="33" Height="28" Padding="3,1"
+                                     ToolTip="{loc:Tr Key='Baumstruktur'}"
+                                     Checked="FolderViewMode_Changed">
+                            <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                <Path Data="M3,3 H11 V8 H3 Z M5,8 V21 M5,13 H11 M5,19 H11"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                                <Path Data="M11,10 H22 V15 H11 Z M11,17 H22 V22 H11 Z"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                            </Canvas></Viewbox>
+                        </RadioButton>
+                        <RadioButton x:Name="FolderFlatViewRadio" GroupName="FolderHierarchyMode"
+                                     Style="{StaticResource PcasaSearchChoiceStyle}" MinWidth="32"
+                                     Width="33" Height="28" Padding="3,1"
+                                     ToolTip="{loc:Tr Key='Flache Ordneransicht'}"
+                                     Checked="FolderViewMode_Changed">
+                            <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                <Path Data="M3,3 H8 V8 H3 Z M11,5 H22 M3,10 H8 V15 H3 Z M11,12 H22 M3,17 H8 V22 H3 Z M11,19 H22"
+                                      Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.6" Fill="Transparent"/>
+                            </Canvas></Viewbox>
+                        </RadioButton>
+                    </StackPanel>
                 <ScrollViewer x:Name="SearchToolbarScrollViewer" Grid.Column="1"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled"
@@ -865,7 +928,8 @@
                 <ColumnDefinition x:Name="InfoSidebarColumn" Width="0" />
             </Grid.ColumnDefinitions>
 
-            <Border x:Name="FolderSidebarPanel" Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}">
+            <Border x:Name="FolderSidebarPanel" Grid.Column="0" Background="{DynamicResource PcasaPanelBrush}"
+                    SizeChanged="FolderSidebarPanel_SizeChanged">
                 <Grid>
                     <Grid x:Name="FolderTreePanel">
                     <Grid.RowDefinitions>
@@ -910,13 +974,6 @@
                                     <Path Data="M 15,10 L 23,23 M 23,10 L 15,23"
                                           Stroke="#FFFFFF" StrokeThickness="0.6"
                                           StrokeStartLineCap="Round"/>
-                                </Canvas></Viewbox>
-                            </Button>
-                            <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Ordnerleiste aus- oder einklappen'}" Click="FolderTreeToggle_Click">
-                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
-                                    <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
-                                    <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9" Fill="Transparent"/>
-                                    <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
                                 </Canvas></Viewbox>
                             </Button>
                             <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Explorer Ansicht'}" Click="ShowAllFilesystemFolders_Click">
@@ -1463,16 +1520,9 @@
                                 <TextBlock Text="{loc:Tr Key='Winkel'}" FontSize="11"
                                            Foreground="{DynamicResource PcasaMutedTextBrush}"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,5,0,11">
-                                    <Slider x:Name="StraightenAngleSlider" Width="192"
-                                            Minimum="-10" Maximum="10" Value="0"
-                                            SmallChange=".05" LargeChange=".5"
-                                            TickFrequency=".05" IsSnapToTickEnabled="False"
-                                            IsMoveToPointEnabled="True"
-                                            ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"
-                                            VerticalAlignment="Center"/>
                                     <TextBlock x:Name="StraightenAngleValue" Width="65"
-                                               Text="0,00°" TextAlignment="Right"
-                                               VerticalAlignment="Center" Margin="7,0,0,0"/>
+                                               Text="0,00°" TextAlignment="Left"
+                                               VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <CheckBox x:Name="StraightenWideRangeCheckBox"
                                           Content="{loc:Tr Key='Großer Bereich ±45°'}"
@@ -1748,6 +1798,17 @@
                                         Panel.ZIndex="3" IsHitTestVisible="False"/>
                             </Grid>
                         </ScrollViewer>
+                        <!-- Only the straightening ANGLE slider moves into the
+                             viewport. All other tools remain in their panel.
+                             This sibling overlay stays fixed during image zoom/pan. -->
+                        <Slider x:Name="StraightenAngleSlider" Visibility="Collapsed"
+                                Panel.ZIndex="10" HorizontalAlignment="Center"
+                                VerticalAlignment="Bottom" Margin="0,0,0,18" Width="192"
+                                Minimum="-10" Maximum="10" Value="0"
+                                SmallChange=".05" LargeChange=".5"
+                                TickFrequency=".05" IsSnapToTickEnabled="False"
+                                IsMoveToPointEnabled="True"
+                                ToolTip="{loc:Tr Key='Fein: Pfeiltasten 0,05°. Erweiterter Bereich mit ±45°.'}"/>
                         <!-- Original/edited comparison of ONE image. The split
                              clips identical, registered views rather than
                              stretching two halves into different proportions. -->
@@ -2335,7 +2396,6 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Text="{loc:Tr Key='Tag hinzufügen'}" FontSize="12" Margin="3,0,0,5"/>
                         <Grid Grid.Row="1" Margin="2,0,2,10">
@@ -2396,11 +2456,7 @@
                                 <StackPanel x:Name="TagRowsPanel"/>
                             </ScrollViewer>
                         </Border>
-                        <StackPanel Grid.Row="4" Margin="2,7,2,0" MinHeight="96">
-                            <TextBlock Text="{loc:Tr Key='Schnell-Tags'}" FontSize="12" Margin="0,0,0,5"/>
-                            <WrapPanel x:Name="TagQuickPanel"/>
-                        </StackPanel>
-                        <StackPanel Grid.Row="5" Margin="2,7,2,0">
+                        <StackPanel Grid.Row="4" Margin="2,7,2,0">
                             <TextBlock x:Name="TagDraftSummaryText" FontSize="11"
                                        HorizontalAlignment="Right" Margin="0,0,0,4"
                                        TextWrapping="Wrap" Visibility="Collapsed"
@@ -2499,7 +2555,7 @@
                             ToolTip="{loc:Tr Key='Zwei ausgewählte Bilder vergleichen'}"
                             x:Name="CompareAbButton" Click="CompareAb_Click" IsEnabled="False" />
                     <Button x:Name="FolderSidebarToggleButton"
-                            Style="{StaticResource PcasaFooterIconButtonStyle}"
+                            Style="{StaticResource PcasaFooterStateButtonStyle}"
                             ToolTip="{loc:Tr Key='Ordnerleiste ein-/ausblenden'}"
                             Click="FolderSidebarToggle_Click">
                         <Viewbox Width="22" Height="22"><Canvas Width="28" Height="28">
@@ -2515,7 +2571,7 @@
                                   StrokeThickness="2.3" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
                         </Canvas></Viewbox>
                     </Button>
-                    <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                    <Button x:Name="TagSidebarButton" Style="{StaticResource PcasaFooterStateButtonStyle}"
                             ToolTip="{loc:Tr Key='Tags anzeigen'}" Tag="Tags" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
@@ -2526,7 +2582,7 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
-                    <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                    <Button x:Name="GpsSidebarButton" Style="{StaticResource PcasaFooterStateButtonStyle}"
                             ToolTip="{loc:Tr Key='GPS-Informationen anzeigen'}" Tag="GPS" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">
@@ -2537,7 +2593,7 @@
                             </Canvas>
                         </Viewbox>
                     </Button>
-                    <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterIconButtonStyle}"
+                    <Button x:Name="InfoSidebarButton" Style="{StaticResource PcasaFooterStateButtonStyle}"
                             Margin="0,0,11,0" ToolTip="{loc:Tr Key='Bildinformationen anzeigen'}" Tag="Info" Click="SidebarMode_Click">
                         <Viewbox Width="18" Height="18">
                             <Canvas Width="24" Height="24">

@@ -451,37 +451,6 @@ public partial class MainWindow
 
     private bool _tagWriteActive;
 
-    private int _quickTagRefreshVersion;
-
-    private async void RefreshQuickTags()
-    {
-        var revision = ++_quickTagRefreshVersion;
-        IReadOnlyList<string> tags;
-        try
-        {
-            tags = await _galleryCatalogReader.ReadAsync(
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    return new ImageTagRepository(_database).GetRecentTags();
-                }, () => revision == _quickTagRefreshVersion);
-        }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex) { PCasaDiagnostics.Write("Tags.Quick", ex); return; }
-        if (revision != _quickTagRefreshVersion || _sidebarMode != "Tags") return;
-        TagQuickPanel.Children.Clear();
-        foreach (var tag in tags)
-        {
-            var button = new Button {
-                Content = tag, ToolTip = UiLanguage.Format("Tag '{0}' allen ausgewählten Bildern hinzufügen", tag),
-                Margin = new Thickness(2), Padding = new Thickness(6, 3, 6, 3),
-                Style = (Style)FindResource("PcasaStatusButtonStyle")
-            };
-            button.Click += (_, _) => StageTagChange(tag, remove: false);
-            TagQuickPanel.Children.Add(button);
-        }
-    }
-
     private bool _tagRecoveryQueued;
     // V1 remains registered for durable packages written by older PCasa versions.
     // New recoveries use a SINGLE replayable step, with pending_tag_edits as truth.
@@ -557,6 +526,11 @@ public partial class MainWindow
                 0, images.Length);
             foreach (var (imageId, originalPath) in images)
             {
+                // This legacy single-step recovery has a per-image SQLite
+                // acknowledgment. Finish the last original before yielding.
+                if (_scheduler.GracefulShutdownRequested)
+                    throw new OperationCanceledException(
+                        "Tag-Wiederherstellung nach letztem Original geparkt.");
                 token.ThrowIfCancellationRequested();
                 var root = Path.GetPathRoot(originalPath) ?? originalPath;
                 // A single offline mapped NAS/share must not prevent the
@@ -983,7 +957,6 @@ public partial class MainWindow
     private async Task PublishTagCommitAsync(string key, int changes)
     {
         StatusText.Text = UiLanguage.Format("Tag-Paket: {0} Änderungen lokal gesichert · Dateien folgen", changes);
-        RefreshQuickTags();
         await RefreshTagSidebarAsync();
         if (_browseInitialized && _browsePageCache is not null &&
             !string.IsNullOrWhiteSpace(TagSearchBox.Text))

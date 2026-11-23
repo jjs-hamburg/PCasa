@@ -79,10 +79,10 @@ public partial class FolderManagerWindow : Window
         {
             (Name: "Desktop", Path: Environment.GetFolderPath(
                 Environment.SpecialFolder.DesktopDirectory)),
-            (Name: "Bilder", Path: Environment.GetFolderPath(
-                Environment.SpecialFolder.MyPictures)),
-            (Name: "Dokumente", Path: Environment.GetFolderPath(
-                Environment.SpecialFolder.MyDocuments))
+            (Name: UiLanguage.Current.Code == "en" ? "Pictures" : "Eigene Bilder",
+                Path: Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)),
+            (Name: UiLanguage.Current.Code == "en" ? "Documents" : "Eigene Dokumente",
+                Path: Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments))
         }
         .Where(folder => !string.IsNullOrWhiteSpace(folder.Path))
         .Select(folder => (folder.Name, FolderExclusionRules.Normalize(folder.Path)))
@@ -166,16 +166,35 @@ public partial class FolderManagerWindow : Window
                 {
                     rootsByPath.TryGetValue(path, out var exact);
                     catalogByPath.TryGetValue(path, out var count);
+                    var special = _systemFolders.FirstOrDefault(folder =>
+                        PathEquals(folder.Path, path));
+                    var isSpecial = !string.IsNullOrEmpty(special.Path);
                     item = CreateItem(new ManagedNode(
                         exact ?? FindCoveringRoot(path), path,
-                        IsRoot: exact is not null, CatalogImageCount: count));
+                        IsRoot: exact is not null,
+                        IsSystemFolder: isSpecial,
+                        Label: isSpecial ? special.Name : null,
+                        CatalogImageCount: count));
                     _folderNodes[path] = item;
-                    if (parent is null) FolderManagerTree.Items.Add(item);
+                    // Real Windows user folders are prominent shortcuts at
+                    // the top, not separately monitored roots. Their actual
+                    // paths remain the sole selection identity.
+                    if (parent is null || isSpecial) FolderManagerTree.Items.Add(item);
                     else parent.Items.Add(item);
                 }
                 parent = item;
             }
         }
+
+        // Keep the three Windows user folders above alphabetic drive roots.
+        // These are the very same path nodes, never duplicated scan roots.
+        var specialNodes = _systemFolders
+            .Select(folder => _folderNodes.GetValueOrDefault(folder.Path))
+            .Where(item => item is not null).Distinct().ToArray();
+        foreach (var shortcut in specialNodes)
+            FolderManagerTree.Items.Remove(shortcut!);
+        for (var index = 0; index < specialNodes.Length; index++)
+            FolderManagerTree.Items.Insert(index, specialNodes[index]!);
 
         // Expansion is user-controlled. Opening a parent must NEVER
         // recursively open children or deeper levels.
@@ -299,6 +318,7 @@ public partial class FolderManagerWindow : Window
             IsEnabled = CanToggle(node)
         };
         checkbox.SetResourceReference(Control.ForegroundProperty, "PcasaTextBrush");
+        checkbox.Style = (Style)FindResource("ManagerFolderCheckBoxStyle");
 
         var item = new TreeViewItem
         {

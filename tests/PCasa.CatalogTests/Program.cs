@@ -203,7 +203,6 @@ internal static class Program
         Run("Scanner exposes committed image folders before scan completion", ScannerPublishesFoldersIncrementally, failures);
         Run("Scan progress previews come from committed local thumbnails, never NAS originals", ScanProgressUsesLocalThumbnails, failures);
         Run("RAW camera extensions participate in the existing scan pipeline", RawFormatsRecognized, failures);
-        Run("Recent quick tags persist and reorder", RecentQuickTagsPersist, failures);
         Run("Tag edit draft preserves independent images and counts across selections", MultiImageTagDraftStaysAcrossSelections, failures);
         Run("Per-image tag batch records one atomic local intent transaction", PerImageTagBatchCommitsAtomically, failures);
         Run("EXIF catalog stores complete tags and GPS with no cache rebuild on backfill", ExifCatalogRoundTrip, failures);
@@ -7070,19 +7069,6 @@ internal static class Program
         var pixels = new byte[bitmap.PixelWidth * bitmap.PixelHeight * 4];
         bitmap.CopyPixels(pixels, bitmap.PixelWidth * 4, 0);
         return SHA256.HashData(pixels);
-    }
-
-    private static void RecentQuickTagsPersist()
-    {
-        using var sandbox = new Sandbox();
-        var (db, _, _) = sandbox.Prepare();
-        var first = new ImageTagRepository(db);
-        first.RememberTag("Ein");
-        first.RememberTag("Zwei");
-        first.RememberTag("Ein");
-        var second = new ImageTagRepository(db).GetRecentTags();
-        if (second.Count != 2 || second[0] != "Ein" || second[1] != "Zwei")
-            throw new Exception("Recently entered tags must survive new repository instances.");
     }
 
     private static void GalleryExplorerSelection()

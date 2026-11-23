@@ -19,8 +19,6 @@ public partial class MainWindow : Window
     private readonly FolderScanner _folderScanner;
     private readonly HashSet<long> _selectedImageIds = new();
     private readonly Dictionary<long, TreeViewItem> _folderTreeItems = new();
-    private readonly FolderTreeDisplaySettings _folderTreeSettings =
-        FolderTreeDisplaySettings.Load();
 
     private IReadOnlyList<PhotoFolderSummary> _photoFolders = Array.Empty<PhotoFolderSummary>();
     private CancellationTokenSource? _activeScanCancellation;
@@ -167,17 +165,6 @@ public partial class MainWindow : Window
             _backgroundDebounceTimer?.Start();
     }
 
-    private void FolderTreeToggle_Click(object sender, RoutedEventArgs e)
-    {
-        var expanding = _folderTreeSettings.Compressed;
-        _folderTreeSettings.Compressed = !expanding;
-        _folderTreeSettings.Save();
-        // Expand must also expose the intermediate ancestors omitted by Compress.
-        _expandingCompressedTree = expanding;
-        RefreshFolderTree();
-        SaveFolderTreeState();
-    }
-
     // The tree's read-only drop eligibility projection. SQLite remains the
     // sole authority; it is rechecked in each scheduled mutation.
     private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
@@ -205,7 +192,6 @@ public partial class MainWindow : Window
     private readonly HashSet<string> _createdEmptyFolderPaths =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _rebuildingFolderTree;
-    private bool _expandingCompressedTree;
 
     private void RefreshFolderTree(bool preserveGalleryAnchor = true)
     {
@@ -214,7 +200,12 @@ public partial class MainWindow : Window
         UpdateFolderImageTotal();
         try
         {
-        var expandedPaths = CaptureExpandedFolderPaths();
+        // The flat list is a projection, NEVER a source for persisted tree
+        // expansion. Restore the real tree's last saved path state.
+        var expandedPaths = _appearance.FlatFolderView || _restoringTreeFromFlat
+            ? new HashSet<string>(_appearance.ExpandedTreePaths ?? [],
+                StringComparer.OrdinalIgnoreCase)
+            : CaptureExpandedFolderPaths();
         // An explicit tree selection can be a parent with no photo-folder ID.
         // Reconstruct that selection by path instead of forcing the active
         // scroll folder whenever a scan rebuilds the tree.
@@ -303,93 +294,26 @@ public partial class MainWindow : Window
             ? defaultExpandedPaths
             : expandedPaths;
 
-        // Compress omits intermediate path nodes from the visual tree.
-        // On returning to Expand, those ancestors did not exist in the
-        // previous expansion snapshot. Explicitly reopen all monitored
-        // root ancestors so exactly the same photo directories are visible.
-        if (!_folderTreeSettings.Compressed &&
-            (!_appearance.FolderExpansionsSaved || _expandingCompressedTree))
+        _collapsedTreePathsForFlat = nodesByPath.Values
+            .Where(node => node.Children.Count > 0 &&
+                !pathsToExpand.Contains(node.FullPath))
+            .Select(node => FolderExclusionRules.Normalize(node.FullPath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (_appearance.FlatFolderView)
         {
-            pathsToExpand = new HashSet<string>(
-                pathsToExpand.Concat(defaultExpandedPaths),
-                StringComparer.OrdinalIgnoreCase);
+            PopulateFlatFolderList(monitoredFolderIds, rootsWithExclusions);
         }
-
-        FolderTreeToggleButton.Tag = _folderTreeSettings.Compressed ? null : "Active";
-        FolderTreeToggleButton.ToolTip = _folderTreeSettings.Compressed
-            ? "Expand: vollständige Pfade anzeigen"
-            : "Compress: Pfade verkürzt anzeigen";
-        FolderTreeToggleButton.ToolTip = _folderTreeSettings.Compressed
-            ? "Vollständige Pfade zeigen"
-            : "Pfadstufen bis zur überwachten Wurzel zusammenfassen";
-
-        foreach (var root in roots.Values.OrderBy(
-                     node => node.DisplayName,
-                     StringComparer.CurrentCultureIgnoreCase))
+        else
         {
-            if (!_folderTreeSettings.Compressed)
-            {
-                FoldersTree.Items.Add(CreateFolderTreeItem(root, pathsToExpand));
-                continue;
-            }
-
-            // Each monitored root under this drive/share is visible, together
-            // with ALL its children and siblings. Only unnecessary ancestors
-            // (such as Users/user in C:\Users\user\Pictures) disappear.
-            var monitoredUnderDrive = monitoredFolders
-                .Where(folder => FolderExclusionRules.IsAtOrBelow(
-                    folder.LocalPath, root.FullPath))
-                .Select(folder => FolderExclusionRules.Normalize(folder.LocalPath))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path.Length)
-                .ThenBy(path => path, StringComparer.CurrentCultureIgnoreCase)
-                .ToArray();
-
-            var directMonitoredRoots = monitoredUnderDrive
-                .Where(path => !monitoredUnderDrive.Any(other =>
-                    !string.Equals(path, other, StringComparison.OrdinalIgnoreCase) &&
-                    FolderExclusionRules.IsAtOrBelow(path, other)))
-                .ToArray();
-
-            if (directMonitoredRoots.Any(path =>
-                    string.Equals(path,
-                        FolderExclusionRules.Normalize(root.FullPath),
-                        StringComparison.OrdinalIgnoreCase)))
-            {
-                // A drive/share root itself is monitored: display its entire
-                // subtree, not a duplicate root nested inside itself.
-                FoldersTree.Items.Add(CreateFolderTreeItem(root, pathsToExpand));
-                continue;
-            }
-
-            var driveItem = CreateFolderTreeItem(
-                root, pathsToExpand, includeChildren: false);
-
-            foreach (var monitoredPath in directMonitoredRoots
-                         .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase))
-            {
-                if (!nodesByPath.TryGetValue(monitoredPath, out var monitoredNode))
-                    continue;
-
-                // E.g. C: > Pictures > _a, _Christina, Himmel ...
-                // The monitored node stays expanded so its siblings are visible.
-                var monitoredItem = CreateFolderTreeItem(monitoredNode, pathsToExpand);
-                // First launch opens monitored roots for discoverability.
-                // Once the user has saved tree state, never force-open the
-                // root after a scan rebuild or PCasa restart.
-                if (useDefaultExpansion && !_appearance.FolderExpansionsSaved)
-                    monitoredItem.IsExpanded = true;
-                driveItem.Items.Add(monitoredItem);
-            }
-
-            // Same policy for the drive/share node. An explicitly collapsed
-            // drive stays collapsed on every subsequent launch.
-            if (useDefaultExpansion && !_appearance.FolderExpansionsSaved)
-                driveItem.IsExpanded = true;
-            FoldersTree.Items.Add(driveItem);
+        foreach (var root in roots.Values.OrderBy(
+            node => node.DisplayName,
+            StringComparer.CurrentCultureIgnoreCase))
+            FoldersTree.Items.Add(CreateFolderTreeItem(root, pathsToExpand));
         }
 
         _folderTreeInitialized = true;
+        SyncFolderViewModeButtons();
 
         var selectedItem = selectedPath is string path
             ? FindFolderTreeItemByPath(FoldersTree, path) : null;
@@ -416,7 +340,6 @@ public partial class MainWindow : Window
         finally
         {
             _rebuildingFolderTree = false;
-            _expandingCompressedTree = false;
         }
     }
 
@@ -440,6 +363,11 @@ public partial class MainWindow : Window
     private void RefreshVisibleFolderCounts()
     {
         UpdateFolderImageTotal();
+        if (_appearance.FlatFolderView)
+        {
+            RefreshFlatFolderCounts();
+            return;
+        }
         _folderCountTotals.Clear();
         var folderCounts = _photoFolders.ToDictionary(folder => folder.Id);
         foreach (var (id, latest) in _liveFolderCountSummaries)
@@ -509,6 +437,18 @@ public partial class MainWindow : Window
         _liveCatalogImageCount = imageCount;
         _liveFolderCountSerial++;
         UpdateFolderImageTotal();
+        if (_appearance.FlatFolderView)
+        {
+            var changedMembership = changes.Any(change =>
+                change.Value is { ImageCount: > 0 } latest
+                    ? !_folderTreeItems.ContainsKey(latest.Id)
+                    : _folderTreeItems.ContainsKey(change.Key));
+            if (changedMembership)
+                RefreshFolderTree(preserveGalleryAnchor: false);
+            else
+                RefreshFlatFolderCounts();
+            return;
+        }
         foreach (var path in affected)
         {
             if (!_folderCountItems.TryGetValue(path, out var item))
@@ -557,7 +497,7 @@ public partial class MainWindow : Window
         // Do not replace a valid previous snapshot with an empty startup
         // tree before the catalog projection has been initialized.
         if (_rebuildingFolderTree || !_folderTreeInitialized ||
-            FoldersTree.Items.Count == 0) return;
+            _appearance.FlatFolderView || FoldersTree.Items.Count == 0) return;
 
         var expanded = CaptureExpandedFolderPaths();
         if (_allFolderProjectionRootPath is not null)

@@ -35,6 +35,8 @@ internal static class Program
         if (args.Length == 2 &&
             string.Equals(args[0], "--chromium-credits", StringComparison.OrdinalIgnoreCase))
             return ChromiumCreditsFlow.Run(args[1]);
+        if (args.Contains("--alpha58-durable", StringComparer.OrdinalIgnoreCase))
+            return Alpha58DurableFlow.Run();
         if (args.Contains("--crop-flow", StringComparer.OrdinalIgnoreCase))
             return CropFlow.Run();
         if (args.Contains("--tag-flow", StringComparer.OrdinalIgnoreCase))
@@ -118,6 +120,7 @@ internal static class Program
             if (typeof(PCasa.App.MainWindow).GetField(
                     "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
                 throw new Exception("First gallery frame was not presented.");
+            Alpha58WindowSmoke.Run(window);
             var deferredSurface = new BrowseGallerySurface();
             deferredSurface.DeferViewportPageRequests(true);
             deferredSurface.SetViewport(1000, 600);
@@ -1360,8 +1363,7 @@ internal static class Program
                 throw new Exception("Search inversion toggle is not labelled NOT.");
             foreach (var buttonName in new[]
             {
-                "FolderExpandAllButton", "FolderCollapseAllButton",
-                "FolderTreeToggleButton"
+                "FolderExpandAllButton", "FolderCollapseAllButton"
             })
             {
                 var treeButton = (Button)window.FindName(buttonName)!;
