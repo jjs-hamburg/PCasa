@@ -228,6 +228,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
     }
 
     public IReadOnlySet<long> HiddenFolderIds => _hiddenFolderIds;
+    public long? EmptyNavigationFolderId => _emptyNavigationFolderId;
 
     /// <summary>
     /// A selected photo folder may have NO images in the active GPS/tag/RAW
