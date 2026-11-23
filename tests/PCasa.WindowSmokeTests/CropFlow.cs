@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -199,6 +200,73 @@ internal static class CropFlow
             Console.WriteLine(
                 "PASS: Alpha.61 color-only Save/SaveCopy and staged-date repair preserve exact " +
                 "EXIF/XMP/IPTC capture dates, timezone and subseconds.");
+
+            // Alpha.62: reproduce the actual scanner-JPEG metadata anomaly,
+            // without checking a private user photograph into public source.
+            // The Canon scanner stored EXIF CreateDate as yyyy/MM/dd, while
+            // DateTimeOriginal/ModifyDate and XMP/IPTC use canonical forms.
+            // ExifTool's typed date writer normalizes this source text and
+            // a strict source/staged metadata comparison then rejects Save.
+            var scanner = Path.Combine(root, "scanner-noncanonical.jpg");
+            File.Copy(datedSource, scanner);
+            RunExif(exif, "-overwrite_original",
+                "-EXIF:CreateDate=2022:01:30 14:13:38", scanner);
+            PatchSingleAscii(scanner,
+                "2022:01:30 14:13:38", "2022/01/30 14:13:38");
+            var scannerReference = Path.Combine(root, "scanner-reference.jpg");
+            File.Copy(scanner, scannerReference);
+            if (ExifDateMetadata.ReadFields(scanner).CreateDate !=
+                "2022/01/30 14:13:38")
+                throw new Exception(
+                    "Noncanonical scanner EXIF test fixture was normalized on read.");
+
+            // First prove that the *existing* strict comparator detects
+            // the difference, and test raw restoration independently of
+            // ExifTool's metadata transfer and pixel writer.
+            var canonicalCopy = Path.Combine(root, "scanner-canonical.jpg");
+            File.Copy(scanner, canonicalCopy);
+            PatchSingleAscii(canonicalCopy,
+                "2022/01/30 14:13:38", "2022:01:30 14:13:38");
+            var missingDateRejected = false;
+            try
+            {
+                ExifDateMetadata.VerifyUnchanged(scanner, canonicalCopy);
+            }
+            catch (InvalidDataException) { missingDateRejected = true; }
+            if (!missingDateRejected)
+                throw new Exception(
+                    "Strict EXIF comparator missed noncanonical CreateDate normalization.");
+            var restoredDateTags =
+                JpegExifVerbatimDateRestorer.Restore(scanner, canonicalCopy);
+            if (!restoredDateTags.Contains("EXIF:CreateDate"))
+                throw new Exception("Verbatim date repair did not patch CreateDate.");
+            ExifDateMetadata.VerifyUnchanged(scanner, canonicalCopy);
+            if (!File.ReadAllBytes(scanner).SequenceEqual(
+                    File.ReadAllBytes(scannerReference)))
+                throw new Exception("TIFF date repair changed the original JPEG.");
+
+            // Both public save modes must succeed with this exact EXIF
+            // condition. Real MTA pipeline, real ExifTool, strict read-back.
+            var scannerBytes = File.ReadAllBytes(scanner);
+            var scannerCopy = JpegCropWriter.GetAvailableCopyPath(scanner);
+            Task.Run(() => JpegCropWriter.SaveAsCopy(scanner, scannerCopy,
+                colorSteps, CancellationToken.None)).GetAwaiter().GetResult();
+            ExifDateMetadata.VerifyUnchanged(scannerReference, scannerCopy);
+            if (!File.ReadAllBytes(scanner).SequenceEqual(scannerBytes))
+                throw new Exception("Noncanonical EXIF SaveCopy altered source.");
+
+            Task.Run(() => JpegCropWriter.Save(scanner, colorSteps,
+                CancellationToken.None)).GetAwaiter().GetResult();
+            ExifDateMetadata.VerifyUnchanged(scannerReference, scanner);
+            if (ExifDateMetadata.ReadFields(scanner).CreateDate !=
+                "2022/01/30 14:13:38")
+                throw new Exception(
+                    "Scanner's noncanonical native CreateDate was modified.");
+            if (Directory.GetFiles(root, ".pcasa-edit-*").Length != 0)
+                throw new Exception("Noncanonical EXIF save leaked staged files.");
+            Console.WriteLine(
+                "PASS: Alpha.62 noncanonical scanner EXIF CreateDate stays byte-exact " +
+                "through color Save/SaveCopy and independent staged date repair.");
 
             // Alpha.37: libvips must release native source handles when a
             // thumbnail has finished. Otherwise the viewer may keep Windows
@@ -649,6 +717,29 @@ internal static class CropFlow
             try { Directory.Delete(root, recursive: true); }
             catch (IOException) { }
         }
+    }
+
+    // Synthetic fixture builder: change ONLY a known 19-character EXIF
+    // ASCII timestamp with an identically sized string. Fail closed if
+    // the source date appears more than once; never patch image pixels.
+    private static void PatchSingleAscii(string path, string source, string replacement)
+    {
+        if (source.Length != replacement.Length)
+            throw new Exception("Date fixture lengths differ.");
+        var bytes = File.ReadAllBytes(path);
+        var needle = Encoding.ASCII.GetBytes(source);
+        var replacementBytes = Encoding.ASCII.GetBytes(replacement);
+        var found = -1;
+        for (var offset = 0; offset <= bytes.Length - needle.Length; offset++)
+        {
+            if (!bytes.AsSpan(offset, needle.Length).SequenceEqual(needle)) continue;
+            if (found >= 0)
+                throw new Exception("Scanner date fixture contains ambiguous text.");
+            found = offset;
+        }
+        if (found < 0) throw new Exception("Scanner EXIF date fixture not found.");
+        replacementBytes.CopyTo(bytes, found);
+        File.WriteAllBytes(path, bytes);
     }
 
     private static string ReadExif(string exe, params string[] args)
