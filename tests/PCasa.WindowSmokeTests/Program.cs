@@ -2332,10 +2332,10 @@ internal static class Program
             foreach (var width in new[] { 720f, 1280f, 1920f })
             foreach (var height in new[] { 600f, 1080f })
             foreach (var t in new[] { 0f, .20f, .5f, .8f, 1f })
-            foreach (var slot in new[] { -2, -1, 0, 1, 2 })
+            foreach (var reelPosition in new[] { -2, -1, 0, 1, 2 })
             {
-                var forward = Viewmaster(slot, t, +1, width, height);
-                var backward = Viewmaster(slot, t, -1, width, height);
+                var forward = Viewmaster(reelPosition, t, +1, width, height);
+                var backward = Viewmaster(reelPosition, t, -1, width, height);
                 if (!float.IsFinite(forward.X) || !float.IsFinite(forward.Y) ||
                     !float.IsFinite(forward.Tilt) ||
                     forward.Scale is < .45f or > 1.001f ||
@@ -2370,18 +2370,18 @@ internal static class Program
                 bool incoming, float progress)
                 => ((float, float, float))reverseCube.Invoke(null,
                     [900f, 600f, u, v, incoming, progress, -1])!;
-            foreach (var progress in new[] { 0f, .15f, .5f, .85f, 1f })
+            foreach (var cubeProgress in new[] { 0f, .15f, .5f, .85f, 1f })
             {
-                var outgoingHinge = ReversePoint(0, .5f, false, progress);
-                var incomingHinge = ReversePoint(1, .5f, true, progress);
+                var outgoingHinge = ReversePoint(0, .5f, false, cubeProgress);
+                var incomingHinge = ReversePoint(1, .5f, true, cubeProgress);
                 if (Math.Abs(outgoingHinge.X - incomingHinge.X) > .005f ||
                     Math.Abs(outgoingHinge.Y - incomingHinge.Y) > .005f ||
                     Math.Abs(outgoingHinge.W - incomingHinge.W) > .005f)
                     throw new Exception("Reversed cube faces separated at left hinge.");
                 foreach (var u in new[] { 0f, .2f, .8f, 1f })
                 {
-                    var reverse = ReversePoint(u, .5f, false, progress);
-                    var forwardMirror = Point(1f - u, .5f, false, progress);
+                    var reverse = ReversePoint(u, .5f, false, cubeProgress);
+                    var forwardMirror = Point(1f - u, .5f, false, cubeProgress);
                     if (Math.Abs(reverse.X + forwardMirror.X) > .005f ||
                         Math.Abs(reverse.W - forwardMirror.W) > .005f)
                         throw new Exception("Reversed cube does not mirror 3D travel.");
