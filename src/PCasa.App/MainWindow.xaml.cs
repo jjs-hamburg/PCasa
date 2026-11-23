@@ -212,6 +212,11 @@ public partial class MainWindow : Window
         if (_rebuildingFolderTree) return;
         _rebuildingFolderTree = true;
         UpdateFolderImageTotal();
+        // Catalog-driven refreshes may happen while the tree is hidden.
+        // Keep its independent scroll position, including if a path mode
+        // button rebuilds its nodes in the background.
+        var treeOffset = _folderTreeInitialized
+            ? FindTreeScrollViewer(FoldersTree)?.VerticalOffset : null;
         try
         {
         // The physical catalog tree stays alive even while the independent
@@ -432,6 +437,10 @@ public partial class MainWindow : Window
         // The live scan path below patches affected ancestors instead of
         // re-walking every NAS folder for each 200-ms count notification.
         RefreshVisibleFolderCounts();
+        if (treeOffset is double savedOffset && savedOffset > 0)
+            _ = Dispatcher.BeginInvoke(new Action(() =>
+                FindTreeScrollViewer(FoldersTree)?.ScrollToVerticalOffset(savedOffset)),
+                System.Windows.Threading.DispatcherPriority.Loaded);
         }
         finally
         {
