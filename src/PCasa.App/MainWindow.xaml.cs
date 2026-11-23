@@ -167,17 +167,6 @@ public partial class MainWindow : Window
             _backgroundDebounceTimer?.Start();
     }
 
-    private void FolderTreeToggle_Click(object sender, RoutedEventArgs e)
-    {
-        var expanding = _folderTreeSettings.Compressed;
-        _folderTreeSettings.Compressed = !expanding;
-        _folderTreeSettings.Save();
-        // Expand must also expose the intermediate ancestors omitted by Compress.
-        _expandingCompressedTree = expanding;
-        RefreshFolderTree();
-        SaveFolderTreeState();
-    }
-
     // The tree's read-only drop eligibility projection. SQLite remains the
     // sole authority; it is rechecked in each scheduled mutation.
     private IReadOnlyList<(MonitoredFolder Folder, IReadOnlyList<string> ExcludedPaths,
@@ -214,7 +203,12 @@ public partial class MainWindow : Window
         UpdateFolderImageTotal();
         try
         {
-        var expandedPaths = CaptureExpandedFolderPaths();
+        // The flat list is a projection, NEVER a source for persisted tree
+        // expansion. Restore the real tree's last saved path state.
+        var expandedPaths = _appearance.FlatFolderView || _restoringTreeFromFlat
+            ? new HashSet<string>(_appearance.ExpandedTreePaths ?? [],
+                StringComparer.OrdinalIgnoreCase)
+            : CaptureExpandedFolderPaths();
         // An explicit tree selection can be a parent with no photo-folder ID.
         // Reconstruct that selection by path instead of forcing the active
         // scroll folder whenever a scan rebuilds the tree.
@@ -315,14 +309,18 @@ public partial class MainWindow : Window
                 StringComparer.OrdinalIgnoreCase);
         }
 
-        FolderTreeToggleButton.Tag = _folderTreeSettings.Compressed ? null : "Active";
-        FolderTreeToggleButton.ToolTip = _folderTreeSettings.Compressed
-            ? "Expand: vollständige Pfade anzeigen"
-            : "Compress: Pfade verkürzt anzeigen";
-        FolderTreeToggleButton.ToolTip = _folderTreeSettings.Compressed
-            ? "Vollständige Pfade zeigen"
-            : "Pfadstufen bis zur überwachten Wurzel zusammenfassen";
+        _collapsedTreePathsForFlat = nodesByPath.Values
+            .Where(node => node.Children.Count > 0 &&
+                !pathsToExpand.Contains(node.FullPath))
+            .Select(node => FolderExclusionRules.Normalize(node.FullPath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        if (_appearance.FlatFolderView)
+        {
+            PopulateFlatFolderList(monitoredFolderIds, rootsWithExclusions);
+        }
+        else
+        {
         foreach (var root in roots.Values.OrderBy(
                      node => node.DisplayName,
                      StringComparer.CurrentCultureIgnoreCase))
@@ -388,6 +386,7 @@ public partial class MainWindow : Window
                 driveItem.IsExpanded = true;
             FoldersTree.Items.Add(driveItem);
         }
+        }
 
         _folderTreeInitialized = true;
 
@@ -440,6 +439,11 @@ public partial class MainWindow : Window
     private void RefreshVisibleFolderCounts()
     {
         UpdateFolderImageTotal();
+        if (_appearance.FlatFolderView)
+        {
+            RefreshFlatFolderCounts();
+            return;
+        }
         _folderCountTotals.Clear();
         var folderCounts = _photoFolders.ToDictionary(folder => folder.Id);
         foreach (var (id, latest) in _liveFolderCountSummaries)
@@ -509,6 +513,18 @@ public partial class MainWindow : Window
         _liveCatalogImageCount = imageCount;
         _liveFolderCountSerial++;
         UpdateFolderImageTotal();
+        if (_appearance.FlatFolderView)
+        {
+            var changedMembership = changes.Any(change =>
+                change.Value is { ImageCount: > 0 } latest
+                    ? !_folderTreeItems.ContainsKey(latest.Id)
+                    : _folderTreeItems.ContainsKey(change.Key));
+            if (changedMembership)
+                RefreshFolderTree(preserveGalleryAnchor: false);
+            else
+                RefreshFlatFolderCounts();
+            return;
+        }
         foreach (var path in affected)
         {
             if (!_folderCountItems.TryGetValue(path, out var item))
@@ -557,7 +573,7 @@ public partial class MainWindow : Window
         // Do not replace a valid previous snapshot with an empty startup
         // tree before the catalog projection has been initialized.
         if (_rebuildingFolderTree || !_folderTreeInitialized ||
-            FoldersTree.Items.Count == 0) return;
+            _appearance.FlatFolderView || FoldersTree.Items.Count == 0) return;
 
         var expanded = CaptureExpandedFolderPaths();
         if (_allFolderProjectionRootPath is not null)
