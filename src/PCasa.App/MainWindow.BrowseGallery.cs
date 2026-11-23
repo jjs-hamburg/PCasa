@@ -1604,9 +1604,13 @@ public partial class MainWindow
             // Folder-scoped search also accepts a parent or drive node.
             // Search results already contain the chosen subtree; never
             // start a second catalog scan merely to navigate it.
-            if (destinationId is long filteredId &&
-                BrowseSurface.GetFolderOffset(filteredId) is double filteredTop)
-                ScrollToExplicitGalleryFolder(filteredId, filteredTop);
+            if (destinationId is long filteredId)
+            {
+                if (BrowseSurface.GetFolderOffset(filteredId) is double filteredTop)
+                    ScrollToExplicitGalleryFolder(filteredId, filteredTop);
+                else
+                    TryNavigateToFilteredEmptyFolder(filteredId);
+            }
             return;
         }
 
@@ -1634,6 +1638,15 @@ public partial class MainWindow
     {
         var navigationVersion = _explicitGalleryNavigationVersion;
         _activePhotoFolderId = photoFolderId;
+        // A previous zero-result folder's temporary header must not displace
+        // the next selected folder's real gallery coordinates.
+        if (BrowseSurface.EmptyNavigationFolderId is long previous &&
+            previous != photoFolderId)
+        {
+            BrowseSurface.SetEmptyNavigationFolder(null);
+            EmptyPanel.Visibility = _displayedBrowseIndex.Count == 0
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         // If "hide collapsed folders" omitted this indexed folder from the
         // virtual layout, first reveal its existing ancestors. Previously we
@@ -1676,6 +1689,12 @@ public partial class MainWindow
             return;
         }
 
+        // A filtered folder with zero matching images still owns an exact
+        // section in the gallery. Don't query SQLite or drop the click just
+        // because the visible thumbnail index contains no matching entry.
+        if (TryNavigateToFilteredEmptyFolder(photoFolderId))
+            return;
+
         // This folder was committed after the last gallery projection, or
         // was omitted while its ancestors were collapsed. A complete SQLite
         // scan of hundreds of thousands of photos used to run here, could
@@ -1706,6 +1725,50 @@ public partial class MainWindow
             UpdateActiveFolderDisplay(photoFolderId,
                 updateTreeSelection: false);
         }
+    }
+
+    private bool TryNavigateToFilteredEmptyFolder(long photoFolderId)
+    {
+        if (!AttributeFilterActive &&
+            string.IsNullOrWhiteSpace(TagSearchBox?.Text) &&
+            _gpsAreaFilterIds is null)
+            return false;
+        if (BrowseSurface.HiddenFolderIds.Contains(photoFolderId) ||
+            !_photoFolders.Any(folder => folder.Id == photoFolderId) ||
+            _displayedBrowseIndex.Any(image =>
+                image.PhotoFolderId == photoFolderId))
+            return false;
+
+        // Both indices have the same authoritative folder order. Find the
+        // requested folder in the COMPLETE local index, then count only
+        // visible images in preceding folders. No NAS reads, no second
+        // gallery index, and no unfiltered thumbnails are ever displayed.
+        var orderedFolders = new Dictionary<long, int>();
+        foreach (var image in _browseIndex)
+            if (!orderedFolders.ContainsKey(image.PhotoFolderId))
+                orderedFolders.Add(image.PhotoFolderId, orderedFolders.Count);
+        if (!orderedFolders.TryGetValue(photoFolderId, out var targetOrder))
+            return false;
+
+        var insertBefore = 0;
+        foreach (var image in _displayedBrowseIndex)
+        {
+            if (!orderedFolders.TryGetValue(image.PhotoFolderId, out var order) ||
+                order >= targetOrder) break;
+            insertBefore++;
+        }
+
+        BrowseSurface.SetEmptyNavigationFolder(photoFolderId, insertBefore);
+        // A completely empty filtered index normally displays a full-page
+        // empty overlay. The selected folder now has a real gallery header
+        // and its own localized no-results message, so reveal that section.
+        EmptyPanel.Visibility = Visibility.Collapsed;
+        BrowseScrollViewer.UpdateLayout();
+        if (BrowseSurface.GetFolderOffset(photoFolderId) is not double top)
+            return false;
+        ScrollToExplicitGalleryFolder(photoFolderId, top);
+        UpdateActiveFolderDisplay(photoFolderId, updateTreeSelection: false);
+        return true;
     }
 
     private async Task<bool> PublishSelectedFolderIndexAsync(
