@@ -1363,8 +1363,7 @@ internal static class Program
                 throw new Exception("Search inversion toggle is not labelled NOT.");
             foreach (var buttonName in new[]
             {
-                "FolderExpandAllButton", "FolderCollapseAllButton",
-                "FolderTreeToggleButton"
+                "FolderExpandAllButton", "FolderCollapseAllButton"
             })
             {
                 var treeButton = (Button)window.FindName(buttonName)!;
