@@ -2488,6 +2488,110 @@ internal static class Program
                 throw new Exception(
                     "Photo-less folder navigation cannot find its first local gallery section.");
 
+            // Alpha.57: the REAL folder-click helper must navigate an entire
+            // folder excluded by the GPS property filter. The selected photo
+            // directory must be a visible header even if its filter matches
+            // are zero. Do not silently switch off the filter or include a
+            // single unfiltered thumbnail.
+            var filterFlags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var filterType = typeof(PCasa.App.MainWindow);
+            var fullField = filterType.GetField("_browseIndex", filterFlags)!;
+            var filteredField = filterType.GetField("_displayedBrowseIndex", filterFlags)!;
+            var foldersField = filterType.GetField("_photoFolders", filterFlags)!;
+            var activeField = filterType.GetField("_activePhotoFolderId", filterFlags)!;
+            var appearanceField = filterType.GetField("_appearance", filterFlags)!;
+            var appearance = appearanceField.GetValue(window)!;
+            var gpsProperty = appearance.GetType().GetProperty("GalleryAttributeFilter")!;
+            var previousFilter = gpsProperty.GetValue(appearance);
+            var previousFull = fullField.GetValue(window);
+            var previousFiltered = filteredField.GetValue(window);
+            var previousFolders = foldersField.GetValue(window);
+            var previousActive = activeField.GetValue(window);
+            var previousHidden = surface.HiddenFolderIds;
+            var previousEmpty = surface.EmptyNavigationFolderId;
+            var navigateEmpty = filterType.GetMethod(
+                "TryNavigateToFilteredEmptyFolder", filterFlags)
+                ?? throw new Exception("Filtered folder navigation handler missing.");
+            try
+            {
+                gpsProperty.SetValue(appearance, "Gps");
+                fullField.SetValue(window, synthetic);
+                foldersField.SetValue(window, groups);
+                surface.SetHiddenFolders(new HashSet<long>());
+
+                // The LAST folder has 240 local photos, none matching GPS.
+                // Its empty header must have enough scroll extent to reach
+                // the top of the actual WPF ScrollViewer viewport.
+                var firstOnly = synthetic.Take(240).ToArray();
+                filteredField.SetValue(window, firstOnly);
+                pages.SetIndex(firstOnly);
+                surface.SetData(firstOnly, groups, pages);
+                Flush(window);
+                if (navigateEmpty.Invoke(window, [200L]) is not true)
+                    throw new Exception("GPS-filtered last folder rejected its tree click.");
+                Flush(window);
+                var lastOffset = surface.GetFolderOffset(200)
+                    ?? throw new Exception("Filtered last folder has no gallery section.");
+                if (Math.Abs(scroller.VerticalOffset - lastOffset) > 3 ||
+                    surface.GetFolderIdAtOffset(lastOffset + 4) != 200 ||
+                    surface.GetVisibleFolderIds().Count != 2 ||
+                    surface.GetImageAnchorOffset(synthetic[240].ImageId, 0) is not null)
+                    throw new Exception(
+                        "Filtered last folder did not jump to its own empty header.");
+
+                // The FIRST folder has no GPS matches, but the following
+                // folder does. Its header must precede all visible images.
+                var secondOnly = synthetic.Skip(240).ToArray();
+                filteredField.SetValue(window, secondOnly);
+                pages.SetIndex(secondOnly);
+                surface.SetData(secondOnly, groups, pages);
+                surface.SetEmptyNavigationFolder(null);
+                Flush(window);
+                if (navigateEmpty.Invoke(window, [100L]) is not true)
+                    throw new Exception("GPS-filtered first folder rejected its tree click.");
+                Flush(window);
+                if (surface.GetFolderOffset(100) is not double firstOffset ||
+                    Math.Abs(firstOffset) > 1 ||
+                    surface.GetVisibleFolderIds()[0] != 100 ||
+                    surface.GetImageAnchorOffset(synthetic[0].ImageId, 0) is not null)
+                    throw new Exception(
+                        "Filtered first folder was not inserted before the visible gallery.");
+
+                // With NO GPS photos anywhere, rendering an empty selected
+                // section must not require a dummy thumbnail or cache page.
+                var noImages = Array.Empty<BrowseThumbnailIndexEntry>();
+                filteredField.SetValue(window, noImages);
+                pages.SetIndex(noImages);
+                surface.SetData(noImages, groups, pages);
+                surface.SetEmptyNavigationFolder(null);
+                Flush(window);
+                if (navigateEmpty.Invoke(window, [100L]) is not true)
+                    throw new Exception("All-zero GPS results prevented folder navigation.");
+                Flush(window);
+                if (surface.GetVisibleFolderIds().Count != 1 ||
+                    surface.GetVisibleFolderIds()[0] != 100 ||
+                    surface.GetVisibleIndexRanges().Count != 0 ||
+                    surface.GetFolderOffset(100) is null)
+                    throw new Exception(
+                        "Entirely empty filtered gallery lost its navigable folder header.");
+                Console.WriteLine(
+                    "PASS: GPS filter preserves clickable first/last/entirely empty folders.");
+            }
+            finally
+            {
+                surface.SetEmptyNavigationFolder(null);
+                surface.SetHiddenFolders(previousHidden);
+                fullField.SetValue(window, previousFull);
+                filteredField.SetValue(window, previousFiltered);
+                foldersField.SetValue(window, previousFolders);
+                activeField.SetValue(window, previousActive);
+                gpsProperty.SetValue(appearance, previousFilter);
+                pages.SetIndex(synthetic);
+                surface.SetData(synthetic, groups, pages);
+                Flush(window);
+            }
+
             // Real regression: a GPS-marked photo in folder 100 must never
             // pull the gallery back after the user explicitly enters folder
             // 200. Repeat with a GPS-free photo: stale layout anchors are
