@@ -94,18 +94,6 @@ public sealed class ImageTagRepository
             .Take(maximum).Select(kv => kv.Key).ToArray();
     }
 
-    public IReadOnlyList<string> GetRecentTags()
-    {
-        using var db = _database.OpenConnection();
-        using var command = db.CreateCommand();
-        command.CommandText =
-            "SELECT tag FROM recent_tags ORDER BY last_used_utc DESC, tag DESC LIMIT 9;";
-        using var reader = command.ExecuteReader();
-        var result = new List<string>();
-        while (reader.Read()) result.Add(reader.GetString(0));
-        return result;
-    }
-
     public void RememberTag(string tag)
     {
         tag = tag.Trim();
