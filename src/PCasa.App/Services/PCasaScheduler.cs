@@ -137,6 +137,33 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly CancellationTokenSource?[] _runningYield =
         new CancellationTokenSource?[LaneGalleryRead + 1];
     private readonly CancellationTokenSource _shutdown = new();
+    private volatile bool _gracefulShutdownRequested;
+    public bool GracefulShutdownRequested => _gracefulShutdownRequested;
+
+    // Freeze new dispatch before waiting for already-running file mutations.
+    // Never cancel an original-file writer while its atomic write is in flight.
+    public async Task PrepareGracefulShutdownAsync()
+    {
+        lock (_gate)
+        {
+            _gracefulShutdownRequested = true;
+            SignalController();
+        }
+        // Read the durable journal outside _gate; it owns its own SQLite locks.
+        var fileKeys = _durableJournal?.Pending()
+            .Where(p => p.Type is not
+                ("manual-folder-scan-v1" or "manual-scan-all-v1"))
+            .Select(p => p.Key).ToHashSet(StringComparer.Ordinal)
+            ?? new HashSet<string>(StringComparer.Ordinal);
+        Task[] writing;
+        lock (_gate)
+            writing = _runningWork
+                .Where(item => fileKeys.Contains(item.Key))
+                .Select(item => item.Completion.Task).ToArray();
+        try { await Task.WhenAll(writing).ConfigureAwait(false); }
+        catch (OperationCanceledException) { /* written checkpoint is durable */ }
+        catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.GracefulDrain", ex); }
+    }
     private readonly Task[] _workers;
     private long _nextId;
     private bool _disposed;
@@ -696,7 +723,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // Keep filling available bounded capacity in global rank
                     // order. SelectNextJobUnsafe is the sole eligibility check.
                     var available = true;
-                    while (available)
+                    while (available && !_gracefulShutdownRequested)
                     {
                         available = false;
                         for (var lane = 0; lane <= LaneGalleryRead; lane++)
@@ -937,6 +964,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     {
         var journal = _durableJournal!;
         package.OnStepCompleted = step => journal.SetState(record.Key, "running", step);
+        package.ShouldYieldAfterStep = () => _gracefulShutdownRequested;
         try
         {
             // A user may pause immediately after the durable INSERT, before
@@ -960,7 +988,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // Shutdown is a yield, user cancellation is final. Never
             // resurrect a deliberately canceled destructive operation.
             journal.SetState(record.Key,
-                _shutdown.IsCancellationRequested ? "queued" :
+                _shutdown.IsCancellationRequested || _gracefulShutdownRequested
+                    ? "queued" :
                 journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
                     ? "paused" : "canceled",
                 package.CompletedSteps);
@@ -1690,6 +1719,9 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     try
                     {
+                        if (_gracefulShutdownRequested)
+                            throw new OperationCanceledException(
+                                "Application exit: preserve pending durable work.");
                         linked.Token.ThrowIfCancellationRequested();
                         if (item.IsCurrent is not null && !item.IsCurrent())
                             throw new OperationCanceledException();
