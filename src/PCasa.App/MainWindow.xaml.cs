@@ -533,9 +533,15 @@ public partial class MainWindow : Window
         UpdateFolderImageTotal();
         if (_appearance.FlatFolderView)
         {
-            // Only the flat projection changes while this view is visible.
-            // The existing catalog-tree WPF objects and scroll stay intact.
-            RefreshFlatFolderList();
+            // Count changes must not recreate the entire flat list every
+            // 200 ms and unexpectedly scroll away from the selected folder.
+            var flatIds = FlatFoldersTree.Items.OfType<TreeViewItem>()
+                .Select(item => (item.Tag as FolderTreeTag)?.PhotoFolderId)
+                .Where(id => id.HasValue).Select(id => id!.Value).ToHashSet();
+            var membershipChanged = changes.Any(change =>
+                (change.Value?.ImageCount > 0) != flatIds.Contains(change.Key));
+            if (membershipChanged) RefreshFlatFolderList();
+            else RefreshFlatFolderCounts();
         }
         foreach (var path in affected)
         {
