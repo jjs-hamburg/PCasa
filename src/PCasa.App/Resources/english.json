@@ -1021,5 +1021,8 @@
   "Die Datei wurde seit dem Öffnen der Bildinformationen geändert.": "The file changed since Image Information was opened.",
   "Nicht unterstütztes EXIF-Datumsfeld: ": "Unsupported EXIF date field: ",
   "Die neuen EXIF-Datumsfelder konnten nicht katalogisiert werden.": "The new EXIF date fields could not be cataloged.",
-  "Gespeicherte EXIF-Datumsfelder stimmen nicht mit der Eingabe überein.": "Saved EXIF date fields do not match the input."
+  "Gespeicherte EXIF-Datumsfelder stimmen nicht mit der Eingabe überein.": "Saved EXIF date fields do not match the input.",
+  "Baumstruktur": "Folder tree",
+  "Flache Ordneransicht": "Flat folder view",
+  "Eingeklappte Ordner in flacher Ansicht ausblenden": "Hide collapsed folders in flat view"
 }
