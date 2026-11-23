@@ -986,7 +986,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 queueOrder: record.QueueOrder,
                 isCurrent: () => journal.Pending().Any(item =>
                     item.Key == record.Key &&
-                    item.State is "queued" or "running"));
+                    item.State is "queued" or "running")).ConfigureAwait(false);
+            // Recovery may originate from the WPF dispatcher. Journal state
+            // must be committed by the scheduler continuation even if the
+            // UI thread is blocked or the process is beginning to close.
             journal.SetState(record.Key, "completed", package.CompletedSteps);
             CompleteTaskPromotion(record.Key);
         }
