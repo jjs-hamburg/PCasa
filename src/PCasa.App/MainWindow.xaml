@@ -607,6 +607,7 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <Button x:Name="SlideshowStartButton" Grid.Column="0"
+                            HorizontalAlignment="Left"
                             Style="{StaticResource PcasaSearchSortButtonStyle}"
                             Width="35" Height="30" Padding="5"
                             Margin="10,3,5,3"
@@ -976,6 +977,13 @@
                                           StrokeStartLineCap="Round"/>
                                 </Canvas></Viewbox>
                             </Button>
+                            <Button x:Name="FolderTreeToggleButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Ordnerleiste aus- oder einklappen'}" Click="FolderTreeToggle_Click">
+                                <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
+                                    <Path Data="M 12,2 L 12,5 M 12,9 L 12,12 M 12,16 L 12,19 M 12,22 L 12,23" Stroke="#36ADFF" StrokeThickness="1.5" />
+                                    <Path Data="M 9,12 L 2,12 M 5,8 L 1,12 L 5,16" Stroke="{DynamicResource PcasaTextBrush}" StrokeThickness="1.9" Fill="Transparent"/>
+                                    <Path Data="M 15,12 L 22,12 M 19,8 L 23,12 L 19,16" Stroke="#36ADFF" StrokeThickness="1.9" Fill="Transparent"/>
+                                </Canvas></Viewbox>
+                            </Button>
                             <Button x:Name="ShowAllFilesystemFoldersButton" Style="{StaticResource PcasaFolderIconButtonStyle}" ToolTip="{loc:Tr Key='Explorer Ansicht'}" Click="ShowAllFilesystemFolders_Click">
                                 <!-- Simple Explorer folder, without extra tray/symbol. -->
                                 <Viewbox Width="23" Height="23"><Canvas Width="24" Height="24">
@@ -1027,6 +1035,21 @@
                             </ContextMenu>
                         </TreeView.ContextMenu>
                     </TreeView>
+                    <!-- Independent flat projection: never clears, selects or scrolls
+                         the real tree. Hidden preserves its measured viewport. -->
+                    <TreeView x:Name="FlatFoldersTree" Grid.Row="1"
+                              Visibility="Collapsed" ToolTipService.IsEnabled="False"
+                              Background="Transparent" BorderThickness="0"
+                              ClipToBounds="True"
+                              ScrollViewer.CanContentScroll="False"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              Margin="7,0,7,8" Padding="0,0,12,0"
+                              SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
+                              PreviewMouseLeftButtonDown="FoldersTree_PreviewMouseLeftButtonDown"
+                              AllowDrop="True"
+                              PreviewDragOver="FolderTreeFiles_DragOver"
+                              PreviewDragLeave="DragTarget_Leave"
+                              PreviewDrop="FolderTreeFiles_Drop"/>
                 </Grid>
                 <Grid x:Name="ViewerEditingPanel" Visibility="Collapsed">
                     <Grid.RowDefinitions>
