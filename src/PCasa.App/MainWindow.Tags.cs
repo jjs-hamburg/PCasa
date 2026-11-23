@@ -526,6 +526,11 @@ public partial class MainWindow
                 0, images.Length);
             foreach (var (imageId, originalPath) in images)
             {
+                // This legacy single-step recovery has a per-image SQLite
+                // acknowledgment. Finish the last original before yielding.
+                if (_scheduler.GracefulShutdownRequested)
+                    throw new OperationCanceledException(
+                        "Tag-Wiederherstellung nach letztem Original geparkt.");
                 token.ThrowIfCancellationRequested();
                 var root = Path.GetPathRoot(originalPath) ?? originalPath;
                 // A single offline mapped NAS/share must not prevent the
