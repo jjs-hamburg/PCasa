@@ -257,7 +257,6 @@ public sealed class ImageTagRepository
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
         var count = 0;
-        var recent = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (id, edits) in editsByImage)
         {
             foreach (var (originalTag, remove) in edits)
@@ -329,11 +328,9 @@ public sealed class ImageTagRepository
                 clearFailure.ExecuteNonQuery();
             }
             count++;
-            if (!remove) recent.Add(tag);
             }
         }
         tx.Commit();
-        foreach (var tag in recent) RememberTag(tag);
         return count;
     }
 
