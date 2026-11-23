@@ -2335,7 +2335,6 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock Text="{loc:Tr Key='Tag hinzufügen'}" FontSize="12" Margin="3,0,0,5"/>
                         <Grid Grid.Row="1" Margin="2,0,2,10">
@@ -2396,11 +2395,7 @@
                                 <StackPanel x:Name="TagRowsPanel"/>
                             </ScrollViewer>
                         </Border>
-                        <StackPanel Grid.Row="4" Margin="2,7,2,0" MinHeight="96">
-                            <TextBlock Text="{loc:Tr Key='Schnell-Tags'}" FontSize="12" Margin="0,0,0,5"/>
-                            <WrapPanel x:Name="TagQuickPanel"/>
-                        </StackPanel>
-                        <StackPanel Grid.Row="5" Margin="2,7,2,0">
+                        <StackPanel Grid.Row="4" Margin="2,7,2,0">
                             <TextBlock x:Name="TagDraftSummaryText" FontSize="11"
                                        HorizontalAlignment="Right" Margin="0,0,0,4"
                                        TextWrapping="Wrap" Visibility="Collapsed"
