@@ -246,7 +246,7 @@ public static class ExifDateMetadata
         ["yyyy:MM:dd", "yyyy/MM/dd", "yyyy-MM-dd", "yyyy.MM.dd"];
 
     private static readonly Regex ValidOptionalTimestampSuffix = new(
-        @"^(?:\\.\\d+)?(?:Z|[+-](?:0\\d|1\\d|2[0-3]):[0-5]\\d)?$",
+        @"^(?:\.\d+)?(?:Z|[+-](?:0\d|1\d|2[0-3]):[0-5]\d)?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static bool TryNormalizeProtectedDate(string tag, string raw,
