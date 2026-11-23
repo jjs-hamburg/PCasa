@@ -30,7 +30,7 @@ public sealed class SlideshowSettings
 
     public SlideshowSettings Normalize()
     {
-        IntervalSeconds = Math.Clamp(IntervalSeconds, 1, 3600);
+        IntervalSeconds = Math.Clamp(IntervalSeconds, 1, 300);
         TransitionMilliseconds = Math.Clamp(TransitionMilliseconds, 0, 3000);
         GalleryPercent = Math.Clamp(GalleryPercent, 50, 100);
         BorderWidth = Math.Clamp(BorderWidth, 0, 100);
