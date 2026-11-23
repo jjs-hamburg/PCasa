@@ -75,7 +75,6 @@ internal static class Program
             app.InitializeComponent();
             window = new PCasa.App.MainWindow();
             window.Show();
-            Alpha58WindowSmoke.Run(window);
             // About has exactly one user-visible release identity: Version.
             var aboutDialogType = typeof(PCasa.App.MainWindow).Assembly
                 .GetType("PCasa.App.PcasaAboutWindow")!;
@@ -121,6 +120,7 @@ internal static class Program
             if (typeof(PCasa.App.MainWindow).GetField(
                     "_startupGalleryPresented", startupFlags)!.GetValue(window) is not true)
                 throw new Exception("First gallery frame was not presented.");
+            Alpha58WindowSmoke.Run(window);
             var deferredSurface = new BrowseGallerySurface();
             deferredSurface.DeferViewportPageRequests(true);
             deferredSurface.SetViewport(1000, 600);
