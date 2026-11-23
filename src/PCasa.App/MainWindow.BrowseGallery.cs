@@ -1642,7 +1642,11 @@ public partial class MainWindow
         // the next selected folder's real gallery coordinates.
         if (BrowseSurface.EmptyNavigationFolderId is long previous &&
             previous != photoFolderId)
+        {
             BrowseSurface.SetEmptyNavigationFolder(null);
+            EmptyPanel.Visibility = _displayedBrowseIndex.Count == 0
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
 
         // If "hide collapsed folders" omitted this indexed folder from the
         // virtual layout, first reveal its existing ancestors. Previously we
@@ -1755,6 +1759,10 @@ public partial class MainWindow
         }
 
         BrowseSurface.SetEmptyNavigationFolder(photoFolderId, insertBefore);
+        // A completely empty filtered index normally displays a full-page
+        // empty overlay. The selected folder now has a real gallery header
+        // and its own localized no-results message, so reveal that section.
+        EmptyPanel.Visibility = Visibility.Collapsed;
         BrowseScrollViewer.UpdateLayout();
         if (BrowseSurface.GetFolderOffset(photoFolderId) is not double top)
             return false;
