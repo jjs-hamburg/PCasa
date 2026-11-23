@@ -278,7 +278,9 @@ public partial class MainWindow
         // gallery mask; it never mutates the user's folder expansion state.
         UpdateGalleryFolderVisibility(preserveGalleryAnchor: false);
         BrowseSurface.SetSelection(_selectedImageIds);
-        EmptyPanel.Visibility = desired.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        EmptyPanel.Visibility = desired.Count == 0 &&
+            BrowseSurface.EmptyNavigationFolderId is null
+                ? Visibility.Visible : Visibility.Collapsed;
         EmptyPanelHeading.Text = query.Length == 0 && !AttributeFilterActive
             ? UiLanguage.T("Noch keine Bilder im Katalog") :
                 query.Length == 0 ? UiLanguage.T("Keine Bilder mit diesen Eigenschaften gefunden") :
