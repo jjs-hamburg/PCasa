@@ -502,7 +502,7 @@ public partial class MainWindow
                 RefreshGallerySearchAfterTreeVisibilityChange();
             }
             if (flatVisibilityChanged)
-                RefreshFolderTree();
+                RefreshFlatFolderList();
             RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
                 originalGalleryOffset, originalNavigationVersion, originalActiveFolderId);
             _ = Dispatcher.BeginInvoke(new Action(() =>
