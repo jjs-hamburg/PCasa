@@ -114,6 +114,10 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
     private Texture? _background;
     private Texture? _white;
     private Texture? _black;
+    // Transient local-cache images at reel slots -2, -1 and +2.
+    // Only needed by Viewmaster B, uploaded once per transition on the
+    // Direct3D worker and released as soon as the next photo settles.
+    private readonly Texture?[] _viewmasterExtras = new Texture?[3];
     private string _transition = "none";
     private int _direction = +1;
     private int _duration;
@@ -200,9 +204,17 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
 
     /// <summary>Upload the next frozen picture ONCE; animate GPU geometry thereafter.</summary>
     public void Present(BitmapSource image, string effect, int milliseconds,
-        Action completed, int direction = +1)
+        Action completed, int direction = +1,
+        IReadOnlyList<BitmapSource?>? wheelNeighbors = null)
     {
         var pixels = CopyPixels(image);
+        // Cache-only previews: no disk reads, NAS probes or background
+        // decodes for extra Viewmaster reel positions.
+        var extras = new Pixels?[3];
+        if (effect == "viewmaster-b" && wheelNeighbors is { Count: 3 })
+            for (var i = 0; i < extras.Length; i++)
+                if (wheelNeighbors[i] is { } preview)
+                    extras[i] = CopyPixels(preview);
         Post(() =>
         {
             var incoming = new Texture(_device!, _context!, pixels);
@@ -214,6 +226,10 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
             }
             EndTransition(reportCompletion: false);
             _next = incoming;
+            if (effect == "viewmaster-b")
+                for (var i = 0; i < extras.Length; i++)
+                    if (extras[i] is { } preview)
+                        _viewmasterExtras[i] = new Texture(_device!, _context!, preview);
             _transition = effect;
             _direction = direction < 0 ? -1 : +1;
             _duration = Math.Max(0, milliseconds);
@@ -454,6 +470,11 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
                 if (t >= .40f && t < .59f)
                     Draw(_black!, 0, 0, _width, _height, 1);
             }
+            else if (_transition is "viewmaster-a" or "viewmaster-b")
+            {
+                DrawViewmasterTransition(_active, _next, t,
+                    _transition == "viewmaster-b");
+            }
             else if (_transition == "cube")
             {
                 // Genuine two-face 3D rotation: shared hinge/depth and
@@ -577,6 +598,126 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
         var insetY = (float)_border * zoom;
         Draw(image, x + insetX, y + insetY,
             Math.Max(1, w - 2 * insetX), Math.Max(1, h - 2 * insetY), alpha);
+    }
+
+    // Viewmaster A: two photos move on the same circular arc.
+    // Viewmaster B: the same arc, but with neighboring cached photos
+    // visible as a reel during the transition. Never render a plastic
+    // backing plate: the photographs themselves form the rotating wheel.
+    private void DrawViewmasterTransition(Texture outgoing, Texture incoming,
+        float progress, bool visibleReel)
+    {
+        var t = Math.Clamp(progress, 0f, 1f);
+        var photos = new List<(int Slot, Texture Photo)>
+        {
+            (0, outgoing), (1, incoming)
+        };
+        if (visibleReel)
+        {
+            if (_viewmasterExtras[0] is { } farBefore) photos.Add((-2, farBefore));
+            if (_viewmasterExtras[1] is { } before) photos.Add((-1, before));
+            if (_viewmasterExtras[2] is { } after) photos.Add((2, after));
+        }
+
+        // Depth ordering keeps the photograph nearest the central viewing
+        // position in front, regardless of clockwise/anticlockwise travel.
+        photos.Sort((left, right) =>
+            Math.Abs(right.Slot - t).CompareTo(Math.Abs(left.Slot - t)));
+
+        var reelVisibility = MathF.Sin(t * MathF.PI);
+        var groupScale = 1f - (visibleReel ? .26f : .07f) * reelVisibility;
+        foreach (var (slot, photo) in photos)
+        {
+            var centerDistance = MathF.Abs(slot - t);
+            var alpha = slot is 0 or 1
+                ? Math.Clamp((1f - centerDistance) * 2f, 0f, 1f)
+                : .90f * Math.Clamp(reelVisibility * 2.4f, 0f, 1f);
+            if (alpha <= 0) continue;
+            var pose = ViewmasterPose(slot, t, _direction, _width, _height);
+            DrawViewmasterPhoto(photo, pose.X, pose.Y,
+                pose.Scale * groupScale, pose.Rotation, alpha);
+        }
+    }
+
+    // Pure reel geometry shared by Direct3D and the WPF emergency fallback.
+    // The current photograph (slot 0 at t=0) and incoming photograph
+    // (slot +1 at t=1) occupy precisely the same centered, upright rectangle.
+    // The sign mirrors travel without mirroring the pixels or aspect ratio.
+    internal static (float X, float Y, float Scale, float Rotation) ViewmasterPose(
+        int slot, float progress, int direction, float width, float height)
+    {
+        var angle = (slot - Math.Clamp(progress, 0f, 1f)) * .68f;
+        var radius = MathF.Min(Math.Max(1f, width) * .69f,
+            Math.Max(1f, height) * .92f);
+        var sign = direction < 0 ? -1 : +1;
+        return (sign * radius * MathF.Sin(angle),
+            radius * (MathF.Cos(angle) - 1f),
+            Math.Clamp(.62f + .38f * MathF.Cos(angle), .46f, 1f),
+            sign * angle * .35f * (180f / MathF.PI));
+    }
+
+    private void DrawViewmasterPhoto(Texture photo, float shiftX, float shiftY,
+        float scale, float angle, float alpha)
+    {
+        var rect = Frame(photo);
+        var width = rect.W * scale;
+        var height = rect.H * scale;
+        if (width <= 0 || height <= 0) return;
+        var x = (_width - width) * .5f + shiftX;
+        var y = (_height - height) * .5f + shiftY;
+        if (_shadow && _shadowOpacity > 0)
+        {
+            var offset = (float)Math.Max(0, _shadowOffset) * scale;
+            var spread = (float)Math.Max(0, _shadowWidth) * scale;
+            // Shadow stays down/right in screen coordinates as a frame
+            // rotates; no dark square or skewed image silhouettes.
+            for (var layer = 4; layer >= 1; layer--)
+            {
+                var blur = spread * layer / 4f;
+                DrawRotated(_black!, x + offset, y + offset,
+                    width + blur, height + blur, angle,
+                    alpha * (float)_shadowOpacity * .12f);
+            }
+            DrawRotated(_black!, x + offset, y + offset,
+                width, height, angle,
+                alpha * (float)_shadowOpacity * .30f);
+        }
+        if (_border > 0)
+            DrawRotated(_white!, x, y, width, height, angle, alpha);
+        var border = (float)_border * scale;
+        DrawRotated(photo, x + border, y + border,
+            Math.Max(1, width - 2f * border),
+            Math.Max(1, height - 2f * border), angle, alpha);
+    }
+
+    // Rotate only QUAD positions, never texture coordinates. The photo's
+    // original pixel aspect ratio remains untouched throughout the reel.
+    private void DrawRotated(Texture image, float x, float y,
+        float width, float height, float rotationDegrees, float alpha)
+    {
+        if (width <= 0 || height <= 0 || alpha <= 0) return;
+        var radians = rotationDegrees * (MathF.PI / 180f);
+        var cos = MathF.Cos(radians);
+        var sin = MathF.Sin(radians);
+        var centerX = x + width * .5f;
+        var centerY = y + height * .5f;
+        (float X, float Y) Point(float dx, float dy) =>
+            (centerX + dx * cos - dy * sin,
+                centerY + dx * sin + dy * cos);
+        Vertex Corner(float dx, float dy, float u, float v)
+        {
+            var p = Point(dx, dy);
+            return new Vertex(p.X * 2f / _width - 1f,
+                1f - p.Y * 2f / _height, 1f, u, v, 1f, 1f, 1f, alpha);
+        }
+        var a = Corner(-width / 2f, -height / 2f, 0f, 0f);
+        var b = Corner(width / 2f, -height / 2f, 1f, 0f);
+        var c = Corner(width / 2f, height / 2f, 1f, 1f);
+        var d = Corner(-width / 2f, height / 2f, 0f, 1f);
+        var vertices = new[] { a, b, c, a, c, d };
+        _context!.UpdateSubresource(vertices, _vertices!);
+        _context.PSSetShaderResource(0, image.View);
+        _context.Draw(6, 0);
     }
 
     // The two photographs live on distinct faces of one rigid cuboid.
@@ -803,6 +944,11 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
 
     private void EndTransition(bool reportCompletion)
     {
+        for (var i = 0; i < _viewmasterExtras.Length; i++)
+        {
+            _viewmasterExtras[i]?.Dispose();
+            _viewmasterExtras[i] = null;
+        }
         if (_next is null) return;
         var seconds = Stopwatch.GetElapsedTime(_startedAt).TotalSeconds;
         if (seconds > 0.01)
@@ -822,6 +968,8 @@ internal sealed class Direct3DSlideshowSurface : IDisposable
 
     private void ReleaseDevice()
     {
+        foreach (var extra in _viewmasterExtras)
+            extra?.Dispose();
         _next?.Dispose();
         _active?.Dispose();
         _background?.Dispose();
