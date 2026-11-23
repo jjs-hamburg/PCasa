@@ -22,6 +22,7 @@ public sealed class SlideshowWindow : Window
         public readonly Image Picture;
         public readonly Border Frame;
         public readonly ScaleTransform Scale = new();
+        public readonly RotateTransform Rotation = new();
         public readonly TranslateTransform Shift = new();
 
         public Layer()
@@ -40,6 +41,7 @@ public sealed class SlideshowWindow : Window
             RenderOptions.SetBitmapScalingMode(Picture, BitmapScalingMode.LowQuality);
             var transforms = new TransformGroup();
             transforms.Children.Add(Scale);
+            transforms.Children.Add(Rotation);
             transforms.Children.Add(Shift);
             Frame = new Border
             {
@@ -63,9 +65,13 @@ public sealed class SlideshowWindow : Window
             Scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
             Scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
             Shift.BeginAnimation(TranslateTransform.XProperty, null);
+            Shift.BeginAnimation(TranslateTransform.YProperty, null);
+            Rotation.BeginAnimation(RotateTransform.AngleProperty, null);
             Frame.Opacity = 1;
             Scale.ScaleX = Scale.ScaleY = 1;
             Shift.X = 0;
+            Shift.Y = 0;
+            Rotation.Angle = 0;
         }
     }
 
@@ -104,6 +110,9 @@ public sealed class SlideshowWindow : Window
     private DateTime _lastChangeUtc = DateTime.UtcNow;
     private DateTime _transitionStartedUtc;
     private int _transitionRenderedFrames;
+    private readonly List<(int Slot, Layer Visual)> _viewmasterFallbackReel = new();
+    private bool _viewmasterFallbackRunning;
+    private DateTime _viewmasterFallbackStarted;
 
     public int CurrentImageIndex => _index;
     public bool IsPaused => _paused;
@@ -216,6 +225,7 @@ public sealed class SlideshowWindow : Window
             _aheadDecode?.Dispose();
             _gpu?.Dispose();
             _gpu = null;
+            StopViewmasterFallback();
             _active.StopAnimations();
             _incoming.StopAnimations();
         };
@@ -364,6 +374,8 @@ public sealed class SlideshowWindow : Window
         _stage.Height = Math.Max(1, height * ratio);
         UpdateLayerGeometry(_active);
         UpdateLayerGeometry(_incoming);
+        foreach (var (_, visual) in _viewmasterFallbackReel)
+            UpdateLayerGeometry(visual);
     }
 
     public static int NextStillIndex(PhotoSequence sequence, int start, int direction)
@@ -588,11 +600,15 @@ public sealed class SlideshowWindow : Window
         _incoming.Frame.Visibility = Visibility.Visible;
         Panel.SetZIndex(_incoming.Frame, 2);
         Panel.SetZIndex(_active.Frame, 1);
+        var previouslyShown = _shownIndex;
         _shownIndex = position;
         _awaitingPixels = false;
         _lastChangeUtc = DateTime.UtcNow;
 
         var type = _options.Transition;
+        var viewmasterNeighbors = type == "viewmaster-b" &&
+            previouslyShown >= 0
+                ? GetViewmasterNeighbors(previouslyShown) : null;
         if (_active.Picture.Source is null || type == "none" ||
             _options.TransitionMilliseconds <= 0)
         {
@@ -614,7 +630,12 @@ public sealed class SlideshowWindow : Window
             {
                 if (_transitioning && serial == _transitionVersion)
                     FinishTransition();
-            }, _navigationDirection);
+            }, _navigationDirection, viewmasterNeighbors);
+            return;
+        }
+        if (type is "viewmaster-a" or "viewmaster-b")
+        {
+            StartViewmasterFallback(type == "viewmaster-b", viewmasterNeighbors);
             return;
         }
         if (type == "zoom")
@@ -675,6 +696,120 @@ public sealed class SlideshowWindow : Window
         _incoming.Frame.BeginAnimation(UIElement.OpacityProperty, fade);
     }
 
+    // Read only the three neighboring LOCAL cache thumbnails for the wheel.
+    // The old photo is slot 0, the incoming photo slot +1; these extras
+    // correspond to slots -2, -1 and +2 in the direction of navigation.
+    // Never trigger remote decoding or request an uncached NAS photo just
+    // to populate the visible reel.
+    private BitmapSource?[] GetViewmasterNeighbors(int previousIndex)
+    {
+        var previews = new BitmapSource?[3];
+        int[] slots = [-2, -1, 2];
+        var used = new HashSet<long>
+        {
+            _sequence.At(previousIndex).ImageId,
+            _sequence.At(_index).ImageId
+        };
+        for (var i = 0; i < slots.Length; i++)
+        {
+            var cursor = previousIndex;
+            var step = slots[i] > 0 ? _navigationDirection : -_navigationDirection;
+            for (var move = 0; move < Math.Abs(slots[i]); move++)
+                cursor = NextStillIndex(_sequence, cursor, step);
+            if (cursor < 0 || !used.Add(_sequence.At(cursor).ImageId))
+                continue;
+            try
+            {
+                previews[i] = _localPreview(_sequence.GalleryPositionAt(cursor));
+            }
+            catch (Exception ex)
+            {
+                PCasaDiagnostics.Write("Slideshow.ViewmasterPreview", ex);
+            }
+        }
+        return previews;
+    }
+
+    private void StartViewmasterFallback(bool showReel,
+        IReadOnlyList<BitmapSource?>? previews)
+    {
+        StopViewmasterFallback();
+        // The fallback uses the SAME circular geometry as Direct3D and
+        // keeps bitmap borders, proportions and shadows intact.
+        _incoming.Frame.BeginAnimation(UIElement.OpacityProperty, null);
+        _incoming.Frame.Opacity = 1;
+        _active.Frame.BeginAnimation(UIElement.OpacityProperty, null);
+        _active.Frame.Opacity = 1;
+        if (showReel && previews is { Count: 3 })
+        {
+            int[] slots = [-2, -1, 2];
+            for (var i = 0; i < slots.Length; i++)
+            {
+                if (previews[i] is not { } bitmap) continue;
+                var layer = new Layer();
+                ConfigureLayer(layer);
+                layer.Picture.Source = bitmap;
+                UpdateLayerGeometry(layer);
+                layer.Frame.Visibility = Visibility.Visible;
+                _stage.Children.Add(layer.Frame);
+                _viewmasterFallbackReel.Add((slots[i], layer));
+            }
+        }
+        _viewmasterFallbackStarted = DateTime.UtcNow;
+        _viewmasterFallbackRunning = true;
+        CompositionTarget.Rendering += RenderViewmasterFallback;
+        RenderViewmasterFallback(null, EventArgs.Empty);
+    }
+
+    private void RenderViewmasterFallback(object? sender, EventArgs e)
+    {
+        if (!_viewmasterFallbackRunning || !_transitioning) return;
+        var duration = Math.Max(1, _options.TransitionMilliseconds);
+        var t = Math.Clamp((float)(DateTime.UtcNow -
+            _viewmasterFallbackStarted).TotalMilliseconds / duration, 0f, 1f);
+        var reel = _options.Transition == "viewmaster-b";
+        var wheelFactor = MathF.Sin(t * MathF.PI);
+        var groupScale = 1f - (reel ? .26f : .07f) * wheelFactor;
+        var width = (float)Math.Max(1, _root.ActualWidth);
+        var height = (float)Math.Max(1, _root.ActualHeight);
+        Paint(0, _active);
+        Paint(1, _incoming);
+        foreach (var (slot, layer) in _viewmasterFallbackReel)
+            Paint(slot, layer);
+        if (t >= 1) FinishTransition();
+
+        void Paint(int slot, Layer layer)
+        {
+            var distance = MathF.Abs(slot - t);
+            var alpha = slot is 0 or 1
+                ? Math.Clamp((1f - distance) * 2f, 0f, 1f)
+                : .90f * Math.Clamp(wheelFactor * 2.4f, 0f, 1f);
+            var pose = Direct3DSlideshowSurface.ViewmasterPose(
+                slot, t, _navigationDirection, width, height);
+            layer.Scale.ScaleX = layer.Scale.ScaleY = pose.Scale * groupScale;
+            layer.Rotation.Angle = pose.Rotation;
+            layer.Shift.X = pose.X;
+            layer.Shift.Y = pose.Y;
+            layer.Frame.Opacity = alpha;
+            Panel.SetZIndex(layer.Frame, 10 - (int)(MathF.Abs(slot - t) * 3f));
+        }
+    }
+
+    private void StopViewmasterFallback()
+    {
+        if (_viewmasterFallbackRunning)
+        {
+            CompositionTarget.Rendering -= RenderViewmasterFallback;
+            _viewmasterFallbackRunning = false;
+        }
+        foreach (var (_, visual) in _viewmasterFallbackReel)
+        {
+            visual.StopAnimations();
+            _stage.Children.Remove(visual.Frame);
+        }
+        _viewmasterFallbackReel.Clear();
+    }
+
     private static void Animate(Animatable target, DependencyProperty property,
         double from, double to, TimeSpan duration)
     {
@@ -705,6 +840,7 @@ public sealed class SlideshowWindow : Window
 
     private void SwapLayers()
     {
+        StopViewmasterFallback();
         _active.StopAnimations();
         _incoming.StopAnimations();
         _active.Frame.Visibility = Visibility.Collapsed;
