@@ -236,8 +236,15 @@ internal static class CropFlow
             if (!missingDateRejected)
                 throw new Exception(
                     "Strict EXIF comparator missed noncanonical CreateDate normalization.");
-            var restoredDateTags =
-                JpegExifVerbatimDateRestorer.Restore(scanner, canonicalCopy);
+            var restoreType = typeof(JpegCropWriter).Assembly.GetType(
+                "PCasa.App.Services.JpegExifVerbatimDateRestorer")
+                ?? throw new Exception("Raw EXIF date restorer missing.");
+            var restoreMethod = restoreType.GetMethod("Restore",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("EXIF date restorer entrypoint missing.");
+            var restoredDateTags = (IReadOnlyList<string>)restoreMethod.Invoke(
+                null, [scanner, canonicalCopy])!;
             if (!restoredDateTags.Contains("EXIF:CreateDate"))
                 throw new Exception("Verbatim date repair did not patch CreateDate.");
             ExifDateMetadata.VerifyUnchanged(scanner, canonicalCopy);
