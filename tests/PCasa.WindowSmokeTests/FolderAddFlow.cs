@@ -1012,9 +1012,18 @@ internal static class FolderAddFlow
             Until(previousWindow, () => !previousWindow.IsVisible,
                 "Previous WPF session did not close before scan-startup regression.");
             window = null;
-            if (roots.GetPendingInitialScans().Count != 0 ||
-                roots.GetPendingAutomaticInventories().Count != 0)
-                throw new Exception("Startup scan regression fixture still has unfinished inventory.");
+            if (roots.GetPendingInitialScans().Count != 0)
+                throw new Exception(
+                    "Startup scan regression fixture still has unfinished initial imports: " +
+                    string.Join(", ", roots.GetPendingInitialScans()
+                        .Select(root => root.LocalPath)));
+            // A P4 inventory which the previous session interrupted is a
+            // deliberately DURABLE receipt. Alpha.58 must resume it with the
+            // same identity, not discard it merely so this fixture is empty.
+            // Detect only NEW inventories manufactured by watcher startup.
+            var inventoriesBeforeRestart = roots.GetPendingAutomaticInventories()
+                .Select(inventory => inventory.ScanKey)
+                .ToHashSet(StringComparer.Ordinal);
             new BackgroundScanSettings { Enabled = true }.Save();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             var startupGallery = (ScrollViewer)window.FindName(
@@ -1049,7 +1058,18 @@ internal static class FolderAddFlow
                     "Startup manufactured a non-idle background scan: " +
                     string.Join(", ", unexpectedStartupScans.Select(job =>
                         job.Key + " priority=" + job.Priority)));
-            Console.WriteLine("PASS: WPF restart admits only normal P4 background reviews, not new startup inventories.");
+            var newInventories = roots.GetPendingAutomaticInventories()
+                .Where(inventory =>
+                    !inventoriesBeforeRestart.Contains(inventory.ScanKey))
+                .Select(inventory => inventory.ScanKey)
+                .ToArray();
+            if (newInventories.Length > 0)
+                throw new Exception(
+                    "Watcher startup created duplicate or unsolicited inventories: " +
+                    string.Join(", ", newInventories));
+            Console.WriteLine(
+                "PASS: WPF restart retains existing durable inventories, admits only " +
+                "normal P4 background reviews, and creates no new startup inventories.");
             var restoredTree = (TreeView)window.FindName("FoldersTree");
             var restoredSelection = (GallerySelection)typeof(PCasa.App.MainWindow)
                 .GetField("_gallerySelection", scanFlags)!.GetValue(window)!;
