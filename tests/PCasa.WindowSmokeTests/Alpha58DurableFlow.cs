@@ -6,6 +6,14 @@ using PCasa.App.Services;
 // never repeat that original on next startup, and never discard queued work.
 internal static class Alpha58DurableFlow
 {
+    // The console test runs on an STA with WPF's DispatcherSynchronizationContext.
+    // Blocking DisposeAsync on that STA deadlocks its continuations. Perform
+    // teardown on a pool thread, exactly like the app's shutdown owner.
+    private static void DisposeWithTimeout(PCasaScheduler scheduler)
+        => Task.Run(async () =>
+            await scheduler.DisposeAsync().ConfigureAwait(false))
+            .WaitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
+
     public static int Run()
     {
         var root = Path.Combine(Path.GetTempPath(),
@@ -51,6 +59,7 @@ internal static class Alpha58DurableFlow
             if (!beganFirstOriginal.Wait(TimeSpan.FromSeconds(15)))
                 throw new TimeoutException("First original never started.");
 
+            Console.WriteLine("Alpha.58: first original entered; freeze new dispatch.");
             scheduler.BeginGracefulShutdown();
             // Exiting must wait for THIS write, but never start the second.
             finishFirstOriginal.Set();
@@ -58,7 +67,8 @@ internal static class Alpha58DurableFlow
             if (!drain.Wait(TimeSpan.FromSeconds(15)))
                 throw new TimeoutException("Graceful exit did not checkpoint the original.");
 
-            scheduler.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            Console.WriteLine("Alpha.58: first original checkpointed; disposing prior scheduler.");
+            DisposeWithTimeout(scheduler);
             scheduler = null;
             var journal = new DurablePackageJournal(database);
             var pending = journal.Pending().SingleOrDefault(
@@ -72,6 +82,7 @@ internal static class Alpha58DurableFlow
             scheduler = new PCasaScheduler();
             scheduler.EnableDurablePackages(database);
             scheduler.RegisterDurablePackageType("alpha58-file-restart", Recipe);
+            Console.WriteLine("Alpha.58: restart from SQLite journal.");
             var unresolved = scheduler.RecoverDurablePackages();
             if (unresolved.Count != 0)
                 throw new Exception("Recovery unexpectedly rejected the saved recipe.");
@@ -83,7 +94,7 @@ internal static class Alpha58DurableFlow
             if (firstWritten != 1 || secondWritten != 1)
                 throw new Exception("Original writes were repeated or skipped on restart.");
 
-            scheduler.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            DisposeWithTimeout(scheduler);
             scheduler = null;
             Console.WriteLine("PASS: Exit completes the current file, persists cursor, and resumes without duplicate writes.");
             return 0;
@@ -97,7 +108,7 @@ internal static class Alpha58DurableFlow
         {
             finishFirstOriginal.Set();
             if (scheduler is not null)
-                try { scheduler.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                try { DisposeWithTimeout(scheduler); }
                 catch { /* Preserve the original test exception. */ }
             try { Directory.Delete(root, recursive: true); }
             catch (IOException) { }
