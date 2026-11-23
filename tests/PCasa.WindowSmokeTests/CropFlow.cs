@@ -252,6 +252,32 @@ internal static class CropFlow
                     File.ReadAllBytes(scannerReference)))
                 throw new Exception("TIFF date repair changed the original JPEG.");
 
+            // Prove the precise breakage of the OLD pipeline using its
+            // actual encoder + native ExifTool -TagsFromFile step WITHOUT
+            // running the new date restorer yet. This must mismatch before
+            // we can claim our synthetic fixture reproduces the user report.
+            var untreatedStage = Path.Combine(root, "scanner-unrepaired-stage.jpg");
+            var copyMetadataMethod = typeof(JpegCropWriter).GetMethod(
+                "CopyMetadata", System.Reflection.BindingFlags.Static |
+                    System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Pixel editor metadata copier not found.");
+            Task.Run(() =>
+            {
+                var rendered = PhotoEditSession.Render(
+                    EditableImageFormats.DecodeForEdit(scanner), colorSteps);
+                EditableImageFormats.Encode(rendered, untreatedStage);
+                copyMetadataMethod.Invoke(null,
+                    [scanner, untreatedStage, rendered.PixelWidth,
+                        rendered.PixelHeight, CancellationToken.None]);
+            }).GetAwaiter().GetResult();
+            var unmodifiedPipelineRejected = false;
+            try { ExifDateMetadata.VerifyUnchanged(scanner, untreatedStage); }
+            catch (InvalidDataException) { unmodifiedPipelineRejected = true; }
+            if (!unmodifiedPipelineRejected)
+                throw new Exception("Synthetic scanner did NOT reproduce the " +
+                    "pre-Alpha.62 EXIF date failure after ExifTool metadata copy.");
+            File.Delete(untreatedStage);
+
             // Both public save modes must succeed with this exact EXIF
             // condition. Real MTA pipeline, real ExifTool, strict read-back.
             var scannerBytes = File.ReadAllBytes(scanner);
