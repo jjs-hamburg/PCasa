@@ -1318,16 +1318,17 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 (indexPosition >= insertBefore || indexPosition == _index.Count))
             {
                 var emptyFolder = folderById[_emptyNavigationFolderId!.Value];
-                var top = y;
-                var imagesTop = top + HeaderHeight;
+                var emptyTop = y;
+                var emptyImagesTop = emptyTop + HeaderHeight;
                 // Reserve enough height for the selected folder header to
                 // reach the top even if it is the LAST gallery section.
-                var bottom = top + Math.Max(HeaderHeight + 70,
+                var emptyBottom = emptyTop + Math.Max(HeaderHeight + 70,
                     Math.Max(1, _viewportHeight) + HeaderHeight + 8);
                 _sections.Add(new SectionLayout(
                     emptyFolder, indexPosition, 0, columnCount, 1, cellWidth,
-                    top, imagesTop, bottom, new[] { 0d, 0d }, new[] { 0d }));
-                y = bottom;
+                    emptyTop, emptyImagesTop, emptyBottom,
+                    new[] { 0d, 0d }, new[] { 0d }));
+                y = emptyBottom;
                 hasEmptyNavigation = false;
                 continue;
             }
