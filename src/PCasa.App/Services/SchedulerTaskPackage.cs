@@ -63,7 +63,7 @@ public sealed class SchedulerTaskPackage
             await _steps[_nextIndex](token);
             _nextIndex++;
             OnStepCompleted?.Invoke(_nextIndex);
-            if (ShouldYieldAfterStep?.Invoke() == true)
+            if (_nextIndex < _steps.Count && ShouldYieldAfterStep?.Invoke() == true)
                 throw new OperationCanceledException(
                     "Auftrag beim sicheren Schreib-Checkpoint für den Neustart geparkt.");
         }
