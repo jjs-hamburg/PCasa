@@ -1005,6 +1005,7 @@
                               PreviewMouseRightButtonDown="FoldersTree_PreviewMouseRightButtonDown"
                               SelectedItemChanged="BrowseFoldersTree_SelectedItemChanged"
                               PreviewMouseLeftButtonDown="FoldersTree_PreviewMouseLeftButtonDown"
+                              PreviewMouseWheel="FoldersTree_PreviewMouseWheel"
                               AllowDrop="True"
                               PreviewDragOver="FolderTreeFiles_DragOver"
                               PreviewDragLeave="DragTarget_Leave"

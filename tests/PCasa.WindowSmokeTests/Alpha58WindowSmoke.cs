@@ -70,6 +70,24 @@ internal static class Alpha58WindowSmoke
             !ReferenceEquals(realTree.SelectedItem, originalSelection))
             throw new Exception("Returning from flat view rebuilt or changed the tree.");
 
+        // Alpha.60: one 22-pixel folder row per wheel notch,
+        // including half-notch touchpad deltas and clamped bounds.
+        var wheelMath = typeof(MainWindow).GetMethod(
+            "FolderWheelTargetOffset", System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Slow folder-tree wheel handler missing.");
+        double Wheel(double current, double delta, double maximum)
+            => (double)wheelMath.Invoke(null, [current, delta, maximum])!;
+        if (Math.Abs(Wheel(110, -120, 500) - 132) > .001 ||
+            Math.Abs(Wheel(110, +120, 500) - 88) > .001 ||
+            Math.Abs(Wheel(110, -60, 500) - 121) > .001 ||
+            Wheel(4, +120, 500) != 0 ||
+            Wheel(492, -120, 500) != 500)
+            throw new Exception(
+                "Folder wheel exceeds one row/notch, loses precision or overscrolls.");
+        Console.WriteLine(
+            "PASS: Alpha.60 folder wheel scrolls 22px per notch and clamps boundaries.");
+
         var slider = window.FindName("StraightenAngleSlider") as Slider;
         var viewer = window.FindName("PhotoViewerPanel") as Grid;
         if (slider is null || viewer is null ||

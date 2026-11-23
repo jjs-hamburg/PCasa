@@ -42,6 +42,7 @@ public sealed class SlideshowSettings
         // back to the safe dissolve.
         Transition = Transition is "none" or "fade" or "zoom" or "slide"
             or "projector" or "cube" or "cards" or "zoomfade"
+            or "viewmaster-a" or "viewmaster-b"
             or "wipe-left" or "wipe-right" or "wipe-up" or "wipe-down"
             ? Transition : "fade";
         DisplayMode = DisplayMode is "gallery" or "fullscreen"

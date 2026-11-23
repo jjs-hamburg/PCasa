@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using PCasa.App.Models;
@@ -123,6 +124,31 @@ public partial class MainWindow
         _explorerOriginalSelectionPath = null;
         _explorerOriginalScroll = null;
         _explorerOriginalExpanded = false;
+    }
+
+    // Tree rows are 22 px high. Windows' default wheel handling can move
+    // several rows per notch and makes long NAS folder trees hard to aim at.
+    // Limit each physical notch to one row, while retaining fractional
+    // high-resolution touchpad deltas. This affects only the folder tree,
+    // not the gallery, viewer or other scroll controls.
+    internal const double FolderWheelPixelsPerNotch = 22.0;
+
+    internal static double FolderWheelTargetOffset(
+        double current, double delta, double maximum)
+        => Math.Clamp(current -
+            delta * FolderWheelPixelsPerNotch / 120.0,
+            0, Math.Max(0, maximum));
+
+    private void FoldersTree_PreviewMouseWheel(
+        object sender, MouseWheelEventArgs e)
+    {
+        if (e.Handled || sender is not TreeView tree) return;
+        var scroll = FindTreeScrollViewer(tree);
+        if (scroll is null || !scroll.IsVisible ||
+            scroll.ScrollableHeight <= 0) return;
+        scroll.ScrollToVerticalOffset(FolderWheelTargetOffset(
+            scroll.VerticalOffset, e.Delta, scroll.ScrollableHeight));
+        e.Handled = true; // Do not also run WPF's faster default wheel step.
     }
 
     private static ScrollViewer? FindTreeScrollViewer(DependencyObject parent)

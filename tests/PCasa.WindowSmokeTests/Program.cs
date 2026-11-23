@@ -1882,6 +1882,27 @@ internal static class Program
                     choice.IsDropDownOpen = false;
                     Flush(slideshowDialog);
                 }
+                // Alpha.60: both Viewmaster choices are separate, selectable
+                // and persist under independent transition IDs.
+                var transitions = slideshowChoices.Single(choice =>
+                    choice.Items.OfType<ComboBoxItem>().Any(item =>
+                        Equals(item.Tag, "viewmaster-a")));
+                var viewmasterNames = transitions.Items.OfType<ComboBoxItem>()
+                    .Where(item => item.Tag is "viewmaster-a" or "viewmaster-b")
+                    .ToArray();
+                if (viewmasterNames.Length != 2 ||
+                    !Equals(viewmasterNames[0].Tag, "viewmaster-a") ||
+                    !Equals(viewmasterNames[1].Tag, "viewmaster-b") ||
+                    !Equals(viewmasterNames[0].Content, "Viewmaster A") ||
+                    !Equals(viewmasterNames[1].Content, "Viewmaster B") ||
+                    new SlideshowSettings { Transition = "viewmaster-a" }
+                        .Normalize().Transition != "viewmaster-a" ||
+                    new SlideshowSettings { Transition = "viewmaster-b" }
+                        .Normalize().Transition != "viewmaster-b")
+                    throw new Exception(
+                        "Viewmaster A/B are missing, renamed or not persisted as separate effects.");
+                Console.WriteLine(
+                    "PASS: Alpha.60 Viewmaster A and B choices keep exact names and distinct IDs.");
                 var numericSliders = Descendants<Slider>(slideshowDialog).ToArray();
                 if (numericSliders.Length != 7 ||
                     numericSliders.Any(slider =>
@@ -2241,6 +2262,34 @@ internal static class Program
                     throw new Exception("Slide did not restore its destination position.");
                 if (sliding.CurrentImageIndex != 2)
                     throw new Exception("Slide completion lost the destination.");
+
+                // Alpha.60: Left must reverse the travel of BOTH photos, not
+                // just decrease the sequence index. The native GPU uses the
+                // same signed direction; WPF fallback starts from negative X.
+                typeof(SlideshowWindow).GetMethod("Navigate", flags)!
+                    .Invoke(sliding, [-1]);
+                Flush(sliding);
+                if (sliding.CurrentImageIndex != 0 ||
+                    typeof(SlideshowWindow).GetField(
+                        "_navigationDirection", flags)!.GetValue(sliding) is not -1)
+                    throw new Exception("Left navigation did not reverse slideshow direction.");
+                if (gpu?.GetType().GetProperty("IsReady")?.GetValue(gpu) is not true)
+                {
+                    var reversedLayer = typeof(SlideshowWindow).GetField(
+                        "_incoming", flags)!.GetValue(sliding)!;
+                    var reversedShift = (TranslateTransform)reversedLayer.GetType()
+                        .GetField("Shift", System.Reflection.BindingFlags.Instance |
+                            System.Reflection.BindingFlags.Public)!.GetValue(reversedLayer)!;
+                    if (reversedShift.X >= 0)
+                        throw new Exception(
+                            "WPF reverse slide still enters from the right.");
+                }
+                Until(sliding, () =>
+                    typeof(SlideshowWindow).GetField("_transitioning", flags)!
+                        .GetValue(sliding) is false,
+                    "Reverse slide transition never completed.");
+                Console.WriteLine(
+                    "PASS: Alpha.60 manual Left reverses slideshow navigation and slide travel.");
             }
             finally { sliding.Close(); }
             // Geometry-only assertions also run when CI has no D3D device.
@@ -2251,10 +2300,100 @@ internal static class Program
                 System.Reflection.BindingFlags.NonPublic;
             var cubePoint = cubeType.GetMethod("CubePoint", cubeFlags)!;
             var cubeRect = cubeType.GetMethod("CubeImageRect", cubeFlags)!;
+
+            // Alpha.60: identical circular geometry for GPU and WPF
+            // fallbacks. Rotation changes DIRECTION but never flips,
+            // stretches or skews the underlying photo texture.
+            var poseMethod = cubeType.GetMethod("ViewmasterPose", cubeFlags)
+                ?? throw new Exception("Viewmaster reel geometry is missing.");
+            (float X, float Y, float Scale, float Tilt) Viewmaster(
+                int slot, float progress, int direction, float width = 1280,
+                float height = 720)
+                => ((float, float, float, float))poseMethod.Invoke(null,
+                    [slot, progress, direction, width, height])!;
+            var startPhoto = Viewmaster(0, 0, 1);
+            var finishPhoto = Viewmaster(1, 1, 1);
+            if (Math.Abs(startPhoto.X) > .001f ||
+                Math.Abs(startPhoto.Y) > .001f ||
+                Math.Abs(startPhoto.Scale - 1f) > .001f ||
+                Math.Abs(startPhoto.Tilt) > .001f ||
+                Math.Abs(finishPhoto.X) > .001f ||
+                Math.Abs(finishPhoto.Y) > .001f ||
+                Math.Abs(finishPhoto.Scale - 1f) > .001f ||
+                Math.Abs(finishPhoto.Tilt) > .001f)
+                throw new Exception("Viewmaster did not settle upright and centered.");
+            var entryRight = Viewmaster(1, 0, +1);
+            var entryLeft = Viewmaster(1, 0, -1);
+            if (entryRight.X <= 0 || entryLeft.X >= 0 ||
+                Math.Abs(entryRight.Y - entryLeft.Y) > .001 ||
+                Math.Abs(entryRight.Scale - entryLeft.Scale) > .001 ||
+                Math.Abs(entryRight.Tilt + entryLeft.Tilt) > .001)
+                throw new Exception("Viewmaster Left does not reverse reel direction.");
+            foreach (var width in new[] { 720f, 1280f, 1920f })
+            foreach (var height in new[] { 600f, 1080f })
+            foreach (var t in new[] { 0f, .20f, .5f, .8f, 1f })
+            foreach (var reelPosition in new[] { -2, -1, 0, 1, 2 })
+            {
+                var forward = Viewmaster(reelPosition, t, +1, width, height);
+                var backward = Viewmaster(reelPosition, t, -1, width, height);
+                if (!float.IsFinite(forward.X) || !float.IsFinite(forward.Y) ||
+                    !float.IsFinite(forward.Tilt) ||
+                    forward.Scale is < .45f or > 1.001f ||
+                    Math.Abs(forward.X + backward.X) > .01f ||
+                    Math.Abs(forward.Y - backward.Y) > .01f ||
+                    Math.Abs(forward.Scale - backward.Scale) > .001f ||
+                    Math.Abs(forward.Tilt + backward.Tilt) > .001f)
+                    throw new Exception(
+                        "Viewmaster reel geometry loses scale, reverse or window-size invariants.");
+            }
+            var middleOld = Viewmaster(0, .5f, +1);
+            var middleNext = Viewmaster(1, .5f, +1);
+            if (Math.Abs(middleOld.X + middleNext.X) > .01f ||
+                Math.Abs(middleOld.Y - middleNext.Y) > .01f ||
+                Math.Abs(middleOld.Scale - middleNext.Scale) > .001f ||
+                middleOld.Tilt >= 0 || middleNext.Tilt <= 0)
+                throw new Exception(
+                    "Viewmaster A is not a common circular arc for both pictures.");
+            Console.WriteLine(
+                "PASS: Alpha.60 GPU/WPF Viewmaster A/B circular reel geometry, reverse travel, " +
+                "upright images and five photo slots.");
             (float X, float Y, float W) Point(float u, float v,
                 bool incoming, float progress)
                 => ((float, float, float))cubePoint.Invoke(null,
                     [900f, 600f, u, v, incoming, progress])!;
+            // The reversed cube must rotate around the opposite physical
+            // hinge without mirroring the PHOTO pixels. Forward geometry is
+            // unchanged; reverse maps u -> 1-u and negates only the X point.
+            var reverseCube = cubeType.GetMethod("CubePointWithDirection", cubeFlags)
+                ?? throw new Exception("GPU cube has no reverse-direction geometry.");
+            (float X, float Y, float W) ReversePoint(float u, float v,
+                bool incoming, float progress)
+                => ((float, float, float))reverseCube.Invoke(null,
+                    [900f, 600f, u, v, incoming, progress, -1])!;
+            foreach (var cubeProgress in new[] { 0f, .15f, .5f, .85f, 1f })
+            {
+                var outgoingHinge = ReversePoint(0, .5f, false, cubeProgress);
+                var incomingHinge = ReversePoint(1, .5f, true, cubeProgress);
+                if (Math.Abs(outgoingHinge.X - incomingHinge.X) > .005f ||
+                    Math.Abs(outgoingHinge.Y - incomingHinge.Y) > .005f ||
+                    Math.Abs(outgoingHinge.W - incomingHinge.W) > .005f)
+                    throw new Exception("Reversed cube faces separated at left hinge.");
+                foreach (var u in new[] { 0f, .2f, .8f, 1f })
+                {
+                    var reverse = ReversePoint(u, .5f, false, cubeProgress);
+                    var forwardMirror = Point(1f - u, .5f, false, cubeProgress);
+                    if (Math.Abs(reverse.X + forwardMirror.X) > .005f ||
+                        Math.Abs(reverse.W - forwardMirror.W) > .005f)
+                        throw new Exception("Reversed cube does not mirror 3D travel.");
+                }
+            }
+            if (Math.Abs(ReversePoint(0, .5f, false, 0).X + 450) > .01f ||
+                Math.Abs(ReversePoint(1, .5f, false, 0).X - 450) > .01f ||
+                Math.Abs(ReversePoint(0, .5f, true, 1).X + 450) > .01f ||
+                Math.Abs(ReversePoint(1, .5f, true, 1).X - 450) > .01f)
+                throw new Exception("Reversed cube mirrored the photo itself.");
+            Console.WriteLine(
+                "PASS: Alpha.60 reverse cube has opposite hinge, mirrored motion, upright photos.");
             foreach (var position in new[] { 0f, .15f, .5f, .85f, 1f })
             {
                 var aHinge = Point(1, .5f, false, position);
