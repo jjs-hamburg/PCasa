@@ -156,10 +156,9 @@ public partial class MainWindow
         // and could starve reachable C: photos indefinitely. This migration
         // retains the journal identity/order and does not touch pending tags.
         var packageJournal = new DurablePackageJournal(_database);
-        var retiredFileJobs = packageJournal.RetireUnfinishedFileJobs();
-        if (retiredFileJobs > 0)
-            PCasaDiagnostics.WriteMessage("Scheduler.RestartFileWork",
-                retiredFileJobs + " alte Dateioperationen ohne Wiederaufnahme beendet.");
+        // Alpha.58: outstanding original-file writes must retain the SAME
+        // identity, recipe, priority, order and confirmed step on restart.
+        // RecoverDurablePackages below is the single replay authority.
         packageJournal.UpgradeLegacyTagRecovery();
         // Legacy one-intent checks are not transfers. An unresolved attempt
         // is NOT a reason to create two new P0 jobs on every application
@@ -190,8 +189,8 @@ public partial class MainWindow
                 $"Priority={unresolved.Priority}; Step={unresolved.CompletedSteps}; " +
                 $"Error={unresolved.Error ?? "(no error recorded)"}");
         }
-        // Pending tag intents remain visible for manual reconciliation.
-        // Starting file writers automatically after restart is forbidden.
+        // Recoverable file writes resume automatically; intentionally
+        // deferred failures remain available for explicit Taskmanager retry.
         // Unresolved legacy file-transfer intents remain stored, but must
         // not preempt imports with fresh P0 reconciliation packages. No
         // filesystem probe or transfer is performed merely by app startup.
