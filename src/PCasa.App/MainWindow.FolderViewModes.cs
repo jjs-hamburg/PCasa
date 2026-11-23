@@ -15,6 +15,7 @@ public partial class MainWindow
     private readonly Dictionary<string, string> _flatFolderDisplayNames =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _restoringTreeFromFlat;
+    private long? _flatExplicitRevealId;
     private bool _updatingFolderViewButtons;
 
     private void FolderViewMode_Changed(object sender, RoutedEventArgs e)
@@ -29,6 +30,7 @@ public partial class MainWindow
         if (!wasFlat) SaveFolderTreeState();
 
         _appearance.FlatFolderView = flat;
+        _flatExplicitRevealId = null;
         _restoringTreeFromFlat = wasFlat;
         try { RefreshFolderTree(); }
         finally { _restoringTreeFromFlat = false; }
