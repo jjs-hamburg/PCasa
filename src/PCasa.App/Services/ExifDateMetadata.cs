@@ -91,13 +91,26 @@ public static class ExifDateMetadata
         using var reader = new ImageExifReader();
         var sourceTags = ParseJson(reader.Read(original, token).Json);
         var resultTags = ParseJson(reader.Read(result, token).Json);
-        if (SameTags(sourceTags, resultTags)) return;
+        // Copy only actual differences. Rewriting all sixteen protected
+        // fields needlessly touches unrelated XMP/IPTC metadata and can
+        // trigger date normalization on camera-specific JPEGs.
+        var different = ProtectedTags
+            .Where(tag => !string.Equals(sourceTags[tag.WriteTag],
+                resultTags[tag.WriteTag], StringComparison.Ordinal))
+            .ToDictionary(tag => tag.WriteTag,
+                tag => sourceTags[tag.WriteTag], StringComparer.Ordinal);
+        if (different.Count == 0) return;
         if (RawImageSource.IsRawPath(result))
             throw new InvalidDataException(
                 "Externes RAW-Ergebnis hat das ursprüngliche Aufnahmedatum verändert.");
 
+        // Log tag IDENTIFIERS only, never the user's photo timestamps.
+        PCasaDiagnostics.WriteMessage("Image.Edit.ExifDateRepair",
+            "Restoring protected date tags on staged result: " +
+            string.Join(", ", different.Keys));
+
         using (var writer = new ExifToolKeywordWriter.Session())
-            writer.WriteExactExifDates(result, sourceTags, token);
+            writer.WriteExactExifDates(result, different, token);
 
         // Reject before publication if the native writer failed, ignored a
         // format-specific tag, or unintentionally changed another date field.

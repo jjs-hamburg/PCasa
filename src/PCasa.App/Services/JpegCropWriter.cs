@@ -161,6 +161,13 @@ public static class JpegCropWriter
             // Preserve EXIF/IPTC/XMP/GPS from the original in BOTH modes.
             // Pixels are already upright; EXIF Orientation must reset to 1.
             CopyMetadata(fullPath, staged, width, height, token);
+            // The generic ExifTool -TagsFromFile/-all:all transfer does not
+            // always reproduce every camera's date-group and subsecond tag
+            // verbatim (and the image encoder may have supplied its own).
+            // Reconcile ONLY protected date tags on the STAGED image. Never
+            // loosen their equality check or touch the original before the
+            // candidate is fully verified.
+            ExifDateMetadata.Preserve(fullPath, staged, token);
             // Validate before the atomic original replacement. No internal
             // crop, adjustment or duplicate may rewrite camera dates.
             ExifDateMetadata.VerifyUnchanged(fullPath, staged, token);
