@@ -19,8 +19,6 @@ public partial class MainWindow : Window
     private readonly FolderScanner _folderScanner;
     private readonly HashSet<long> _selectedImageIds = new();
     private readonly Dictionary<long, TreeViewItem> _folderTreeItems = new();
-    private readonly FolderTreeDisplaySettings _folderTreeSettings =
-        FolderTreeDisplaySettings.Load();
 
     private IReadOnlyList<PhotoFolderSummary> _photoFolders = Array.Empty<PhotoFolderSummary>();
     private CancellationTokenSource? _activeScanCancellation;
@@ -194,7 +192,6 @@ public partial class MainWindow : Window
     private readonly HashSet<string> _createdEmptyFolderPaths =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _rebuildingFolderTree;
-    private bool _expandingCompressedTree;
 
     private void RefreshFolderTree(bool preserveGalleryAnchor = true)
     {
@@ -297,18 +294,6 @@ public partial class MainWindow : Window
             ? defaultExpandedPaths
             : expandedPaths;
 
-        // Compress omits intermediate path nodes from the visual tree.
-        // On returning to Expand, those ancestors did not exist in the
-        // previous expansion snapshot. Explicitly reopen all monitored
-        // root ancestors so exactly the same photo directories are visible.
-        if (!_folderTreeSettings.Compressed &&
-            (!_appearance.FolderExpansionsSaved || _expandingCompressedTree))
-        {
-            pathsToExpand = new HashSet<string>(
-                pathsToExpand.Concat(defaultExpandedPaths),
-                StringComparer.OrdinalIgnoreCase);
-        }
-
         _collapsedTreePathsForFlat = nodesByPath.Values
             .Where(node => node.Children.Count > 0 &&
                 !pathsToExpand.Contains(node.FullPath))
@@ -322,73 +307,13 @@ public partial class MainWindow : Window
         else
         {
         foreach (var root in roots.Values.OrderBy(
-                     node => node.DisplayName,
-                     StringComparer.CurrentCultureIgnoreCase))
-        {
-            if (!_folderTreeSettings.Compressed)
-            {
-                FoldersTree.Items.Add(CreateFolderTreeItem(root, pathsToExpand));
-                continue;
-            }
-
-            // Each monitored root under this drive/share is visible, together
-            // with ALL its children and siblings. Only unnecessary ancestors
-            // (such as Users/user in C:\Users\user\Pictures) disappear.
-            var monitoredUnderDrive = monitoredFolders
-                .Where(folder => FolderExclusionRules.IsAtOrBelow(
-                    folder.LocalPath, root.FullPath))
-                .Select(folder => FolderExclusionRules.Normalize(folder.LocalPath))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path.Length)
-                .ThenBy(path => path, StringComparer.CurrentCultureIgnoreCase)
-                .ToArray();
-
-            var directMonitoredRoots = monitoredUnderDrive
-                .Where(path => !monitoredUnderDrive.Any(other =>
-                    !string.Equals(path, other, StringComparison.OrdinalIgnoreCase) &&
-                    FolderExclusionRules.IsAtOrBelow(path, other)))
-                .ToArray();
-
-            if (directMonitoredRoots.Any(path =>
-                    string.Equals(path,
-                        FolderExclusionRules.Normalize(root.FullPath),
-                        StringComparison.OrdinalIgnoreCase)))
-            {
-                // A drive/share root itself is monitored: display its entire
-                // subtree, not a duplicate root nested inside itself.
-                FoldersTree.Items.Add(CreateFolderTreeItem(root, pathsToExpand));
-                continue;
-            }
-
-            var driveItem = CreateFolderTreeItem(
-                root, pathsToExpand, includeChildren: false);
-
-            foreach (var monitoredPath in directMonitoredRoots
-                         .OrderBy(path => path, StringComparer.CurrentCultureIgnoreCase))
-            {
-                if (!nodesByPath.TryGetValue(monitoredPath, out var monitoredNode))
-                    continue;
-
-                // E.g. C: > Pictures > _a, _Christina, Himmel ...
-                // The monitored node stays expanded so its siblings are visible.
-                var monitoredItem = CreateFolderTreeItem(monitoredNode, pathsToExpand);
-                // First launch opens monitored roots for discoverability.
-                // Once the user has saved tree state, never force-open the
-                // root after a scan rebuild or PCasa restart.
-                if (useDefaultExpansion && !_appearance.FolderExpansionsSaved)
-                    monitoredItem.IsExpanded = true;
-                driveItem.Items.Add(monitoredItem);
-            }
-
-            // Same policy for the drive/share node. An explicitly collapsed
-            // drive stays collapsed on every subsequent launch.
-            if (useDefaultExpansion && !_appearance.FolderExpansionsSaved)
-                driveItem.IsExpanded = true;
-            FoldersTree.Items.Add(driveItem);
-        }
+            node => node.DisplayName,
+            StringComparer.CurrentCultureIgnoreCase))
+            FoldersTree.Items.Add(CreateFolderTreeItem(root, pathsToExpand));
         }
 
         _folderTreeInitialized = true;
+        SyncFolderViewModeButtons();
 
         var selectedItem = selectedPath is string path
             ? FindFolderTreeItemByPath(FoldersTree, path) : null;
@@ -415,7 +340,6 @@ public partial class MainWindow : Window
         finally
         {
             _rebuildingFolderTree = false;
-            _expandingCompressedTree = false;
         }
     }
 
