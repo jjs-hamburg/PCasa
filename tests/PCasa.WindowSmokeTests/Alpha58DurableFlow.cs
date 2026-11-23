@@ -90,7 +90,15 @@ internal static class Alpha58DurableFlow
                 journal.RecentCompleted().Any(entry =>
                     entry.Key == "alpha58:originals" &&
                     entry.CompletedSteps == 2), TimeSpan.FromSeconds(15)))
-                throw new TimeoutException("The second original did not resume.");
+            {
+                var stillPending = journal.Pending().FirstOrDefault(entry =>
+                    entry.Key == "alpha58:originals");
+                throw new TimeoutException(
+                    "Recovered file write did not reach its final journal commit; " +
+                    $"firstWrites={firstWritten}; secondWrites={secondWritten}; " +
+                    $"state={stillPending?.State ?? "not pending"}; " +
+                    $"cursor={stillPending?.CompletedSteps.ToString() ?? "n/a"}.");
+            }
             if (firstWritten != 1 || secondWritten != 1)
                 throw new Exception("Original writes were repeated or skipped on restart.");
 
