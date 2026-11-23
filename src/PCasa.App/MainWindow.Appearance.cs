@@ -32,6 +32,8 @@ public partial class MainWindow
         // explicit Problems/None selection is always respected.
         public string FolderStatusMode { get; set; } = "Always";
         public bool HideCollapsedFolders { get; set; }
+        public bool HideCollapsedInFlatView { get; set; }
+        public bool FlatFolderView { get; set; }
         public bool SearchGalleryViewOnly { get; set; }
         public bool TooltipsEnabled { get; set; } = true;
         public double ThumbnailSpacing { get; set; } = 10;
@@ -463,7 +465,8 @@ public partial class MainWindow
         var current = new AppearanceDialogValues(
             _appearance.Theme, _appearance.Background, _appearance.TextureFileName,
             _appearance.FolderStatusMode, _appearance.RestoreGalleryPosition,
-            _appearance.HideCollapsedFolders, _appearance.ShowThumbnailFileNames,
+            _appearance.HideCollapsedFolders, _appearance.HideCollapsedInFlatView,
+            _appearance.ShowThumbnailFileNames,
             _appearance.BoldThumbnailFileNames, _appearance.ShowThumbnailIcons,
             _appearance.ShowThumbnailShadows == true, _appearance.TooltipsEnabled,
             _viewerSettings.SequenceScope.ToString(),
@@ -479,6 +482,8 @@ public partial class MainWindow
         void Preview(AppearanceDialogValues candidate, bool persist)
         {
             var visibilityChanged = candidate.HideCollapsed != _appearance.HideCollapsedFolders;
+            var flatVisibilityChanged = _appearance.FlatFolderView &&
+                candidate.HideCollapsedInFlat != _appearance.HideCollapsedInFlatView;
             _pendingGalleryAnchor = originalGalleryAnchor;
             _restoringGalleryLayoutAnchor = true;
             _appearance.Theme = candidate.Theme;
@@ -487,6 +492,7 @@ public partial class MainWindow
             _appearance.FolderStatusMode = candidate.FolderStatus;
             _appearance.RestoreGalleryPosition = candidate.RestorePosition;
             _appearance.HideCollapsedFolders = candidate.HideCollapsed;
+            _appearance.HideCollapsedInFlatView = candidate.HideCollapsedInFlat;
             _appearance.ShowThumbnailFileNames = candidate.FileNames;
             _appearance.BoldThumbnailFileNames = candidate.BoldFileNames;
             _appearance.ShowThumbnailIcons = candidate.Icons;
@@ -501,6 +507,8 @@ public partial class MainWindow
                 UpdateGalleryFolderVisibility();
                 RefreshGallerySearchAfterTreeVisibilityChange();
             }
+            if (flatVisibilityChanged)
+                RefreshFolderTree();
             RestoreAppearanceGalleryAnchor(originalGalleryAnchor,
                 originalGalleryOffset, originalNavigationVersion, originalActiveFolderId);
             _ = Dispatcher.BeginInvoke(new Action(() =>
