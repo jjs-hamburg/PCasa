@@ -2510,6 +2510,9 @@ internal static class Program
             var previousActive = activeField.GetValue(window);
             var previousHidden = surface.HiddenFolderIds;
             var previousEmpty = surface.EmptyNavigationFolderId;
+            var emptyPanel = (FrameworkElement?)window.FindName("EmptyPanel")
+                ?? throw new Exception("Global empty-gallery panel missing.");
+            var previousEmptyPanelVisibility = emptyPanel.Visibility;
             var navigateEmpty = filterType.GetMethod(
                 "TryNavigateToFilteredEmptyFolder", filterFlags)
                 ?? throw new Exception("Filtered folder navigation handler missing.");
@@ -2562,6 +2565,7 @@ internal static class Program
                 // section must not require a dummy thumbnail or cache page.
                 var noImages = Array.Empty<BrowseThumbnailIndexEntry>();
                 filteredField.SetValue(window, noImages);
+                emptyPanel.Visibility = Visibility.Visible;
                 pages.SetIndex(noImages);
                 surface.SetData(noImages, groups, pages);
                 surface.SetEmptyNavigationFolder(null);
@@ -2572,7 +2576,8 @@ internal static class Program
                 if (surface.GetVisibleFolderIds().Count != 1 ||
                     surface.GetVisibleFolderIds()[0] != 100 ||
                     surface.GetVisibleIndexRanges().Count != 0 ||
-                    surface.GetFolderOffset(100) is null)
+                    surface.GetFolderOffset(100) is null ||
+                    emptyPanel.Visibility != Visibility.Collapsed)
                     throw new Exception(
                         "Entirely empty filtered gallery lost its navigable folder header.");
                 Console.WriteLine(
@@ -2587,6 +2592,7 @@ internal static class Program
                 foldersField.SetValue(window, previousFolders);
                 activeField.SetValue(window, previousActive);
                 gpsProperty.SetValue(appearance, previousFilter);
+                emptyPanel.Visibility = previousEmptyPanelVisibility;
                 pages.SetIndex(synthetic);
                 surface.SetData(synthetic, groups, pages);
                 Flush(window);
