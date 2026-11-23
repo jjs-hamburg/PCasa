@@ -57,6 +57,11 @@ public sealed class BrowseGallerySurface : FrameworkElement
         Array.Empty<PhotoFolderSummary>();
     private IReadOnlySet<long> _selectedImageIds = new HashSet<long>();
     private IReadOnlySet<long> _hiddenFolderIds = new HashSet<long>();
+    // Exactly one folder with zero filter matches can have a real gallery
+    // header so selecting it never silently fails. This is only geometry:
+    // it does not add images to the filtered thumbnail index or page cache.
+    private long? _emptyNavigationFolderId;
+    private int _emptyNavigationBeforeIndex;
     private BrowseThumbnailPageCache? _pageCache;
     private double _thumbnailWidth = 180;
     private double _thumbnailHeight;
@@ -175,6 +180,13 @@ public sealed class BrowseGallerySurface : FrameworkElement
         }
 
         if (!sameIndex) _hoveredImageIndex = null;
+        if (_emptyNavigationFolderId is long emptyId &&
+            index.Any(image => image.PhotoFolderId == emptyId))
+        {
+            // A filter change has made this folder visible normally.
+            _emptyNavigationFolderId = null;
+            _emptyNavigationBeforeIndex = 0;
+        }
         _index = index;
         _folders = folders;
         if (!sameIndex || !sameFolders)
@@ -216,6 +228,25 @@ public sealed class BrowseGallerySurface : FrameworkElement
     }
 
     public IReadOnlySet<long> HiddenFolderIds => _hiddenFolderIds;
+
+    /// <summary>
+    /// A selected photo folder may have NO images in the active GPS/tag/RAW
+    /// filter. Insert one empty section at its exact filtered-gallery
+    /// position. The existing filter, index, cache and other folder sections
+    /// remain unchanged. Null removes the transient navigation section.
+    /// </summary>
+    public void SetEmptyNavigationFolder(long? photoFolderId,
+        int beforeImageIndex = 0)
+    {
+        beforeImageIndex = Math.Clamp(beforeImageIndex, 0, _index.Count);
+        if (_emptyNavigationFolderId == photoFolderId &&
+            (photoFolderId is null ||
+                _emptyNavigationBeforeIndex == beforeImageIndex)) return;
+
+        _emptyNavigationFolderId = photoFolderId;
+        _emptyNavigationBeforeIndex = beforeImageIndex;
+        InvalidateLayout();
+    }
 
     public bool SetHiddenFolders(IReadOnlySet<long> hidden)
     {
@@ -484,6 +515,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
                 continue;
             // Only first and last IMAGE rows count, not arbitrary interior
             // images or the absolute start/end of the ScrollViewer.
+            if (section.ImageCount == 0) continue;
             var firstTop = section.ImagesTop;
             var firstBottom = firstTop + section.RowImageHeights[0];
             var lastTop = section.ImagesTop +
@@ -638,7 +670,7 @@ public sealed class BrowseGallerySurface : FrameworkElement
             new Rect(0, Math.Max(0, _viewportTop), Math.Max(1, ActualWidth),
                 Math.Max(1, _viewportHeight)));
 
-        if (_sections.Count == 0 || _index.Count == 0)
+        if (_sections.Count == 0)
         {
             return;
         }
@@ -868,6 +900,15 @@ public sealed class BrowseGallerySurface : FrameworkElement
     {
         if (section.ImageCount <= 0)
         {
+            var message = new FormattedText(
+                UiLanguage.T("Keine Bilder mit diesen Eigenschaften gefunden"),
+                CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                12, _mutedBrush,
+                VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            drawingContext.DrawText(message,
+                new Point(HorizontalMargin, section.ImagesTop + 9));
             return;
         }
 
@@ -1244,13 +1285,16 @@ public sealed class BrowseGallerySurface : FrameworkElement
         _thumbnailHeight = Math.Max(72, _thumbnailWidth * 0.72);
         _sections.Clear();
 
-        if (_index.Count == 0)
+        var folderById = _folders.ToDictionary(folder => folder.Id);
+        var hasEmptyNavigation = _emptyNavigationFolderId is long emptyId &&
+            folderById.ContainsKey(emptyId) &&
+            !_hiddenFolderIds.Contains(emptyId) &&
+            !_index.Any(image => image.PhotoFolderId == emptyId);
+        if (_index.Count == 0 && !hasEmptyNavigation)
         {
             _totalHeight = 1;
             return;
         }
-
-        var folderById = _folders.ToDictionary(folder => folder.Id);
         var availableWidth = Math.Max(1, _layoutWidth - (HorizontalMargin * 2));
         // Choose the number of columns using the desired minimum gap.
         // Distribute leftover width evenly instead of leaving it all
@@ -1265,9 +1309,28 @@ public sealed class BrowseGallerySurface : FrameworkElement
         var cellWidth = Math.Max(_thumbnailWidth, availableWidth / columnCount);
         var y = 0d;
         var indexPosition = 0;
+        var insertBefore = Math.Clamp(_emptyNavigationBeforeIndex, 0, _index.Count);
 
-        while (indexPosition < _index.Count)
+        while (indexPosition < _index.Count || hasEmptyNavigation)
         {
+            if (hasEmptyNavigation &&
+                (indexPosition >= insertBefore || indexPosition == _index.Count))
+            {
+                var emptyFolder = folderById[_emptyNavigationFolderId!.Value];
+                var top = y;
+                var imagesTop = top + HeaderHeight;
+                // Reserve enough height for the selected folder header to
+                // reach the top even if it is the LAST gallery section.
+                var bottom = top + Math.Max(HeaderHeight + 70,
+                    Math.Max(1, _viewportHeight) + HeaderHeight + 8);
+                _sections.Add(new SectionLayout(
+                    emptyFolder, indexPosition, 0, columnCount, 1, cellWidth,
+                    top, imagesTop, bottom, new[] { 0d, 0d }, new[] { 0d }));
+                y = bottom;
+                hasEmptyNavigation = false;
+                continue;
+            }
+            if (indexPosition >= _index.Count) break;
             var folderId = _index[indexPosition].PhotoFolderId;
             var start = indexPosition;
             while (indexPosition < _index.Count && _index[indexPosition].PhotoFolderId == folderId)
