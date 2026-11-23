@@ -775,7 +775,6 @@ public partial class MainWindow
         _appearance.ActiveSidebarMode = mode;
         UpdateWorkspaceLayoutPreservingGallery();
         SaveAppearance();
-        if (mode == "Tags") RefreshQuickTags();
         if (mode == "GPS") ActivateGpsMap();
         await UpdateSidebarContentAsync();
     }
