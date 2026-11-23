@@ -204,6 +204,9 @@ public partial class MainWindow
         // A running import may still publish/reflow the gallery while waiting.
         SaveGalleryPosition();
         _shutdownStarted = true;
+        // Freeze new dispatch synchronously. The writer currently inside its
+        // original-file transaction will finish and checkpoint, then yield.
+        _scheduler.BeginGracefulShutdown();
         // Stop producers immediately. BackgroundScan_WindowClosed runs only
         // AFTER disposal and is too late to stop startup probes/inventories.
         _backgroundMonitorClosing = true;
@@ -251,6 +254,7 @@ public partial class MainWindow
                 // the application open just to wait for that read.
                 // Active manual mutations / native metadata writers DO require
                 // the normal full drain, to protect originals and package steps.
+                await _scheduler.PrepareGracefulShutdownAsync();
                 var criticalWorkActive = ExifToolKeywordWriter.HasLiveSessions ||
                     _scheduler.Snapshot().Any(job =>
                         job.WorkKind == SchedulerWorkKind.Catalog &&
@@ -315,18 +319,8 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
-            // The scheduler has drained all critical source mutations. Only
-            // persistent scan packages may resume when PCasa starts again.
-            // This is a journal state transition, not a filesystem operation.
-            try
-            {
-                var retired = new DurablePackageJournal(_database)
-                    .RetireUnfinishedFileJobs();
-                if (retired > 0)
-                    PCasaDiagnostics.WriteMessage("Shutdown.FileJobs",
-                        retired + " Dateioperationen mit der Sitzung beendet.");
-            }
-            catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Journal", ex); }
+            // The remaining original-file recipes and cursor positions stay
+            // in SQLite for the very next startup. Never retire them here.
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;
