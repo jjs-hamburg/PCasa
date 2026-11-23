@@ -103,6 +103,7 @@ public partial class MainWindow
         FolderSidebarDividerColumn.Width = new GridLength(showFolder ? 5 : 0);
         FolderSidebarPanel.Visibility = showFolder ? Visibility.Visible : Visibility.Collapsed;
         FolderSidebarSplitter.Visibility = showFolder ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSearchFolderToolbarWidth();
 
         GalleryWorkspaceColumn.MinWidth = 240;
         GalleryWorkspaceColumn.Width = new GridLength(galleryFraction, GridUnitType.Star);
@@ -222,6 +223,7 @@ public partial class MainWindow
 
     private void BrowseWorkspace_SizeChanged(object sender, SizeChangedEventArgs e)
     {
+        UpdateSearchFolderToolbarWidth();
         if (_gpsFullscreen && _sidebarMode == "GPS")
             UpdateGpsPhotoOverlayPlacement();
     }
