@@ -91,12 +91,12 @@ public static class ExifDateMetadata
         using var reader = new ImageExifReader();
         var sourceTags = ParseJson(reader.Read(original, token).Json);
         var resultTags = ParseJson(reader.Read(result, token).Json);
-        // Copy only actual differences. Rewriting all sixteen protected
-        // fields needlessly touches unrelated XMP/IPTC metadata and can
-        // trigger date normalization on camera-specific JPEGs.
+        // Compare time VALUES, not the punctuation used by the scanner.
+        // ExifTool may normalize 2022/01/30 into 2022:01:30, which is
+        // not a change of date. Write only genuinely different fields.
         var different = ProtectedTags
-            .Where(tag => !string.Equals(sourceTags[tag.WriteTag],
-                resultTags[tag.WriteTag], StringComparison.Ordinal))
+            .Where(tag => !SameProtectedTag(tag.WriteTag,
+                sourceTags[tag.WriteTag], resultTags[tag.WriteTag]))
             .ToDictionary(tag => tag.WriteTag,
                 tag => sourceTags[tag.WriteTag], StringComparer.Ordinal);
         if (different.Count == 0) return;
@@ -117,8 +117,12 @@ public static class ExifDateMetadata
         using var verifyReader = new ImageExifReader();
         var verified = ParseJson(verifyReader.Read(result, token).Json);
         if (!SameTags(sourceTags, verified))
+        {
+            ReportDateDifferences("Image.Edit.ExifDateRepairRemaining",
+                sourceTags, verified);
             throw new InvalidDataException(
                 "Exif-Aufnahmedaten des Originals konnten nicht vollständig wiederhergestellt werden.");
+        }
     }
 
     public static void VerifyUnchanged(string original, string result,
@@ -128,8 +132,12 @@ public static class ExifDateMetadata
         var expected = ParseJson(reader.Read(original, token).Json);
         var actual = ParseJson(reader.Read(result, token).Json);
         if (!SameTags(expected, actual))
+        {
+            ReportDateDifferences("Image.Edit.ExifDateMismatch",
+                expected, actual);
             throw new InvalidDataException(
                 "Bildbearbeitung hat EXIF-Aufnahme- oder Digitalisierungsdatum verändert.");
+        }
     }
 
     public static void SaveExplicit(string path, Fields updated,
@@ -205,10 +213,84 @@ public static class ExifDateMetadata
         return tags;
     }
 
+    private static void ReportDateDifferences(string eventName,
+        IReadOnlyDictionary<string, string?> expected,
+        IReadOnlyDictionary<string, string?> actual)
+    {
+        // Report only field NAMES, never embedded capture dates or paths.
+        var differing = ProtectedTags
+            .Where(t => !SameProtectedTag(t.WriteTag,
+                expected[t.WriteTag], actual[t.WriteTag]))
+            .Select(t => t.WriteTag);
+        PCasaDiagnostics.WriteMessage(eventName,
+            "Protected date tag mismatch: " + string.Join(", ", differing));
+    }
+
+    // The strict safety invariant is *semantic* date equality. Only a
+    // recognizable, fully valid date can be normalized; missing dates,
+    // different clock times, zone offsets, subseconds and unrecognized
+    // values continue to be compared EXACTLY. No local timezone conversion.
+    internal static bool SameProtectedTag(string tag, string? original,
+        string? candidate)
+    {
+        if (string.Equals(original, candidate, StringComparison.Ordinal))
+            return true;
+        if (original is null || candidate is null)
+            return false;
+        return TryNormalizeProtectedDate(tag, original, out var left) &&
+            TryNormalizeProtectedDate(tag, candidate, out var right) &&
+            string.Equals(left, right, StringComparison.Ordinal);
+    }
+
+    private static readonly string[] DateSeparators =
+        ["yyyy:MM:dd", "yyyy/MM/dd", "yyyy-MM-dd", "yyyy.MM.dd"];
+
+    private static readonly Regex ValidOptionalTimestampSuffix = new(
+        @"^(?:\.\d+)?(?:Z|[+-](?:0\d|1\d|2[0-3]):[0-5]\d)?$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static bool TryNormalizeProtectedDate(string tag, string raw,
+        out string normalized)
+    {
+        normalized = "";
+        if (tag == "IPTC:DateCreated")
+        {
+            if (!DateOnly.TryParseExact(raw, DateSeparators,
+                    CultureInfo.InvariantCulture, DateTimeStyles.None,
+                    out var dateOnly)) return false;
+            normalized = dateOnly.ToString("yyyy-MM-dd",
+                CultureInfo.InvariantCulture);
+            return true;
+        }
+        // EXIF timestamps do not contain timezone information; its
+        // dedicated OffsetTime* and SubSecTime* tags must stay exact.
+        var isExif = tag.StartsWith("EXIF:", StringComparison.Ordinal);
+        if (isExif && tag is not ("EXIF:DateTimeOriginal" or
+            "EXIF:CreateDate" or "EXIF:ModifyDate")) return false;
+        if (tag.StartsWith("IPTC:", StringComparison.Ordinal)) return false;
+        if (!isExif && !tag.StartsWith("XMP-", StringComparison.Ordinal))
+            return false;
+        if (raw.Length < 19 || raw[10] is not (' ' or 'T'))
+            return false;
+        if (!DateOnly.TryParseExact(raw[..10], DateSeparators,
+                CultureInfo.InvariantCulture, DateTimeStyles.None,
+                out var date)) return false;
+        if (!TimeOnly.TryParseExact(raw.Substring(11, 8), "HH:mm:ss",
+                CultureInfo.InvariantCulture, DateTimeStyles.None,
+                out var time)) return false;
+        var suffix = raw[19..];
+        if (isExif && suffix.Length != 0) return false;
+        if (!ValidOptionalTimestampSuffix.IsMatch(suffix)) return false;
+        normalized = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            + "T" + time.ToString("HH:mm:ss", CultureInfo.InvariantCulture)
+            + suffix;
+        return true;
+    }
+
     private static bool SameTags(IReadOnlyDictionary<string, string?> a,
         IReadOnlyDictionary<string, string?> b) =>
-        ProtectedTags.All(t => string.Equals(a[t.WriteTag], b[t.WriteTag],
-            StringComparison.Ordinal));
+        ProtectedTags.All(t => SameProtectedTag(t.WriteTag,
+            a[t.WriteTag], b[t.WriteTag]));
 }
 
 /// <summary>Strict known smartphone filename timestamps; never guess a clock time.</summary>
