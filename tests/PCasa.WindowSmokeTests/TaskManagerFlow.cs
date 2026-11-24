@@ -186,9 +186,10 @@ internal static class TaskManagerFlow
                 string.Equals(item.Directory, firstA, StringComparison.OrdinalIgnoreCase));
             var initialB = firstQueue.Single(item =>
                 string.Equals(item.Directory, firstB, StringComparison.OrdinalIgnoreCase));
-            if (!firstRepo.MovePendingFirstImport(initialB.FolderId, initialA.FolderId) ||
+            if (firstQueue[0].FolderId != initialB.FolderId ||
+                initialB.QueueOrder >= initialA.QueueOrder ||
                 !firstRepo.SetPendingFirstImportPaused(initialA.FolderId, true))
-                throw new Exception("First-import queue cannot be reordered/paused.");
+                throw new Exception("New first-import requests did not use user LIFO order.");
             // Re-selecting an unfinished root must retain pause and rank.
             firstRepo.Add(firstA);
             database.Initialize();
@@ -371,7 +372,7 @@ internal static class TaskManagerFlow
                 throw new Exception("Held first import lost its status or persisted dispatch order.");
 
             // An explicitly paused import is STILL a position in its
-            // persistent P2 queue. Up/down must change its real dispatch
+            // persistent P0 queue. Up/down must change its real dispatch
             // rank and the visual order, even while it remains held.
             // Status-group sorting previously hid a successful move.
             grid.SelectedItem = pausedRow;
