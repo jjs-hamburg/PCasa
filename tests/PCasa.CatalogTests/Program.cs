@@ -135,6 +135,7 @@ internal static class Program
         Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalWaitsForSafeBoundary, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
+        Run("A yielding catalog owner finishes its dependent catalog step before another owner", SchedulerNestedCatalogStepSharesOwner, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
         Run("Rename reconciles the catalog", RenameMustReconcile, failures);
         Run("Failed image decoding does not block safe rename pruning", DecodeFailureStillReconcilesKnownMissingPaths, failures);
@@ -2508,6 +2509,61 @@ internal static class Program
             if (mutation.State != SchedulerJobState.Completed ||
                 mutation.Phase != "Galerie aktualisiert")
                 throw new Exception("Manual operation status/progress was not authoritative.");
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void SchedulerNestedCatalogStepSharesOwner()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var yieldRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var order = new List<string>();
+            var attempts = 0;
+            var owner = scheduler.EnqueueAsync("test:catalog-owner",
+                SchedulerPriority.Background, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        using var registration = token.Register(() => yieldRequested.TrySetResult());
+                        started.TrySetResult();
+                        // A safe file boundary may have to complete a dependent
+                        // catalog step even after the owner was asked to yield.
+                        await release.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        await scheduler.EnqueueAsync("test:catalog-dependent",
+                            SchedulerPriority.Background,
+                            _ =>
+                            {
+                                order.Add("dependent");
+                                return Task.CompletedTask;
+                            }, workKind: SchedulerWorkKind.Catalog)
+                            .WaitAsync(TimeSpan.FromSeconds(5));
+                        token.ThrowIfCancellationRequested();
+                        throw new Exception("Owner did not observe its requested yield.");
+                    }
+                    order.Add("resumed");
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var competitor = scheduler.EnqueueAsync("test:catalog-competitor",
+                SchedulerPriority.ManualAction, _ =>
+                {
+                    order.Add("competitor");
+                    return Task.CompletedTask;
+                }, workKind: SchedulerWorkKind.Catalog);
+            try
+            {
+                await yieldRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (competitor.IsCompleted)
+                    throw new Exception("A different catalog owner crossed the safe boundary.");
+            }
+            finally { release.TrySetResult(); }
+            await Task.WhenAll(owner, competitor).WaitAsync(TimeSpan.FromSeconds(10));
+            if (attempts != 2 ||
+                !order.SequenceEqual(["dependent", "competitor", "resumed"]))
+                throw new Exception("Dependent catalog work did not preserve owner and queue order.");
         }
         Check().GetAwaiter().GetResult();
     }
