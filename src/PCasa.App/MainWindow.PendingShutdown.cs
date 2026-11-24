@@ -82,6 +82,12 @@ public partial class MainWindow
                     reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
         }
         var result = new List<ShutdownPendingOperation>();
+        if (_directImageWriteProgress is { } direct)
+            result.Add(new ShutdownPendingOperation(direct.Key,
+                direct.Phase ?? UiLanguage.T("Bildbearbeitung speichern"),
+                UiLanguage.T(_directImageWriteStarted ? "Läuft" : "Wartet"),
+                [new ShutdownPendingFile(direct.CurrentPath ?? "", null)],
+                CanCancel: !_directImageWriteStarted));
         foreach (var draft in draftTags)
             if (images.TryGetValue(draft.ImageId, out var file))
                 result.Add(new ShutdownPendingOperation("draft:tag:" + draft.ImageId,
@@ -97,6 +103,12 @@ public partial class MainWindow
     private async Task<bool> CancelShutdownOperationAsync(
         ShutdownPendingOperation item)
     {
+        if (_directImageWriteProgress?.Key == item.Key)
+        {
+            if (_directImageWriteStarted) return false;
+            _directImageWriteCancellation?.Cancel();
+            return true;
+        }
         if (item.Key.StartsWith("draft:tag:", StringComparison.Ordinal) &&
             item.DraftImageId is long imageId)
         {

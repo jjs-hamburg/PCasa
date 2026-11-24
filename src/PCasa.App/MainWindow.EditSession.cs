@@ -525,9 +525,10 @@ public partial class MainWindow
                     JpegCropWriter.GetAvailableCopyPath(request.Path));
                 request = request with { CopyPath = copyPath };
             }
-            var task = _scheduler.EnqueueDurableRecipeAsync(key, "image-edit-v1",
-                JsonSerializer.Serialize(request),
-                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            var task = StartDirectImageWrite(key,
+                UiLanguage.T("Bildbearbeitung speichern"), request.Path,
+                BuildEditPackage(key, JsonSerializer.Serialize(request)),
+                request.FolderId, reindexOriginal: request.CopyPath is null);
             _pendingEditImageIds.Add(info.Id);
             _cropSavePending = false; // Navigation must not wait for a NAS write.
             UpdateEditControls();
@@ -707,7 +708,7 @@ public partial class MainWindow
         try
         {
             await task;
-            if (Dispatcher.HasShutdownStarted) return;
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             if (request.CopyPath is { Length: > 0 } copy)
             {
                 // A different image or gallery may now be active. Refresh the
@@ -736,46 +737,8 @@ public partial class MainWindow
                 // Do not also enqueue the same file as a redundant P3 scan.
                 if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
                     ShowViewerImage(keepCurrentAsPlaceholder: true);
-                // Reconcile catalog size, timestamp and EXIF before packing
-                // the new thumbnail. On-disk edits no longer retain the old
-                // last-write time. A background scan must not race the user.
-                try
-                {
-                    await _scheduler.RunAsync(
-                        "image:postcommit-scan:" + Guid.NewGuid().ToString("N"),
-                        SchedulerPriority.ManualAction,
-                        token =>
-                        {
-                            var root = _folderRepository.GetAll()
-                                .FirstOrDefault(item => item.Id == request.FolderId)
-                                ?? throw new IOException(
-                                    "Überwachungsordner für das gespeicherte Bild fehlt.");
-                            var result = _folderScanner.ScanFile(root, request.Path,
-                                cancellationToken: token,
-                                publishCatalogChange: false, forceExifRefresh: true);
-                            if (result.Failed > 0 || result.ImageFilesSeen == 0)
-                                throw new IOException(
-                                    "Gespeichertes Bild konnte nicht katalogisiert werden.");
-                            return Task.CompletedTask;
-                        }, workKind: SchedulerWorkKind.Catalog);
-                }
-                catch (Exception ex)
-                {
-                    // Never replay an already completed original-file write
-                    // because an independent catalog update failed.
-                    PCasaDiagnostics.Write("Image.Edit.PostCommitScan", ex);
-                    // Only an unsuccessful immediate P0 re-index needs a
-                    // background retry; the file write must never be replayed.
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        request.FolderId, request.Path,
-                        BackgroundFolderChangeKind.ScanFile,
-                        Recursive: false, ForceExifRefresh: true));
-                    StatusText.Text = UiLanguage.T(
-                        "Bild gespeichert, Katalogaktualisierung ausstehend.");
-                }
-                // A file commit is NOT complete for the user while the
-                // gallery still projects the previous pixel version.
-                await RefreshThumbnailsAsync([request.ImageId]);
+                // The direct write already reconciled the source and
+                // its packed thumbnails before releasing the catalogue lease.
                 await RefreshBrowseGalleryAsync(forceIndexReload: true,
                     warmViewport: false);
             }

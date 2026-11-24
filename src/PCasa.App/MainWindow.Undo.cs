@@ -88,12 +88,17 @@ public partial class MainWindow
         Task task;
         try
         {
-            task = _scheduler.EnqueueDurableRecipeAsync(key,"undo-restore-v1",
-                JsonSerializer.Serialize(request),
-                SchedulerPriority.ManualAction,SchedulerWorkKind.Catalog);
+            task = StartDirectImageWrite(key, UiLanguage.T("Bild wiederherstellen"),
+                request.Path, BuildUndoRestorePackage(key, JsonSerializer.Serialize(request)),
+                request.MonitoredFolderId, reindexOriginal: true);
             _taskManagerWindow?.RequestRefresh();
         }
-        catch { EndVisibleManualOperation(key); throw; }
+        catch (Exception ex)
+        {
+            EndVisibleManualOperation(key);
+            ShowFileActionError(ex);
+            return;
+        }
         _ = ObserveUndoRestoreAsync(task,key,request);
     }
 
@@ -130,7 +135,7 @@ public partial class MainWindow
         }
         finally
         {
-            if (!Dispatcher.HasShutdownStarted)
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
             {
                 EndVisibleManualOperation(key);
                 if (succeeded)
@@ -164,43 +169,8 @@ public partial class MainWindow
                     {
                         PCasaDiagnostics.Write("Undo.RestoredPreview", ex);
                     }
-                    // Restore is complete on disk, but the gallery must
-                    // commit the corresponding catalog revision and packed
-                    // thumbnail before reporting a consistent restored image.
-                    // Never restore the file twice because a later cache
-                    // operation fails.
-                    var indexed = false;
-                    try
-                    {
-                        await _scheduler.RunAsync(
-                            "undo:reindex:" + key, SchedulerPriority.ManualAction,
-                            token =>
-                            {
-                                var root = _folderRepository.GetAll()
-                                    .FirstOrDefault(folder =>
-                                        folder.Id == request.MonitoredFolderId)
-                                    ?? throw new IOException(
-                                        "Überwachungsordner für das wiederhergestellte Bild fehlt.");
-                                var scanned = _folderScanner.ScanFile(root,
-                                    request.Path, cancellationToken: token,
-                                    publishCatalogChange: false, forceExifRefresh: true);
-                                if (scanned.Failed > 0 || scanned.ImageFilesSeen == 0)
-                                    throw new IOException(
-                                        "Wiederhergestelltes Bild konnte nicht katalogisiert werden.");
-                                return Task.CompletedTask;
-                            }, workKind: SchedulerWorkKind.Catalog);
-                        indexed = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        PCasaDiagnostics.Write("Undo.RestoreReindex", ex);
-                        QueueBackgroundChange(new BackgroundFolderChange(
-                            request.MonitoredFolderId, request.Path,
-                            BackgroundFolderChangeKind.ScanFile,
-                            Recursive: false, ForceExifRefresh: true));
-                    }
-                    if (indexed)
-                        await RefreshThumbnailsAsync([request.ImageId]);
+                    // Direct restore reconciles the catalog and thumbnails
+                    // under its own lease; no additional write job is needed.
                     if (_viewerOpen && _viewerImageInfo?.Id == request.ImageId)
                         ShowViewerImage(keepCurrentAsPlaceholder:true);
                     await RefreshBrowseGalleryAsync(forceIndexReload:true,
