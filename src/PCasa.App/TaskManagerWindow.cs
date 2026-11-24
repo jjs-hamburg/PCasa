@@ -40,7 +40,7 @@ public sealed class TaskManagerWindow : Window
     private readonly CheckBox _running = new(), _waiting = new(),
         _errors = new(), _completed = new();
     private readonly Button _up = new(), _down = new(),
-        _startNow = new(), _restart = new(), _pauseResume = new(), _delete = new();
+        _startNow = new(), _pauseResume = new(), _delete = new();
     private readonly TextBlock _detail = new();
     private List<TaskRow> _all = [];
     private bool _reading;
@@ -168,7 +168,6 @@ public sealed class TaskManagerWindow : Window
         Button(_up, "Nach oben", () => Move(-1), actions);
         Button(_down, "Nach unten", () => Move(1), actions);
         Button(_startNow, "Jetzt ausführen", StartNow, actions);
-        Button(_restart, "Neu starten", Restart, actions);
         Button(_pauseResume, "Pausieren", PauseResume, actions);
         Button(_delete, "Löschen", Delete, actions);
         var close = new Button
@@ -525,12 +524,9 @@ public sealed class TaskManagerWindow : Window
         _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
         _startNow.IsEnabled = !_acting && !InformationalExternal(row) &&
             !IsContinuousReview(row) &&
-            row is { Status: "Wartet" } &&
-            (_startAutomaticNow is not null || row.Durable);
-        // Resume is no longer disguised as "Neu starten"; that button
-        // means retry after an actual failure, never resume a paused scan.
-        _restart.IsEnabled = !_acting && !InformationalExternal(row) &&
-            row is { Status: "Fehler", Retryable: true };
+            (row is { Status: "Fehler", Retryable: true } ||
+             (row is { Status: "Wartet" or "Angehalten" } &&
+              (_startAutomaticNow is not null || row.Durable)));
         var canResume = row is { Status: "Angehalten" } &&
             (row.Durable || _resumePausedTask is not null ||
              IsInitialImport(row.Key) && _resumeAutomaticScan is not null);
@@ -604,10 +600,17 @@ public sealed class TaskManagerWindow : Window
     private void StartNow()
     {
         var row = Selection;
-        if (row is not { Status: "Wartet" } || IsContinuousReview(row)) return;
+        if (row is null || IsContinuousReview(row)) return;
+        if (row is { Status: "Fehler", Retryable: true })
+        {
+            RetryFailed(row);
+            return;
+        }
+        if (row.Status is not ("Wartet" or "Angehalten")) return;
         if (row.Durable)
-            _ = PerformAsync(row.Key,
-                () => Task.Run(() => _scheduler.PromoteTaskNow(row.Key)));
+            _ = PerformAsync(row.Key, () => Task.Run(() =>
+                _scheduler.PromoteTaskNow(row.Key) &&
+                (row.Status != "Angehalten" || _scheduler.ResumeDurableTask(row.Key))));
         else if (_startAutomaticNow is not null)
             _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
     }
@@ -624,10 +627,8 @@ public sealed class TaskManagerWindow : Window
             _moveGlobalTask(row.Key, neighbor.Key, accepted));
     }
 
-    private void Restart()
+    private void RetryFailed(TaskRow row)
     {
-        var row = Selection;
-        if (row is not { Retryable: true }) return;
         if (_failedRows.TryGetValue(row.Key, out var failedFiles))
         {
             _ = PerformAsync(row.Key, async () =>
@@ -640,7 +641,8 @@ public sealed class TaskManagerWindow : Window
         }
         _ = PerformAsync(row.Key, () => Task.Run(() =>
         {
-            if (!_scheduler.RetryDurableTask(row.Key))
+            if (!_scheduler.PromoteTaskNow(row.Key) ||
+                !_scheduler.RetryDurableTask(row.Key))
                 throw new InvalidOperationException("Der Auftrag ist nicht mehr fehlerhaft.");
             return true;
         }));
