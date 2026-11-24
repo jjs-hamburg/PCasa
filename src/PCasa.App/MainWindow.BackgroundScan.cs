@@ -1169,10 +1169,7 @@ public partial class MainWindow
                 ResumeGeneration = interruptedCursor is not null
                     ? cursorGeneration : revisionChanged ? null : existing.ResumeGeneration,
                 ForceExifRefresh = existing.ForceExifRefresh ||
-                    change.ForceExifRefresh,
-                // New revisions restart enumeration against the catalog.
-                // No artificial follow-up notification is necessary.
-                NeedsFollowup = false
+                    change.ForceExifRefresh
             };
         }
         else
@@ -1468,7 +1465,8 @@ public partial class MainWindow
                         queueOrder: request.QueueOrder == long.MaxValue
                             ? null : request.QueueOrder);
                     CompleteAutomaticChange(request);
-                    _scheduler.CompleteTaskPromotion(taskKey);
+                    if (!_backgroundPending.ContainsKey(taskKey))
+                        _scheduler.CompleteTaskPromotion(taskKey);
                     catalogChanged |= removed > 0;
                     if (removed > 0)
                     {
@@ -1710,24 +1708,17 @@ public partial class MainWindow
                             QueueBackgroundChange(accepted.Change, persisted: accepted);
                     }
                     CompleteAutomaticChange(request);
-                    if (!request.NeedsFollowup)
+                    if (!_backgroundPending.ContainsKey(taskKey))
                         _scheduler.CompleteTaskPromotion(taskKey);
                     scanResume.Dispose();
                     scanResume = null;
-                    var followup = request.NeedsFollowup;
                     request = request with
                     {
                         Resume = null,
-                        ResumeGeneration = null,
-                        NeedsFollowup = false
+                        ResumeGeneration = null
                     };
                     requests[nextRequestIndex] = request;
                     catalogChanged |= result.CatalogChanged;
-                    if (followup)
-                        QueueBackgroundChange(new BackgroundFolderChange(
-                            request.MonitoredFolderId, request.Path,
-                            request.Kind, request.Recursive,
-                            ForceExifRefresh: request.ForceExifRefresh));
                     TrackFolderActivity(
                         request.Kind == BackgroundFolderChangeKind.ScanFile
                             ? Path.GetDirectoryName(scanPath) ?? scanPath
@@ -2056,7 +2047,6 @@ public partial class MainWindow
         bool Recursive,
         FolderScanner.ScanResumeState? Resume = null,
         long? ResumeGeneration = null,
-        bool NeedsFollowup = false,
         bool ForceExifRefresh = false,
         long QueueOrder = long.MaxValue,
         string? Revision = null);
