@@ -3076,9 +3076,10 @@ internal static class TagFlow
             var scanAllowed = (bool)mayShowScan.Invoke(window, null)!;
             if (!scanAllowed)
                 throw new Exception("Queued Tag job incorrectly suppresses NAS progress.");
+            var syntheticScanOwner = new object();
             scanPresenter.UpdateScan(new ScanProgress(5, 3, 2, 0,
                 @"S:\album\new-photo.jpg", Added: 3, ReadingNew: true),
-                showWhileManualWaiting: scanAllowed);
+                showWhileManualWaiting: scanAllowed, scanOwner: syntheticScanOwner);
             var repaint = typeof(PCasa.App.MainWindow).GetMethod(
                 "RenderVisibleTagSeries",
                 System.Reflection.BindingFlags.NonPublic |
@@ -3099,13 +3100,18 @@ internal static class TagFlow
                 System.Reflection.BindingFlags.NonPublic |
                 System.Reflection.BindingFlags.Instance)
                 ?? throw new Exception("Pending Tag presenter restoration missing.");
+            if (!scanPresenter.EndScanPhase(syntheticScanOwner))
+                throw new Exception("Synthetic scan did not own its own phase.");
             restorePending.Invoke(window, null);
             if (scanPresenter.ShowingScanDuringManualWait ||
                 (scanPresenter.FindName("CountText") as TextBlock)?.Text != "0 / 7")
                 throw new Exception("Completed NAS scan did not restore queued Tag series.");
-            // The scan dialog must render a committed LOCAL thumbnail even
-            // while an older Tag package is queued. Do this before ending
-            // the shared presentation lifetime.
+            endManual.Invoke(window, [waitingNasKey]);
+            // The shared-window arbitration above is synchronous and uses
+            // the actual MainWindow. Test asynchronous decoding separately
+            // in the SAME presenter class, with an exclusive producer.
+            // The live watcher may otherwise legitimately replace the fake
+            // scan's filename during the Dispatcher pump below.
             string? localPreview;
             using (var connection = db.OpenConnection())
             using (var lookup = connection.CreateCommand())
@@ -3119,15 +3125,25 @@ internal static class TagFlow
             }
             if (string.IsNullOrWhiteSpace(localPreview) || !File.Exists(localPreview))
                 throw new Exception("Smoke image has no committed local scan thumbnail.");
-            scanPresenter.UpdateScan(new ScanProgress(6, 4, 2, 0,
-                firstOriginal, CurrentThumbnailPath: localPreview),
-                showWhileManualWaiting: true);
-            Until(window, () =>
-                (scanPresenter.FindName("CurrentThumbnail") as Image)?.Source
-                is ImageSource previewImage && previewImage.Width > 0 && previewImage.Height > 0,
-                "Scan progress did not display the committed local image.");
-            restorePending.Invoke(window, null);
-            endManual.Invoke(window, [waitingNasKey]);
+            var previewPresenter = new PCasa.App.BrowseCacheProgressWindow { Owner = window };
+            var previewOwner = new object();
+            try
+            {
+                previewPresenter.BeginManualOperation("Tags in Originaldateien schreiben", 7);
+                previewPresenter.UpdateScan(new ScanProgress(6, 4, 2, 0,
+                    firstOriginal, CurrentThumbnailPath: localPreview),
+                    showWhileManualWaiting: true, scanOwner: previewOwner);
+                Until(window, () =>
+                    (previewPresenter.FindName("CurrentThumbnail") as Image)?.Source
+                    is ImageSource previewImage && previewImage.Width > 0 && previewImage.Height > 0,
+                    "Scan progress did not display the committed local image.");
+                if (!previewPresenter.EndScanPhase(previewOwner))
+                    throw new Exception("Preview owner could not end its own scan.");
+                previewPresenter.BeginManualOperation("Tags in Originaldateien schreiben", 7);
+                if ((previewPresenter.FindName("CurrentThumbnail") as Image)?.Source is not null)
+                    throw new Exception("Completed scan preview survived the manual overlay.");
+            }
+            finally { previewPresenter.EndManualOperation(); previewPresenter.Finish(); }
             Console.WriteLine("PASS: Live scan progress shows its local cached picture.");
             Console.WriteLine(
                 "PASS: Active NAS scan replaces queued Tag caption and restores pending series.");

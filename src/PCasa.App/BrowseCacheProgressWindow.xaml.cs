@@ -43,6 +43,7 @@ public partial class BrowseCacheProgressWindow : Window
     private readonly CancellationTokenSource _previewLifetime = new();
     private DateTime _lastPreviewUpdate = DateTime.MinValue;
     private bool _previewBusy;
+    private long _previewRevision;
     private string? _displayedPreviewImagePath;
     private string? _pendingLocalPreviewPath;
     private string? _pendingOriginalPreviewPath;
@@ -332,7 +333,7 @@ public partial class BrowseCacheProgressWindow : Window
         FolderPathText.Text = progress.CurrentFile is null ? string.Empty :
             Path.GetDirectoryName(progress.CurrentFile) ?? string.Empty;
         FolderPathText.ToolTip = progress.CurrentFile;
-        CurrentThumbnail.Source = null;
+        InvalidateProgressPreview();
         PublishProgressStatus();
         RevealActiveProgress();
     }
@@ -356,7 +357,7 @@ public partial class BrowseCacheProgressWindow : Window
         FolderPathText.Text = string.Empty;
         FolderPathText.ToolTip = null;
         _manualCurrentImagePath = null;
-        CurrentThumbnail.Source = null;
+        InvalidateProgressPreview();
         RevealActiveProgress();
         PublishProgressStatus();
     }
@@ -454,6 +455,7 @@ public partial class BrowseCacheProgressWindow : Window
         System.Windows.Media.Imaging.BitmapSource? thumbnail)
     {
         if (!_manualPresentationActive || _finished || _databaseBackupRunning ||
+            _showingScanDuringManualWait ||
             !string.Equals(_manualCurrentImagePath, originalPath,
                 StringComparison.OrdinalIgnoreCase)) return;
         CurrentThumbnail.Source = thumbnail;
@@ -550,7 +552,7 @@ public partial class BrowseCacheProgressWindow : Window
         CurrentFileText.ToolTip = null;
         FolderPathText.Text = string.Empty;
         FolderPathText.ToolTip = null;
-        CurrentThumbnail.Source = null;
+        InvalidateProgressPreview();
         // No status notification: the completed manual job already set its
         // result caption. Publishing an empty progress label erases it.
         if (IsVisible) Hide();
@@ -586,6 +588,8 @@ public partial class BrowseCacheProgressWindow : Window
         _activeScanOwner = null;
         _lastScanProgress = null;
         _scanPhaseOverride = null;
+        if (_showingScanDuringManualWait)
+            InvalidateProgressPreview();
         if (_databaseBackupRunning)
         {
             ShowDatabaseBackupIfIdle();
@@ -705,13 +709,20 @@ public partial class BrowseCacheProgressWindow : Window
         // Scan and cache may share this presenter in sequence. Never show
         // a filename or preview from the former operation after ownership
         // changes or the next progress packet has no current source.
-        _displayedPreviewImagePath = null;
-        _pendingLocalPreviewPath = null;
-        _pendingOriginalPreviewPath = null;
+        InvalidateProgressPreview();
         CurrentFileText.Text = string.Empty;
         CurrentFileText.ToolTip = null;
         FolderPathText.Text = string.Empty;
         FolderPathText.ToolTip = null;
+        CurrentThumbnail.Source = null;
+    }
+
+    private void InvalidateProgressPreview()
+    {
+        _previewRevision++;
+        _displayedPreviewImagePath = null;
+        _pendingLocalPreviewPath = null;
+        _pendingOriginalPreviewPath = null;
         CurrentThumbnail.Source = null;
     }
 
@@ -722,11 +733,9 @@ public partial class BrowseCacheProgressWindow : Window
             if (!string.Equals(_displayedPreviewImagePath, currentPath,
                     StringComparison.OrdinalIgnoreCase))
             {
-                _displayedPreviewImagePath = currentPath;
-                _pendingLocalPreviewPath = null;
-                _pendingOriginalPreviewPath = null;
                 // Do not show the previous photo under the next filename.
-                CurrentThumbnail.Source = null;
+                InvalidateProgressPreview();
+                _displayedPreviewImagePath = currentPath;
             }
             CurrentFileText.Text = Path.GetFileName(currentPath);
             CurrentFileText.ToolTip = currentPath;
@@ -768,12 +777,29 @@ public partial class BrowseCacheProgressWindow : Window
                 _pendingOriginalPreviewPath = null;
                 if (path is null) continue;
                 _lastPreviewUpdate = DateTime.UtcNow;
-                var bitmap = await Task.Run(() =>
-                    _loader.Load(path, 92, cancellation), cancellation);
-                if (!_finished && !cancellation.IsCancellationRequested &&
-                    string.Equals(_displayedPreviewImagePath, original,
-                        StringComparison.OrdinalIgnoreCase))
-                    CurrentThumbnail.Source = bitmap;
+                var revision = _previewRevision;
+                try
+                {
+                    var bitmap = await Task.Run(() =>
+                        _loader.Load(path, 92, cancellation), cancellation);
+                    if (!_finished && !cancellation.IsCancellationRequested &&
+                        revision == _previewRevision &&
+                        !_databaseBackupRunning &&
+                        (!_manualPresentationActive || _showingScanDuringManualWait) &&
+                        string.Equals(_displayedPreviewImagePath, original,
+                            StringComparison.OrdinalIgnoreCase))
+                        CurrentThumbnail.Source = bitmap;
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // A missing old cache file must not discard a newer
+                    // pending request that arrived during the failed read.
+                    PCasaDiagnostics.Write("Progress.LocalPreview", ex);
+                }
             }
         }
         catch (OperationCanceledException) { }
