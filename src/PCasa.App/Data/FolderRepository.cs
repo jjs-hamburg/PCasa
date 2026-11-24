@@ -829,7 +829,8 @@ public sealed class FolderRepository
     // inventory epoch. Recovered packages reuse their old identity/epoch.
     public RegularScanCheckpoint BeginOrResumeRegularScan(
         string scanKey, long folderId, string scanRoot,
-        string sourceCanonicalPath, bool beginManualEpoch)
+        string sourceCanonicalPath, bool beginManualEpoch,
+        bool loadLegacyProgress = true)
     {
         using var connection = _database.OpenConnection();
         using var tx = connection.BeginTransaction();
@@ -916,6 +917,7 @@ public sealed class FolderRepository
         }
         var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var cursors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (loadLegacyProgress)
         using (var rows = connection.CreateCommand())
         {
             rows.Transaction = tx;
@@ -934,8 +936,8 @@ public sealed class FolderRepository
             }
         }
         tx.Commit();
-        return new RegularScanCheckpoint(generation, epoch, checkedCount,
-            completed, cursors);
+        return new RegularScanCheckpoint(generation, epoch,
+            loadLegacyProgress ? checkedCount : 0, completed, cursors);
     }
 
     // This is the durable *first-pass* frontier per physical directory.

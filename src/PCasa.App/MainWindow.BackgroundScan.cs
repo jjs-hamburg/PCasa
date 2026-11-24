@@ -36,7 +36,7 @@ public partial class MainWindow
     // A review round has no wall-clock expiry. Only an unreachable/error
     // source needs a retry backoff; a completed root is eligible again only
     // after every other monitored root finishes the SAME round.
-    private static readonly TimeSpan FailedRootReviewBackoff = TimeSpan.FromHours(6);
+    private static readonly TimeSpan SourceRetryInterval = TimeSpan.FromSeconds(10);
     private BackgroundFolderChangeKind? _backgroundActiveScanKind;
     private string? _backgroundActiveRootReviewPath;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
@@ -454,7 +454,8 @@ public partial class MainWindow
             // the SAME scheduler, and an actually active first import still
             // has precedence. A different pending root is not a global lock.
             var idleSlotFree = !_backgroundWorkerRunning &&
-                _backgroundPending.Count == 0 &&
+                !_backgroundPending.Values.Any(request =>
+                    !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request))) &&
                 !_initialScanActive && !_initialScanPumpRunning &&
                 !_manualContextScanActive && !_manualScanAllActive &&
                 !_manualFileTransferActive;
@@ -499,8 +500,9 @@ public partial class MainWindow
 
                 var deferred = _backgroundDeferredInventoryRoots.Contains(folder.Id);
                 var idleReviewDue = folder.Id == idleCandidate;
-                if (!firstKnown && !deferred && !idleReviewDue)
-                    continue;
+                // Reconnect can happen long after the first availability
+                // snapshot. Recover the accepted inventory identity on any
+                // available probe, not only the first time a root is seen.
 
                 // Resume real interrupted inventory receipts without inventing
                 // a second scan key, but defer them until all first imports
@@ -511,6 +513,16 @@ public partial class MainWindow
                     .Where(request => request is not null &&
                         request.Kind != BackgroundFolderChangeKind.RescanRoot)
                     .Cast<BackgroundFolderChange>()
+                    .Where(request =>
+                    {
+                        var key = AutomaticTaskKey(new PendingBackgroundScan(
+                            request.MonitoredFolderId, request.Path,
+                            request.Kind, request.Recursive));
+                        return !_backgroundPending.ContainsKey(key) &&
+                            !(_backgroundInFlight?.Any(item =>
+                                string.Equals(AutomaticTaskKey(item), key,
+                                    StringComparison.OrdinalIgnoreCase)) ?? false);
+                    })
                     .ToArray();
 
                 var reconcile = idleReviewDue;
@@ -836,7 +848,9 @@ public partial class MainWindow
                 task.Kind == BackgroundFolderChangeKind.RescanRoot &&
                 _backgroundReviewOrder.TryGetValue(task.MonitoredFolderId, out var reviewRank)
                     ? reviewRank : rank++,
-                CanStop: !stopping));
+                CanStop: !stopping,
+                CatalogDirectory: task.Kind == BackgroundFolderChangeKind.ScanDirectory
+                    ? task.Path : null));
         }
 
         if (_backgroundScanInitialized &&
@@ -1034,7 +1048,7 @@ public partial class MainWindow
         var source = _folderRepository.GetSourceState(folder.CanonicalPath);
         if (source is { DesiredPresent: true })
             _folderRepository.DeferRootReview(folder.Id,
-                source.Value.Generation, DateTime.UtcNow.AddHours(6));
+                source.Value.Generation, DateTime.UtcNow + SourceRetryInterval);
     }
 
     private void QueueBackgroundChange(BackgroundFolderChange change,
@@ -1543,10 +1557,6 @@ public partial class MainWindow
                         scanResume = null;
                     }
                     scanResume ??= new FolderScanner.ScanResumeState();
-                    if (request.Kind != BackgroundFolderChangeKind.ScanFile &&
-                        scanResume.CommittedFiles == 0)
-                        scanResume.ImageFilesSeen =
-                            _folderRepository.GetConfirmedRegularScanCount(inventoryKey);
                     _backgroundLiveChecked = scanResume.ImageFilesSeen;
                     resumeGeneration = sourceState.Value.Generation;
                     request = request with
@@ -1611,7 +1621,8 @@ public partial class MainWindow
                                     : _folderScanner.ScanDirectory(
                                         folder, scanPath, request.Recursive,
                                         progress: scanProgress, token, scanResume,
-                                        durableScanKey: inventoryKey);
+                                        durableScanKey: inventoryKey,
+                                        catalogOwnedProgress: true);
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
@@ -1725,19 +1736,15 @@ public partial class MainWindow
                 }
                 catch (Exception scanError)
                 {
-                    // A missing SMB drive is not an error that should
-                    // strand work for six hours. Re-probe a suspected
-                    // network I/O failure on the same 10-second source-gate
-                    // cadence; genuine non-I/O scanner failures keep the
-                    // longer cooldown to prevent a hot retry loop. In
-                    // neither case is the SQLite file cursor discarded.
+                    // A failed check never advances catalog order. Retry
+                    // on the existing source-availability cadence, not a
+                    // separate multi-hour background-review cooldown.
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
                         resumeGeneration is long failedGeneration)
                     {
-                        var delay = scanError is IOException or UnauthorizedAccessException
-                            ? TimeSpan.FromSeconds(10) : FailedRootReviewBackoff;
                         _folderRepository.DeferRootReview(folder.Id,
-                            failedGeneration, DateTime.UtcNow + delay);
+                            failedGeneration, DateTime.UtcNow + SourceRetryInterval);
+                        PCasaDiagnostics.Write("Background.RootCheck", scanError);
                     }
                     scanResume?.Dispose();
                     scanResume = null;

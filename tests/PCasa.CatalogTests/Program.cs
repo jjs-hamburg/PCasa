@@ -2020,10 +2020,26 @@ internal static class Program
             reopened.GetFolderImportState(root.Id)?.CataloguedCount != 2 ||
             reopened.CountCataloguedInDirectory(dir) != 2)
             throw new Exception("New job failed to reconcile catalog-owned file state.");
+        // An old automatic directory receipt may still contain a filename
+        // cursor that would hide a newly arrived earlier file. Its identity
+        // is retained, but its old progress is deliberately ignored.
+        var source = reopened.GetSourceState(root.CanonicalPath)!.Value;
+        var automaticKey = $"background:inventory:{root.Id}:{source.Generation}:ScanDirectory:True:{dir}";
+        var oldReceipt = reopened.BeginOrResumeRegularScan(automaticKey, root.Id,
+            dir, root.CanonicalPath, beginManualEpoch: false);
+        if (!reopened.SaveRegularScanFile(automaticKey, dir, "z.jpg", 999,
+                source.Generation, oldReceipt.Epoch))
+            throw new Exception("Could not seed legacy automatic receipt.");
+        WriteJpeg(Path.Combine(dir, "0.jpg"));
+        var recovered = scanner2.ScanDirectory(root, dir, true,
+            durableScanKey: automaticKey, catalogOwnedProgress: true);
+        if (recovered.Updated != 1 || recovered.ImageFilesSeen != 3 ||
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 3)
+            throw new Exception("Automatic recovery trusted stale filename progress.");
         var repeated = scanner2.ScanDirectory(root, root.LocalPath, true,
             durableScanKey: "manual:catalog:third", catalogOwnedProgress: true);
         if (repeated.Updated != 0 || repeated.Removed != 0 ||
-            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 2)
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 3)
             throw new Exception("Unchanged images were reimported or folder count reset.");
     }
 

@@ -7,7 +7,8 @@ namespace PCasa.App;
 // scheduler execution. The taskmanager never owns a second scanner or queue.
 public sealed record AutomaticScanTask(
     string Key, string Title, string Directory, string Progress,
-    string Status, int Priority, long Order, bool CanStop = true);
+    string Status, int Priority, long Order, bool CanStop = true,
+    string? CatalogDirectory = null);
 
 public partial class MainWindow
 {

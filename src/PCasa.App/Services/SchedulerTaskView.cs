@@ -140,7 +140,10 @@ public sealed class SchedulerTaskView
                     rows.Add(new SchedulerTaskViewItem(scan.Key, scan.Title,
                         scan.Directory, first is not null
                             ? UiLanguage.Format("{0:N0} Bilder", first.CataloguedCount)
-                            : scan.Progress, scan.Status,
+                            : scan.CatalogDirectory is string directory
+                                ? UiLanguage.Format("{0:N0} Bilder",
+                                    scanProgress.CountCataloguedInDirectory(directory))
+                                : scan.Progress, scan.Status,
                         null, scan.Priority, first?.QueueOrder ?? scan.Order,
                         false, _canMoveAutomatic &&
                             ((first is not null) ||
