@@ -82,12 +82,17 @@ public partial class MainWindow
                     reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
         }
         var result = new List<ShutdownPendingOperation>();
-        if (_directImageWriteProgress is { } direct)
+        if (_directImageWriteProgress is { CurrentPath: { } path } direct)
+        {
+            using var preview = db.CreateCommand();
+            preview.CommandText = "SELECT thumbnail_path FROM images WHERE local_path=$path COLLATE NOCASE LIMIT 1;";
+            preview.Parameters.AddWithValue("$path", path);
             result.Add(new ShutdownPendingOperation(direct.Key,
                 direct.Phase ?? UiLanguage.T("Bildbearbeitung speichern"),
                 UiLanguage.T(_directImageWriteStarted ? "Läuft" : "Wartet"),
-                [new ShutdownPendingFile(direct.CurrentPath ?? "", null)],
+                [new ShutdownPendingFile(path, preview.ExecuteScalar() as string)],
                 CanCancel: !_directImageWriteStarted));
+        }
         foreach (var draft in draftTags)
             if (images.TryGetValue(draft.ImageId, out var file))
                 result.Add(new ShutdownPendingOperation("draft:tag:" + draft.ImageId,

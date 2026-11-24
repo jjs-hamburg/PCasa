@@ -909,8 +909,13 @@ public partial class MainWindow
             var payload = System.Text.Json.JsonSerializer.Serialize(
                 selected.Select(image => new DurableDeleteItem(image.Id, image.Path)).ToArray());
             var package = BuildDurableDeletePackage(key, payload, succeeded, errors);
-            await _scheduler.EnqueueDurablePackageAsync(package,
-                "gallery-delete-v1", payload, SchedulerPriority.ManualAction);
+            if (selected.Length == 1)
+                await StartDirectImageWrite(key, UiLanguage.T("Bilder löschen"),
+                    selected[0].Path, package, folderId: 0, reindexOriginal: false);
+            else
+                await _scheduler.EnqueueDurablePackageAsync(package,
+                    "gallery-delete-v1", payload, SchedulerPriority.ManualAction);
+            if (_shutdownStarted || Dispatcher.HasShutdownStarted) return;
             _selectedImageIds.ExceptWith(succeeded);
             if (_selectedImageIds.Count == 0) _gallerySelection.Reset();
             await RefreshBrowseGalleryAsync(forceIndexReload: true);

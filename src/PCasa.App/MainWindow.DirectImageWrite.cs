@@ -26,7 +26,7 @@ public partial class MainWindow
         var submitted = DateTimeOffset.UtcNow;
         _directImageWriteProgress = new SchedulerJobSnapshot(-1, key,
             SchedulerPriority.ManualAction, SchedulerJobState.Queued, submitted, null)
-            { Phase = title, Total = 1, CurrentPath = path };
+            { Phase = title, Total = Math.Max(1, work.TotalSteps), CurrentPath = path };
         var task = RunDirectImageWriteAsync(key, title, path, work, folderId,
             reindexOriginal, cancellation, submitted);
         _directImageWriteTask = task;
@@ -47,8 +47,23 @@ public partial class MainWindow
             _directImageWriteProgress = new SchedulerJobSnapshot(-1, key,
                 SchedulerPriority.ManualAction, SchedulerJobState.Running,
                 submitted, null, StartedAt: DateTimeOffset.UtcNow)
-                { Phase = title, Total = 1, CurrentPath = path };
+                { Phase = title, Total = Math.Max(1, work.TotalSteps), CurrentPath = path };
             DisplayManualOperation(key);
+            // Reuse the step completion notification without creating a
+            // scheduler history row or a persistent job.
+            work.OnStepCompleted = completed =>
+            {
+                _ = Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_directImageWriteProgress is not { } current ||
+                        current.Key != key || _shutdownStarted) return;
+                    var progress = current with { Processed = completed };
+                    _directImageWriteProgress = progress;
+                    if (_visibleManualActiveKey == key)
+                        _visibleManualWindow?.UpdateManualOperationWithContext(
+                            progress, title);
+                }));
+            };
             // Once an original write begins, let the atomic writer finish.
             // Closing the app may cancel a wait, never interrupt File.Replace.
             await Task.Run(() => work.ExecuteAsync(CancellationToken.None));
