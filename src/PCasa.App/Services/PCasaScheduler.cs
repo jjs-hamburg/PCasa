@@ -127,8 +127,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         BeginGracefulShutdown();
         // Read the durable journal outside _gate; it owns its own SQLite locks.
         var fileKeys = _durableJournal?.Pending()
-            .Where(p => p.Type is not
-                ("manual-folder-scan-v1" or "manual-scan-all-v1"))
+            .Where(p => !DurablePackageJournal.SurvivesSession(p.Type))
             .Select(p => p.Key).ToHashSet(StringComparer.Ordinal)
             ?? new HashSet<string>(StringComparer.Ordinal);
         Task[] writing;
@@ -275,11 +274,17 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // monitor. This is a cached readiness decision, never a parallel job lane.
     public SourceAvailabilityGate SourceAvailability { get; }
 
-    public void EnableDurablePackages(LocalDatabase database)
+    private bool _retireFileJobsOnSessionEnd;
+
+    public void EnableDurablePackages(LocalDatabase database,
+        bool retireFileJobsOnSessionEnd = false)
     {
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
+        _retireFileJobsOnSessionEnd = retireFileJobsOnSessionEnd;
+        if (_retireFileJobsOnSessionEnd)
+            _durableJournal.RetireUnfinishedFileJobs();
         _durableJournal.ReleaseStartupPauses();
         _taskOrderStore = new SchedulerTaskOrderStore(database);
         foreach (var key in _taskOrderStore.ReleaseStartupPauses())
@@ -1811,6 +1816,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         try { await Task.WhenAll(durable); }
         catch (OperationCanceledException) { }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        if (_retireFileJobsOnSessionEnd)
+            _durableJournal?.RetireUnfinishedFileJobs();
         _shutdown.Dispose();
         _controllerWake.Dispose();
     }
