@@ -58,18 +58,23 @@ public partial class MainWindow
                     token =>
                     {
                         token.ThrowIfCancellationRequested();
-                        return _folderRepository.GetPendingInitialScans()
-                            .Where(folder => !attempted.Contains(folder.Id))
-                            .Select((folder, index) => new
+                        var folders = _folderRepository.GetAll()
+                            .ToDictionary(folder => folder.Id);
+                        return _folderRepository.GetPendingFirstImportQueue()
+                            .Where(row => !row.Paused &&
+                                !attempted.Contains(row.FolderId) &&
+                                folders.ContainsKey(row.FolderId))
+                            .Select(row => new
                             {
-                                Folder = folder,
+                                Folder = folders[row.FolderId],
+                                row.QueueOrder,
                                 Place = _scheduler.EffectiveTaskPlacement(
-                                    $"initial:{folder.Id}",
-                                    SchedulerPriority.UserAction, index)
+                                    $"initial:{row.FolderId}",
+                                    SchedulerPriority.UserAction, row.QueueOrder)
                             })
                             .OrderBy(x => x.Place.Priority)
                             .ThenBy(x => x.Place.QueueOrder)
-                            .Select(x => x.Folder)
+                            .ThenBy(x => x.Folder.Id)
                             .FirstOrDefault();
                     }, workKind: SchedulerWorkKind.CatalogRead);
                 if (_folderRemovalPending || _folderManagerOpen ||
@@ -77,8 +82,8 @@ public partial class MainWindow
                     return;
                 if (next is null) break;
                 processedAny = true;
-                _initialScanAttempted.Add(next.Id);
-                await RunPendingInitialScanAsync(next);
+                _initialScanAttempted.Add(next.Folder.Id);
+                await RunPendingInitialScanAsync(next.Folder, next.QueueOrder);
             }
         }
         catch (Exception ex)
@@ -108,7 +113,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task RunPendingInitialScanAsync(MonitoredFolder folder)
+    private async Task RunPendingInitialScanAsync(MonitoredFolder folder, long queueOrder)
     {
         using var cancellation = new CancellationTokenSource();
         _initialScanCancellation = cancellation;
@@ -198,9 +203,10 @@ public partial class MainWindow
             try
             {
                 result = await ScheduleCompleteFolderScanAsync(
-                    folder.LocalPath, SchedulerPriority.Background,
+                    folder.LocalPath, SchedulerPriority.UserAction,
                     progress, cancellation.Token, folder.Id,
-                    requirePendingInitialImport: true, operationKey: scanKey);
+                    requirePendingInitialImport: true, operationKey: scanKey,
+                    queueOrder: queueOrder);
             }
             finally
             {
