@@ -1061,13 +1061,23 @@ internal static class FolderAddFlow
                     "Startup scan regression fixture still has unfinished initial imports: " +
                     string.Join(", ", roots.GetPendingInitialScans()
                         .Select(root => root.LocalPath)));
-            // A P4 inventory which the previous session interrupted is a
-            // deliberately DURABLE receipt. Alpha.58 must resume it with the
-            // same identity, not discard it merely so this fixture is empty.
-            // Detect only NEW inventories manufactured by watcher startup.
-            var inventoriesBeforeRestart = roots.GetPendingAutomaticInventories()
+            // An accepted watcher job survives even before its first
+            // directory inventory receipt exists. Starting that job after
+            // restart is recovery, not unsolicited watcher work.
+            var acceptedBeforeRestart = roots.GetPendingAutomaticChanges()
+                .Select(job => job.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var previousInventories = roots.GetPendingAutomaticInventories();
+            var inventoriesBeforeRestart = previousInventories
                 .Select(inventory => inventory.ScanKey)
                 .ToHashSet(StringComparer.Ordinal);
+            foreach (var inventory in previousInventories)
+            {
+                // Legacy receipts may predate the accepted-change ledger.
+                var parts = inventory.ScanKey.Split(':', 7);
+                if (parts.Length == 7 && (parts[4] is "ScanFile" or "ScanDirectory"))
+                    acceptedBeforeRestart.Add(
+                        $"automatic:{inventory.MonitoredFolderId}:{parts[4]}:{inventory.ScanRoot}");
+            }
             new BackgroundScanSettings { Enabled = true }.Save();
             window = new PCasa.App.MainWindow { Width = 1100, Height = 700 };
             var startupGallery = (ScrollViewer)window.FindName(
@@ -1095,6 +1105,7 @@ internal static class FolderAddFlow
                         StringComparison.Ordinal) &&
                     job.WorkKind == SchedulerWorkKind.CatalogScan &&
                     job.Priority != SchedulerPriority.Idle &&
+                    !acceptedBeforeRestart.Contains(job.Key) &&
                     job.State is (SchedulerJobState.Queued or
                         SchedulerJobState.Running or SchedulerJobState.YieldRequested))
                 .ToArray();
@@ -1105,7 +1116,9 @@ internal static class FolderAddFlow
                         job.Key + " priority=" + job.Priority)));
             var newInventories = roots.GetPendingAutomaticInventories()
                 .Where(inventory =>
-                    !inventoriesBeforeRestart.Contains(inventory.ScanKey))
+                    !inventoriesBeforeRestart.Contains(inventory.ScanKey) &&
+                    !acceptedBeforeRestart.Contains(
+                        $"automatic:{inventory.MonitoredFolderId}:ScanDirectory:{inventory.ScanRoot}"))
                 .Select(inventory => inventory.ScanKey)
                 .ToArray();
             if (newInventories.Length > 0)
@@ -1113,8 +1126,8 @@ internal static class FolderAddFlow
                     "Watcher startup created duplicate or unsolicited inventories: " +
                     string.Join(", ", newInventories));
             Console.WriteLine(
-                "PASS: WPF restart retains existing durable inventories, admits only " +
-                "normal P4 background reviews, and creates no new startup inventories.");
+                "PASS: WPF restart restores accepted watcher jobs and their inventories " +
+                "without manufacturing unsolicited startup work.");
             var restoredTree = (TreeView)window.FindName("FoldersTree");
             var restoredSelection = (GallerySelection)typeof(PCasa.App.MainWindow)
                 .GetField("_gallerySelection", scanFlags)!.GetValue(window)!;
