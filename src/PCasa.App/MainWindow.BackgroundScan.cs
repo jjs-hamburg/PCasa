@@ -868,11 +868,9 @@ public partial class MainWindow
             pausedReview ? "Angehalten" : reviewing ? "Läuft" : "Wartet",
             (int)SchedulerPriority.Idle, long.MaxValue, CanStop: false));
 
-        // A pending Erstimport is *not* a FileSystemWatcher event. It uses
-        // the scheduler's dedicated InitialImport lane, and was omitted by
-        // every earlier Taskmanager query. Read its exact scheduler key and
-        // retain its root even if the transient snapshot was evicted while
-        // dozens of thumbnails were queued.
+        // A pending first import is not a watcher event. Its persistent
+        // identity is also the scheduler key. Retain its root for display
+        // even when the transient progress snapshot is unavailable.
         if (_initialScanActive &&
             _initialScanTaskKey is { } initialKey &&
             _initialScanTaskDirectory is { } initialRoot)
@@ -893,8 +891,7 @@ public partial class MainWindow
                 job?.Processed ?? 0);
             var stopping = _initialScanStopRequested;
             rows.Add(new AutomaticScanTask(
-                _activeScanFolderId is long id
-                    ? $"initial:{id}" : initialKey,
+                initialKey,
                 UiLanguage.T("Erstimport"), directory,
                 stopping
                     ? UiLanguage.T("Abbruch angefordert")
@@ -946,17 +943,6 @@ public partial class MainWindow
                     RefreshBackgroundMonitor();
             }
             return deleted;
-        }
-        // Legacy invocation remains safe for any already-open window.
-        if (key == _initialScanTaskKey && _initialScanActive &&
-            _initialScanCancellation is
-                { IsCancellationRequested: false } initialCancellation)
-        {
-            _initialScanStopRequested = true;
-            try { await initialCancellation.CancelAsync(); }
-            catch (ObjectDisposedException) { }
-            _scheduler.NotifyTaskViewChanged();
-            return true;
         }
         if (!key.StartsWith("automatic:", StringComparison.Ordinal))
             return false;
