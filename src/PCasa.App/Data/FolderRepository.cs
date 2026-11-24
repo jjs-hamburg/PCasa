@@ -220,8 +220,45 @@ public sealed class FolderRepository
         transaction.Commit();
     }
 
+    // Import state is independent of every scheduler job identity.
+    public sealed record FolderImportState(long FolderId, int CataloguedCount,
+        bool InitialImportComplete, long LastCheckSequence);
+
+    public FolderImportState? GetFolderImportState(long folderId)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.id, (SELECT COUNT(*) FROM images i WHERE i.folder_id=m.id),
+                   m.initial_scan_pending=0, m.last_check_sequence
+              FROM monitored_folders m WHERE m.id=$id;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? new FolderImportState(reader.GetInt64(0),
+            reader.GetInt32(1), reader.GetBoolean(2), reader.GetInt64(3)) : null;
+    }
+
+    public int CountCataloguedInDirectory(string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) ||
+            !Path.IsPathFullyQualified(directory)) return 0;
+        var prefix = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(directory).Replace('/', '\\'));
+        if (!prefix.EndsWith('\\')) prefix += "\\";
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM images
+             WHERE local_path LIKE $pattern ESCAPE '!';
+            """;
+        cmd.Parameters.AddWithValue("$pattern",
+            prefix.Replace("!", "!!").Replace("%", "!%").Replace("_", "!_") + "%");
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
     public sealed record PendingFirstImport(long FolderId, string Directory,
-        long QueueOrder, bool Paused);
+        long QueueOrder, bool Paused, int CataloguedCount = 0);
 
     public IReadOnlyList<PendingFirstImport> GetPendingFirstImportQueue()
     {
@@ -231,7 +268,8 @@ public sealed class FolderRepository
             SELECT m.id,m.local_path,
                    CASE WHEN m.initial_scan_queue_order > 0
                         THEN m.initial_scan_queue_order ELSE m.id END,
-                   m.initial_scan_paused
+                   m.initial_scan_paused,
+                   (SELECT COUNT(*) FROM images i WHERE i.folder_id=m.id)
               FROM monitored_folders m
               JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
              WHERE m.initial_scan_pending=1 AND m.initial_scan_deleted=0
@@ -243,7 +281,7 @@ public sealed class FolderRepository
         while (reader.Read())
             pending.Add(new PendingFirstImport(reader.GetInt64(0),
                 reader.GetString(1), reader.GetInt64(2),
-                reader.GetInt64(3) != 0));
+                reader.GetInt64(3) != 0, reader.GetInt32(4)));
         return pending;
     }
 

@@ -142,12 +142,14 @@ public sealed class FolderScanner
         ScanResumeState? resume = null,
         bool durableInitialImport = false,
         string? durableScanKey = null,
-        bool preferFirstPass = false)
+        bool preferFirstPass = false,
+        bool catalogOwnedProgress = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
             resume: resume, durableInitialImport: durableInitialImport,
-            durableScanKey: durableScanKey, preferFirstPass: preferFirstPass);
+            durableScanKey: durableScanKey, preferFirstPass: preferFirstPass,
+            catalogOwnedProgress: catalogOwnedProgress);
     }
 
     public ScanResult ScanFile(
@@ -179,7 +181,8 @@ public sealed class FolderScanner
         bool durableInitialImport = false,
         string? durableScanKey = null,
         bool forceExifRefresh = false,
-        bool preferFirstPass = false)
+        bool preferFirstPass = false,
+        bool catalogOwnedProgress = false)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -223,7 +226,7 @@ public sealed class FolderScanner
                 durableScanKey, folder.Id, scanRoot, folder.CanonicalPath,
                 beginManualEpoch: false)
             : null;
-        if (regularCheckpoint is not null &&
+        if (!catalogOwnedProgress && regularCheckpoint is not null &&
             resume is not null && resume.Enumerator is null &&
             resume.ImageFilesSeen == 0)
             resume.ImageFilesSeen = regularCheckpoint.Checked;
@@ -231,7 +234,8 @@ public sealed class FolderScanner
             _folderRepository.GetScanEpoch(folder.CanonicalPath);
         if (resume is not null) resume.ScanEpoch = scanEpoch;
 
-        var imageFilesSeen = resume?.ImageFilesSeen ?? regularCheckpoint?.Checked ?? 0;
+        var imageFilesSeen = resume?.ImageFilesSeen ??
+            (catalogOwnedProgress ? 0 : regularCheckpoint?.Checked ?? 0);
         var updated = resume?.Updated ?? 0;
         var unchanged = resume?.Unchanged ?? 0;
         var added = resume?.Added ?? 0;
@@ -250,8 +254,12 @@ public sealed class FolderScanner
             : null;
 
         // First-import and other scan receipts drive the same enumerator.
-        var persistentScan = durableInitialImport || durableScanKey is not null;
-        var completedDirectories = durableInitialImport
+        // Re-enumerate every current directory entry; previous filename
+        // frontiers cannot establish that a file is unchanged or still exists.
+        // Existing valid rows skip expensive import work by file identity.
+        var persistentScan = !catalogOwnedProgress &&
+            (durableInitialImport || durableScanKey is not null);
+        var completedDirectories = !persistentScan ? null : durableInitialImport
             ? resume?.CompletedInitialDirectories ??
                 _folderRepository.GetCompletedInitialScanDirectories(
                     folder.Id, generation, scanEpoch)
@@ -260,7 +268,7 @@ public sealed class FolderScanner
                 : null;
         if (persistentScan && resume is not null)
             resume.CompletedInitialDirectories = completedDirectories;
-        var fileCursors = durableInitialImport
+        var fileCursors = !persistentScan ? null : durableInitialImport
             ? resume?.InitialFileCursors ??
                 _folderRepository.GetInitialScanFileCursors(folder.Id, generation, scanEpoch)
             : durableScanKey is not null
@@ -274,7 +282,7 @@ public sealed class FolderScanner
         // Upgrade the old package's existing receipts before they are deleted
         // on completion. Background verification deliberately ignores this
         // directory frontier, so new/modified/deleted photos are checked later.
-        if (preferFirstPass && durableScanKey is not null)
+        if (persistentScan && preferFirstPass && durableScanKey is not null)
         {
             _folderRepository.ImportFirstPassFromRegularScans(
                 folder.Id, generation);
@@ -293,7 +301,7 @@ public sealed class FolderScanner
         // already-indexed originals never go through metadata/decode again.
         // P4 full verification deliberately does not use this shortcut.
         HashSet<string>? indexedFirstPassPaths = null;
-        if (preferFirstPass && specificFile is null)
+        if (persistentScan && preferFirstPass && specificFile is null)
         {
             indexedFirstPassPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using var snapshotDb = _catalog.Database.OpenConnection();

@@ -443,11 +443,8 @@ public partial class MainWindow
                             Path.GetFullPath(directory).Replace('/', '\\'),
                             folder.CanonicalPath, beginManualEpoch: true);
                     _manualScanEpoch = checkpoint.Epoch;
-                    // Restore the durable count BEFORE first UI progress. A
-                    // process restart creates a fresh in-memory scan step.
-                    if (_resume.Enumerator is null)
-                        _resume.ImageFilesSeen =
-                            Math.Max(_resume.ImageFilesSeen, checkpoint.Checked);
+                    // The receipt preserves identity and the source fence,
+                    // not the amount of imported catalog data.
                 }
                 _manualGenerationStarted = true;
             }
@@ -464,16 +461,13 @@ public partial class MainWindow
                 _resume.CacheRepaired));
             try
             {
-                // Preserve the per-directory first-pass frontier even when
-                // the root is already complete. FolderScanner discovers
-                // unindexed additions in completed directories by comparing
-                // file names against its catalog snapshot; existing originals
-                // remain for P4 reconciliation, not this P0 import.
+                // Both first import and manual reread reconcile the current
+                // filesystem against the catalog, not an old filename cursor.
                 Result = owner._folderScanner.ScanDirectory(
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    preferFirstPass: !requirePendingInitialImport);
+                    catalogOwnedProgress: true);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)

@@ -105,6 +105,8 @@ internal static class Program
             RegularScanRestartSafe, failures);
         Run("Manual scans retain a first-pass cursor per directory across separate jobs while background checks changes",
             FirstPassDirectorySurvivesJobs, failures);
+        Run("Catalog-owned import reconciles changed and missing files across job identities",
+            CatalogOwnedDirectoryReconciliation, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
@@ -1985,6 +1987,44 @@ internal static class Program
         if (fresh.ImageFilesSeen != 8 || fresh.Removed != 1 ||
             new ImageCatalogRepository(db).CountAll() != 8)
             throw new Exception("A new full inventory did not reconcile the deleted image.");
+    }
+
+    private static void CatalogOwnedDirectoryReconciliation()
+    {
+        using var sandbox = new Sandbox();
+        var dir = Path.Combine(sandbox.Images, "Album");
+        Directory.CreateDirectory(dir);
+        var removed = Path.Combine(dir, "b.jpg");
+        var changed = Path.Combine(dir, "c.jpg");
+        WriteJpeg(removed);
+        WriteJpeg(changed);
+        var (db, root, scanner) = sandbox.Prepare();
+        var folders = new FolderRepository(db);
+        var first = scanner.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:catalog:first", catalogOwnedProgress: true);
+        if (first.Updated != 2 ||
+            folders.GetFolderImportState(root.Id) is not
+                { CataloguedCount: 2, InitialImportComplete: true })
+            throw new Exception("Catalog state was not committed by the import.");
+
+        File.Delete(removed);
+        File.SetLastWriteTimeUtc(changed, DateTime.UtcNow.AddMinutes(-10));
+        WriteJpeg(Path.Combine(dir, "a.jpg"));
+        db.Initialize();
+        var reopened = new FolderRepository(db);
+        var scanner2 = new FolderScanner(new ImageCatalogRepository(db),
+            new ThumbnailCache(), reopened, new BrowseThumbnailProfileRepository(db));
+        var next = scanner2.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:catalog:second", catalogOwnedProgress: true);
+        if (next.Updated != 2 || next.Removed != 1 ||
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 2 ||
+            reopened.CountCataloguedInDirectory(dir) != 2)
+            throw new Exception("New job failed to reconcile catalog-owned file state.");
+        var repeated = scanner2.ScanDirectory(root, root.LocalPath, true,
+            durableScanKey: "manual:catalog:third", catalogOwnedProgress: true);
+        if (repeated.Updated != 0 || repeated.Removed != 0 ||
+            reopened.GetFolderImportState(root.Id)?.CataloguedCount != 2)
+            throw new Exception("Unchanged images were reimported or folder count reset.");
     }
 
     private static void FirstPassDirectorySurvivesJobs()

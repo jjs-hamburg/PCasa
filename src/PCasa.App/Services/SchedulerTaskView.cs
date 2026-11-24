@@ -100,9 +100,8 @@ public sealed class SchedulerTaskView
                     // receipt as the floating progress window. A queued job
                     // restored after restart has no in-memory snapshot yet.
                     var progress = record.Type == "manual-folder-scan-v1"
-                        ? UiLanguage.Format("{0:N0} geprüft",
-                            Math.Max(snapshot?.Processed ?? 0,
-                                scanProgress.GetConfirmedRegularScanCount(record.Key)))
+                        ? UiLanguage.Format("{0:N0} Bilder",
+                            scanProgress.CountCataloguedInDirectory(path))
                         : snapshot is { Total: > 0 }
                             ? $"{snapshot.Processed:N0}/{snapshot.Total:N0}"
                             : total > 0
@@ -139,7 +138,9 @@ public sealed class SchedulerTaskView
                 {
                     firstByKey.TryGetValue(scan.Key, out var first);
                     rows.Add(new SchedulerTaskViewItem(scan.Key, scan.Title,
-                        scan.Directory, scan.Progress, scan.Status,
+                        scan.Directory, first is not null
+                            ? UiLanguage.Format("{0:N0} Bilder", first.CataloguedCount)
+                            : scan.Progress, scan.Status,
                         null, scan.Priority, first?.QueueOrder ?? scan.Order,
                         false, _canMoveAutomatic &&
                             ((first is not null) ||
@@ -187,7 +188,7 @@ public sealed class SchedulerTaskView
                     if (liveKeys.Contains(key) ||
                         continuedImports.Contains(first.Directory)) continue;
                     rows.Add(new SchedulerTaskViewItem(key, UiLanguage.T("Bilder einlesen"),
-                        first.Directory, "–",
+                        first.Directory, UiLanguage.Format("{0:N0} Bilder", first.CataloguedCount),
                         first.Paused ? "Angehalten" : "Wartet",
                         null, 2, first.QueueOrder,
                         false, _canMoveAutomatic,
