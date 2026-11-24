@@ -336,7 +336,10 @@ public sealed class SchedulerTaskView
                         Order = order
                     },
                     row => row.Status == "Läuft");
-                return new SchedulerTaskViewResult(positioned.ToList(), failedGroups);
+                var ordered = positioned.Where(row =>
+                    row.Key != PCasaScheduler.ContinuousReviewKey).Concat(
+                    positioned.Where(row => row.Key == PCasaScheduler.ContinuousReviewKey));
+                return new SchedulerTaskViewResult(ordered.ToList(), failedGroups);
     }
 
     private IReadOnlyDictionary<long,string> LoadFirstImagePaths(

@@ -39,9 +39,6 @@ public partial class MainWindow
     private static readonly TimeSpan FailedRootReviewBackoff = TimeSpan.FromHours(6);
     private BackgroundFolderChangeKind? _backgroundActiveScanKind;
     private string? _backgroundActiveRootReviewPath;
-    private readonly Dictionary<string, int> _backgroundRootReviewYields =
-        new(StringComparer.OrdinalIgnoreCase);
-    private const int MaxNewFileYieldsPerRootReview = 3;
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundExcludedPaths = new();
     private readonly Dictionary<long, IReadOnlyList<string>> _backgroundIncludedPaths = new();
 
@@ -463,35 +460,16 @@ public partial class MainWindow
                 !_manualFileTransferActive;
             var reachableDue = dueRootReviews.Count(id =>
                 availability.TryGetValue(id, out var reachable) && reachable);
-            // A user-promoted P2 review is an explicit request, not idle
-            // maintenance. Admit it immediately even when a manual P0 scan
-            // is running: the SAME scheduler enforces P0 before P2 execution.
-            // The admission order is the scheduler's effective user order
-            // even before a review has a physical scan WorkItem. A P4
-            // review moved above another P4 review must be admitted first.
-            var sourceById = folders.ToDictionary(root => root.Id);
-            var orderedReviews = dueRootReviews
-                .Where(sourceById.ContainsKey)
-                .OrderBy(id => _scheduler.EffectiveTaskPlacement(
-                    $"automatic:{id}:RescanRoot:{sourceById[id].LocalPath}",
-                    SchedulerPriority.Idle,
-                    _backgroundReviewOrder.GetValueOrDefault(id, long.MaxValue)
-                ).Priority)
-                .ThenBy(id => _scheduler.EffectiveTaskPlacement(
-                    $"automatic:{id}:RescanRoot:{sourceById[id].LocalPath}",
-                    SchedulerPriority.Idle,
-                    _backgroundReviewOrder.GetValueOrDefault(id, long.MaxValue)
-                ).QueueOrder).ToArray();
-            var urgentCandidate = orderedReviews.FirstOrDefault(id =>
-                _backgroundUrgentReviews.Contains(id) &&
-                availability.TryGetValue(id, out var urgentReachable) &&
-                urgentReachable);
-            var idleCandidate = urgentCandidate != 0 ? urgentCandidate :
-                idleSlotFree
-                    ? orderedReviews.FirstOrDefault(id =>
-                        availability.TryGetValue(id, out var reachable) && reachable)
-                    : 0L;
-            _backgroundIdleStatus = dueRootReviews.Count == 0
+            // Only one permanent review can run. Its next root comes
+            // exclusively from the persisted catalog sequence.
+            var reviewPaused = _scheduler.IsExternalTaskPaused(
+                PCasaScheduler.ContinuousReviewKey);
+            var idleCandidate = !reviewPaused && idleSlotFree
+                ? dueRootReviews.FirstOrDefault(id =>
+                    availability.TryGetValue(id, out var reachable) && reachable)
+                : 0L;
+            _backgroundIdleStatus = reviewPaused ? "Angehalten" :
+                dueRootReviews.Count == 0
                 ? "Keine abgeschlossenen, prüfbaren Ordner verfügbar"
                 : reachableDue == 0
                     ? "Keine erreichbaren Ordner zur Bestandsprüfung"
@@ -530,12 +508,12 @@ public partial class MainWindow
                 var restored = interruptedInventories
                     .Where(receipt => receipt.MonitoredFolderId == folder.Id)
                     .Select(TryRecoverAutomaticInventory)
-                    .Where(request => request is not null)
+                    .Where(request => request is not null &&
+                        request.Kind != BackgroundFolderChangeKind.RescanRoot)
                     .Cast<BackgroundFolderChange>()
                     .ToArray();
 
-                var reconcile = (firstKnown && !firstSnapshot) ||
-                    deferred || idleReviewDue;
+                var reconcile = idleReviewDue;
                 if (pendingInitialIds.Count > 0 &&
                     (restored.Length > 0 || reconcile) &&
                     // A new eligible P4 cycle on ANOTHER root may run when
@@ -805,7 +783,8 @@ public partial class MainWindow
             // cursor and are not directly interruptible. They are not
             // actionable scan tasks and must not be misleading UI rows.
             if (task.Kind is BackgroundFolderChangeKind.RecoverCache or
-                BackgroundFolderChangeKind.RemovePath) return;
+                BackgroundFolderChangeKind.RemovePath or
+                BackgroundFolderChangeKind.RescanRoot) return;
             var key = AutomaticTaskKey(task);
             var stopping = _backgroundSuppressed.Contains(key);
             // A non-interruptible SMB operation may continue briefly after
@@ -876,6 +855,20 @@ public partial class MainWindow
                 Add(task, false);
         }
 
+        // One permanent review row, even if no root is reachable.
+        var review = snapshots.LastOrDefault(job =>
+            job.Key == PCasaScheduler.ContinuousReviewKey);
+        var reviewing = review?.State == SchedulerJobState.Running;
+        var pausedReview = _scheduler.IsExternalTaskPaused(
+            PCasaScheduler.ContinuousReviewKey);
+        rows.Add(new AutomaticScanTask(PCasaScheduler.ContinuousReviewKey,
+            UiLanguage.T("Bestand überprüfen"),
+            reviewing ? review?.CurrentPath ?? _backgroundActiveRootReviewPath ?? "–" : "–",
+            reviewing ? UiLanguage.Format("{0:N0} geprüft", _backgroundLiveChecked)
+                : UiLanguage.T(_backgroundIdleStatus),
+            pausedReview ? "Angehalten" : reviewing ? "Läuft" : "Wartet",
+            (int)SchedulerPriority.Idle, long.MaxValue, CanStop: false));
+
         // A pending Erstimport is *not* a FileSystemWatcher event. It uses
         // the scheduler's dedicated InitialImport lane, and was omitted by
         // every earlier Taskmanager query. Read its exact scheduler key and
@@ -918,6 +911,7 @@ public partial class MainWindow
     // Full-root checks get a retry backoff, preventing a 30-second restart.
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
+        if (key == PCasaScheduler.ContinuousReviewKey) return false;
         if (key.StartsWith("database:backup:", StringComparison.Ordinal))
         {
             if (!string.Equals(key, _databaseBackupKey,
@@ -1053,6 +1047,13 @@ public partial class MainWindow
             return;
         }
 
+        if (change.Kind == BackgroundFolderChangeKind.RescanRoot &&
+            _scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
+        {
+            interruptedCursor?.Dispose();
+            return;
+        }
+
         string normalized;
         try
         {
@@ -1121,28 +1122,13 @@ public partial class MainWindow
                     : normalized, "Pending", change.Recursive);
         }
 
-        // A newly copied file/directory must not wait days for a full P4
-        // inventory to finish. Yield only the idle root review; the existing
-        // scanner retains its live enumerator and persisted directory cursor
-        // and is placed back behind the newly discovered P3 work.
+        // Any higher-priority watcher event yields the review.
         if (_backgroundActiveScanKind == BackgroundFolderChangeKind.RescanRoot &&
-            _backgroundActiveRootReviewPath is string rootReview &&
-            change.Kind is BackgroundFolderChangeKind.ScanFile or
-                BackgroundFolderChangeKind.ScanDirectory)
-        {
-            // Fairness: a steady stream of new photos must not keep
-            // interrupting the SAME P4 root forever. Yield to the first
-            // three concrete discovery bursts, then finish this root before
-            // processing further queued watcher events.
-            var yields = _backgroundRootReviewYields.GetValueOrDefault(rootReview);
-            if (yields < MaxNewFileYieldsPerRootReview &&
-                _backgroundCurrentScanCancellation is
-                    { IsCancellationRequested: false } running)
-            {
-                _backgroundRootReviewYields[rootReview] = yields + 1;
-                _ = running.CancelAsync();
-            }
-        }
+            (change.Kind is BackgroundFolderChangeKind.ScanFile or
+                BackgroundFolderChangeKind.ScanDirectory or
+                BackgroundFolderChangeKind.RemovePath) &&
+            _backgroundCurrentScanCancellation is { IsCancellationRequested: false } running)
+            _ = running.CancelAsync();
         _cacheMaintenanceCancellation?.Cancel();
         _backgroundDebounceTimer?.Stop();
         _backgroundDebounceTimer?.Start();
@@ -1258,6 +1244,12 @@ public partial class MainWindow
                         "Taskmanager changed the pending root-review order.");
                 var request = requests[nextRequestIndex];
                 var taskKey = AutomaticTaskKey(request);
+                if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                    _scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
+                {
+                    request.Resume?.Dispose();
+                    continue;
+                }
                 if (_scheduler.IsExternalTaskPaused(taskKey))
                 {
                     _backgroundOrderChanged = true;
@@ -1569,12 +1561,14 @@ public partial class MainWindow
                         PCasaDiagnostics.WriteMessage("Scan.RootStart",
                             $"Folder={folder.LocalPath}; Generation={sourceState.Value.Generation}; " +
                             $"ResumeInMemory={scanResume.ImageFilesSeen}; Kind={request.Kind}");
-                    schedulerScanKey =
-                        $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}";
+                    schedulerScanKey = request.Kind == BackgroundFolderChangeKind.RescanRoot
+                        ? PCasaScheduler.ContinuousReviewKey
+                        : $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}";
                     // The watcher cursor and Taskmanager row share ONE
                     // scheduler identity. The global user order applies
                     // to this existing execution, not a new scan.
-                    _scheduler.RegisterTaskAlias(schedulerScanKey, taskKey);
+                    if (request.Kind != BackgroundFolderChangeKind.RescanRoot)
+                        _scheduler.RegisterTaskAlias(schedulerScanKey, taskKey);
                     try
                     {
                     await _scheduler.EnqueueAsync(
@@ -1584,9 +1578,7 @@ public partial class MainWindow
                         // outrank it at P3; dedicated initial imports and
                         // all manual P0/P1 packages keep their existing lanes.
                         request.Kind == BackgroundFolderChangeKind.RescanRoot
-                            ? _backgroundUrgentReviews.Contains(request.MonitoredFolderId)
-                                ? SchedulerPriority.UserAction : SchedulerPriority.Idle
-                            : SchedulerPriority.Background,
+                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
                         token =>
                         {
                             token.ThrowIfCancellationRequested();
@@ -1634,6 +1626,7 @@ public partial class MainWindow
                     var result = scanResult ?? throw new OperationCanceledException();
                     if (inventoryResult is not null)
                     {
+                        _backgroundActiveScanKind = null;
                         reviewCompleted = true;
                         foreach (var change in inventoryResult.Changes)
                             QueueBackgroundChange(change);
@@ -1642,7 +1635,6 @@ public partial class MainWindow
                         _scheduler.CompleteTaskPromotion(taskKey);
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
                     {
-                        _backgroundRootReviewYields.Remove(scanPath);
                         _backgroundUrgentReviews.Remove(request.MonitoredFolderId);
                     }
                     scanResume.Dispose();

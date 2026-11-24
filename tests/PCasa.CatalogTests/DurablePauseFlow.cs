@@ -126,17 +126,23 @@ internal static class DurablePauseFlow
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.EnableDurablePackages(database);
-            if (!scheduler.IsExternalTaskPaused(key))
-                throw new Exception("Legacy background review pause was lost on restart");
+            if (scheduler.IsExternalTaskPaused(key) ||
+                !scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
+                throw new Exception("Legacy hold did not migrate to permanent background review");
             if (scheduler.IsExternalTaskPaused(ordinaryKey) ||
                 !scheduler.RecoverableExternalTaskKeys().Contains(ordinaryKey))
                 throw new Exception("Restart did not release and recover the ordinary watcher request");
             scheduler.AcknowledgeRecoveredExternalTask(ordinaryKey);
             if (scheduler.RecoverableExternalTaskKeys().Contains(ordinaryKey))
                 throw new Exception("Recovered watcher request was not acknowledged");
-            if (!scheduler.SetExternalTaskPaused(key, false) ||
-                scheduler.IsExternalTaskPaused(key))
-                throw new Exception("Automatic scan did not resume");
+            if (!scheduler.SetExternalTaskPaused(PCasaScheduler.ContinuousReviewKey, false) ||
+                scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
+                throw new Exception("Continuous review did not resume");
+            if (scheduler.PromoteTaskNow(PCasaScheduler.ContinuousReviewKey) ||
+                scheduler.MoveTaskGlobally(PCasaScheduler.ContinuousReviewKey, ordinaryKey,
+                    new[] { new SchedulerTaskOrderItem(ordinaryKey, SchedulerPriority.Background),
+                        new SchedulerTaskOrderItem(PCasaScheduler.ContinuousReviewKey, SchedulerPriority.Idle) }))
+                throw new Exception("Permanent review accepted promotion or move");
             if (!scheduler.PromoteTaskNow(key))
                 throw new Exception("Promote Now rejected the original key");
             var placement = scheduler.EffectiveTaskPlacement(key,

@@ -77,6 +77,8 @@ public partial class MainWindow
     private async Task<bool> MoveGlobalTaskAsync(string key, string targetKey,
         IReadOnlyList<SchedulerTaskOrderItem> allAcceptedKeys)
     {
+        if (key == PCasaScheduler.ContinuousReviewKey ||
+            targetKey == PCasaScheduler.ContinuousReviewKey) return false;
         var moved = await Task.Run(() =>
             _scheduler.MoveTaskGlobally(key, targetKey, allAcceptedKeys));
         if (!moved) return false;
@@ -349,6 +351,7 @@ public partial class MainWindow
 
     private Task<bool> StartTaskNowAsync(string key)
     {
+        if (key == PCasaScheduler.ContinuousReviewKey) return Task.FromResult(false);
         if (!TryInitialTaskId(key, out var folderId))
         {
             if (!key.StartsWith("automatic:", StringComparison.Ordinal))
@@ -378,6 +381,21 @@ public partial class MainWindow
 
     private Task<bool> PauseAutomaticTaskAsync(string key)
     {
+        if (key == PCasaScheduler.ContinuousReviewKey)
+        {
+            if (!_scheduler.SetExternalTaskPaused(key, true)) return Task.FromResult(false);
+            foreach (var queued in _backgroundPending.Where(entry =>
+                entry.Value.Kind == BackgroundFolderChangeKind.RescanRoot).ToArray())
+            {
+                queued.Value.Resume?.Dispose();
+                _backgroundPending.Remove(queued.Key);
+            }
+            if (_backgroundActiveScanKind == BackgroundFolderChangeKind.RescanRoot &&
+                _backgroundCurrentScanCancellation is { IsCancellationRequested: false } review)
+                RequestTaskManagerYield(review);
+            _scheduler.NotifyTaskViewChanged();
+            return Task.FromResult(true);
+        }
         if (!key.StartsWith("automatic:", StringComparison.Ordinal))
             return Task.FromResult(false);
         var paused = _scheduler.SetExternalTaskPaused(key, true);

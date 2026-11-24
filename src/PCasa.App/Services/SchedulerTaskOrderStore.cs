@@ -89,8 +89,8 @@ public sealed class SchedulerTaskOrderStore
     }
 
     // Release ordinary automatic requests on restart, returning their
-    // identities for reconstruction by the watcher owner. Legacy root-review
-    // holds remain intact until the continuous review is represented by one job.
+    // identities for reconstruction by the watcher owner. Old per-root
+    // review holds are migrated to the permanent review identity.
     public IReadOnlyList<string> ReleaseStartupPauses()
     {
         using var db = _database.OpenConnection();
@@ -101,7 +101,8 @@ public sealed class SchedulerTaskOrderStore
             read.Transaction = tx;
             read.CommandText = """
                 SELECT task_key FROM scheduler_task_order
-                 WHERE paused=1 AND task_key NOT GLOB 'automatic:*:RescanRoot:*';
+                 WHERE paused=1 AND task_key NOT GLOB 'automatic:*:RescanRoot:*'
+                   AND task_key!='automatic:continuous-review';
                 """;
             using var reader = read.ExecuteReader();
             while (reader.Read()) keys.Add(reader.GetString(0));
@@ -110,8 +111,16 @@ public sealed class SchedulerTaskOrderStore
         {
             release.Transaction = tx;
             release.CommandText = """
+                INSERT INTO scheduler_task_order(task_key,dispatch_order,paused,updated_utc)
+                SELECT 'automatic:continuous-review',9223372036854775807,1,
+                       strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                  WHERE EXISTS (SELECT 1 FROM scheduler_task_order
+                      WHERE paused=1 AND task_key GLOB 'automatic:*:RescanRoot:*')
+                ON CONFLICT(task_key) DO UPDATE SET paused=1;
+                DELETE FROM scheduler_task_order
+                 WHERE task_key GLOB 'automatic:*:RescanRoot:*';
                 UPDATE scheduler_task_order SET paused=0
-                 WHERE paused=1 AND task_key NOT GLOB 'automatic:*:RescanRoot:*';
+                 WHERE paused=1 AND task_key!='automatic:continuous-review';
                 DELETE FROM scheduler_task_order
                  WHERE paused=0 AND dispatch_order=9223372036854775807
                    AND priority_override IS NULL AND promoted_now=0;

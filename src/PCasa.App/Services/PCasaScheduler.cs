@@ -32,6 +32,7 @@ public sealed record SchedulerJobSnapshot(
 /// </summary>
 public sealed class PCasaScheduler : IAsyncDisposable
 {
+    public const string ContinuousReviewKey = "automatic:continuous-review";
     private const int MaximumHistory = 512;
     private const int LaneBackground = 0;
     private const int LaneUserAction = 1;
@@ -308,6 +309,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
 
     public bool PromoteTaskNow(string key)
     {
+        if (key == ContinuousReviewKey) return false;
         var store = _taskOrderStore ??
             throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
         List<WorkItem> changed = [];
@@ -495,6 +497,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public bool MoveTaskGlobally(string key, string targetKey,
         IReadOnlyList<SchedulerTaskOrderItem> acceptedTaskKeys)
     {
+        if (key == ContinuousReviewKey || targetKey == ContinuousReviewKey)
+            return false;
+        acceptedTaskKeys = acceptedTaskKeys.Where(item =>
+            item.Key != ContinuousReviewKey).ToArray();
         var store = _taskOrderStore ??
             throw new InvalidOperationException("Taskmanager-Reihenfolge nicht aktiviert.");
         List<WorkItem> changed = [];

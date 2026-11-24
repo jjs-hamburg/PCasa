@@ -378,6 +378,7 @@ public sealed class TaskManagerWindow : Window
     {
         var row = TaskAt(e.OriginalSource as DependencyObject);
         _dragOrigin = row is not null && !InformationalExternal(row) &&
+            !IsContinuousReview(row) &&
             row.Status != "Abgeschlossen" &&
             ( _moveGlobalTask is not null ||
               (row.Movable && HasReorderPeer(row) &&
@@ -425,6 +426,7 @@ public sealed class TaskManagerWindow : Window
         var source = _all.FirstOrDefault(row => row.Key == key);
         e.Effects = !_acting && source is not null &&
             !InformationalExternal(source) && !InformationalExternal(target) &&
+            !IsContinuousReview(source) && !IsContinuousReview(target) &&
             target is not null && source.Key != target.Key &&
             source.Status != "Abgeschlossen" &&
             target.Status != "Abgeschlossen" &&
@@ -451,7 +453,7 @@ public sealed class TaskManagerWindow : Window
         if (_moveGlobalTask is not null)
         {
             var ordered = _all.Where(row => row.Status != "Abgeschlossen" &&
-                !InformationalExternal(row))
+                !InformationalExternal(row) && !IsContinuousReview(row))
                 .Select(row => new SchedulerTaskOrderItem(
                     row.Key, (SchedulerPriority)row.Priority)).ToArray();
             _ = PerformAsync(key, () => _moveGlobalTask(key, targetKey, ordered));
@@ -476,6 +478,9 @@ public sealed class TaskManagerWindow : Window
            (row.Key.StartsWith("external:session:", StringComparison.Ordinal) ||
             row.Key == "external:cleanup:pending" ||
             row.Key.StartsWith("external:cleanup:", StringComparison.Ordinal));
+
+    private static bool IsContinuousReview(TaskRow? row)
+        => row?.Key == PCasaScheduler.ContinuousReviewKey;
 
     private static bool IsInitialImport(string key)
         => key.StartsWith("initial:", StringComparison.Ordinal);
@@ -526,7 +531,7 @@ public sealed class TaskManagerWindow : Window
 
     private bool CanMove(TaskRow row, int direction)
     {
-        if (InformationalExternal(row)) return false;
+        if (InformationalExternal(row) || IsContinuousReview(row)) return false;
         if (_moveGlobalTask is not null)
         {
             if (row.Status == "Abgeschlossen") return false;
@@ -535,7 +540,7 @@ public sealed class TaskManagerWindow : Window
             // unfiltered accepted order so invisible tasks keep their rank.
             var visible = _visible.Where(item =>
                 item.Status != "Abgeschlossen" &&
-                !InformationalExternal(item)).ToArray();
+                !InformationalExternal(item) && !IsContinuousReview(item)).ToArray();
             var globalIndex = Array.FindIndex(
                 visible, item => item.Key == row.Key);
             return globalIndex >= 0 && globalIndex + direction >= 0 &&
@@ -559,14 +564,14 @@ public sealed class TaskManagerWindow : Window
     private void ApplyFilters()
     {
         var key = Selection?.Key;
-        var filtered = _all.Where(row => row.Status switch
+        var filtered = _all.Where(row => IsContinuousReview(row) || (row.Status switch
         {
             "Läuft" => _running.IsChecked == true,
             "Wartet" or "Angehalten" or "Nicht erreichbar" => _waiting.IsChecked == true,
             "Fehler" => _errors.IsChecked == true,
             "Abgeschlossen" => _completed.IsChecked == true,
             _ => false
-        }).ToArray();
+        })).ToArray();
 
         // Preserve the DataGrid's scroll position and row selection when
         // only the progress or error text changes. Reassigning ItemsSource
@@ -603,6 +608,7 @@ public sealed class TaskManagerWindow : Window
         _up.IsEnabled = !_acting && row is not null && CanMove(row, -1);
         _down.IsEnabled = !_acting && row is not null && CanMove(row, 1);
         _startNow.IsEnabled = !_acting && !InformationalExternal(row) &&
+            !IsContinuousReview(row) &&
             row is { Status: "Wartet" } &&
             (_startAutomaticNow is not null || row.Durable);
         // Resume is no longer disguised as "Neu starten"; that button
@@ -699,7 +705,7 @@ public sealed class TaskManagerWindow : Window
     private void StartNow()
     {
         var row = Selection;
-        if (row is not { Status: "Wartet" }) return;
+        if (row is not { Status: "Wartet" } || IsContinuousReview(row)) return;
         if (row.Durable)
             _ = PerformAsync(row.Key,
                 () => Task.Run(() => _scheduler.PromoteTaskNow(row.Key)));
@@ -715,11 +721,11 @@ public sealed class TaskManagerWindow : Window
         {
             var visible = _visible.Where(item =>
                 item.Status != "Abgeschlossen" &&
-                !InformationalExternal(item)).ToArray();
+                !InformationalExternal(item) && !IsContinuousReview(item)).ToArray();
             var index = Array.FindIndex(visible, item => item.Key == row.Key);
             var neighbor = visible[index + direction];
             var accepted = _all.Where(item => item.Status != "Abgeschlossen" &&
-                    !InformationalExternal(item))
+                    !InformationalExternal(item) && !IsContinuousReview(item))
                 .Select(item => new SchedulerTaskOrderItem(
                     item.Key, (SchedulerPriority)item.Priority)).ToArray();
             _ = PerformAsync(row.Key, () =>
