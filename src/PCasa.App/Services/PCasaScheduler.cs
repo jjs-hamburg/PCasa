@@ -968,11 +968,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
         {
             // Shutdown is a yield, user cancellation is final. Never
             // resurrect a deliberately canceled destructive operation.
+            var endingSession = _shutdown.IsCancellationRequested || _gracefulShutdownRequested;
             journal.SetState(record.Key,
-                _shutdown.IsCancellationRequested || _gracefulShutdownRequested
-                    ? "queued" :
-                journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
-                    ? "paused" : "canceled",
+                endingSession
+                    ? _retireFileJobsOnSessionEnd &&
+                      !DurablePackageJournal.SurvivesSession(record.Type)
+                        ? "canceled" : "queued"
+                    : journal.Pending().Any(p => p.Key == record.Key && p.State == "paused")
+                        ? "paused" : "canceled",
                 package.CompletedSteps);
             throw;
         }
@@ -1678,7 +1681,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
             catch (OperationCanceledException)
             {
                 interrupted = true;
-                if (item.YieldRequested && !_shutdown.IsCancellationRequested &&
+                if (item.YieldRequested && !_gracefulShutdownRequested &&
+                    !_shutdown.IsCancellationRequested &&
                     !item.CancellationToken.IsCancellationRequested &&
                     !item.UserCancellation.IsCancellationRequested)
                 {
@@ -1704,7 +1708,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     // pending and running or lose its new assignment.
                     if (interrupted)
                     {
-                        if (resume && !_disposed &&
+                        if (resume && !_disposed && !_gracefulShutdownRequested &&
                             !_shutdown.IsCancellationRequested &&
                             !item.CancellationToken.IsCancellationRequested &&
                             !item.UserCancellation.IsCancellationRequested)
