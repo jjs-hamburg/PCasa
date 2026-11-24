@@ -189,7 +189,8 @@ public sealed class BackgroundFolderMonitor : IDisposable
             state.Folder.Id,
             path,
             BackgroundFolderChangeKind.ScanFile,
-            Recursive: false));
+            Recursive: false,
+            ForceExifRefresh: !created));
     }
 
     private void OnDeleted(WatcherState state, string path)
