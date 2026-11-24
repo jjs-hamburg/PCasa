@@ -155,7 +155,9 @@ public sealed class DurablePackageJournal
         SchedulerPriority priority, SchedulerWorkKind workKind)
     {
         using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO scheduler_packages
                 (package_key,package_type,payload_json,priority,work_kind,updated_utc)
@@ -168,18 +170,25 @@ public sealed class DurablePackageJournal
         cmd.Parameters.AddWithValue("$priority", (int)priority);
         cmd.Parameters.AddWithValue("$kind", (int)workKind);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        cmd.ExecuteNonQuery();
+        var inserted = cmd.ExecuteNonQuery() != 0;
+        var acceptance = inserted && priority == SchedulerPriority.ManualAction
+            ? LocalDatabase.NextSchedulerAcceptanceSequence(db, tx) : 0L;
         using (var rank = db.CreateCommand())
         {
+            rank.Transaction = tx;
             rank.CommandText = """
                 UPDATE scheduler_packages
-                   SET queue_order=CASE WHEN priority=0 THEN -sequence ELSE sequence END
+                   SET queue_order=CASE WHEN priority=0
+                       THEN CASE WHEN $accepted>0 THEN -$accepted ELSE -sequence END
+                       ELSE sequence END
                  WHERE package_key=$key AND queue_order IS NULL;
                 """;
+            rank.Parameters.AddWithValue("$accepted", acceptance);
             rank.Parameters.AddWithValue("$key", key);
             rank.ExecuteNonQuery();
         }
         using var lookup = db.CreateCommand();
+        lookup.Transaction = tx;
         lookup.CommandText = """
             SELECT sequence,priority,work_kind,completed_steps,state,error,
                    package_type,payload_json,COALESCE(queue_order,CASE WHEN priority=0 THEN -sequence ELSE sequence END)
@@ -197,11 +206,14 @@ public sealed class DurablePackageJournal
             reader.GetInt32(2) != (int)workKind)
             throw new InvalidOperationException(
                 "Paketidentität kollidiert mit einem anderen unveränderlichen Auftrag: " + key);
-        return new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
+        var result = new DurablePackageRecord(key, reader.GetString(6), reader.GetString(7),
             (SchedulerPriority)reader.GetInt32(1), (SchedulerWorkKind)reader.GetInt32(2),
             reader.GetInt64(0), reader.GetInt32(3), reader.GetString(4),
             reader.IsDBNull(5) ? null : reader.GetString(5))
         { QueueOrder = reader.GetInt64(8) };
+        reader.Close();
+        tx.Commit();
+        return result;
     }
 
     public IReadOnlyList<DurablePackageRecord> Pending()
