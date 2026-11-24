@@ -199,8 +199,8 @@ public sealed class FolderRepository
         // above already establishes its one pending marker. Selecting an
         // existing root must never reopen a completed import or unpause a
         // partially completed one. An explicit refresh uses the scan path.
-        // Give a genuinely NEW pending root a stable tail slot. A manual
-        // reordering of older first imports is never reset by this insert.
+        // A new root is a user request, so allocate its LIFO acceptance
+        // rank from the same sequence as manually submitted packages.
         // Both the source marker and queue position commit atomically.
         if (inserted > 0)
         {
@@ -208,12 +208,11 @@ public sealed class FolderRepository
             rank.Transaction = transaction;
             rank.CommandText = """
                 UPDATE monitored_folders
-                   SET initial_scan_queue_order=(
-                       SELECT MAX(CASE WHEN initial_scan_queue_order>0
-                              THEN initial_scan_queue_order ELSE id END)+1
-                         FROM monitored_folders)
+                   SET initial_scan_queue_order=$accepted
                  WHERE local_path=$path COLLATE NOCASE;
                 """;
+            rank.Parameters.AddWithValue("$accepted",
+                LocalDatabase.NextSchedulerAcceptanceSequence(connection, transaction));
             rank.Parameters.AddWithValue("$path", classification.LocalPath);
             rank.ExecuteNonQuery();
         }
@@ -266,8 +265,8 @@ public sealed class FolderRepository
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT m.id,m.local_path,
-                   CASE WHEN m.initial_scan_queue_order > 0
-                        THEN m.initial_scan_queue_order ELSE m.id END,
+                   -(CASE WHEN m.initial_scan_queue_order > 0
+                        THEN m.initial_scan_queue_order ELSE m.id END),
                    m.initial_scan_paused,
                    (SELECT COUNT(*) FROM images i WHERE i.folder_id=m.id)
               FROM monitored_folders m
@@ -383,7 +382,7 @@ public sealed class FolderRepository
                 WHERE m.initial_scan_pending=1
                   AND m.initial_scan_deleted=0 AND s.desired_present=1
                 ORDER BY CASE WHEN m.initial_scan_queue_order>0
-                         THEN m.initial_scan_queue_order ELSE m.id END,m.id;
+                         THEN m.initial_scan_queue_order ELSE m.id END DESC,m.id DESC;
                 """;
             using var reader = cmd.ExecuteReader();
             while (reader.Read()) ordered.Add(reader.GetInt64(0));
@@ -404,7 +403,7 @@ public sealed class FolderRepository
         for (var i = 0; i < ordered.Count; i++)
         {
             idParam.Value = ordered[i];
-            rankParam.Value = i + 1L;
+            rankParam.Value = ordered.Count - (long)i;
             if (update.ExecuteNonQuery() != 1)
                 throw new IOException("First-import queue changed during reorder.");
         }
