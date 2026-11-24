@@ -1407,6 +1407,10 @@ internal static class TagFlow
             var activeScanOwner = new object();
             try
             {
+                // Background progress may appear at any point during keyboard
+                // input. Only an explicit ShowFromStatus action may activate it.
+                if (scanPresentation.ShowActivated)
+                    throw new Exception("Automatic progress window can steal keyboard focus.");
                 scanPresentation.BeginCachePhase();
                 scanPresentation.UpdateScan(
                     new ScanProgress(12, 0, 12, 0, null, Added: 0, ReadingNew: false),
