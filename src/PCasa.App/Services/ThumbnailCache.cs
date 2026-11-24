@@ -117,36 +117,37 @@ public sealed class ThumbnailCache
             fileSize, modifiedUtcTicks, false, false);
         if (File.Exists(path)) return new ThumbnailResult(path, size, size);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".ppm";
-        var jpeg = temporary + ".jpg";
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".jpg";
         try
         {
-            using (var output = File.Create(temporary))
+            // Use the same WPF JPEG encoder as video placeholders, without
+            // depending on optional libvips PPM loader support.
+            var pixels = new byte[size * size * 3];
+            for (var y = 0; y < size; y++)
+            for (var x = 0; x < size; x++)
             {
-                output.Write(Encoding.ASCII.GetBytes($"P6\n{size} {size}\n255\n"));
-                var pixels = new byte[size * size * 3];
-                for (var y = 0; y < size; y++)
-                for (var x = 0; x < size; x++)
-                {
-                    var offset = (y * size + x) * 3;
-                    var cross = x > 48 && x < 208 && y > 48 && y < 208 &&
-                        (Math.Abs(x - y) < 12 || Math.Abs(x + y - size) < 12);
-                    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] =
-                        cross ? (byte)240 : (byte)45;
-                }
-                output.Write(pixels);
+                var offset = (y * size + x) * 3;
+                var cross = x > 48 && x < 208 && y > 48 && y < 208 &&
+                    (Math.Abs(x - y) < 12 || Math.Abs(x + y - size) < 12);
+                pixels[offset] = pixels[offset + 1] = pixels[offset + 2] =
+                    cross ? (byte)240 : (byte)45;
             }
             token.ThrowIfCancellationRequested();
-            using (var image = Image.NewFromFile(temporary))
-                image.Jpegsave(jpeg, q: 85);
+            var bitmap = System.Windows.Media.Imaging.BitmapSource.Create(
+                size, size, 96, 96, System.Windows.Media.PixelFormats.Rgb24,
+                null, pixels, size * 3);
+            bitmap.Freeze();
+            var encoder = new System.Windows.Media.Imaging.JpegBitmapEncoder
+                { QualityLevel = 85 };
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+            using (var output = File.Create(temporary)) encoder.Save(output);
             token.ThrowIfCancellationRequested();
-            File.Move(jpeg, path, overwrite: true);
+            File.Move(temporary, path, overwrite: true);
             return new ThumbnailResult(path, size, size);
         }
         finally
         {
             if (File.Exists(temporary)) File.Delete(temporary);
-            if (File.Exists(jpeg)) File.Delete(jpeg);
         }
     }
 
