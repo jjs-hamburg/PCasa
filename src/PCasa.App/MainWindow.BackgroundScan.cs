@@ -255,6 +255,8 @@ public partial class MainWindow
         });
     }
 
+    private long _automaticDeletionVersion;
+
     private async void RefreshBackgroundMonitor()
     {
         if (_updateDownloadActive || !_backgroundScanInitialized ||
@@ -277,6 +279,7 @@ public partial class MainWindow
         // Only this single monitor owner detects offline -> available.
         var wasOffline = _backgroundOfflineRootPaths.ToArray();
         var initialAvailabilitySnapshot = _backgroundFirstMonitorSnapshot;
+        var deletionVersion = _automaticDeletionVersion;
 
         try
         {
@@ -481,7 +484,8 @@ public partial class MainWindow
                 // a second scan key, but defer them until all first imports
                 // have finished. Live file watcher events are not deferred.
                 var restored = interruptedInventories
-                    .Where(receipt => receipt.MonitoredFolderId == folder.Id)
+                    .Where(receipt => deletionVersion == _automaticDeletionVersion &&
+                        receipt.MonitoredFolderId == folder.Id)
                     .Select(TryRecoverAutomaticInventory)
                     .Where(request => request is not null &&
                         request.Kind != BackgroundFolderChangeKind.RescanRoot)
@@ -884,9 +888,8 @@ public partial class MainWindow
         return rows;
     }
 
-    // Stop means remove the queued event or cooperatively stop its current
-    // attempt. It NEVER removes an indexed photo or a committed file cursor.
-    // Full-root checks get a retry backoff, preventing a 30-second restart.
+    // Stop removes the pending request and its restart receipt, never a
+    // catalogued photo. The permanent background check cannot be deleted.
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
         if (key == PCasaScheduler.ContinuousReviewKey) return false;
@@ -952,6 +955,10 @@ public partial class MainWindow
                 if (!string.Equals(AutomaticTaskKey(task), key,
                         StringComparison.OrdinalIgnoreCase))
                     continue;
+                _automaticDeletionVersion++;
+                _scheduler.AcknowledgeRecoveredExternalTask(key);
+                _scheduler.SetExternalTaskPaused(key, false);
+                _scheduler.CompleteTaskPromotion(key);
                 if (index == _backgroundInFlightIndex)
                 {
                     _backgroundSuppressed.Add(key);
@@ -967,6 +974,7 @@ public partial class MainWindow
                         try { await active.CancelAsync(); }
                         catch (ObjectDisposedException) { }
                     }
+                    DeleteAutomaticInventoryReceipt(task);
                     _scheduler.NotifyTaskViewChanged();
                     return true;
                 }
@@ -974,7 +982,7 @@ public partial class MainWindow
                 _backgroundSuppressed.Add(key);
                 if (_backgroundPending.Remove(key, out var pendingFollowup))
                     pendingFollowup.Resume?.Dispose();
-                DeferStoppedRootReview(task);
+                DeleteAutomaticInventoryReceipt(task);
                 _scheduler.NotifyTaskViewChanged();
                 return true;
             }
@@ -982,12 +990,23 @@ public partial class MainWindow
         if (_backgroundPending.Remove(key, out var queued))
         {
             queued.Resume?.Dispose();
-            DeferStoppedRootReview(queued);
+            _automaticDeletionVersion++;
+            _scheduler.AcknowledgeRecoveredExternalTask(key);
+            _scheduler.SetExternalTaskPaused(key, false);
+            _scheduler.CompleteTaskPromotion(key);
+            DeleteAutomaticInventoryReceipt(queued);
             RefreshFolderStatusVisuals();
             _scheduler.NotifyTaskViewChanged();
             return true;
         }
         return false;
+    }
+
+    private void DeleteAutomaticInventoryReceipt(PendingBackgroundScan task)
+    {
+        if (task.Kind == BackgroundFolderChangeKind.ScanDirectory)
+            _folderRepository.DeleteAutomaticDirectoryInventory(
+                task.MonitoredFolderId, task.Path);
     }
 
     private void DeferStoppedRootReview(PendingBackgroundScan task)
@@ -1215,9 +1234,10 @@ public partial class MainWindow
                     throw new OperationCanceledException(
                         "Automatic scan paused by the scheduler controller.");
                 }
-                if (_backgroundSuppressed.Remove(taskKey))
+                if (_backgroundSuppressed.Contains(taskKey))
                 {
                     request.Resume?.Dispose();
+                    DeleteAutomaticInventoryReceipt(request);
                     continue; // stopped before the operation began
                 }
                 // The resume state belongs to this queued scan request, not
@@ -1433,7 +1453,7 @@ public partial class MainWindow
                     // A Stop request may arrive during the preceding SMB
                     // source probe. Honor it here before touching an image;
                     // the scanner's committed SQLite cursor remains intact.
-                    if (_backgroundSuppressed.Remove(taskKey))
+                    if (_backgroundSuppressed.Contains(taskKey))
                     {
                         scanResume?.Dispose();
                         scanResume = null;
@@ -1441,7 +1461,7 @@ public partial class MainWindow
                         {
                             Resume = null, ResumeGeneration = null
                         };
-                        DeferStoppedRootReview(request);
+                        DeleteAutomaticInventoryReceipt(request);
                         continue;
                     }
                     // Every active NAS scan is visible, even if it only
@@ -1626,10 +1646,9 @@ public partial class MainWindow
                         scanResume = null;
                         throw;
                     }
-                    // A user explicitly stopped this automatic task. Keep
-                    // committed SQLite scan receipts but do not requeue
-                    // the same request immediately after cancellation.
-                    if (_backgroundSuppressed.Remove(taskKey))
+                    // An explicit deletion retires the durable request,
+                    // but leaves the committed catalog untouched.
+                    if (_backgroundSuppressed.Contains(taskKey))
                     {
                         scanResume?.Dispose();
                         scanResume = null;
@@ -1637,7 +1656,7 @@ public partial class MainWindow
                         {
                             Resume = null, ResumeGeneration = null
                         };
-                        DeferStoppedRootReview(request);
+                        DeleteAutomaticInventoryReceipt(request);
                         TrackFolderActivity(scanPath, "Ready");
                         RefreshFolderStatusVisuals();
                         continue;
@@ -1782,6 +1801,13 @@ public partial class MainWindow
             _backgroundOrderChanged = false;
             _backgroundInFlight = null;
             _backgroundInFlightIndex = 0;
+            // A cancellation can arrive before scanner receipt creation.
+            // Retire any late receipt only after the worker has unwound.
+            var deleted = requests.Where(item =>
+                _backgroundSuppressed.Contains(AutomaticTaskKey(item))).ToArray();
+            foreach (var item in deleted)
+                DeleteAutomaticInventoryReceipt(item);
+            var deletedKeys = _backgroundSuppressed.ToHashSet(StringComparer.OrdinalIgnoreCase);
             _backgroundSuppressed.Clear();
             _backgroundWorkerRunning = false;
             _isScanning = _manualScanRunning;
@@ -1794,11 +1820,18 @@ public partial class MainWindow
                 _manualFileTransferActive || _folderRemovalPending || _externalEditPauseActive)
             {
                 foreach (var remaining in requests.Skip(nextRequestIndex))
+                {
+                    if (deletedKeys.Contains(AutomaticTaskKey(remaining)))
+                    {
+                        remaining.Resume?.Dispose();
+                        continue;
+                    }
                     QueueBackgroundChange(new BackgroundFolderChange(
                         remaining.MonitoredFolderId, remaining.Path,
                         remaining.Kind, remaining.Recursive,
                         ForceExifRefresh: remaining.ForceExifRefresh),
                         remaining.Resume, remaining.ResumeGeneration);
+                }
 
                 // Scans already completed before preemption can leave durable
                 // cache jobs. Resume that work later without rescanning images.

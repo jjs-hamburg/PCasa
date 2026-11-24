@@ -804,6 +804,29 @@ public sealed class FolderRepository
         return result;
     }
 
+    // Remove the request, not the catalog. Shallow and recursive
+    // receipts share one external task key.
+    public void DeleteAutomaticDirectoryInventory(long folderId, string directory)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            DELETE FROM scan_resume_directories WHERE scan_key IN (
+                SELECT scan_key FROM scan_resume_jobs
+                WHERE monitored_folder_id=$id AND scan_root=$root COLLATE NOCASE
+                  AND scan_key LIKE 'background:inventory:%:ScanDirectory:%');
+            DELETE FROM scan_resume_jobs
+                WHERE monitored_folder_id=$id AND scan_root=$root COLLATE NOCASE
+                  AND scan_key LIKE 'background:inventory:%:ScanDirectory:%';
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$root", directory);
+        cmd.ExecuteNonQuery();
+        tx.Commit();
+    }
+
     public sealed record RegularScanCheckpoint(
         long Generation, long Epoch, int Checked,
         HashSet<string> Completed, Dictionary<string, string> Cursors);

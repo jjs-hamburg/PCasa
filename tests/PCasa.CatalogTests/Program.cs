@@ -1876,6 +1876,18 @@ internal static class Program
             pending[0].ScanRoot != root.LocalPath)
             throw new Exception("Startup recovery did not find the original unfinished root scan.");
 
+        // Deleting a directory request must remove only its restart
+        // identity, leaving both a different request and indexed photos.
+        var directoryKey = $"background:inventory:{root.Id}:{generation}:ScanDirectory:True:{directory}";
+        folders.BeginOrResumeRegularScan(directoryKey, root.Id, directory,
+            root.CanonicalPath, beginManualEpoch: false);
+        var beforeDeletion = new ImageCatalogRepository(db).CountAll();
+        folders.DeleteAutomaticDirectoryInventory(root.Id, directory);
+        var surviving = new FolderRepository(db).GetPendingAutomaticInventories();
+        if (surviving.Count != 1 || surviving[0].ScanKey != key ||
+            new ImageCatalogRepository(db).CountAll() != beforeDeletion)
+            throw new Exception("Deleted automatic request survived or changed catalog contents.");
+
         // A partial directory inventory MUST NOT authorize deletion of the
         // photo that the new process skipped using its persisted cursor.
         File.Delete(Path.Combine(directory, "photo-0000.jpg"));
