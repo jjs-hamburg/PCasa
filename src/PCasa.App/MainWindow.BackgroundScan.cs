@@ -286,7 +286,7 @@ public partial class MainWindow
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, inclusions, pendingInitialIds,
-                interruptedInventories, dueRootReviews,
+                interruptedInventories, durableChanges, dueRootReviews,
                 reconnectedFolderIds) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
@@ -326,7 +326,8 @@ public partial class MainWindow
                     // Read dates while already on the scheduled probe lane.
                     // Never schedule a new review from a WPF timer alone.
                     var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
-                    return (roots, states, rules, includedRules, pending, inventories, due,
+                    var changes = _folderRepository.GetPendingAutomaticChanges();
+                    return (roots, states, rules, includedRules, pending, inventories, changes, due,
                         reconnected);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
@@ -411,6 +412,20 @@ public partial class MainWindow
                 _backgroundKnownFolderIds.Clear();
                 return;
             }
+
+            // The durable queue is restored even when an individual root is
+            // offline. Dispatch, not acceptance, depends on reachability.
+            if (deletionVersion == _automaticDeletionVersion)
+                foreach (var saved in durableChanges)
+                {
+                    if (_backgroundPending.ContainsKey(saved.Key) ||
+                        _backgroundInFlight?.Any(item =>
+                            AutomaticTaskKey(item) == saved.Key) == true)
+                        continue;
+                    QueueBackgroundChange(saved.Change, persisted: saved);
+                }
+            if (_backgroundPending.Count > 0)
+                _backgroundDebounceTimer?.Start();
 
             var currentIds = folders.Select(folder => folder.Id).ToHashSet();
             _backgroundKnownFolderIds.RemoveWhere(id => !currentIds.Contains(id));
@@ -772,7 +787,6 @@ public partial class MainWindow
             // cursor and are not directly interruptible. They are not
             // actionable scan tasks and must not be misleading UI rows.
             if (task.Kind is BackgroundFolderChangeKind.RecoverCache or
-                BackgroundFolderChangeKind.RemovePath or
                 BackgroundFolderChangeKind.RescanRoot) return;
             var key = AutomaticTaskKey(task);
             var stopping = _backgroundSuppressed.Contains(key);
@@ -818,8 +832,10 @@ public partial class MainWindow
                 UiLanguage.T(AutomaticTaskTitle(task.Kind)), path,
                 progress,
                 paused ? "Angehalten" :
-                    runningSnapshot is not null ? "Läuft" : "Wartet",
-                AutomaticTaskPriority(task.Kind), rank++,
+                    runningSnapshot is not null ? "Läuft" :
+                    IsPathKnownOffline(task.Path) ? "Nicht erreichbar" : "Wartet",
+                AutomaticTaskPriority(task.Kind),
+                task.QueueOrder == long.MaxValue ? rank++ : task.QueueOrder,
                 CanStop: !stopping,
                 CatalogDirectory: task.Kind == BackgroundFolderChangeKind.ScanDirectory
                     ? task.Path : null));
@@ -833,6 +849,7 @@ public partial class MainWindow
                     Add(inFlight[i], i == _backgroundInFlightIndex);
             foreach (var task in _backgroundPending.Values
                          .OrderBy(row => AutomaticTaskPriority(row.Kind))
+                         .ThenBy(row => row.QueueOrder)
                          .ThenBy(row => row.Path, StringComparer.OrdinalIgnoreCase))
                 Add(task, false);
         }
@@ -974,6 +991,7 @@ public partial class MainWindow
                         try { await active.CancelAsync(); }
                         catch (ObjectDisposedException) { }
                     }
+                    _folderRepository.RetireAutomaticChange(key);
                     DeleteAutomaticInventoryReceipt(task);
                     _scheduler.NotifyTaskViewChanged();
                     return true;
@@ -982,6 +1000,7 @@ public partial class MainWindow
                 _backgroundSuppressed.Add(key);
                 if (_backgroundPending.Remove(key, out var pendingFollowup))
                     pendingFollowup.Resume?.Dispose();
+                _folderRepository.RetireAutomaticChange(key);
                 DeleteAutomaticInventoryReceipt(task);
                 _scheduler.NotifyTaskViewChanged();
                 return true;
@@ -994,12 +1013,23 @@ public partial class MainWindow
             _scheduler.AcknowledgeRecoveredExternalTask(key);
             _scheduler.SetExternalTaskPaused(key, false);
             _scheduler.CompleteTaskPromotion(key);
+            _folderRepository.RetireAutomaticChange(key);
             DeleteAutomaticInventoryReceipt(queued);
             RefreshFolderStatusVisuals();
             _scheduler.NotifyTaskViewChanged();
             return true;
         }
         return false;
+    }
+
+    private void CompleteAutomaticChange(PendingBackgroundScan task)
+    {
+        if (task.Revision is not null)
+        {
+            _folderRepository.RetireAutomaticChange(AutomaticTaskKey(task), task.Revision);
+            // Discard monitor snapshots made before this acknowledgement.
+            _automaticDeletionVersion++;
+        }
     }
 
     private void DeleteAutomaticInventoryReceipt(PendingBackgroundScan task)
@@ -1023,7 +1053,8 @@ public partial class MainWindow
 
     private void QueueBackgroundChange(BackgroundFolderChange change,
         FolderScanner.ScanResumeState? interruptedCursor = null,
-        long? cursorGeneration = null)
+        long? cursorGeneration = null,
+        FolderRepository.AutomaticChangeJob? persisted = null)
     {
         if (!_backgroundScanInitialized ||
             _backgroundScanSettings?.Enabled != true)
@@ -1062,6 +1093,27 @@ public partial class MainWindow
 
         var key = AutomaticTaskKey(new PendingBackgroundScan(
             change.MonitoredFolderId, normalized, change.Kind, change.Recursive));
+        if (change.Kind is BackgroundFolderChangeKind.ScanFile or
+            BackgroundFolderChangeKind.ScanDirectory or BackgroundFolderChangeKind.RemovePath)
+        {
+            // Persist at acceptance, not when a scanner eventually starts.
+            // Only new events allocate a new revision.
+            if (persisted is null)
+            {
+                try
+                {
+                    persisted = _folderRepository.AcceptAutomaticChange(key,
+                        change with { Path = normalized });
+                }
+                catch (Exception ex)
+                {
+                    PCasaDiagnostics.Write("Background.AcceptChange", ex);
+                    interruptedCursor?.Dispose();
+                    return;
+                }
+            }
+            change = persisted.Change;
+        }
         if (_backgroundPending.TryGetValue(key, out var existing))
         {
             // A watcher may add more work while a suspended request is
@@ -1074,6 +1126,8 @@ public partial class MainWindow
             _backgroundPending[key] = existing with
             {
                 Recursive = existing.Recursive || change.Recursive,
+                QueueOrder = persisted?.Order ?? existing.QueueOrder,
+                Revision = persisted?.Revision ?? existing.Revision,
                 Resume = retained,
                 ResumeGeneration = interruptedCursor is not null
                     ? cursorGeneration : existing.ResumeGeneration,
@@ -1095,7 +1149,9 @@ public partial class MainWindow
                 change.Recursive,
                 interruptedCursor,
                 cursorGeneration,
-                ForceExifRefresh: change.ForceExifRefresh);
+                ForceExifRefresh: change.ForceExifRefresh,
+                QueueOrder: persisted?.Order ?? long.MaxValue,
+                Revision: persisted?.Revision);
         }
 
         if (change.Kind is not (BackgroundFolderChangeKind.RemovePath or BackgroundFolderChangeKind.RecoverCache))
@@ -1159,26 +1215,23 @@ public partial class MainWindow
         // Keep paused requests with their original cursor and queue identity.
         // A paused-only queue must not spin the debounce timer.
         if (!_backgroundPending.Values.Any(request =>
-            !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request))))
+            !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)) &&
+            !IsPathKnownOffline(request.Path)))
             return;
         var pausedRequests = _backgroundPending
-            .Where(entry => _scheduler.IsExternalTaskPaused(entry.Key))
+            .Where(entry => _scheduler.IsExternalTaskPaused(entry.Key) ||
+                IsPathKnownOffline(entry.Value.Path))
             .ToArray();
         var requests = _backgroundPending.Values
             .Where(request =>
-                !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)))
+                !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)) &&
+                !IsPathKnownOffline(request.Path))
             .Select(request =>
             {
                 var defaultPriority = request.Kind ==
                     BackgroundFolderChangeKind.RescanRoot
                     ? SchedulerPriority.Idle : SchedulerPriority.Background;
-                var defaultOrder = request.Kind switch
-                    {
-                        BackgroundFolderChangeKind.RemovePath => 0,
-                        BackgroundFolderChangeKind.ScanFile => 1,
-                        BackgroundFolderChangeKind.ScanDirectory => 2,
-                        _ => 3
-                    };
+                var defaultOrder = request.QueueOrder;
                 return (Request: request, Placement:
                     _scheduler.EffectiveTaskPlacement(
                         AutomaticTaskKey(request), defaultPriority, defaultOrder));
@@ -1259,6 +1312,8 @@ public partial class MainWindow
                     .FirstOrDefault(candidate => candidate.Id == request.MonitoredFolderId);
                 if (folder is null)
                 {
+                    CompleteAutomaticChange(request);
+                    scanResume?.Dispose();
                     continue;
                 }
 
@@ -1271,6 +1326,7 @@ public partial class MainWindow
                     !FolderExclusionRules.MayContainIncludedDescendant(request.Path,
                         currentInclusions))
                 {
+                    CompleteAutomaticChange(request);
                     scanResume?.Dispose();
                     continue;
                 }
@@ -1340,7 +1396,13 @@ public partial class MainWindow
                         }, cancellationToken: _backgroundLifetime.Token,
                         workKind: SchedulerWorkKind.SourceProbe);
                     if (!verifiedGone)
+                    {
+                        // Reappeared paths retire the obsolete removal;
+                        // unreachable parents keep their accepted request.
+                        if (File.Exists(request.Path) || Directory.Exists(request.Path))
+                            CompleteAutomaticChange(request);
                         continue;
+                    }
 
                     // Deletion and scanning must share the same scheduler lane.
                     // Recheck the path at execution time: a delayed watcher
@@ -1373,6 +1435,7 @@ public partial class MainWindow
                         () => _folderRepository.IsCurrentSourceGeneration(
                             folder.CanonicalPath, deletionSource.Value.Generation, true),
                         _backgroundLifetime.Token);
+                    CompleteAutomaticChange(request);
                     catalogChanged |= removed > 0;
                     if (removed > 0)
                     {
@@ -1607,6 +1670,7 @@ public partial class MainWindow
                         foreach (var change in inventoryResult.Changes)
                             QueueBackgroundChange(change);
                     }
+                    CompleteAutomaticChange(request);
                     if (!request.NeedsFollowup)
                         _scheduler.CompleteTaskPromotion(taskKey);
                     scanResume.Dispose();
@@ -1958,5 +2022,7 @@ public partial class MainWindow
         FolderScanner.ScanResumeState? Resume = null,
         long? ResumeGeneration = null,
         bool NeedsFollowup = false,
-        bool ForceExifRefresh = false);
+        bool ForceExifRefresh = false,
+        long QueueOrder = long.MaxValue,
+        string? Revision = null);
 }

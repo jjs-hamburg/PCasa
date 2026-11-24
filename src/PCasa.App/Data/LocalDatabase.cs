@@ -362,6 +362,18 @@ public sealed class LocalDatabase
         using (var regularScan = connection.CreateCommand())
         {
             regularScan.CommandText = """
+                CREATE TABLE IF NOT EXISTS automatic_change_jobs (
+                    queue_order INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_key TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                    monitored_folder_id INTEGER NOT NULL,
+                    local_path TEXT NOT NULL,
+                    kind INTEGER NOT NULL,
+                    recursive INTEGER NOT NULL,
+                    force_exif_refresh INTEGER NOT NULL,
+                    revision TEXT NOT NULL,
+                    FOREIGN KEY(monitored_folder_id)
+                        REFERENCES monitored_folders(id) ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS scan_resume_jobs (
                     scan_key TEXT PRIMARY KEY,
                     monitored_folder_id INTEGER NOT NULL,

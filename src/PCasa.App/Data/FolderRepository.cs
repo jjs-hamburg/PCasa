@@ -827,6 +827,74 @@ public sealed class FolderRepository
         tx.Commit();
     }
 
+    public sealed record AutomaticChangeJob(string Key, long Order,
+        string Revision, BackgroundFolderChange Change);
+
+    // Queue identity survives before the first worker starts. Coalescing
+    // preserves FIFO position, but a new event has a new revision so a
+    // completing older worker cannot acknowledge it.
+    public AutomaticChangeJob AcceptAutomaticChange(string key,
+        BackgroundFolderChange change)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO automatic_change_jobs
+                (task_key,monitored_folder_id,local_path,kind,recursive,
+                 force_exif_refresh,revision)
+            VALUES ($key,$id,$path,$kind,$recursive,$force,$revision)
+            ON CONFLICT(task_key) DO UPDATE SET
+                recursive=MAX(automatic_change_jobs.recursive,excluded.recursive),
+                force_exif_refresh=MAX(automatic_change_jobs.force_exif_refresh,
+                    excluded.force_exif_refresh),
+                revision=excluded.revision
+            RETURNING queue_order,revision,recursive,force_exif_refresh;
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$id", change.MonitoredFolderId);
+        cmd.Parameters.AddWithValue("$path", change.Path);
+        cmd.Parameters.AddWithValue("$kind", (int)change.Kind);
+        cmd.Parameters.AddWithValue("$recursive", change.Recursive ? 1 : 0);
+        cmd.Parameters.AddWithValue("$force", change.ForceExifRefresh ? 1 : 0);
+        cmd.Parameters.AddWithValue("$revision", Guid.NewGuid().ToString("N"));
+        using var row = cmd.ExecuteReader();
+        if (!row.Read()) throw new InvalidOperationException("Automatic request was not stored.");
+        return new AutomaticChangeJob(key, row.GetInt64(0), row.GetString(1),
+            change with { Recursive = row.GetBoolean(2), ForceExifRefresh = row.GetBoolean(3) });
+    }
+
+    public IReadOnlyList<AutomaticChangeJob> GetPendingAutomaticChanges()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT task_key,queue_order,revision,monitored_folder_id,local_path,
+                   kind,recursive,force_exif_refresh
+            FROM automatic_change_jobs ORDER BY queue_order;
+            """;
+        using var row = cmd.ExecuteReader();
+        var result = new List<AutomaticChangeJob>();
+        while (row.Read())
+            result.Add(new AutomaticChangeJob(row.GetString(0), row.GetInt64(1),
+                row.GetString(2), new BackgroundFolderChange(row.GetInt64(3),
+                    row.GetString(4), (BackgroundFolderChangeKind)row.GetInt32(5),
+                    row.GetBoolean(6), row.GetBoolean(7))));
+        return result;
+    }
+
+    public bool RetireAutomaticChange(string key, string? revision = null)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM automatic_change_jobs WHERE task_key=$key
+              AND ($revision IS NULL OR revision=$revision);
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.Parameters.AddWithValue("$revision", (object?)revision ?? DBNull.Value);
+        return cmd.ExecuteNonQuery() != 0;
+    }
+
     public sealed record RegularScanCheckpoint(
         long Generation, long Epoch, int Checked,
         HashSet<string> Completed, Dictionary<string, string> Cursors);

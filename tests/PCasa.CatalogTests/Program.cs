@@ -1878,6 +1878,21 @@ internal static class Program
 
         // Deleting a directory request must remove only its restart
         // identity, leaving both a different request and indexed photos.
+        var firstChange = new BackgroundFolderChange(root.Id,
+            Path.Combine(directory, "photo-0000.jpg"), BackgroundFolderChangeKind.ScanFile, false);
+        var secondChange = firstChange with { Path = Path.Combine(directory, "photo-0001.jpg") };
+        var accepted = folders.AcceptAutomaticChange("first", firstChange);
+        var second = folders.AcceptAutomaticChange("second", secondChange);
+        var latest = folders.AcceptAutomaticChange("first", firstChange with { ForceExifRefresh = true });
+        var persisted = new FolderRepository(db).GetPendingAutomaticChanges();
+        if (persisted.Count != 2 || persisted[0].Key != "first" ||
+            latest.Order != accepted.Order || second.Order <= accepted.Order ||
+            latest.Revision == accepted.Revision || !persisted[0].Change.ForceExifRefresh ||
+            folders.RetireAutomaticChange("first", accepted.Revision) ||
+            !folders.RetireAutomaticChange("first", latest.Revision) ||
+            !folders.RetireAutomaticChange("second"))
+            throw new Exception("Automatic FIFO acceptance, recovery or revision-safe acknowledgement failed.");
+
         var directoryKey = $"background:inventory:{root.Id}:{generation}:ScanDirectory:True:{directory}";
         folders.BeginOrResumeRegularScan(directoryKey, root.Id, directory,
             root.CanonicalPath, beginManualEpoch: false);
