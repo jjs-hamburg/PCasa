@@ -1885,12 +1885,21 @@ internal static class Program
         var accepted = folders.AcceptAutomaticChange("first", firstChange);
         var second = folders.AcceptAutomaticChange("second", secondChange);
         var latest = folders.AcceptAutomaticChange("first", firstChange with { ForceExifRefresh = true });
-        var persisted = new FolderRepository(db).GetPendingAutomaticChanges();
+        var reopened = new FolderRepository(db);
+        var persisted = reopened.GetPendingAutomaticChanges();
+        // Interruption or late publication resolves the newest accepted
+        // revision without changing the original FIFO rank.
+        var resumed = reopened.GetPendingAutomaticChange("first");
+        if (resumed is null || resumed.Revision != latest.Revision ||
+            resumed.Order != accepted.Order || !resumed.Change.ForceExifRefresh ||
+            reopened.GetPendingAutomaticChange("nonexistent") is not null)
+            throw new Exception("Watcher retry did not resolve the current accepted receipt.");
         if (persisted.Count != 2 || persisted[0].Key != "first" ||
             latest.Order != accepted.Order || second.Order <= accepted.Order ||
             latest.Revision == accepted.Revision || !persisted[0].Change.ForceExifRefresh ||
             folders.RetireAutomaticChange("first", accepted.Revision) ||
             !folders.RetireAutomaticChange("first", latest.Revision) ||
+            reopened.GetPendingAutomaticChange("first") is not null ||
             !folders.RetireAutomaticChange("second"))
             throw new Exception("Automatic FIFO acceptance, recovery or revision-safe acknowledgement failed.");
 
