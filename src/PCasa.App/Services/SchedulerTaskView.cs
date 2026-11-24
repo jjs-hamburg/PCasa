@@ -492,7 +492,7 @@ public sealed class SchedulerTaskView
         => key.StartsWith("automatic:", StringComparison.Ordinal) &&
            key.Contains(":RescanRoot:", StringComparison.Ordinal);
 
-    private static string TaskCaption(DurablePackageRecord item)
+    internal static string TaskCaption(DurablePackageRecord item)
         => item.Type switch
         {
             "gps-edit-v1" or "gps-edit-v2" => item.Payload.Contains("\"Mode\":2", StringComparison.Ordinal)
