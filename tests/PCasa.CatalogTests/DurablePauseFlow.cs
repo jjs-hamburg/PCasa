@@ -17,6 +17,7 @@ internal static class DurablePauseFlow
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
             ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
+            ExerciseSessionFileJobLifetime(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -29,6 +30,49 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseSessionFileJobLifetime(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "session-file-jobs.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        journal.Put("old:transfer", "gallery-transfer-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.SetState("old:transfer", "running", 2);
+        journal.Put("old:scan", "manual-folder-scan-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        journal.SetState("old:scan", "running", 1);
+        journal.Put("old:retry", "import-error-retry-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        await using (var scheduler = new PCasaScheduler())
+        {
+            scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+            var pending = journal.Pending();
+            if (pending.Count != 2 ||
+                pending.Single(row => row.Key == "old:scan").CompletedSteps != 1 ||
+                !pending.Any(row => row.Key == "old:retry"))
+                throw new Exception("Startup replayed a file job or discarded a scan checkpoint.");
+            journal.Put("new:delete", "gallery-delete-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+            journal.Put("new:scan", "manual-scan-all-v1", "{}",
+                SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        }
+        var remaining = journal.Pending();
+        if (remaining.Count != 3 || remaining.Any(row =>
+                !DurablePackageJournal.SurvivesSession(row.Type)))
+            throw new Exception("Shutdown retained a file job or lost a scan.");
+        using var db = database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*) FROM scheduler_packages
+             WHERE state='canceled'
+               AND ((package_key='old:transfer' AND completed_steps=2)
+                    OR package_key='new:delete');
+            """;
+        if (Convert.ToInt32(cmd.ExecuteScalar()) != 2)
+            throw new Exception("Session retirement lost the terminal audit records.");
+        Console.WriteLine("PASS: File jobs end with the session; scan receipts survive.");
     }
 
     private static async Task ExerciseImageEditFailureLifecycle(string dir)
