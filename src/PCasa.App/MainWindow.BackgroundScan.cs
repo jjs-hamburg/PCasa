@@ -772,7 +772,7 @@ public partial class MainWindow
         // import from Taskmanager while its progress window is advancing.
         var snapshots = _scheduler.Snapshot();
         var latest = snapshots
-            .Where(job => job.Key.StartsWith("background-scan:", StringComparison.Ordinal))
+            .Where(job => job.Key.StartsWith("automatic:", StringComparison.Ordinal))
             .GroupBy(job => job.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
                 group => group.OrderByDescending(job => job.Id).First(),
@@ -800,12 +800,9 @@ public partial class MainWindow
             // The in-flight scheduler snapshot, not merely a queued WPF
             // request, decides whether a scanner is really running.
             var runningSnapshot = current && key == _backgroundLiveTaskKey
-                ? latest.Values.FirstOrDefault(job =>
-                    job.Key.StartsWith(
-                        $"background-scan:{task.MonitoredFolderId}:",
-                        StringComparison.Ordinal) &&
-                    job.State == SchedulerJobState.Running)
-                : null;
+                && latest.TryGetValue(key, out var snapshot) &&
+                    snapshot.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested
+                ? snapshot : null;
             // Show the directory actually being visited, rather than
             // merely the monitored root. During a scan of G:\Bilder the
             // user needs to see that Camera Roll is currently being checked.
@@ -1587,14 +1584,9 @@ public partial class MainWindow
                             $"ResumeInMemory={scanResume.ImageFilesSeen}; Kind={request.Kind}");
                     schedulerScanKey = request.Kind == BackgroundFolderChangeKind.RescanRoot
                         ? PCasaScheduler.ContinuousReviewKey
-                        : $"background-scan:{folder.Id}:{sourceState.Value.Generation}:{scanPath}";
-                    // The watcher cursor and Taskmanager row share ONE
-                    // scheduler identity. The global user order applies
-                    // to this existing execution, not a new scan.
-                    if (request.Kind != BackgroundFolderChangeKind.RescanRoot)
-                        _scheduler.RegisterTaskAlias(schedulerScanKey, taskKey);
-                    try
-                    {
+                        : taskKey;
+                    // Use the accepted task identity directly. Generation and
+                    // scan receipts belong to the source, not the scheduler key.
                     await _scheduler.EnqueueAsync(
                         schedulerScanKey,
                         // A startup root verification is idle work (P4),
@@ -1642,12 +1634,9 @@ public partial class MainWindow
                         () => _folderRepository.IsCurrentSourceGeneration(
                             folder.CanonicalPath, sourceState.Value.Generation, true),
                         scanCancellation.Token,
-                        workKind: SchedulerWorkKind.CatalogScan);
-                    }
-                    finally
-                    {
-                        _scheduler.UnregisterTaskAlias(schedulerScanKey);
-                    }
+                        workKind: SchedulerWorkKind.CatalogScan,
+                        queueOrder: request.QueueOrder == long.MaxValue
+                            ? null : request.QueueOrder);
                     var result = scanResult ?? throw new OperationCanceledException();
                     if (inventoryResult is not null)
                     {
