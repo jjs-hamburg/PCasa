@@ -207,6 +207,14 @@ public sealed class FolderScanner
             throw new OperationCanceledException(
                 "The scan source configuration changed during a paused inventory.");
         }
+        // Validate current exclusions before allocating a durable scan receipt.
+        // A stale watcher event must not leave an orphan inventory for a
+        // directory excluded since the event was queued.
+        var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
+        var inclusions = _folderRepository.GetIncludedPaths(folder.Id);
+        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions, inclusions) &&
+            !FolderExclusionRules.MayContainIncludedDescendant(scanRoot, inclusions))
+            return new ScanResult(0, 0, 0, 0);
         if (resume is not null) resume.SourceGeneration = generation;
         // Same scanner and traversal for every inventory. The durable key
         // belongs to one scan request; completed requests erase their receipt.
@@ -222,11 +230,6 @@ public sealed class FolderScanner
         var scanEpoch = resume?.ScanEpoch ?? regularCheckpoint?.Epoch ??
             _folderRepository.GetScanEpoch(folder.CanonicalPath);
         if (resume is not null) resume.ScanEpoch = scanEpoch;
-        var exclusions = _folderRepository.GetExcludedPaths(folder.Id);
-        var inclusions = _folderRepository.GetIncludedPaths(folder.Id);
-        if (FolderExclusionRules.IsExcluded(scanRoot, exclusions, inclusions) &&
-            !FolderExclusionRules.MayContainIncludedDescendant(scanRoot, inclusions))
-            return new ScanResult(0, 0, 0, 0);
 
         var imageFilesSeen = resume?.ImageFilesSeen ?? regularCheckpoint?.Checked ?? 0;
         var updated = resume?.Updated ?? 0;

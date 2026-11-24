@@ -1291,15 +1291,16 @@ public partial class MainWindow
                     continue;
                 }
 
-                if (_backgroundExcludedPaths.TryGetValue(
-                        folder.Id, out var currentExclusions) &&
-                    FolderExclusionRules.IsExcluded(request.Path, currentExclusions,
-                        _backgroundIncludedPaths.GetValueOrDefault(folder.Id)
-                            ?? Array.Empty<string>()) &&
+                // Watcher queue admission uses a cached rule snapshot; execution
+                // must use the current committed rules after a folder edit.
+                var currentExclusions = _folderRepository.GetExcludedPaths(folder.Id);
+                var currentInclusions = _folderRepository.GetIncludedPaths(folder.Id);
+                if (FolderExclusionRules.IsExcluded(request.Path, currentExclusions,
+                        currentInclusions) &&
                     !FolderExclusionRules.MayContainIncludedDescendant(request.Path,
-                        _backgroundIncludedPaths.GetValueOrDefault(folder.Id)
-                            ?? Array.Empty<string>()))
+                        currentInclusions))
                 {
+                    scanResume?.Dispose();
                     continue;
                 }
 
@@ -1505,6 +1506,11 @@ public partial class MainWindow
                             _scheduler.ReportProgress(schedulerScanKey,
                                 AutomaticTaskTitle(request.Kind), value.ImageFilesSeen,
                                 0, value.CurrentFile);
+                        // Continuous checks are passive, never foreground
+                        // import presentations. In particular, do not steal
+                        // search status or gallery focus every idle pass.
+                        if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
+                            return;
                         // The same scheduler snapshot drives both the small
                         // progress window and the taskmanager live row.
                         activityWindow ??= AcquireProgressPresenter(backgroundPresenterOwner);
@@ -1514,7 +1520,8 @@ public partial class MainWindow
                         ShowScannedPhotoFolder(value);
                         // Do not overwrite the shared Tag/scan presenter's
                         // authoritative status-bar projection.
-                        if (_visibleManualOperations.Count == 0)
+                        if (_visibleManualOperations.Count == 0 &&
+                            string.IsNullOrWhiteSpace(TagSearchBox?.Text))
                             StatusText.Text =
                                 $"Hintergrund: {value.Added:N0} neu · {value.Changed:N0} geändert · " +
                                 $"{value.CacheRepaired:N0} Cache-Reparaturen · {value.Unchanged:N0} unverändert" +
@@ -1795,7 +1802,9 @@ public partial class MainWindow
             {
                 // The catalog summary already owns this count. Never open a new
                 // SQLite connection to update a cosmetic WPF status label.
-                StatusText.Text = $"{_lastCatalogImageCount:N0} Bilder";
+                if (!reviewCompleted && _visibleManualOperations.Count == 0 &&
+                    string.IsNullOrWhiteSpace(TagSearchBox?.Text))
+                    StatusText.Text = $"{_lastCatalogImageCount:N0} Bilder";
             }
         }
         catch (OperationCanceledException)
@@ -1806,7 +1815,9 @@ public partial class MainWindow
             // Network loss during a scan/cache rebuild must never escape
             // this async void Dispatcher event handler and terminate PCasa.
             PCasaDiagnostics.Write("BackgroundDebounceTimer_Tick", ex);
-            StatusText.Text = "Hintergrundprüfung unterbrochen – erneuter Versuch später";
+            if (string.IsNullOrWhiteSpace(TagSearchBox?.Text) &&
+                _visibleManualOperations.Count == 0)
+                StatusText.Text = "Hintergrundprüfung unterbrochen – erneuter Versuch später";
         }
         finally
         {
@@ -1890,7 +1901,9 @@ public partial class MainWindow
             var cacheOwner = new object();
             try
             {
-                StatusText.Text = $"Hintergrund: {missing:N0} Vorschaudaten vorbereiten";
+                if (string.IsNullOrWhiteSpace(TagSearchBox?.Text) &&
+                    _visibleManualOperations.Count == 0)
+                    StatusText.Text = $"Hintergrund: {missing:N0} Vorschaudaten vorbereiten";
                 activityWindow?.BeginCachePhase(cacheOwner);
                 var currentWindow = activityWindow;
                 var cacheProgress = currentWindow is null ? null
