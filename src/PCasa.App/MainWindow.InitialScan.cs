@@ -65,12 +65,12 @@ public partial class MainWindow
                 // UI dispatcher while another operation holds SQLite.
                 var attempted = _initialScanAttempted.ToHashSet();
                 var orderVersion = _initialScanOrderVersion;
-                var next = await _scheduler.RunAsync(
-                    $"catalog:pending-first-import:{Guid.NewGuid():N}",
-                    SchedulerPriority.Background,
-                    token =>
+                // This is admission/control-plane work, not a competing
+                // catalog job. Never queue the lookup behind the P0 whose
+                // execution the newly accepted import must supersede.
+                var next = await Task.Run(
+                    () =>
                     {
-                        token.ThrowIfCancellationRequested();
                         var folders = _folderRepository.GetAll()
                             .ToDictionary(folder => folder.Id);
                         return _folderRepository.GetPendingFirstImportQueue()
@@ -83,13 +83,13 @@ public partial class MainWindow
                                 row.QueueOrder,
                                 Place = _scheduler.EffectiveTaskPlacement(
                                     $"initial:{row.FolderId}",
-                                    SchedulerPriority.UserAction, row.QueueOrder)
+                                    SchedulerPriority.ManualAction, row.QueueOrder)
                             })
                             .OrderBy(x => x.Place.Priority)
                             .ThenBy(x => x.Place.QueueOrder)
                             .ThenBy(x => x.Folder.Id)
                             .FirstOrDefault();
-                    }, workKind: SchedulerWorkKind.CatalogRead);
+                    });
                 if (_shutdownStarted || _folderRemovalPending || _folderManagerOpen ||
                     _manualFileTransferActive || _externalEditPauseActive ||
                     Dispatcher.HasShutdownStarted)
@@ -214,7 +214,7 @@ public partial class MainWindow
             PCasaDiagnostics.WriteMessage("Scan.InitialImport",
                 $"Resume pending first-import for monitored folder: {folder.LocalPath}");
             var result = await ScheduleCompleteFolderScanAsync(
-                folder.LocalPath, SchedulerPriority.UserAction,
+                folder.LocalPath, SchedulerPriority.ManualAction,
                 progress, cancellation.Token, folder.Id,
                 requirePendingInitialImport: true, operationKey: scanKey,
                 queueOrder: queueOrder);
