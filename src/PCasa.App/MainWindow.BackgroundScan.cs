@@ -24,12 +24,9 @@ public partial class MainWindow
     private readonly HashSet<long> _backgroundDeferredInventoryRoots = new();
     private readonly HashSet<long> _gpsSourceAuditedRoots = new();
     private bool _backgroundFirstMonitorSnapshot = true;
-    // Only one complete P4 sweep is admitted at a time. A completed root
-    // becomes due again after a minimum interval, never immediately after
-    // its last image. Concrete watcher events remain higher priority.
-    // A review round has no wall-clock expiry. Only an unreachable/error
-    // source needs a retry backoff; a completed root is eligible again only
-    // after every other monitored root finishes the SAME round.
+    // One idle verification selects the least recently checked reachable
+    // root. Only a source failure needs retry backoff; no time interval
+    // or mandatory round completion limits successful checks.
     private static readonly TimeSpan SourceRetryInterval = TimeSpan.FromSeconds(10);
     private BackgroundFolderChangeKind? _backgroundActiveScanKind;
     private string? _backgroundActiveRootReviewPath;
@@ -424,7 +421,7 @@ public partial class MainWindow
                         continue;
                     QueueBackgroundChange(saved.Change, persisted: saved);
                 }
-            if (_backgroundPending.Count > 0)
+            if (HasRunnableBackgroundRequests())
                 _backgroundDebounceTimer?.Start();
 
             var currentIds = folders.Select(folder => folder.Id).ToHashSet();
@@ -445,8 +442,7 @@ public partial class MainWindow
             // the SAME scheduler, and an actually active first import still
             // has precedence. A different pending root is not a global lock.
             var idleSlotFree = !_backgroundWorkerRunning &&
-                !_backgroundPending.Values.Any(request =>
-                    !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request))) &&
+                !HasRunnableBackgroundRequests() &&
                 !_initialScanActive && !_initialScanPumpRunning &&
                 !_manualContextScanActive && !_manualScanAllActive &&
                 !_manualFileTransferActive;
@@ -577,6 +573,16 @@ public partial class MainWindow
             }
         }
     }
+
+    // Held or unreachable work remains accepted, but does not reserve the
+    // idle slot. Use the same readiness predicate for admission and dispatch.
+    private bool IsRunnableBackgroundRequest(PendingBackgroundScan request) =>
+        !_scheduler.IsExternalTaskPaused(request.Kind == BackgroundFolderChangeKind.RescanRoot
+            ? PCasaScheduler.ContinuousReviewKey : AutomaticTaskKey(request)) &&
+        !IsPathKnownOffline(request.Path);
+
+    private bool HasRunnableBackgroundRequests() =>
+        _backgroundPending.Values.Any(IsRunnableBackgroundRequest);
 
     private bool IsPathKnownOffline(string path)
         => _backgroundOfflineRootPaths.Any(root => PathIsAtOrUnderRoot(path, root));
@@ -1164,7 +1170,7 @@ public partial class MainWindow
         _backgroundDebounceTimer?.Stop();
 
         var urgentQueued = _backgroundPending.Values.Any(request =>
-            !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)) &&
+            IsRunnableBackgroundRequest(request) &&
             _scheduler.EffectiveTaskPlacement(AutomaticTaskKey(request),
                 request.Kind == BackgroundFolderChangeKind.RescanRoot
                     ? SchedulerPriority.Idle : SchedulerPriority.Background,
@@ -1179,8 +1185,7 @@ public partial class MainWindow
                 _manualContextScanActive || _manualScanAllActive)))
         {
             if (!_folderRemovalPending && _backgroundScanSettings?.Enabled == true &&
-                _backgroundPending.Values.Any(request =>
-                    !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request))))
+                HasRunnableBackgroundRequests())
             {
                 _backgroundDebounceTimer?.Start();
             }
@@ -1197,18 +1202,13 @@ public partial class MainWindow
 
         // Keep paused requests with their original cursor and queue identity.
         // A paused-only queue must not spin the debounce timer.
-        if (!_backgroundPending.Values.Any(request =>
-            !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)) &&
-            !IsPathKnownOffline(request.Path)))
+        if (!HasRunnableBackgroundRequests())
             return;
         var pausedRequests = _backgroundPending
-            .Where(entry => _scheduler.IsExternalTaskPaused(entry.Key) ||
-                IsPathKnownOffline(entry.Value.Path))
+            .Where(entry => !IsRunnableBackgroundRequest(entry.Value))
             .ToArray();
         var requests = _backgroundPending.Values
-            .Where(request =>
-                !_scheduler.IsExternalTaskPaused(AutomaticTaskKey(request)) &&
-                !IsPathKnownOffline(request.Path))
+            .Where(IsRunnableBackgroundRequest)
             .Select(request =>
             {
                 var defaultPriority = request.Kind ==
@@ -1461,6 +1461,12 @@ public partial class MainWindow
                     }, cancellationToken: _backgroundLifetime.Token,
                     workKind: SchedulerWorkKind.SourceProbe);
                 if (!scanPathExists)
+                {
+                    scanResume?.Dispose();
+                    continue;
+                }
+                if (request.Kind == BackgroundFolderChangeKind.RescanRoot &&
+                    _scheduler.IsExternalTaskPaused(PCasaScheduler.ContinuousReviewKey))
                 {
                     scanResume?.Dispose();
                     continue;
@@ -1888,9 +1894,11 @@ public partial class MainWindow
             if (!_updateDownloadActive && !_folderRemovalPending &&
                 !_externalEditPauseActive && _backgroundScanSettings?.Enabled == true)
             {
-                if (_backgroundPending.Count > 0)
+                if (HasRunnableBackgroundRequests())
                     _backgroundDebounceTimer?.Start();
-                else if (reviewCompleted && !_backgroundMonitorClosing)
+                else if (!_backgroundMonitorClosing)
+                    // Immediately re-evaluate the next eligible root after
+                    // any batch, even if offline/paused requests remain.
                     RefreshBackgroundMonitor();
             }
         }
