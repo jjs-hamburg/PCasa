@@ -624,7 +624,7 @@ internal static class FolderAddFlow
             // execute as a second catalog job while first import owns the
             // worker. The gallery remains independent during this wait.
             Until(window, () =>
-                ((IReadOnlyList<AutomaticScanTask>)typeof(PCasa.App.MainWindow)
+                ((IReadOnlyList<PCasa.App.AutomaticScanTask>)typeof(PCasa.App.MainWindow)
                     .GetMethod("SnapshotAutomaticScans", BindingFlags.Instance |
                         BindingFlags.NonPublic)!.Invoke(window, null)!)
                     .Any(task => task.Key.Contains("incoming-during-import.jpg",
