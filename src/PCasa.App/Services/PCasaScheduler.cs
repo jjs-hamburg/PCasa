@@ -1788,6 +1788,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 // even if the first SQLite/SMB/ExifTool call is still blocked
                 // and has not yet reached its first ReportProgress boundary.
                 PublishState(item);
+                bool interrupted = false, resume = false;
                 using (yieldRequest)
                 using (var linked = yieldRequest is null
                     ? CancellationTokenSource.CreateLinkedTokenSource(
@@ -1817,32 +1818,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     }
                     catch (OperationCanceledException)
                     {
-                        var valid = false;
+                        interrupted = true;
                         if (item.YieldRequested && !_shutdown.IsCancellationRequested &&
-                            !item.CancellationToken.IsCancellationRequested)
+                            !item.CancellationToken.IsCancellationRequested &&
+                            !item.UserCancellation.IsCancellationRequested)
                         {
-                            try { valid = item.IsCurrent is null || item.IsCurrent(); }
+                            try { resume = item.IsCurrent is null || item.IsCurrent(); }
                             catch { /* Startup/monitor reconciliation can retry. */ }
                         }
-                        lock (_gate)
-                        {
-                            if (valid && !_disposed && !_shutdown.IsCancellationRequested &&
-                                !item.CancellationToken.IsCancellationRequested)
-                            {
-                                item.YieldRequested = false;
-                                _pending.Add(item);
-                                SetStateUnsafe(item, SchedulerJobState.Queued);
-                                SignalController();
-                            }
-                            else
-                            {
-                                SetStateUnsafe(item, SchedulerJobState.Canceled);
-                                item.Completion.TrySetCanceled();
-                            }
-                        }
-                        // A cooperative yield can make this same package queued
-                        // again without issuing another progress callback.
-                        PublishState(item);
                     }
                     catch (Exception ex)
                     {
@@ -1855,15 +1838,32 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         {
                             _runningWork.Remove(item);
                             _laneOccupied[lane]--;
-                            // Every completed, canceled or yielded operation
-                            // changes the ONE global eligibility decision.
-                            // Wake each pending lane once; the scheduler will
-                            // choose the next ranked job, never the worker.
-                            WakePendingWorkersUnsafe();
                             item.YieldSource = null;
                             item.ExecutionLane = -1;
-
+                            // Remove the old assignment and requeue under the
+                            // same lock. A priority change can select a different
+                            // executor; it must never see the same item both
+                            // pending and running or lose its new assignment.
+                            if (interrupted)
+                            {
+                                if (resume && !_disposed &&
+                                    !_shutdown.IsCancellationRequested &&
+                                    !item.CancellationToken.IsCancellationRequested &&
+                                    !item.UserCancellation.IsCancellationRequested)
+                                {
+                                    item.YieldRequested = false;
+                                    _pending.Add(item);
+                                    SetStateUnsafe(item, SchedulerJobState.Queued);
+                                }
+                                else
+                                {
+                                    SetStateUnsafe(item, SchedulerJobState.Canceled);
+                                    item.Completion.TrySetCanceled();
+                                }
+                            }
+                            WakePendingWorkersUnsafe();
                         }
+                        if (interrupted) PublishState(item);
                     }
                 }
             }
