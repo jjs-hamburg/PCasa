@@ -337,8 +337,8 @@ public partial class MainWindow
                 PCasaDiagnostics.WriteMessage("Shutdown.Duration",
                     $"Abschlussdauer: {watch.ElapsedMilliseconds} ms; " +
                     "Scheduler und native Metadatenprozesse abgeschlossen.");
-            // The remaining original-file recipes and cursor positions stay
-            // in SQLite for the very next startup. Never retire them here.
+            // Scan state survives shutdown. Unfinished file jobs are retired
+            // by the scheduler; unconfirmed writes remain reviewable errors.
             _shutdownProgressWindow?.Close();
             _shutdownProgressWindow = null;
             _shutdownFinished = true;
