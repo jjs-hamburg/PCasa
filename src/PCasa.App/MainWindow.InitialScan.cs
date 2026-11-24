@@ -120,8 +120,7 @@ public partial class MainWindow
         // Reuse the job identity as the Scheduler's actual InitialImport
         // operation. The Taskmanager and the progress presenter describe the
         // SAME job, not two artificially synchronized representations.
-        var scanKey =
-            $"catalog:complete-scan:{Guid.NewGuid():N}:{folder.LocalPath}";
+        var scanKey = $"initial:{folder.Id}";
         _initialScanTaskKey = scanKey;
         _initialScanTaskDirectory = folder.LocalPath;
         _initialScanTaskCurrentFile = null;
@@ -198,20 +197,11 @@ public partial class MainWindow
             scanActive = true;
             PCasaDiagnostics.WriteMessage("Scan.InitialImport",
                 $"Resume pending first-import for monitored folder: {folder.LocalPath}");
-            _scheduler.RegisterTaskAlias(scanKey, $"initial:{folder.Id}");
-            ScanResult result;
-            try
-            {
-                result = await ScheduleCompleteFolderScanAsync(
-                    folder.LocalPath, SchedulerPriority.UserAction,
-                    progress, cancellation.Token, folder.Id,
-                    requirePendingInitialImport: true, operationKey: scanKey,
-                    queueOrder: queueOrder);
-            }
-            finally
-            {
-                _scheduler.UnregisterTaskAlias(scanKey);
-            }
+            var result = await ScheduleCompleteFolderScanAsync(
+                folder.LocalPath, SchedulerPriority.UserAction,
+                progress, cancellation.Token, folder.Id,
+                requirePendingInitialImport: true, operationKey: scanKey,
+                queueOrder: queueOrder);
 
             scanActive = false;
             TrackFolderActivity(folder.LocalPath,
