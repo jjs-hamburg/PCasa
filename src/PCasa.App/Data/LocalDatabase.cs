@@ -537,6 +537,22 @@ public sealed class LocalDatabase
         // tombstone survives restart and never touches saved scan cursors.
         EnsureColumn(connection, "monitored_folders", "initial_scan_deleted",
             "INTEGER NOT NULL DEFAULT 0");
+        // Existing roots start at zero. Neither this migration nor a restart
+        // touches image identities, thumbnails or original metadata.
+        EnsureColumn(connection, "monitored_folders", "last_check_sequence",
+            "INTEGER NOT NULL DEFAULT 0");
+        using (var checkSequence = connection.CreateCommand())
+        {
+            checkSequence.CommandText = """
+                CREATE TABLE IF NOT EXISTS catalog_check_sequence (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    last_value INTEGER NOT NULL CHECK(last_value>=0)
+                );
+                INSERT INTO catalog_check_sequence(id,last_value) VALUES(1,0)
+                    ON CONFLICT(id) DO NOTHING;
+                """;
+            checkSequence.ExecuteNonQuery();
+        }
         EnsureColumn(connection, "images", "photo_folder_id", "INTEGER NULL");
         RemoveLegacyRelativePath(connection, "photo_folders");
         RemoveLegacyRelativePath(connection, "images");

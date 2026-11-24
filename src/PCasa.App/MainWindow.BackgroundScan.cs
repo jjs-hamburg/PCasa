@@ -292,7 +292,7 @@ public partial class MainWindow
             // Both Directory.Exists on a dead UNC share and FileSystemWatcher
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, inclusions, pendingInitialIds,
-                interruptedInventories, dueRootReviews, reviewRound,
+                interruptedInventories, dueRootReviews,
                 reconnectedFolderIds, urgentReviews) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
@@ -332,10 +332,9 @@ public partial class MainWindow
                     // Read dates while already on the scheduled probe lane.
                     // Never schedule a new review from a WPF timer alone.
                     var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
-                    var round = _folderRepository.GetReviewRoundStatus(DateTime.UtcNow);
                     var urgent = _folderRepository.GetUrgentRootReviewIds();
                     return (roots, states, rules, includedRules, pending, inventories, due,
-                        round, reconnected, urgent);
+                        reconnected, urgent);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -492,20 +491,13 @@ public partial class MainWindow
                     ? orderedReviews.FirstOrDefault(id =>
                         availability.TryGetValue(id, out var reachable) && reachable)
                     : 0L;
-            var roundText =
-                $"Prüfrunde {reviewRound.Round}: " +
-                $"{reviewRound.Completed}/{reviewRound.Eligible} Stammordner fertig";
             _backgroundIdleStatus = dueRootReviews.Count == 0
-                ? reviewRound.Eligible == 0
-                    ? $"{roundText} – zunächst Erstimporte abschließen"
-                    : reviewRound.Deferred > 0
-                        ? $"{roundText} – {reviewRound.Deferred} warten auf erneuten Versuch"
-                        : $"{roundText} – keine erreichbare Prüfung fällig"
+                ? "Keine abgeschlossenen, prüfbaren Ordner verfügbar"
                 : reachableDue == 0
-                    ? $"{roundText} – {dueRootReviews.Count} Prüfung(en) nicht erreichbar"
+                    ? "Keine erreichbaren Ordner zur Bestandsprüfung"
                     : !idleSlotFree
-                        ? $"{roundText} – warten auf andere Scanaufträge"
-                        : $"{roundText} – nächster Ordner wird eingeplant";
+                        ? "Bestandsprüfung wartet auf andere Aufträge"
+                        : "Nächster Ordner wird geprüft";
             foreach (var folder in folders)
             {
                 if (!availability.TryGetValue(folder.Id, out var reachable) || !reachable)
@@ -1244,6 +1236,7 @@ public partial class MainWindow
         _isScanning = true;
         UpdateManualScanControls();
         var catalogChanged = false;
+        var reviewCompleted = false;
         BrowseCacheProgressWindow? activityWindow = null;
         var backgroundPresenterOwner = new object();
         var scanOwner = new object();
@@ -1534,6 +1527,8 @@ public partial class MainWindow
                         continue;
                     }
                     ScanResult? scanResult = null;
+                    CatalogInventoryCheckResult? inventoryResult = null;
+                    var reviewEpoch = _folderRepository.GetScanEpoch(folder.CanonicalPath);
                     // One confirmed count belongs to the original
                     // directory-inventory receipt, not to a newly allocated
                     // WPF progress object or a new scheduler attempt.
@@ -1595,13 +1590,29 @@ public partial class MainWindow
                                 scanResume.Unchanged, scanResume.Failed, scanPath,
                                 scanResume.Added, scanResume.Changed,
                                 scanResume.CacheRepaired));
-                            scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
-                                ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token,
-                                    forceExifRefresh: request.ForceExifRefresh)
-                                : _folderScanner.ScanDirectory(
-                                    folder, scanPath, request.Recursive,
-                                    progress: scanProgress, token, scanResume,
-                                    durableScanKey: inventoryKey);
+                            if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
+                            {
+                                inventoryResult = new CatalogInventoryCheck(_database).Check(
+                                    folder,
+                                    _folderRepository.GetExcludedPaths(folder.Id),
+                                    _folderRepository.GetIncludedPaths(folder.Id), token,
+                                    (count, path) => scanProgress.Report(
+                                        new ScanProgress(count, 0, count, 0, path)));
+                                token.ThrowIfCancellationRequested();
+                                if (!_folderRepository.CompleteRootCheck(folder.Id,
+                                    sourceState.Value.Generation, reviewEpoch))
+                                    throw new OperationCanceledException("Review source changed.");
+                                scanResult = new ScanResult(inventoryResult.CheckedFiles, 0,
+                                    inventoryResult.CheckedFiles, 0);
+                            }
+                            else
+                                scanResult = request.Kind == BackgroundFolderChangeKind.ScanFile
+                                    ? _folderScanner.ScanFile(folder, scanPath, scanProgress, token,
+                                        forceExifRefresh: request.ForceExifRefresh)
+                                    : _folderScanner.ScanDirectory(
+                                        folder, scanPath, request.Recursive,
+                                        progress: scanProgress, token, scanResume,
+                                        durableScanKey: inventoryKey);
                             return Task.CompletedTask;
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
@@ -1614,6 +1625,12 @@ public partial class MainWindow
                         _scheduler.UnregisterTaskAlias(schedulerScanKey);
                     }
                     var result = scanResult ?? throw new OperationCanceledException();
+                    if (inventoryResult is not null)
+                    {
+                        reviewCompleted = true;
+                        foreach (var change in inventoryResult.Changes)
+                            QueueBackgroundChange(change);
+                    }
                     if (!request.NeedsFollowup)
                         _scheduler.CompleteTaskPromotion(taskKey);
                     if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
@@ -1843,11 +1860,12 @@ public partial class MainWindow
             }
 
             if (!_updateDownloadActive && !_folderRemovalPending &&
-                !_externalEditPauseActive &&
-                _backgroundPending.Count > 0 &&
-                _backgroundScanSettings?.Enabled == true)
+                !_externalEditPauseActive && _backgroundScanSettings?.Enabled == true)
             {
-                _backgroundDebounceTimer?.Start();
+                if (_backgroundPending.Count > 0)
+                    _backgroundDebounceTimer?.Start();
+                else if (reviewCompleted && !_backgroundMonitorClosing)
+                    RefreshBackgroundMonitor();
             }
         }
     }

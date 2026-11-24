@@ -1906,85 +1906,68 @@ internal static class Program
                 .ContainsKey(directory))
             throw new Exception("Completed full scan failed to record its root and directory dates.");
         var nextDue = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (nextDue.Contains(root.Id) || !nextDue.Contains(other.Id))
-            throw new Exception("Completed root restarted before another root finished.");
-        // Even a year later, no time-based rule may restart root while
-        // the other monitored folder is still unfinished.
-        var yearLater = verified.GetDueRootReviewIds(now.AddYears(1));
-        if (yearLater.Contains(root.Id) || !yearLater.Contains(other.Id))
-            throw new Exception("Elapsed time incorrectly reset an unfinished review round.");
-        var roundBeforeRestart = verified.GetReviewRoundStatus(DateTime.UtcNow);
-        if (roundBeforeRestart.Round != 1 ||
-            roundBeforeRestart.Eligible != 2 ||
-            roundBeforeRestart.Completed != 1)
-            throw new Exception("Whole-library round completion was not recorded.");
+        if (!nextDue.SequenceEqual(new[] { other.Id, root.Id }))
+            throw new Exception("Oldest completed folder must be next.");
+        if (!verified.GetDueRootReviewIds(now.AddYears(1)).SequenceEqual(nextDue))
+            throw new Exception("Clock change altered review order.");
         db.Initialize();
-        var restoredRound = new FolderRepository(db).GetReviewRoundStatus(DateTime.UtcNow);
-        if (restoredRound != roundBeforeRestart)
-            throw new Exception("Restart lost the already-completed root's round membership.");
+        if (!new FolderRepository(db).GetDueRootReviewIds(now).SequenceEqual(nextDue))
+            throw new Exception("Restart lost persistent check sequence.");
 
-        // Finish the second root. Only now may a new review round begin.
-        var otherKey = $"background:inventory:{other.Id}:{otherGeneration}:RescanRoot:True:{other.LocalPath}";
-        var finishedOther = nextProcess.ScanDirectory(other, other.LocalPath,
-            recursive: true, durableScanKey: otherKey);
-        if (finishedOther.Failed != 0)
-            throw new Exception("Second root could not complete its round.");
-        // The third monitored root still has an uncompleted first import.
-        // It may be offline, but a brand-new review round must NOT restart
-        // the two completed roots while that root is still outstanding.
-        var beforeInitialFinishes = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (beforeInitialFinishes.Count != 0 ||
-            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 1)
-            throw new Exception("Offline pending first import caused endless repeat scans.");
+        // An incomplete unrelated import must never block further checks.
+        var otherEpoch = folders.GetScanEpoch(other.CanonicalPath);
+        if (!verified.CompleteRootCheck(other.Id, otherGeneration, otherEpoch))
+            throw new Exception("Valid review receipt rejected.");
+        if (!verified.GetDueRootReviewIds(now).SequenceEqual(new[] { root.Id, other.Id }))
+            throw new Exception("Completed review did not move behind older roots.");
+        if (verified.CompleteRootCheck(root.Id, generation + 1,
+                folders.GetScanEpoch(root.CanonicalPath)))
+            throw new Exception("Superseded source advanced review order.");
+        if (!verified.GetDueRootReviewIds(now).SequenceEqual(new[] { root.Id, other.Id }))
+            throw new Exception("Failed review changed persistent order.");
+
         var pendingGeneration = folders.GetSourceState(
             firstImportPending.CanonicalPath)!.Value.Generation;
-        if (!folders.CompleteInitialScan(firstImportPending.Id,
-                pendingGeneration,
+        if (!folders.CompleteInitialScan(firstImportPending.Id, pendingGeneration,
                 folders.GetScanEpoch(firstImportPending.CanonicalPath)))
             throw new Exception("Pending third root failed its initial import.");
-        var dueLastRoot = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (dueLastRoot.Count != 1 || dueLastRoot[0] != firstImportPending.Id)
-            throw new Exception("Finished first import was not given its turn in the round.");
-        var pendingKey = $"background:inventory:{firstImportPending.Id}:{pendingGeneration}:RescanRoot:True:{firstImportPending.LocalPath}";
-        if (nextProcess.ScanDirectory(firstImportPending,
-                firstImportPending.LocalPath,
-                recursive: true, durableScanKey: pendingKey).Failed != 0)
-            throw new Exception("Third root could not finish its full review.");
-        var nextRound = verified.GetDueRootReviewIds(DateTime.UtcNow);
-        if (!nextRound.Contains(root.Id) ||
-            !nextRound.Contains(other.Id) ||
-            !nextRound.Contains(firstImportPending.Id) ||
-            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 2)
-            throw new Exception("Next round did not start after ALL roots completed.");
+        if (!verified.GetDueRootReviewIds(now).SequenceEqual(
+                new[] { root.Id, other.Id, firstImportPending.Id }))
+            throw new Exception("Completed initial import was not assigned the newest check value.");
 
-        // Unreachable root: retain its round membership and cursor and
-        // suppress retries until the saved backoff expires. Other eligible
-        // roots are still allowed to work during that interval.
-        verified.DeferRootReview(root.Id, generation, now.AddHours(6));
-        var beforeRetry = verified.GetDueRootReviewIds(now.AddHours(1));
-        if (beforeRetry.Contains(root.Id) || !beforeRetry.Contains(other.Id))
-            throw new Exception("Deferred source delayed another root or retried immediately.");
-        db.Initialize();
-        if (!new FolderRepository(db).GetDueRootReviewIds(
-                now.AddHours(7)).Contains(root.Id))
-            throw new Exception("Deferred incomplete root was lost across restart.");
-        // A confirmed NAS reconnect overrides the OLD deadline immediately.
-        // The completed round and each saved file receipt must not change.
-        verified.DeferRootReview(root.Id, generation, now.AddHours(10));
-        if (verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
-            throw new Exception("NAS retry was not deferred before reconnect.");
-        var currentRound = verified.GetReviewRoundStatus(now);
+        // The verification service must not touch catalog/thumbnail data,
+        // even when it finds missing or newly added originals.
+        var addedPath = Path.Combine(directory, "new-review.jpg");
+        WriteJpeg(addedPath);
+        var beforeCheck = new ImageCatalogRepository(db).CountAll();
+        var comparison = new CatalogInventoryCheck(db).Check(root,
+            Array.Empty<string>(), Array.Empty<string>(), CancellationToken.None);
+        if (!comparison.Changes.Any(c => c.Kind == BackgroundFolderChangeKind.ScanFile &&
+                c.Path == addedPath) ||
+            !comparison.Changes.Any(c => c.Kind == BackgroundFolderChangeKind.RemovePath &&
+                c.Path == Path.Combine(directory, "photo-0000.jpg")) ||
+            new ImageCatalogRepository(db).CountAll() != beforeCheck)
+            throw new Exception("Metadata-only review missed differences or mutated the catalog.");
+        File.Delete(addedPath);
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            try
+            {
+                new CatalogInventoryCheck(db).Check(root, Array.Empty<string>(),
+                    Array.Empty<string>(), canceled.Token);
+                throw new Exception("Review ignored cancellation.");
+            }
+            catch (OperationCanceledException) { }
+        }
+
+        verified.DeferRootReview(root.Id, generation, now.AddSeconds(10));
+        if (verified.GetDueRootReviewIds(now).Contains(root.Id) ||
+            !verified.GetDueRootReviewIds(now).Contains(other.Id))
+            throw new Exception("Unavailable root blocked another folder.");
         if (!verified.ReleaseRootReviewRetryOnReconnect(root.Id) ||
-            !verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
-            throw new Exception("Confirmed NAS return did not release the old retry deadline.");
-        var reconnectedRound = verified.GetReviewRoundStatus(now);
-        if (reconnectedRound.Round != currentRound.Round ||
-            reconnectedRound.Eligible != currentRound.Eligible ||
-            reconnectedRound.Completed != currentRound.Completed ||
-            reconnectedRound.Deferred >= currentRound.Deferred)
-            throw new Exception("Reconnecting unexpectedly reset round progress, or retained its deferral.");
-        if (verified.ReleaseRootReviewRetryOnReconnect(root.Id))
-            throw new Exception("Idempotent reconnect released an already-cleared retry.");
+            verified.GetDueRootReviewIds(now).First() != root.Id)
+            throw new Exception("Reconnect did not restore oldest root without advancing it.");
 
         // The completed inventory releases its checkpoint. A genuinely
         // NEW complete inventory must visit the whole directory and may

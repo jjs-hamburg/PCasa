@@ -451,90 +451,13 @@ public sealed class FolderRepository
         long MonitoredFolderId, string ScanKey, string ScanRoot,
         long SourceGeneration);
 
-    // There is ONE persistent review round across monitored roots. A root
-    // can finish at most once in that round. The next round begins only
-    // AFTER every eligible root has completed (or been removed). A failed
-    // or disconnected root is still unfinished and never silently skipped.
-    //
-    // The caller probes availability separately; this read never accesses
-    // NAS files and cannot consume a file cursor. The DB transaction makes
-    // round advancement atomic across restarts and concurrent completions.
+    // The catalog owns the persistent verification order. Offline and
+    // incomplete roots never block the other roots from being checked again.
+    // utcNow is used only for the existing source-error retry mechanism.
     public IReadOnlyList<long> GetDueRootReviewIds(DateTime utcNow)
     {
         using var db = _database.OpenConnection();
-        using var tx = db.BeginTransaction();
-        long cycle;
-        using (var readCycle = db.CreateCommand())
-        {
-            readCycle.Transaction = tx;
-            readCycle.CommandText = """
-                SELECT current_cycle FROM scan_review_cycle WHERE id=1;
-                """;
-            cycle = Convert.ToInt64(readCycle.ExecuteScalar());
-        }
-
-        long outstanding;
-        long eligible;
-        using (var scan = db.CreateCommand())
-        {
-            scan.Transaction = tx;
-            scan.CommandText = """
-                SELECT COUNT(*),
-                       COALESCE(SUM(CASE WHEN
-                           r.monitored_folder_id IS NULL OR
-                           r.source_generation != s.generation OR
-                           r.completed_cycle < $round
-                           THEN 1 ELSE 0 END),0)
-                  FROM monitored_folders m
-                  JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-                  LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-                 WHERE s.desired_present=1 AND m.initial_scan_pending=0;
-                """;
-            scan.Parameters.AddWithValue("$round", cycle);
-            using var reader = scan.ExecuteReader();
-            reader.Read();
-            eligible = reader.GetInt64(0);
-            outstanding = reader.GetInt64(1);
-        }
-
-        // An offline, unfinished first import may not prevent verification
-        // of other sources, but it still belongs to the library's round.
-        // Once those other roots finish, do not spin a second round while
-        // that original import remains unresolved.
-        long pendingFirstImports;
-        using (var pending = db.CreateCommand())
-        {
-            pending.Transaction = tx;
-            pending.CommandText = """
-                SELECT COUNT(*) FROM monitored_folders m
-                JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
-                WHERE m.initial_scan_pending=1
-                  AND m.initial_scan_deleted=0 AND s.desired_present=1;
-                """;
-            pendingFirstImports = Convert.ToInt64(pending.ExecuteScalar());
-        }
-
-        if (eligible > 0 && outstanding == 0 && pendingFirstImports == 0)
-        {
-            // A COMPLETED round has an end. Advance once (persistently)
-            // rather than starting at the first root while another remains
-            // unfinished. No 30-day wall-clock condition is involved.
-            using var advance = db.CreateCommand();
-            advance.Transaction = tx;
-            advance.CommandText = """
-                UPDATE scan_review_cycle SET current_cycle=current_cycle+1,
-                    started_utc=$now WHERE id=1 AND current_cycle=$previous;
-                """;
-            advance.Parameters.AddWithValue("$now",
-                utcNow.ToUniversalTime().ToString("O"));
-            advance.Parameters.AddWithValue("$previous", cycle);
-            if (advance.ExecuteNonQuery() != 1)
-                throw new IOException("Review-round cursor changed unexpectedly.");
-            cycle++;
-        }
-
         using var cmd = db.CreateCommand();
-        cmd.Transaction = tx;
         cmd.CommandText = """
             SELECT m.id
               FROM monitored_folders m
@@ -543,25 +466,62 @@ public sealed class FolderRepository
              WHERE s.desired_present=1 AND m.initial_scan_pending=0
                AND (r.monitored_folder_id IS NULL
                     OR r.source_generation != s.generation
-                    OR r.completed_cycle < $round)
-               AND (r.monitored_folder_id IS NULL
-                    OR r.source_generation != s.generation
                     OR r.retry_after_utc IS NULL
                     OR r.retry_after_utc <= $now)
-             ORDER BY COALESCE(r.requested_priority,4) ASC,
-                      CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
-                      r.queue_order ASC,
-                      COALESCE(r.last_completed_utc,'') ASC,
-                      m.local_path COLLATE NOCASE ASC;
+             ORDER BY m.last_check_sequence ASC, m.local_path COLLATE NOCASE ASC;
             """;
-        cmd.Parameters.AddWithValue("$round", cycle);
         cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
-        using var dueReader = cmd.ExecuteReader();
-        var due = new List<long>();
-        while (dueReader.Read()) due.Add(dueReader.GetInt64(0));
-        dueReader.Close();
+        using var reader = cmd.ExecuteReader();
+        var ids = new List<long>();
+        while (reader.Read()) ids.Add(reader.GetInt64(0));
+        return ids;
+    }
+
+    private static void AdvanceCheckSequence(
+        Microsoft.Data.Sqlite.SqliteConnection db,
+        Microsoft.Data.Sqlite.SqliteTransaction tx, long folderId)
+    {
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            UPDATE catalog_check_sequence SET last_value=last_value+1 WHERE id=1;
+            UPDATE monitored_folders
+               SET last_check_sequence=(SELECT last_value FROM catalog_check_sequence WHERE id=1)
+             WHERE id=$id;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.ExecuteNonQuery();
+    }
+
+    // Only a fully successful enumeration with the original source fence
+    // can advance the global order. A canceled check never calls this.
+    public bool CompleteRootCheck(long folderId, long generation, long epoch)
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO scan_root_review
+                (monitored_folder_id,source_generation,last_completed_utc,retry_after_utc)
+            SELECT m.id,s.generation,$now,NULL
+              FROM monitored_folders m
+              JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
+             WHERE m.id=$id AND m.initial_scan_pending=0 AND s.desired_present=1
+               AND s.generation=$generation AND s.scan_epoch=$epoch
+            ON CONFLICT(monitored_folder_id) DO UPDATE SET
+                source_generation=excluded.source_generation,
+                last_completed_utc=excluded.last_completed_utc,
+                retry_after_utc=NULL,requested_priority=4;
+            """;
+        cmd.Parameters.AddWithValue("$id", folderId);
+        cmd.Parameters.AddWithValue("$generation", generation);
+        cmd.Parameters.AddWithValue("$epoch", epoch);
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        if (cmd.ExecuteNonQuery() != 1) return false;
+        AdvanceCheckSequence(db, tx, folderId);
         tx.Commit();
-        return due;
+        return true;
     }
 
     // Stable order of the one existing P4 root-review dispatcher. This
@@ -686,37 +646,6 @@ public sealed class FolderRepository
         using var reader = cmd.ExecuteReader();
         while (reader.Read()) ids.Add(reader.GetInt64(0));
         return ids;
-    }
-
-    public sealed record ReviewRoundStatus(long Round, int Eligible,
-        int Completed, int Deferred);
-
-    public ReviewRoundStatus GetReviewRoundStatus(DateTime utcNow)
-    {
-        using var db = _database.OpenConnection();
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = """
-            SELECT c.current_cycle,
-                   COUNT(m.id),
-                   COALESCE(SUM(CASE WHEN r.source_generation=s.generation
-                       AND r.completed_cycle>=c.current_cycle
-                       THEN 1 ELSE 0 END),0),
-                   COALESCE(SUM(CASE WHEN r.source_generation=s.generation
-                       AND (r.completed_cycle<c.current_cycle)
-                       AND r.retry_after_utc>$now
-                       THEN 1 ELSE 0 END),0)
-              FROM scan_review_cycle c
-              LEFT JOIN monitored_folders m ON m.initial_scan_pending=0
-              LEFT JOIN scheduler_sources s
-                  ON s.canonical_path=m.canonical_path AND s.desired_present=1
-              LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
-             WHERE c.id=1 AND (m.id IS NULL OR s.canonical_path IS NOT NULL);
-            """;
-        cmd.Parameters.AddWithValue("$now", utcNow.ToUniversalTime().ToString("O"));
-        using var reader = cmd.ExecuteReader();
-        reader.Read();
-        return new ReviewRoundStatus(reader.GetInt64(0),
-            reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
     }
 
     public DateTime? GetLastCompletedRootReview(long monitoredFolderId)
@@ -1242,6 +1171,7 @@ public sealed class FolderRepository
             verified.Parameters.AddWithValue("$generation", generation);
             verified.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
             verified.ExecuteNonQuery();
+            AdvanceCheckSequence(connection, tx, completedRoot.Value);
         }
 
         using var clear = connection.CreateCommand();
@@ -1351,6 +1281,7 @@ public sealed class FolderRepository
         var completed = update.ExecuteNonQuery() == 1;
         if (completed)
         {
+            AdvanceCheckSequence(connection, transaction, folderId);
             // Checkpoints have no purpose once the initial import is done.
             // Remove them atomically with the durable completion marker.
             using var cleanup = connection.CreateCommand();
