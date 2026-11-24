@@ -700,7 +700,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     if (_disposed) break;
                     // Global rank, not per-lane callbacks, decides preemption.
-                    var highest = _pending.Where(p => !IsGalleryPresentation(p))
+                    var highest = _pending.Where(p => !IsIndependentReadItem(p))
                         .OrderBy(p => RankOwner(p).Priority)
                         .ThenBy(p => RankOwner(p).QueueOrder)
                         .ThenBy(p => RankOwner(p).Id).FirstOrDefault();
@@ -713,7 +713,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         if (!((_maintenancePauseCount > 0 && IsCatalogMutation(running)) ||
                               (RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
-                                   !IsGalleryPresentation(p) &&
+                                   !IsIndependentReadItem(p) &&
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               IsBlockedByInteraction(running) ||
                               (highest is not null && Precedes(highest, running))))
@@ -733,7 +733,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         {
                             // Presentation I/O is admitted independently of
                             // the journal probe and logical job arbitration.
-                            if (executor is ExecutorGalleryRead or ExecutorThumbnail)
+                            if (executor is ExecutorGalleryRead or ExecutorThumbnail or
+                                ExecutorViewer or ExecutorCatalogRead)
                                 continue;
                             if (executor != ExecutorCatalog &&
                                 _runningWork.Count(work => work.ExecutionClass == executor) >=
@@ -760,21 +761,23 @@ public sealed class PCasaScheduler : IAsyncDisposable
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }
 
-    // Called only under _gate. The two presentation executors share
-    // lifetime/cancellation bookkeeping with the coordinator, but their
-    // admission is driven exclusively by read capacity. No SQLite journal
-    // query, manual-job rank, or background availability probe can delay it.
-    private void DispatchPresentationReadsUnsafe()
+    // Called only under _gate. Read executors share lifetime/cancellation
+    // bookkeeping with the coordinator, but admission is driven by read
+    // capacity, not by logical job rank or the SQLite journal probe.
+    // SourceProbe is deliberately excluded: some existing callers perform
+    // actual filesystem mutations using that kind.
+    private void DispatchIndependentReadsUnsafe()
     {
         if (_disposed || _gracefulShutdownRequested || _shutdown.IsCancellationRequested)
             return;
-        foreach (var executor in new[] { ExecutorGalleryRead, ExecutorThumbnail })
+        foreach (var executor in new[] { ExecutorGalleryRead, ExecutorThumbnail,
+                     ExecutorViewer, ExecutorCatalogRead })
         {
             while (_runningWork.Count(work => work.ExecutionClass == executor) <
                    ReadCapacity[executor])
             {
                 var next = _pending.Where(item =>
-                        IsGalleryPresentation(item) &&
+                        IsIndependentReadItem(item) &&
                         ExecutorFor(item.Priority, item.Kind) == executor)
                     .OrderByDescending(HasRunningParent)
                     .ThenBy(item => item.Priority)
@@ -1536,8 +1539,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 completion = item.Completion.Task;
             }
 
-            if (workKind is SchedulerWorkKind.BrowseRead or SchedulerWorkKind.ThumbnailRead)
-                DispatchPresentationReadsUnsafe();
+            if (IsIndependentRead(workKind))
+                DispatchIndependentReadsUnsafe();
             else
                 SignalController();
         }
@@ -1569,8 +1572,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
                  (a.QueueOrder == b.QueueOrder && a.Id < b.Id)));
     }
 
-    private static bool IsGalleryPresentation(WorkItem item) =>
-        item.Kind is SchedulerWorkKind.BrowseRead or SchedulerWorkKind.ThumbnailRead;
+    private static bool IsIndependentRead(SchedulerWorkKind kind) =>
+        kind is SchedulerWorkKind.BrowseRead or SchedulerWorkKind.ThumbnailRead or
+            SchedulerWorkKind.ViewerRead or SchedulerWorkKind.CatalogRead;
+
+    private static bool IsIndependentReadItem(WorkItem item) =>
+        IsIndependentRead(item.Kind);
 
     // Durable mutation packages and catalog inventories are logical jobs.
     // A worker lane is not permission to overlap a second logical job.
@@ -1626,41 +1633,33 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (RankOwner(candidate).Priority == SchedulerPriority.Idle &&
             (durableNonIdlePending ||
              _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                 !IsGalleryPresentation(other) &&
+                 !IsIndependentReadItem(other) &&
                  RankOwner(other).Priority < SchedulerPriority.Idle) ||
-             _runningWork.Any(other => !IsGalleryPresentation(other) &&
+             _runningWork.Any(other => !IsIndependentReadItem(other) &&
                  RankOwner(other).Priority < SchedulerPriority.Idle)))
             return null;
 
-        // The read-only browse projection is a technical view operation,
-        // not a competing user package. It has bounded read capacity and
-        // cannot write originals or seize a P0 execution lane. In particular,
-        // an offline/slow durable P0 NAS scan must never leave the initial
-        // folder tree and gallery blank on startup.
-        var independentBrowseRead =
-            candidate.Kind is SchedulerWorkKind.BrowseRead or
-                SchedulerWorkKind.ThumbnailRead or SchedulerWorkKind.ViewerRead;
         // One package owns its dependent operations. They must never wait
         // behind an unrelated queued P0 while the owner awaits them.
-        if (!childOfRunningPackage && !independentBrowseRead &&
+        if (!childOfRunningPackage &&
             _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                !IsGalleryPresentation(other) && Precedes(other, candidate)))
+                !IsIndependentReadItem(other) && Precedes(other, candidate)))
             return null;
         // Manual P0 packages form an actual LIFO interruption stack.
         // P1-P3 may run on independent read/executor capacity while an
         // older higher-priority operation is already in flight. P4 is
         // explicitly stricter and was checked above against ALL running jobs.
-        if (!childOfRunningPackage && !independentBrowseRead &&
+        if (!childOfRunningPackage &&
             RankOwner(candidate).Priority == SchedulerPriority.ManualAction &&
             _runningWork.Any(active =>
-                !IsGalleryPresentation(active) &&
+                !IsIndependentReadItem(active) &&
                 RankOwner(active).Priority == SchedulerPriority.ManualAction &&
                 Precedes(active, candidate)))
             return null;
 
         // Journal recovery may have an accepted P0 package not yet copied
         // into the in-memory run queue. It still wins over P2-P4 execution.
-        if (!childOfRunningPackage && !independentBrowseRead &&
+        if (!childOfRunningPackage &&
             durableManualPending &&
             RankOwner(candidate).Priority > SchedulerPriority.ManualAction)
             return null;
@@ -1765,8 +1764,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             item.Completion.TrySetCanceled();
                         }
                     }
-                    if (IsGalleryPresentation(item))
-                        DispatchPresentationReadsUnsafe();
+                    if (IsIndependentReadItem(item))
+                        DispatchIndependentReadsUnsafe();
                     else
                         WakePendingWorkersUnsafe();
                 }
