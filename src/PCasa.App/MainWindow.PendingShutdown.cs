@@ -72,6 +72,29 @@ public partial class MainWindow
             .ToArray();
         var targets = operations.ToDictionary(record => record.Key,
             record => ShutdownRecipeTargets(record.Payload), StringComparer.Ordinal);
+        // V2 tag recovery owns the current unparked pending intent set,
+        // not an image list in its empty JSON recipe. Resolve previews
+        // from that same local catalog instead of probing originals.
+        if (operations.Any(record => record.Type == "tag-recovery-v2"))
+        {
+            var parked = _originalWriteFailures.Unresolved()
+                .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
+                .Select(error => error.ImageId).ToHashSet();
+            var pendingIds = new ImageTagRepository(_database).PendingEdits(int.MaxValue)
+                .Select(edit => edit.ImageId).Distinct().Where(id => !parked.Contains(id))
+                .ToArray();
+            foreach (var record in operations.Where(record => record.Type == "tag-recovery-v2"))
+                targets[record.Key].Ids.UnionWith(pendingIds);
+        }
+        foreach (var record in operations.Where(record => record.Type == "tag-recovery-v1"))
+        {
+            try
+            {
+                targets[record.Key].Ids.UnionWith(
+                    JsonSerializer.Deserialize<long[]>(record.Payload) ?? Array.Empty<long>());
+            }
+            catch (JsonException) { }
+        }
         foreach (var target in targets.Values)
             needed.UnionWith(target.Ids);
         var images = new Dictionary<long, ShutdownPendingFile>();
