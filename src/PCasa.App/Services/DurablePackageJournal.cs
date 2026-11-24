@@ -101,10 +101,39 @@ public sealed class DurablePackageJournal
     // transfer or other file mutation must never reappear as a runnable job
     // after the PCasa process has ended. Keep its history and last error;
     // do NOT delete the DB record or imply that a partial file write finished.
+    public static bool SurvivesSession(string type) => type is
+        "manual-folder-scan-v1" or "manual-scan-all-v1" or "import-error-retry-v1";
+
     public int RetireUnfinishedFileJobs()
     {
         using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        // A staged tag projection is not proof of an original-file write.
+        // Preserve its revisions for explicit review and prevent the
+        // automatic tag drain from recreating the abandoned job.
+        using (var park = db.CreateCommand())
+        {
+            park.Transaction = tx;
+            park.CommandText = """
+                INSERT INTO original_write_failures
+                    (kind,image_id,package_key,file_path,attempts,
+                     last_error,last_attempt_utc,resolved)
+                SELECT DISTINCT 'tags',p.image_id,
+                    'tags:session-ended:' || p.image_id,i.local_path,$max,
+                    $error,$now,0
+                FROM pending_tag_edits p JOIN images i ON i.id=p.image_id
+                WHERE 1=1
+                ON CONFLICT(kind,image_id) DO UPDATE SET
+                    attempts=MAX(original_write_failures.attempts,excluded.attempts),
+                    resolved=0;
+                """;
+            park.Parameters.AddWithValue("$max", OriginalWriteFailureRepository.MaximumAttempts);
+            park.Parameters.AddWithValue("$error", "Dateioperation mit der PCasa-Sitzung beendet.");
+            park.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+            park.ExecuteNonQuery();
+        }
         using var command = db.CreateCommand();
+        command.Transaction = tx;
         command.CommandText = """
             UPDATE scheduler_packages
                SET state='canceled', retry_after_utc=NULL,
@@ -113,11 +142,13 @@ public sealed class DurablePackageJournal
                        ELSE error END,
                    updated_utc=$now
              WHERE package_type NOT IN
-                   ('manual-folder-scan-v1','manual-scan-all-v1')
+                   ('manual-folder-scan-v1','manual-scan-all-v1','import-error-retry-v1')
                AND state IN ('queued','running','deferred','paused');
             """;
         command.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        return command.ExecuteNonQuery();
+        var retired = command.ExecuteNonQuery();
+        tx.Commit();
+        return retired;
     }
 
     public DurablePackageRecord Put(string key, string type, string payload,
