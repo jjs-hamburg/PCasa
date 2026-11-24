@@ -34,7 +34,7 @@ internal static class TaskManagerFlow
                      "Destination":"C:\\Copy","FolderId":999}
                     """ })!;
             if (!targets.Ids.SetEquals(new long[] { 17, 23, 41 }) ||
-                !targets.Paths.SetEquals(new[] { @"C:\Photo.jpg", @"S:\\NAS\\source.jpg" }))
+                !targets.Paths.SetEquals(new[] { @"C:\Photo.jpg", @"S:\NAS\source.jpg" }))
                 throw new Exception("Exit review lost sources or included a destination.");
             var app = new PCasa.App.App();
             app.InitializeComponent();
