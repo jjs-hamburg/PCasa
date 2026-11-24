@@ -129,14 +129,16 @@ public partial class MainWindow
         return true;
     }
 
-    private Task<bool> StartTaskNowAsync(string key)
+    private async Task<bool> StartTaskNowAsync(string key)
     {
-        if (key == PCasaScheduler.ContinuousReviewKey) return Task.FromResult(false);
+        if (key == PCasaScheduler.ContinuousReviewKey) return false;
         if (!TryInitialTaskId(key, out var folderId))
         {
             if (!key.StartsWith("automatic:", StringComparison.Ordinal))
-                return Task.FromResult(false);
-            if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
+                return false;
+            if (_scheduler.IsExternalTaskPaused(key) &&
+                !_scheduler.SetExternalTaskPaused(key, false)) return false;
+            if (!_scheduler.PromoteTaskNow(key)) return false;
             _backgroundOrderChanged = _backgroundInFlight is { Length: > 0 };
             if (_backgroundOrderChanged &&
                 _backgroundCurrentScanCancellation is
@@ -144,14 +146,17 @@ public partial class MainWindow
                 RequestTaskManagerYield(running);
             _backgroundDebounceTimer?.Start();
             _scheduler.NotifyTaskViewChanged();
-            return Task.FromResult(true);
+            return true;
         }
-        // The initial import owns the same confirmed scan cursor and key.
-        if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
+        // Promote before releasing the pause so the existing import cannot
+        // start with an obsolete rank.
+        if (!_scheduler.PromoteTaskNow(key)) return false;
+        await Task.Run(() => _scheduler.ChangeTaskIntent(() =>
+            _folderRepository.SetPendingFirstImportPaused(folderId, false)));
         _initialScanAttempted.Remove(folderId);
         ReconsiderInitialImportOrder();
         _scheduler.NotifyTaskViewChanged();
-        return Task.FromResult(true);
+        return true;
     }
 
     private Task<bool> PauseAutomaticTaskAsync(string key)
