@@ -98,7 +98,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly List<WorkItem> _pending = new();
     // All admitted executions participate in idle admission, including reads.
     private readonly HashSet<WorkItem> _runningWork = new();
-    private bool _outstandingNonIdleAtLastReview;
     // Nested operations inherit their owning package across await/Dispatcher
     // continuations. A package must never await a child that the queue puts
     // behind another waiting package (dependency deadlock).
@@ -732,23 +731,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
                         available = false;
                         for (var executor = 0; executor <= ExecutorGalleryRead; executor++)
                         {
+                            // Presentation I/O is admitted independently of
+                            // the journal probe and logical job arbitration.
+                            if (executor is ExecutorGalleryRead or ExecutorThumbnail)
+                                continue;
                             if (executor != ExecutorCatalog &&
                                 _runningWork.Count(work => work.ExecutionClass == executor) >=
                                     ReadCapacity[executor]) continue;
                             var item = SelectNextJobUnsafe(executor,
                                 manualWaiting, nonIdleWaiting);
                             if (item is null) continue;
-                            _pending.Remove(item);
-                            item.YieldRequested = false;
-                            item.ExecutionClass = executor;
-                            CancellationTokenSource? yieldRequest =
-                                IsCatalogMutation(item) ? new CancellationTokenSource() : null;
-                            item.YieldSource = yieldRequest;
-                            _runningWork.Add(item);
-                            SetStateUnsafe(item, SchedulerJobState.Running);
+                            StartExecutionUnsafe(item, executor);
                             viewChanged = true;
-                            _executions.RemoveAll(task => task.IsCompletedSuccessfully);
-                            _executions.Add(Task.Run(() => ExecuteAsync(item, yieldRequest)));
                             available = true;
                         }
                     }
@@ -764,6 +758,46 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
+    }
+
+    // Called only under _gate. The two presentation executors share
+    // lifetime/cancellation bookkeeping with the coordinator, but their
+    // admission is driven exclusively by read capacity. No SQLite journal
+    // query, manual-job rank, or background availability probe can delay it.
+    private void DispatchPresentationReadsUnsafe()
+    {
+        if (_disposed || _gracefulShutdownRequested || _shutdown.IsCancellationRequested)
+            return;
+        foreach (var executor in new[] { ExecutorGalleryRead, ExecutorThumbnail })
+        {
+            while (_runningWork.Count(work => work.ExecutionClass == executor) <
+                   ReadCapacity[executor])
+            {
+                var next = _pending.Where(item =>
+                        IsGalleryPresentation(item) &&
+                        ExecutorFor(item.Priority, item.Kind) == executor)
+                    .OrderByDescending(HasRunningParent)
+                    .ThenBy(item => item.Priority)
+                    .ThenBy(item => item.QueueOrder)
+                    .ThenBy(item => item.Id)
+                    .FirstOrDefault();
+                if (next is null) break;
+                StartExecutionUnsafe(next, executor);
+            }
+        }
+    }
+
+    private void StartExecutionUnsafe(WorkItem item, int executor)
+    {
+        _pending.Remove(item);
+        item.YieldRequested = false;
+        item.ExecutionClass = executor;
+        var yieldRequest = IsCatalogMutation(item) ? new CancellationTokenSource() : null;
+        item.YieldSource = yieldRequest;
+        _runningWork.Add(item);
+        SetStateUnsafe(item, SchedulerJobState.Running);
+        _executions.RemoveAll(task => task.IsCompletedSuccessfully);
+        _executions.Add(Task.Run(() => ExecuteAsync(item, yieldRequest)));
     }
 
     // Passive I/O probe, with no mutation of queue or journal state.
@@ -1502,7 +1536,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 completion = item.Completion.Task;
             }
 
-            SignalController();
+            if (workKind is SchedulerWorkKind.BrowseRead or SchedulerWorkKind.ThumbnailRead)
+                DispatchPresentationReadsUnsafe();
+            else
+                SignalController();
         }
         NotifyTaskViewChanged();
         return completion;
@@ -1728,7 +1765,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             item.Completion.TrySetCanceled();
                         }
                     }
-                    WakePendingWorkersUnsafe();
+                    if (IsGalleryPresentation(item))
+                        DispatchPresentationReadsUnsafe();
+                    else
+                        WakePendingWorkersUnsafe();
                 }
                 if (interrupted) PublishState(item);
             }
