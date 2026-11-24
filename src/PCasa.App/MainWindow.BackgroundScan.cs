@@ -353,7 +353,7 @@ public partial class MainWindow
             // started when PCasa exited. Rebuild its SAME accepted identity
             // from the scheduler's persisted hold rather than losing the
             // user's pause or inventing a second scanner.
-            foreach (var pausedKey in _scheduler.PausedExternalTaskKeys())
+            foreach (var pausedKey in _scheduler.RecoverableExternalTaskKeys())
             {
                 var request = ParsePausedAutomaticTask(pausedKey);
                 if (request is null ||
@@ -374,6 +374,7 @@ public partial class MainWindow
                         inclusions.GetValueOrDefault(owner.Id) ?? Array.Empty<string>()))
                     continue;
                 QueueBackgroundChange(request);
+                _scheduler.AcknowledgeRecoveredExternalTask(pausedKey);
             }
             _backgroundUrgentReviews.Clear();
             foreach (var id in urgentReviews)
@@ -770,7 +771,8 @@ public partial class MainWindow
             string.IsNullOrWhiteSpace(parts[3]))
             return null;
         return new BackgroundFolderChange(id, parts[3], kind,
-            Recursive: kind != BackgroundFolderChangeKind.ScanFile);
+            Recursive: kind != BackgroundFolderChangeKind.ScanFile,
+            ForceExifRefresh: kind == BackgroundFolderChangeKind.ScanFile);
     }
 
     private static string AutomaticTaskTitle(BackgroundFolderChangeKind kind)
@@ -1701,7 +1703,8 @@ public partial class MainWindow
                     // Unexpected cancellation still needs a future attempt.
                     QueueBackgroundChange(new BackgroundFolderChange(
                         request.MonitoredFolderId, request.Path,
-                        request.Kind, request.Recursive), scanResume, resumeGeneration);
+                        request.Kind, request.Recursive,
+                        ForceExifRefresh: request.ForceExifRefresh), scanResume, resumeGeneration);
                     scanResume = null;
                 }
                 catch (Exception scanError)

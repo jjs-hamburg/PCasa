@@ -15,6 +15,7 @@ internal static class DurablePauseFlow
         {
             ExercisePauseAndRestart(dir).GetAwaiter().GetResult();
             ExerciseAutomaticControlPersistence(dir).GetAwaiter().GetResult();
+            ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
@@ -87,22 +88,52 @@ internal static class DurablePauseFlow
         Console.WriteLine("PASS: Failed image save is terminal; next manual Save runs once.");
     }
 
+    private static void ExerciseInitialImportStartupRelease(string dir)
+    {
+        var db = new LocalDatabase(Path.Combine(dir, "initial-pause.db"));
+        db.Initialize();
+        var folders = new FolderRepository(db);
+        var path = Path.Combine(dir, "paused-import");
+        Directory.CreateDirectory(path);
+        folders.Add(path);
+        var root = folders.GetAll().Single();
+        if (!folders.SetPendingFirstImportPaused(root.Id, true))
+            throw new Exception("Initial import refused pause");
+        if (folders.GetPendingInitialScans().Any())
+            throw new Exception("Paused initial import was executable in this session");
+        var reopened = new FolderRepository(db);
+        reopened.ReleaseStartupImportPauses();
+        if (reopened.GetPendingInitialScans().Single().Id != root.Id)
+            throw new Exception("Restart did not release original initial-import identity");
+        if (!reopened.HasIncompleteImport(root.Id))
+            throw new Exception("Releasing a pause falsely completed the import");
+    }
+
     private static async Task ExerciseAutomaticControlPersistence(string dir)
     {
         var database = new LocalDatabase(Path.Combine(dir, "pcasa.db"));
         const string key = @"automatic:1:RescanRoot:G:\Camera Roll";
+        const string ordinaryKey = @"automatic:1:ScanFile:G:\Camera Roll\photo.jpg";
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.EnableDurablePackages(database);
             if (!scheduler.SetExternalTaskPaused(key, true) ||
                 !scheduler.IsExternalTaskPaused(key))
                 throw new Exception("Automatic scan pause was not accepted");
+            if (!scheduler.SetExternalTaskPaused(ordinaryKey, true))
+                throw new Exception("Ordinary watcher pause was not accepted");
         }
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.EnableDurablePackages(database);
             if (!scheduler.IsExternalTaskPaused(key))
-                throw new Exception("Automatic scan pause was lost on restart");
+                throw new Exception("Legacy background review pause was lost on restart");
+            if (scheduler.IsExternalTaskPaused(ordinaryKey) ||
+                !scheduler.RecoverableExternalTaskKeys().Contains(ordinaryKey))
+                throw new Exception("Restart did not release and recover the ordinary watcher request");
+            scheduler.AcknowledgeRecoveredExternalTask(ordinaryKey);
+            if (scheduler.RecoverableExternalTaskKeys().Contains(ordinaryKey))
+                throw new Exception("Recovered watcher request was not acknowledged");
             if (!scheduler.SetExternalTaskPaused(key, false) ||
                 scheduler.IsExternalTaskPaused(key))
                 throw new Exception("Automatic scan did not resume");
@@ -183,19 +214,16 @@ internal static class DurablePauseFlow
                 throw new Exception("Paused job executed an unconfirmed step");
         }
 
-        // Closing/recreating the process must NOT auto-resume a user pause.
+        // Alpha.63: normal holds expire on restart, but their progress does not.
+        canFinish = true;
         await using (var scheduler = new PCasaScheduler())
         {
             scheduler.RegisterDurablePackageType("pause-test-v1", Make);
             scheduler.EnableDurablePackages(database);
+            var recovered = journal.Pending().Single(x => x.Key == key);
+            if (recovered.State != "queued" || recovered.CompletedSteps != 1)
+                throw new Exception("Startup release changed the durable identity/cursor");
             scheduler.RecoverDurablePackages();
-            await Task.Delay(350);
-            if (secondStepAttempts != 1 ||
-                journal.Pending().Single(x => x.Key == key).State != "paused")
-                throw new Exception("Recovered scheduler restarted a paused package");
-            canFinish = true;
-            if (!scheduler.ResumeDurableTask(key))
-                throw new Exception("Resume did not activate original identity");
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(12));
             // A test-step completion precedes the scheduler continuation's
             // final SQLite state commit. Wait for that authoritative receipt.

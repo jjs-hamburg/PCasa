@@ -67,6 +67,7 @@ public partial class MainWindow : Window
         _scheduler.RegisterDurablePackageType("gallery-delete-v1", BuildDurableDeletePackage);
         _scheduler.RegisterDurablePackageType("create-gallery-folder-v1", BuildCreateGalleryFolderPackage);
         _folderRepository = new FolderRepository(_database);
+        _folderRepository.ReleaseStartupImportPauses();
         _imageCatalog = new ImageCatalogRepository(_database);
         _folderScanner = new FolderScanner(_imageCatalog, new ThumbnailCache(), _folderRepository);
         InitializeAppearance();

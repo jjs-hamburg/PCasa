@@ -104,6 +104,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private readonly Dictionary<string, Func<string, string, SchedulerTaskPackage>> _packageFactories = new(StringComparer.Ordinal);
     private readonly HashSet<string> _pausedExternalTasks =
         new(StringComparer.Ordinal);
+    private readonly HashSet<string> _releasedStartupExternalTasks =
+        new(StringComparer.Ordinal);
     private readonly List<WorkItem> _pending = new();
     // All physical executor lanes participate in idle admission, including
     // read/thumbnail lanes that have no catalog-mutation counter.
@@ -289,7 +291,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
+        _durableJournal.ReleaseStartupPauses();
         _taskOrderStore = new SchedulerTaskOrderStore(database);
+        foreach (var key in _taskOrderStore.ReleaseStartupPauses())
+            _releasedStartupExternalTasks.Add(key);
         foreach (var key in _taskOrderStore.ReadPaused())
             _pausedExternalTasks.Add(key);
         foreach (var (key, placement) in _taskOrderStore.ReadAll())
@@ -379,6 +384,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public IReadOnlyList<string> PausedExternalTaskKeys()
     {
         lock (_gate) return _pausedExternalTasks.ToArray();
+    }
+
+    public IReadOnlyList<string> RecoverableExternalTaskKeys()
+    {
+        lock (_gate)
+            return _pausedExternalTasks.Concat(_releasedStartupExternalTasks)
+                .Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    public void AcknowledgeRecoveredExternalTask(string key)
+    {
+        lock (_gate) _releasedStartupExternalTasks.Remove(key);
     }
 
     public bool SetExternalTaskPaused(string key, bool paused)

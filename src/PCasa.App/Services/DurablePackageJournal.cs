@@ -354,6 +354,21 @@ public sealed class DurablePackageJournal
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    // Alpha.63: an ordinary manual hold lasts for this application session.
+    // Recovery preserves the original key, queue position, recipe and cursor.
+    public void ReleaseStartupPauses()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET state='queued',error=NULL,retry_after_utc=NULL,updated_utc=$now
+             WHERE state='paused';
+            """;
+        cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
+        cmd.ExecuteNonQuery();
+    }
+
     public DurablePackageRecord? ResumePaused(string key)
     {
         using var db = _database.OpenConnection();

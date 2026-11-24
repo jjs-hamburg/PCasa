@@ -262,6 +262,20 @@ public sealed class FolderRepository
     // A held first-import remains pending and retains every committed
     // file receipt. It is visible in Taskmanager until the user resumes it;
     // future process starts must not silently restart an explicitly held job.
+    // Only invoked during application startup, not when a repository or
+    // maintenance connection is opened in the current session.
+    public void ReleaseStartupImportPauses()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE monitored_folders SET initial_scan_paused=0
+             WHERE initial_scan_pending=1 AND initial_scan_paused=1
+               AND initial_scan_deleted=0;
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
     public bool SetPendingFirstImportPaused(long folderId, bool paused)
     {
         using var db = _database.OpenConnection();

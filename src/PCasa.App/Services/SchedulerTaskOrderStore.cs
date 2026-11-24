@@ -88,6 +88,40 @@ public sealed class SchedulerTaskOrderStore
         }
     }
 
+    // Release ordinary automatic requests on restart, returning their
+    // identities for reconstruction by the watcher owner. Legacy root-review
+    // holds remain intact until the continuous review is represented by one job.
+    public IReadOnlyList<string> ReleaseStartupPauses()
+    {
+        using var db = _database.OpenConnection();
+        using var tx = db.BeginTransaction();
+        var keys = new List<string>();
+        using (var read = db.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = """
+                SELECT task_key FROM scheduler_task_order
+                 WHERE paused=1 AND task_key NOT GLOB 'automatic:*:RescanRoot:*';
+                """;
+            using var reader = read.ExecuteReader();
+            while (reader.Read()) keys.Add(reader.GetString(0));
+        }
+        using (var release = db.CreateCommand())
+        {
+            release.Transaction = tx;
+            release.CommandText = """
+                UPDATE scheduler_task_order SET paused=0
+                 WHERE paused=1 AND task_key NOT GLOB 'automatic:*:RescanRoot:*';
+                DELETE FROM scheduler_task_order
+                 WHERE paused=0 AND dispatch_order=9223372036854775807
+                   AND priority_override IS NULL AND promoted_now=0;
+                """;
+            release.ExecuteNonQuery();
+        }
+        tx.Commit();
+        return keys;
+    }
+
     public IReadOnlySet<string> ReadPaused()
     {
         using var db = _database.OpenConnection();
