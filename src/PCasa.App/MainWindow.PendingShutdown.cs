@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text.Json;
 using PCasa.App.Services;
 
 namespace PCasa.App;
@@ -57,14 +58,22 @@ public partial class MainWindow
         finally { _shutdownReviewOpen = false; }
     }
 
-    // Already accepted original writes are durable scheduler work, not
-    // unsaved editor drafts. On Exit they checkpoint and resume on startup;
-    // deliberate cancellation remains exclusively in the Taskmanager.
+    // Show both unsubmitted drafts and accepted file operations. Scan
+    // intents are excluded: their progress survives a normal shutdown.
     private List<ShutdownPendingOperation> SnapshotShutdownOperations(
         IReadOnlyList<TagImageChange> draftTags, long? editId)
     {
         var needed = new HashSet<long>(draftTags.Select(tag => tag.ImageId));
         if (editId is long edited) needed.Add(edited);
+        var operations = new DurablePackageJournal(_database).Pending()
+            .Where(record => record.Type is not
+                ("manual-folder-scan-v1" or "manual-scan-all-v1" or
+                 "import-error-retry-v1" or "transfer-reconcile-v1"))
+            .ToArray();
+        var targets = operations.ToDictionary(record => record.Key,
+            record => ShutdownRecipeTargets(record.Payload), StringComparer.Ordinal);
+        foreach (var target in targets.Values)
+            needed.UnionWith(target.Ids);
         var images = new Dictionary<long, ShutdownPendingFile>();
         using var db = _database.OpenConnection();
         foreach (var group in needed.Chunk(400))
@@ -82,6 +91,50 @@ public partial class MainWindow
                     reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
         }
         var result = new List<ShutdownPendingOperation>();
+        // Resolve explicit source paths using the catalog, not the original
+        // files. The dialog must also work with disconnected NAS sources.
+        var previews = images.Values.DistinctBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
+        var unresolvedPaths = targets.Values.SelectMany(target => target.Paths)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !previews.ContainsKey(path)).ToArray();
+        foreach (var group in unresolvedPaths.Chunk(300))
+        {
+            using var command = db.CreateCommand();
+            var args = group.Select((_, i) => "$path" + i).ToArray();
+            for (var i = 0; i < group.Length; i++)
+                command.Parameters.AddWithValue(args[i], group[i]);
+            command.CommandText =
+                "SELECT local_path,thumbnail_path FROM images WHERE local_path COLLATE NOCASE IN (" +
+                string.Join(",", args) + ");";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                previews[reader.GetString(0)] = new ShutdownPendingFile(
+                    reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+        }
+        foreach (var record in operations)
+        {
+            var target = targets[record.Key];
+            var files = target.Ids.Where(images.ContainsKey).Select(id => images[id])
+                .Concat(target.Paths.Select(path => previews.GetValueOrDefault(path)
+                    ?? new ShutdownPendingFile(path, null)))
+                .DistinctBy(file => file.Path, StringComparer.OrdinalIgnoreCase).ToArray();
+            var status = record.State switch
+            {
+                "running" => "Läuft",
+                "deferred" => "Fehler",
+                "paused" => "Angehalten",
+                _ => "Wartet"
+            };
+            // An already staged tag transaction is protected by the same
+            // scheduler cancellation rules as in Taskmanager.
+            var protectedTag = record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+                (record.CompletedSteps > 0 || record.State == "running" ||
+                 record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal));
+            result.Add(new ShutdownPendingOperation(record.Key,
+                SchedulerTaskView.TaskCaption(record), UiLanguage.T(status), files,
+                CanCancel: !protectedTag));
+        }
         if (_directImageWriteProgress is { CurrentPath: { } path } direct)
         {
             using var preview = db.CreateCommand();
@@ -103,6 +156,58 @@ public partial class MainWindow
                 UiLanguage.T("Bildbearbeitung speichern"),
                 UiLanguage.T("Nicht gespeichert"), [editedFile]));
         return result;
+    }
+
+    internal static (HashSet<long> Ids, HashSet<string> Paths) ShutdownRecipeTargets(string payload)
+    {
+        var ids = new HashSet<long>();
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var json = JsonDocument.Parse(payload);
+            Visit(json.RootElement);
+        }
+        catch (JsonException) { }
+        return (ids, paths);
+
+        void Visit(JsonElement node)
+        {
+            if (node.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in node.EnumerateArray()) Visit(element);
+                return;
+            }
+            if (node.ValueKind != JsonValueKind.Object) return;
+            foreach (var property in node.EnumerateObject())
+            {
+                if ((property.Name is "ImageId" or "Id") &&
+                    property.Value.ValueKind == JsonValueKind.Number &&
+                    property.Value.TryGetInt64(out var id) && id > 0)
+                    ids.Add(id);
+                else if (property.Name == "ImageIds" &&
+                    property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var value in property.Value.EnumerateArray())
+                        if (value.ValueKind == JsonValueKind.Number &&
+                            value.TryGetInt64(out var imageId) && imageId > 0)
+                            ids.Add(imageId);
+                }
+                else if (property.Name == "Path" &&
+                    property.Value.ValueKind == JsonValueKind.String &&
+                    property.Value.GetString() is { Length: > 0 } path)
+                    paths.Add(path);
+                else if (property.Name == "Sources" &&
+                    property.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var value in property.Value.EnumerateArray())
+                        if (value.ValueKind == JsonValueKind.String &&
+                            value.GetString() is { Length: > 0 } source)
+                            paths.Add(source);
+                }
+                else if (property.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                    Visit(property.Value);
+            }
+        }
     }
 
     private async Task<bool> CancelShutdownOperationAsync(
