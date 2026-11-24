@@ -556,7 +556,10 @@ internal static class TaskManagerFlow
                 == "taskmanager:failed-original");
             Pump(manager);
             var retry = Descendants<Button>(manager).Single(button =>
-                Equals(button.Content, "Neu starten"));
+                Equals(button.Content, "Jetzt ausführen"));
+            if (Descendants<Button>(manager).Any(button =>
+                    Equals(button.Content, "Neu starten")))
+                throw new Exception("Obsolete Restart action remains in Taskmanager.");
             var discard = Descendants<Button>(manager).Single(button =>
                 Equals(button.Content, "Löschen"));
             if (!retry.IsEnabled || !discard.IsEnabled)
