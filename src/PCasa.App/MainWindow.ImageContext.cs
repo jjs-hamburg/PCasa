@@ -42,9 +42,16 @@ public partial class MainWindow
         // once on right-click; no new gallery scan or additional selection.
         var thumbnailIds = SelectThumbnailIds(id, _selectedImageIds,
             _displayedBrowseIndex);
+        var selectedSet = thumbnailIds.ToHashSet();
+        var errorIds = _displayedBrowseIndex.Where(image =>
+            image.HasImportError && selectedSet.Contains(image.ImageId))
+            .Select(image => image.ImageId).ToArray();
+        if (errorIds.Length > 0)
+            AddContextAction(menu, "Erneut einlesen",
+                () => _ = RetryImportErrorsAsync(errorIds));
+        var errorSet = errorIds.ToHashSet();
         var validThumbnailIds = thumbnailIds.Where(imageId =>
-            !_displayedBrowseIndex.Any(image => image.ImageId == imageId &&
-                image.HasImportError)).ToArray();
+            !errorSet.Contains(imageId)).ToArray();
         if (validThumbnailIds.Length > 0)
         {
             var captured = validThumbnailIds;
@@ -250,6 +257,73 @@ public partial class MainWindow
         {
             if (key is not null && !Dispatcher.HasShutdownStarted)
                 EndVisibleManualOperation(key);
+        }
+    }
+
+    private sealed record ImportErrorRetryRecipe(long[] ImageIds);
+
+    // A targeted catalogue update is a manual import job, not a thumbnail
+    // repair or a scan of the surrounding folder. The immutable selection
+    // and completed steps survive restart.
+    private SchedulerTaskPackage BuildImportErrorRetryPackage(string key, string payload)
+    {
+        var recipe = System.Text.Json.JsonSerializer.Deserialize<ImportErrorRetryRecipe>(payload)
+            ?? throw new InvalidDataException("Invalid import retry recipe.");
+        var package = new SchedulerTaskPackage(key);
+        foreach (var id in recipe.ImageIds.Distinct())
+        {
+            var imageId = id;
+            package.AddStep(token =>
+            {
+                token.ThrowIfCancellationRequested();
+                string? path;
+                using (var db = _database.OpenConnection())
+                using (var cmd = db.CreateCommand())
+                {
+                    cmd.CommandText = """
+                        SELECT local_path FROM images
+                        WHERE id=$id AND import_error IS NOT NULL;
+                        """;
+                    cmd.Parameters.AddWithValue("$id", imageId);
+                    path = cmd.ExecuteScalar() as string;
+                }
+                // It may already have been repaired by a watcher or removed.
+                if (path is null) return Task.CompletedTask;
+                var folder = ResolveMonitoredFolder(path);
+                if (folder is null) return Task.CompletedTask;
+                if (!_scheduler.SourceAvailability.CanAccess(path, token))
+                    throw new IOException("Source temporarily unavailable: " + path);
+                if (!File.Exists(path))
+                    throw new IOException("File temporarily unavailable: " + path);
+                _folderScanner.ScanFile(folder, path, cancellationToken: token,
+                    forceExifRefresh: true);
+                return Task.CompletedTask;
+            });
+        }
+        return package;
+    }
+
+    private async Task RetryImportErrorsAsync(long[] imageIds)
+    {
+        if (imageIds.Length == 0 || _shutdownStarted) return;
+        var key = "catalog:retry-import:" + Guid.NewGuid().ToString("N");
+        try
+        {
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                new ImportErrorRetryRecipe(imageIds));
+            var completion = _scheduler.EnqueueDurableRecipeAsync(key,
+                "import-error-retry-v1", payload, SchedulerPriority.ManualAction,
+                SchedulerWorkKind.CatalogScan);
+            _taskManagerWindow?.RequestRefresh();
+            await completion;
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                await RefreshBrowseGalleryAsync(forceIndexReload: true, warmViewport: false);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
+                ShowFileActionError(ex);
         }
     }
 

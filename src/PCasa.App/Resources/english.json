@@ -509,6 +509,7 @@
   "Offene Tag-Aufträge": "Pending tag writes",
   "ohne": "without",
   "Einlesefehler": "Import errors",
+  "Erneut einlesen": "Retry import",
   "Ohne Einlesefehler": "Without import errors",
   "Einlesefehler anzeigen": "Show import error",
   "Mit Standardprogramm öffnen": "Open with default application",

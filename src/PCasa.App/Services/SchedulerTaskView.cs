@@ -500,6 +500,7 @@ public sealed class SchedulerTaskView
             "tag-edit-v1" or "tag-edit-v2" => UiLanguage.T("Tags schreiben"),
             "tag-recovery-v1" or "tag-recovery-v2" => UiLanguage.T("Tags wiederherstellen"),
             "manual-folder-scan-v1" => UiLanguage.T("Ordner aktualisieren"),
+            "import-error-retry-v1" => UiLanguage.T("Erneut einlesen"),
             "manual-scan-all-v1" => UiLanguage.T("Alle Ordner einlesen"),
             "gallery-transfer-v1" or "transfer-reconcile-v1" => UiLanguage.T("Dateien übertragen"),
             "gallery-delete-v1" => UiLanguage.T("Dateien löschen"),

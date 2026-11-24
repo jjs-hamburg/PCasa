@@ -1762,6 +1762,13 @@ internal static class Program
                 !IsMatch(photoEntry, "None", false))
                 throw new Exception("All media/photos/videos filtering produced incorrect matches.");
             Console.WriteLine("PASS: All media, photos and video share the existing gallery property filter.");
+            var brokenEntry = photoEntry with { HasImportError = true };
+            if (!IsMatch(brokenEntry, "ImportError", false) ||
+                IsMatch(brokenEntry, "ImportError", true) ||
+                IsMatch(photoEntry, "ImportError", false) ||
+                !IsMatch(photoEntry, "ImportError", true))
+                throw new Exception("Import error filter did not use the authoritative indexed flag.");
+            Console.WriteLine("PASS: Import errors and their inverse use the same gallery property projection.");
 
             // A property toggle must preserve a matching current image and
             // otherwise choose the nearest following/preceding match.
