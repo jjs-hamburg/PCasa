@@ -1950,34 +1950,63 @@ internal static class Program
                 firstImportPending.LocalPath,
                 recursive: true, durableScanKey: pendingKey).Failed != 0)
             throw new Exception("Third root could not finish its full review.");
-        var nextRound = verified.GetDueRootReviewIds(DateTime.UtcNow);
+        // Alpha.63: All three roots are now complete. Their persisted
+        // last-completed stamps must prevent another 30,000-file cycle
+        // on a startup, polling tick or source reconnect.
+        var lastRootCompleted = verified.GetLastCompletedRootReview(
+            firstImportPending.Id) ?? throw new Exception(
+                "Last root did not persist its completed timestamp.");
+        var beforeCooldown = lastRootCompleted.AddDays(30).AddTicks(-1);
+        var beforeRound = verified.GetDueRootReviewIds(beforeCooldown);
+        if (beforeRound.Count != 0 ||
+            verified.GetReviewRoundStatus(beforeCooldown).Round != 1)
+            throw new Exception(
+                "Completed review restarted before the 30-day cooldown elapsed.");
+        db.Initialize();
+        var afterRestart = new FolderRepository(db)
+            .GetDueRootReviewIds(beforeCooldown);
+        if (afterRestart.Count != 0 ||
+            new FolderRepository(db).GetReviewRoundStatus(beforeCooldown).Round != 1)
+            throw new Exception(
+                "Restart discarded the completed round's 30-day cooldown.");
+
+        // At the boundary, the pending set is created once, durably, not
+        // every time the monitor's 30-second probe is called.
+        var nextRoundStart = lastRootCompleted.AddDays(30).AddTicks(1);
+        var nextRound = verified.GetDueRootReviewIds(nextRoundStart);
         if (!nextRound.Contains(root.Id) ||
             !nextRound.Contains(other.Id) ||
             !nextRound.Contains(firstImportPending.Id) ||
-            verified.GetReviewRoundStatus(DateTime.UtcNow).Round != 2)
-            throw new Exception("Next round did not start after ALL roots completed.");
+            verified.GetReviewRoundStatus(nextRoundStart).Round != 2)
+            throw new Exception(
+                "The completed full-library review did not become due after 30 days.");
+        if (verified.GetDueRootReviewIds(nextRoundStart).Count != nextRound.Count ||
+            verified.GetReviewRoundStatus(nextRoundStart).Round != 2)
+            throw new Exception(
+                "Repeated monitor probes unexpectedly advanced the review round.");
+        var testFutureNow = nextRoundStart.AddMinutes(1);
 
         // Unreachable root: retain its round membership and cursor and
         // suppress retries until the saved backoff expires. Other eligible
         // roots are still allowed to work during that interval.
-        verified.DeferRootReview(root.Id, generation, now.AddHours(6));
-        var beforeRetry = verified.GetDueRootReviewIds(now.AddHours(1));
+        verified.DeferRootReview(root.Id, generation, testFutureNow.AddHours(6));
+        var beforeRetry = verified.GetDueRootReviewIds(testFutureNow.AddHours(1));
         if (beforeRetry.Contains(root.Id) || !beforeRetry.Contains(other.Id))
             throw new Exception("Deferred source delayed another root or retried immediately.");
         db.Initialize();
         if (!new FolderRepository(db).GetDueRootReviewIds(
-                now.AddHours(7)).Contains(root.Id))
+                testFutureNow.AddHours(7)).Contains(root.Id))
             throw new Exception("Deferred incomplete root was lost across restart.");
         // A confirmed NAS reconnect overrides the OLD deadline immediately.
         // The completed round and each saved file receipt must not change.
-        verified.DeferRootReview(root.Id, generation, now.AddHours(10));
-        if (verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
+        verified.DeferRootReview(root.Id, generation, testFutureNow.AddHours(10));
+        if (verified.GetDueRootReviewIds(testFutureNow.AddHours(1)).Contains(root.Id))
             throw new Exception("NAS retry was not deferred before reconnect.");
-        var currentRound = verified.GetReviewRoundStatus(now);
+        var currentRound = verified.GetReviewRoundStatus(testFutureNow);
         if (!verified.ReleaseRootReviewRetryOnReconnect(root.Id) ||
             !verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
             throw new Exception("Confirmed NAS return did not release the old retry deadline.");
-        var reconnectedRound = verified.GetReviewRoundStatus(now);
+        var reconnectedRound = verified.GetReviewRoundStatus(testFutureNow);
         if (reconnectedRound.Round != currentRound.Round ||
             reconnectedRound.Eligible != currentRound.Eligible ||
             reconnectedRound.Completed != currentRound.Completed ||
