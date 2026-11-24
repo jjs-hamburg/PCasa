@@ -1970,6 +1970,45 @@ internal static class Program
                 c.Path == Path.Combine(directory, "photo-0000.jpg")) ||
             new ImageCatalogRepository(db).CountAll() != beforeCheck)
             throw new Exception("Metadata-only review missed differences or mutated the catalog.");
+        // Detected differences must survive a process exit immediately
+        // after acknowledging the review, before the UI receives them.
+        var epoch = folders.GetScanEpoch(root.CanonicalPath);
+        var beforeReceipt = verified.GetDueRootReviewIds(now);
+        if (verified.CompleteRootCheck(root.Id, generation + 1, epoch,
+                comparison.Changes) is not null ||
+            verified.GetPendingAutomaticChanges().Count != 0 ||
+            !verified.GetDueRootReviewIds(now).SequenceEqual(beforeReceipt))
+            throw new Exception("Stale review accepted changes or advanced the check sequence.");
+        try
+        {
+            verified.CompleteRootCheck(root.Id, generation, epoch,
+                comparison.Changes.Append(comparison.Changes[0] with
+                    { MonitoredFolderId = other.Id }).ToArray());
+            throw new Exception("Invalid review change was accepted.");
+        }
+        catch (ArgumentException) { }
+        if (verified.GetPendingAutomaticChanges().Count != 0 ||
+            !verified.GetDueRootReviewIds(now).SequenceEqual(beforeReceipt))
+            throw new Exception("Review transaction did not roll back all changes.");
+        var committed = verified.CompleteRootCheck(root.Id, generation, epoch,
+            comparison.Changes);
+        if (committed is null || committed.Count != comparison.Changes.Count)
+            throw new Exception("Completed review did not accept its discoveries.");
+        db.Initialize();
+        var reopenedChanges = new FolderRepository(db).GetPendingAutomaticChanges();
+        if (reopenedChanges.Count != committed.Count ||
+            !committed.All(job => reopenedChanges.Any(saved =>
+                saved.Key == job.Key && saved.Revision == job.Revision)) ||
+            verified.GetDueRootReviewIds(now).Last() != root.Id ||
+            new ImageCatalogRepository(db).CountAll() != beforeCheck)
+            throw new Exception("Review discoveries and completion did not persist together.");
+        foreach (var job in committed)
+            verified.RetireAutomaticChange(job.Key, job.Revision);
+        // Restore the previous relative order for the retry checks below.
+        if (!verified.CompleteRootCheck(other.Id, otherGeneration, otherEpoch) ||
+            !verified.CompleteRootCheck(firstImportPending.Id, pendingGeneration,
+                folders.GetScanEpoch(firstImportPending.CanonicalPath)))
+            throw new Exception("Could not prepare the next verification sequence.");
         File.Delete(addedPath);
         using (var canceled = new CancellationTokenSource())
         {
