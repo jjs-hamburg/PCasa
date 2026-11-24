@@ -341,7 +341,7 @@ public partial class MainWindow
         using var step = new CompleteFolderScanStep(this, directory,
             schedulerProgress, expectedMonitoredFolderId, requirePendingInitialImport,
             acknowledgeTargetedPending, key);
-        if (priority == SchedulerPriority.ManualAction)
+        if (priority == SchedulerPriority.ManualAction && !requirePendingInitialImport)
         {
             var package = new SchedulerTaskPackage(key);
             package.AddStep(step.ExecuteAsync);
