@@ -1040,6 +1040,32 @@ public partial class MainWindow
                 source.Value.Generation, DateTime.UtcNow + SourceRetryInterval);
     }
 
+    private void RequeueBackgroundRequest(PendingBackgroundScan request,
+        FolderScanner.ScanResumeState? cursor, long? generation)
+    {
+        FolderRepository.AutomaticChangeJob? receipt = null;
+        if (request.Revision is not null)
+        {
+            receipt = _folderRepository.GetPendingAutomaticChange(AutomaticTaskKey(request));
+            if (receipt is null)
+            {
+                cursor?.Dispose();
+                return; // Explicitly retired; do not recreate the job.
+            }
+            if (receipt.Revision != request.Revision)
+            {
+                // A newer notification requires a fresh comparison. The
+                // catalog retains all already committed image work.
+                cursor?.Dispose();
+                cursor = null;
+                generation = null;
+            }
+        }
+        QueueBackgroundChange(new BackgroundFolderChange(request.MonitoredFolderId,
+            request.Path, request.Kind, request.Recursive, request.ForceExifRefresh),
+            cursor, generation, receipt);
+    }
+
     private void QueueBackgroundChange(BackgroundFolderChange change,
         FolderScanner.ScanResumeState? interruptedCursor = null,
         long? cursorGeneration = null,
@@ -1048,6 +1074,7 @@ public partial class MainWindow
         if (!_backgroundScanInitialized ||
             _backgroundScanSettings?.Enabled != true)
         {
+            interruptedCursor?.Dispose();
             return;
         }
 
@@ -1101,14 +1128,35 @@ public partial class MainWindow
                     return;
                 }
             }
+            else
+            {
+                // A review result or a restored snapshot may have been
+                // superseded by a watcher callback before UI publication.
+                var latest = _folderRepository.GetPendingAutomaticChange(key);
+                if (latest is null)
+                {
+                    interruptedCursor?.Dispose();
+                    return;
+                }
+                if (latest.Revision != persisted.Revision)
+                {
+                    interruptedCursor?.Dispose();
+                    interruptedCursor = null;
+                    cursorGeneration = null;
+                }
+                persisted = latest;
+            }
             change = persisted.Change;
         }
         if (_backgroundPending.TryGetValue(key, out var existing))
         {
-            // A watcher may add more work while a suspended request is
-            // waiting. Preserve its one authoritative scanner cursor.
-            var retained = interruptedCursor ?? existing.Resume;
-            if (interruptedCursor is not null &&
+            var revisionChanged = persisted is not null &&
+                existing.Revision != persisted.Revision;
+            var retained = interruptedCursor ?? (revisionChanged ? null : existing.Resume);
+            if (revisionChanged && existing.Resume is not null &&
+                !ReferenceEquals(existing.Resume, retained))
+                existing.Resume.Dispose();
+            if (!revisionChanged && interruptedCursor is not null &&
                 existing.Resume is not null &&
                 !ReferenceEquals(interruptedCursor, existing.Resume))
                 existing.Resume.Dispose();
@@ -1119,14 +1167,12 @@ public partial class MainWindow
                 Revision = persisted?.Revision ?? existing.Revision,
                 Resume = retained,
                 ResumeGeneration = interruptedCursor is not null
-                    ? cursorGeneration : existing.ResumeGeneration,
+                    ? cursorGeneration : revisionChanged ? null : existing.ResumeGeneration,
                 ForceExifRefresh = existing.ForceExifRefresh ||
                     change.ForceExifRefresh,
-                // Never coalesce a later watcher event into an older partial
-                // scan without preserving the need for a final fresh pass.
-                NeedsFollowup = existing.NeedsFollowup ||
-                    (existing.Resume is not null && interruptedCursor is null) ||
-                    (existing.Resume is null && interruptedCursor is not null)
+                // New revisions restart enumeration against the catalog.
+                // No artificial follow-up notification is necessary.
+                NeedsFollowup = false
             };
         }
         else
@@ -1395,7 +1441,7 @@ public partial class MainWindow
                         continue;
                     var removed = 0;
                     await _scheduler.EnqueueAsync(
-                        $"background-delete:{folder.Id}:{deletionSource.Value.Generation}:{request.Path}",
+                        taskKey,
                         SchedulerPriority.Background,
                         token =>
                         {
@@ -1417,8 +1463,12 @@ public partial class MainWindow
                         },
                         () => _folderRepository.IsCurrentSourceGeneration(
                             folder.CanonicalPath, deletionSource.Value.Generation, true),
-                        _backgroundLifetime.Token);
+                        _backgroundLifetime.Token,
+                        workKind: SchedulerWorkKind.CatalogScan,
+                        queueOrder: request.QueueOrder == long.MaxValue
+                            ? null : request.QueueOrder);
                     CompleteAutomaticChange(request);
+                    _scheduler.CompleteTaskPromotion(taskKey);
                     catalogChanged |= removed > 0;
                     if (removed > 0)
                     {
@@ -1477,8 +1527,13 @@ public partial class MainWindow
                 // Directory.Exists can outlive cancellation on a dead NAS.
                 // A manual request that arrived during the probe must still
                 // supersede this background request before it gets scheduled.
-                if (_manualContextScanActive || _manualScanAllActive ||
-                    _manualFileTransferActive || _folderRemovalPending)
+                if (((_manualContextScanActive || _manualScanAllActive ||
+                    _manualFileTransferActive) &&
+                    _scheduler.EffectiveTaskPlacement(taskKey,
+                        request.Kind == BackgroundFolderChangeKind.RescanRoot
+                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
+                        request.QueueOrder).Priority > SchedulerPriority.ManualAction) ||
+                    _folderRemovalPending)
                     throw new OperationCanceledException("Manual folder action has priority.");
 
                 TrackFolderActivity(
@@ -1736,10 +1791,7 @@ public partial class MainWindow
                         throw;
                     }
                     // Unexpected cancellation still needs a future attempt.
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        request.MonitoredFolderId, request.Path,
-                        request.Kind, request.Recursive,
-                        ForceExifRefresh: request.ForceExifRefresh), scanResume, resumeGeneration);
+                    RequeueBackgroundRequest(request, scanResume, resumeGeneration);
                     scanResume = null;
                 }
                 catch (Exception scanError)
@@ -1874,10 +1926,7 @@ public partial class MainWindow
                         remaining.Resume?.Dispose();
                         continue;
                     }
-                    QueueBackgroundChange(new BackgroundFolderChange(
-                        remaining.MonitoredFolderId, remaining.Path,
-                        remaining.Kind, remaining.Recursive,
-                        ForceExifRefresh: remaining.ForceExifRefresh),
+                    RequeueBackgroundRequest(remaining,
                         remaining.Resume, remaining.ResumeGeneration);
                 }
 
