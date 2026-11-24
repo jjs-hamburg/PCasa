@@ -106,49 +106,6 @@ public partial class MainWindow
         return true;
     }
 
-    private async Task<bool> MoveAutomaticScanAsync(
-        string sourceKey, string targetKey)
-    {
-        if (!TryInitialTaskId(sourceKey, out var source) ||
-            !TryInitialTaskId(targetKey, out var target))
-            return false;
-
-        var (changed, nextFolderId) = await _scheduler.RunAsync(
-            $"taskmanager:first-import-reorder:{Guid.NewGuid():N}",
-            SchedulerPriority.UserAction,
-            token =>
-            {
-                token.ThrowIfCancellationRequested();
-                var moved = _folderRepository.MovePendingFirstImport(source, target);
-                var first = moved
-                    ? _folderRepository.GetPendingFirstImportQueue()
-                        .FirstOrDefault(row => !row.Paused)?.FolderId
-                    : null;
-                return (moved, first);
-            }, workKind: SchedulerWorkKind.CatalogRead);
-        if (!changed) return false;
-        // A direct user move is a new explicit request. It also overrides
-        // the session-only guard for an earlier failed automatic attempt;
-        // otherwise moving the task would change its visible rank but not
-        // actually cause the scanner to execute it.
-        _initialScanAttempted.Remove(source);
-
-        // A newly promoted first import must actually overtake a running
-        // older import. Yield at the scanner's normal cancellation boundary;
-        // its confirmed SQLite receipts remain ready for later resumption.
-        if (_initialScanActive && _activeScanFolderId is long activeId &&
-            activeId != source &&
-            _initialScanCancellation is
-                { IsCancellationRequested: false } running)
-        {
-            if (nextFolderId == source)
-                try { await running.CancelAsync(); }
-                catch (ObjectDisposedException) { }
-        }
-        QueuePendingInitialScans();
-        return true;
-    }
-
     private async Task<bool> ResumeAutomaticScanAsync(string key)
     {
         if (!TryInitialTaskId(key, out var folderId)) return false;
@@ -281,9 +238,11 @@ public partial class MainWindow
             RetryOriginalWriteAsync, DiscardOriginalWriteAsync,
             SnapshotAutomaticScans, StopAutomaticScanAsync,
             () => _backgroundIdleStatus,
-            MoveAutomaticScanAsync, ResumeAutomaticScanAsync,
-            StartTaskNowAsync, PauseTaskAsync, ResumePausedTaskAsync,
-            MoveGlobalTaskAsync)
+            resumeAutomaticScan: ResumeAutomaticScanAsync,
+            startAutomaticNow: StartTaskNowAsync,
+            pauseInitialImport: PauseTaskAsync,
+            resumePausedTask: ResumePausedTaskAsync,
+            moveGlobalTask: MoveGlobalTaskAsync)
         {
             Owner = this
         };
