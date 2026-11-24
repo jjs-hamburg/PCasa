@@ -2949,10 +2949,17 @@ internal static class Program
                         galleryRunning.TrySetResult();
                         await galleryRelease.Task.WaitAsync(token);
                     }, workKind: SchedulerWorkKind.BrowseRead);
+                // Admission of a presentation read is synchronous with
+                // submission, even while the logical scheduler is occupied.
+                // It must not wait for the next journal/controller probe.
+                if (scheduler.Snapshot().Single(job =>
+                        job.Key == "test:independent-gallery").State != SchedulerJobState.Running)
+                    throw new Exception("Gallery admission still depends on scheduler arbitration.");
                 await galleryRunning.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                await scheduler.EnqueueAsync("test:visible-thumb",
-                    SchedulerPriority.UserAction, _ => Task.CompletedTask,
-                    workKind: SchedulerWorkKind.ThumbnailRead).WaitAsync(TimeSpan.FromSeconds(5));
+                var thumbnail = scheduler.EnqueueAsync("test:visible-thumb",
+                    SchedulerPriority.Idle, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.ThumbnailRead);
+                await thumbnail.WaitAsync(TimeSpan.FromSeconds(5));
                 await Task.Delay(300);
                 if (attempts != 1 || scheduler.Snapshot().Any(x =>
                     x.Key == "test:review-gallery-independent" &&
