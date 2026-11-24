@@ -3889,6 +3889,10 @@ internal static class Program
         query.CommandText = "SELECT thumbnail_path FROM images WHERE import_error IS NOT NULL";
         if (query.ExecuteScalar() is not string placeholder || !File.Exists(placeholder))
             throw new Exception("Failed file has no durable placeholder.");
+        var errorEntries = new BrowseCacheRepository(db).GetGalleryIndex(96)
+            .Where(entry => entry.HasImportError).ToArray();
+        if (errorEntries.Length != 1 || errorEntries[0].FileName != "broken.jpg")
+            throw new Exception("Gallery did not project the persistent import error.");
         var unchanged = scanner.ScanDirectory(root, root.LocalPath, true,
             catalogOwnedProgress: true);
         if (unchanged.Failed != 0 || unchanged.Updated != 0)
@@ -3902,6 +3906,8 @@ internal static class Program
         query.CommandText = "SELECT COUNT(*) FROM images WHERE import_error IS NOT NULL";
         if (repaired.Updated != 1 || Convert.ToInt32(query.ExecuteScalar()) != 0)
             throw new Exception("Successful reread did not clear persistent import error.");
+        if (new BrowseCacheRepository(db).GetGalleryIndex(96).Any(entry => entry.HasImportError))
+            throw new Exception("Repaired image remained in the error projection.");
     }
 
     private static void ExcludedSubtreeIsRemoved()

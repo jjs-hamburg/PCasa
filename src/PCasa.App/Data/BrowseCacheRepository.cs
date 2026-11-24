@@ -144,8 +144,10 @@ public sealed class BrowseCacheRepository
                 -- Legacy JPEG fallbacks are unsafe for PSD: they may
                 -- represent an embedded crop in the wrong orientation.
                 -- Show no fallback until the merged-composite tier is ready.
-                CASE WHEN te.image_id IS NULL AND LOWER(i.extension) <> '.psd'
-                     THEN i.thumbnail_path ELSE NULL END
+                CASE WHEN te.image_id IS NULL AND
+                    (LOWER(i.extension) <> '.psd' OR i.import_error IS NOT NULL)
+                     THEN i.thumbnail_path ELSE NULL END,
+                CASE WHEN i.import_error IS NOT NULL THEN 1 ELSE 0 END
             FROM images i
             INNER JOIN photo_folders pf ON pf.id = i.photo_folder_id
             """ + (includeMissing ? " LEFT JOIN " : " INNER JOIN ") + """
@@ -196,7 +198,8 @@ public sealed class BrowseCacheRepository
                     ? null : ParseCaptureTime(reader.GetString(15)),
                 reader.GetInt32(16),
                 reader.GetInt32(17),
-                reader.IsDBNull(18) ? null : reader.GetString(18)));
+                reader.IsDBNull(18) ? null : reader.GetString(18),
+                HasImportError: reader.GetInt32(19) != 0));
         }
 
         return result;

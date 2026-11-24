@@ -12,7 +12,7 @@ public partial class MainWindow
     // The existing gallery index already carries GPS, tag and RAW flags.
     // No second catalog query, scan, index or projection is introduced.
     private string CurrentAttributeFilter =>
-        _appearance.GalleryAttributeFilter is "Gps" or "Tags" or "Raw" or "Video"
+        _appearance.GalleryAttributeFilter is "Gps" or "Tags" or "Raw" or "Video" or "ImportError"
             ? _appearance.GalleryAttributeFilter : "None";
 
     private bool AttributeFilterActive => CurrentAttributeFilter != "None";
@@ -26,6 +26,7 @@ public partial class MainWindow
             "Tags" => image.HasTags,
             "Raw" => image.IsRaw,
             "Video" => VideoFormats.IsVideo(image.FileName),
+            "ImportError" => image.HasImportError,
             _ => true
         };
         return filter == "None" || (inverted ? !matches : matches);
@@ -42,11 +43,13 @@ public partial class MainWindow
             "Tags" => inverse ? "Ohne Tags" : "Mit Tags",
             "Raw" => inverse ? "Ohne RAW" : "Nur RAW",
             "Video" => inverse ? "Nur Fotos" : "Nur Videos",
+            "ImportError" => inverse ? "Ohne Einlesefehler" : "Einlesefehler",
             _ => "Filter"
         });
         GalleryAttributeGpsMenu.IsChecked = filter == "Gps";
         GalleryAttributeTagsMenu.IsChecked = filter == "Tags";
         GalleryAttributeRawMenu.IsChecked = filter == "Raw";
+        GalleryAttributeImportErrorMenu.IsChecked = filter == "ImportError";
         GalleryAttributeVideoMenu.IsChecked = filter == "Video" && !inverse;
         GalleryAttributePhotosMenu.IsChecked = filter == "Video" && inverse;
         GalleryAttributeAllMediaMenu.IsChecked = filter == "None";
@@ -133,7 +136,7 @@ public partial class MainWindow
 
     private async Task ChangeGalleryAttributeFilterAsync(string next, bool inverted)
     {
-        if (next is not ("None" or "Gps" or "Tags" or "Raw" or "Video")) return;
+        if (next is not ("None" or "Gps" or "Tags" or "Raw" or "Video" or "ImportError")) return;
         if (CurrentAttributeFilter == next &&
             _appearance.GalleryAttributeFilterInverted == inverted) return;
 
