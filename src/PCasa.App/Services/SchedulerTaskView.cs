@@ -152,32 +152,6 @@ public sealed class SchedulerTaskView
                         false, _canStopAutomatic && scan.CanStop));
                 }
 
-                // An in-process database backup is a real scheduler
-                // job; show its queued/running lifecycle directly from
-                // scheduler snapshots. No duplicate UI task is created.
-                foreach (var backup in latest.Values.Where(job =>
-                    job.Key.StartsWith("database:backup:", StringComparison.Ordinal) &&
-                    job.State is SchedulerJobState.Queued or
-                        SchedulerJobState.Running or SchedulerJobState.YieldRequested))
-                {
-                    var destination = backup.Key.Length >
-                        "database:backup:".Length + 33
-                        ? backup.Key[("database:backup:".Length + 33)..]
-                        : "–";
-                    var fileProgress = backup.Total > 0
-                        ? UiLanguage.Format("{0:N0}/{1:N0} Dateien",
-                            backup.Processed, backup.Total)
-                        : "–";
-                    rows.Add(new SchedulerTaskViewItem(backup.Key,
-                        UiLanguage.T("Datenbank sichern"), destination,
-                        fileProgress,
-                        backup.State == SchedulerJobState.Running
-                            ? "Läuft" : "Wartet",
-                        backup.Error, (int)backup.Priority, backup.Id,
-                        false, false, false, _canStopAutomatic,
-                        backup.WorkKind));
-                }
-
                 // The pending initial-import flag is a durable job from
                 // the moment the source was selected, NOT merely when
                 // the UI scan pump gets around to starting it. Paused

@@ -206,6 +206,7 @@ public partial class MainWindow
         _shutdownStarted = true;
         // Freeze new dispatch synchronously. The writer currently inside its
         // original-file transaction will finish and checkpoint, then yield.
+        _databaseBackupCancellation?.Cancel();
         _scheduler.BeginGracefulShutdown();
         // Stop producers immediately. BackgroundScan_WindowClosed runs only
         // AFTER disposal and is too late to stop startup probes/inventories.
@@ -220,7 +221,8 @@ public partial class MainWindow
         // In-flight catalog work or owned ExifTool sessions can need an
         // uninterruptible file transaction or a slow NAS cancellation.
         // Make this visible before any slow cleanup, not after it.
-        var busy = ExifToolProcessRegistry.LiveCount > 0 ||
+        var busy = _databaseBackupTask is { IsCompleted: false } ||
+            ExifToolProcessRegistry.LiveCount > 0 ||
             ExifToolKeywordWriter.HasLiveSessions ||
             _scheduler.Snapshot().Any(job => job.State is
                 SchedulerJobState.Queued or SchedulerJobState.Running or
@@ -246,6 +248,14 @@ public partial class MainWindow
         var watch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
+            // A backup is outside scheduler lifetime management. Cancel it
+            // and wait for its temporary archive/snapshot cleanup explicitly.
+            if (_databaseBackupTask is { } backup)
+            {
+                try { await backup; }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { PCasaDiagnostics.Write("Shutdown.Backup", ex); }
+            }
             await Task.Run(async () =>
             {
                 // The one scheduler cancels all jobs and journals completed

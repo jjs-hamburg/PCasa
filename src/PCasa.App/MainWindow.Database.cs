@@ -10,7 +10,6 @@ public partial class MainWindow
     private bool _databaseMaintenancePending;
     private Task? _databaseBackupTask;
     private CancellationTokenSource? _databaseBackupCancellation;
-    private string? _databaseBackupKey;
 
     private void DatabaseManagementMenu_Click(object sender, RoutedEventArgs e)
     {
@@ -31,35 +30,22 @@ public partial class MainWindow
             return false;
         }
         var cancellation = new CancellationTokenSource();
-        var key = "database:backup:" + Guid.NewGuid().ToString("N") + ":" +
-            destination;
         var owner = new object();
         _databaseBackupCancellation = cancellation;
-        _databaseBackupKey = key;
         var presenter = AcquireProgressPresenter(owner);
         presenter.BeginDatabaseBackup(owner);
 
         var progress = new Progress<DatabaseBackupProgress>(value =>
         {
             if (Dispatcher.HasShutdownStarted) return;
-            _scheduler.ReportProgress(key, value.Phase,
-                value.ProcessedFiles, value.TotalFiles, value.CurrentFile);
             presenter.UpdateDatabaseBackup(owner, value);
         });
         try
         {
-            // The user's backup click is a P0 manual PACKAGE, not a P2
-            // maintenance request. Its own scheduler capacity lets it begin
-            // even while a NAS directory scan is stuck in native I/O.
-            // DatabaseMaintenance writes a temporary archive and publishes
-            // the destination only after a complete, validated backup.
-            var package = new SchedulerTaskPackage(key);
-            package.AddStep(token => Task.Run(() =>
-                new DatabaseMaintenance().Backup(destination, progress, token), token));
-            var execution = _scheduler.EnqueuePackageAsync(
-                package, SchedulerPriority.ManualAction,
-                cancellationToken: cancellation.Token,
-                workKind: SchedulerWorkKind.DatabaseBackup);
+            // Maintenance runs outside the scheduler queue. Its lease
+            // drains current mutations before the consistent snapshot.
+            var execution = RunDatabaseBackupAsync(destination, progress,
+                cancellation.Token);
             _databaseBackupTask = execution;
             _taskManagerWindow?.RequestRefresh();
             _ = CompleteDatabaseBackupAsync(
@@ -71,12 +57,19 @@ public partial class MainWindow
             presenter.EndDatabaseBackup(owner);
             ReleaseProgressPresenter(owner);
             _databaseBackupCancellation = null;
-            _databaseBackupKey = null;
             cancellation.Dispose();
             PcasaDialog.Show(this, ex.Message, "PCasa",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             return false;
         }
+    }
+
+    private async Task RunDatabaseBackupAsync(string destination,
+        IProgress<DatabaseBackupProgress> progress, CancellationToken token)
+    {
+        using var pause = await _scheduler.AcquireMaintenancePauseAsync(token);
+        await Task.Run(() => new DatabaseMaintenance().Backup(destination,
+            progress, token), token);
     }
 
     private async Task CompleteDatabaseBackupAsync(Task execution, object owner,
@@ -86,7 +79,7 @@ public partial class MainWindow
         try
         {
             await execution;
-            if (!Dispatcher.HasShutdownStarted)
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
             {
                 // End the backup overlay before a modal success message.
                 // Otherwise the completed backup stays at 100% for the
@@ -103,13 +96,13 @@ public partial class MainWindow
         }
         catch (OperationCanceledException)
         {
-            if (!Dispatcher.HasShutdownStarted)
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
                 StatusText.Text = UiLanguage.T("Datenbanksicherung abgebrochen.");
         }
         catch (Exception ex)
         {
             PCasaDiagnostics.Write("Database.Backup", ex);
-            if (!Dispatcher.HasShutdownStarted)
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
             {
                 StatusText.Text = UiLanguage.T("Datenbanksicherung fehlgeschlagen.");
                 PcasaDialog.Show(this, ex.Message, "PCasa",
@@ -118,10 +111,9 @@ public partial class MainWindow
         }
         finally
         {
-            _databaseBackupKey = null;
             _databaseBackupCancellation = null;
             _databaseBackupTask = null;
-            if (!Dispatcher.HasShutdownStarted)
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
             {
                 presenter.EndDatabaseBackup(owner);
                 ReleaseProgressPresenter(owner);
@@ -159,7 +151,7 @@ public partial class MainWindow
                     "Der Wartungsdialog wurde nicht sichtbar. PCasa bleibt geöffnet.");
             // The existing close path owns every scanner, writer, database
             // transaction and ExifTool child. No second shutdown route.
-            if (!Dispatcher.HasShutdownStarted) Close();
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted) Close();
         }
         catch (Exception ex)
         {
@@ -170,7 +162,7 @@ public partial class MainWindow
             {
                 PCasaDiagnostics.Write("Database.MaintenanceHandoffCleanup", cleanupEx);
             }
-            if (!Dispatcher.HasShutdownStarted)
+            if (!_shutdownStarted && !Dispatcher.HasShutdownStarted)
                 PcasaDialog.Show(this, ex.Message,
                     UiLanguage.T("Datenbankverwaltung"),
                     MessageBoxButton.OK, MessageBoxImage.Error);

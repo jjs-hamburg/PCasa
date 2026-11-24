@@ -180,6 +180,63 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // This lease belongs to the ONE scheduler; no second job/queue is built.
     private int _nativeDragInteractionCount;
     private int _externalEditInteractionCount;
+    private int _maintenancePauseCount;
+
+    private sealed class MaintenanceLease(PCasaScheduler owner) : IDisposable
+    {
+        private PCasaScheduler? _owner = owner;
+        public void Dispose() =>
+            Interlocked.Exchange(ref _owner, null)?.EndMaintenancePause();
+    }
+
+    // Maintenance is not a job: freeze new catalog mutation dispatch and
+    // wait asynchronously for any existing owner to reach a safe boundary.
+    // Local gallery/thumbnail reads remain independent.
+    public async Task<IDisposable> AcquireMaintenancePauseAsync(
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_maintenancePauseCount != 0)
+                throw new InvalidOperationException("Maintenance already active.");
+            _maintenancePauseCount++;
+            SignalController();
+        }
+        var lease = new MaintenanceLease(this);
+        try
+        {
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                lock (_gate)
+                {
+                    ObjectDisposedException.ThrowIf(_disposed, this);
+                    if (!_runningWork.Any(IsCatalogMutation))
+                        return lease;
+                }
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    private void EndMaintenancePause()
+    {
+        lock (_gate)
+        {
+            if (_maintenancePauseCount > 0) _maintenancePauseCount--;
+            if (!_disposed) SignalController();
+        }
+    }
+
+    private static bool IsCatalogMutation(WorkItem item) =>
+        item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan or
+            SchedulerWorkKind.InitialImport or SchedulerWorkKind.DatabaseBackup;
 
     private sealed class NativeDragLease(PCasaScheduler owner) : IDisposable
     {
@@ -735,7 +792,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             SchedulerWorkKind.ThumbnailRead or
                             SchedulerWorkKind.ViewerRead)
                             continue;
-                        if (!((RankOwner(running).Priority == SchedulerPriority.Idle &&
+                        if (!((_maintenancePauseCount > 0 && IsCatalogMutation(running)) ||
+                              (RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
                                    !IsGalleryPresentation(p) &&
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
@@ -1660,6 +1718,12 @@ public sealed class PCasaScheduler : IAsyncDisposable
             .ThenBy(x => RankOwner(x).Id)
             .FirstOrDefault();
         if (candidate is null) return null;
+
+        // A dependent step of an already running owner must be able to
+        // finish; otherwise maintenance could deadlock waiting for it.
+        if (_maintenancePauseCount > 0 && IsCatalogMutation(candidate) &&
+            !(_runningWork.Contains(RankOwner(candidate)) && candidate.Parent is not null))
+            return null;
 
         if (IsSerialCatalogJob(candidate) &&
             candidate.Kind is not (SchedulerWorkKind.BrowseRead or

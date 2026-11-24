@@ -890,19 +890,6 @@ public partial class MainWindow
     private async Task<bool> StopAutomaticScanAsync(string key)
     {
         if (key == PCasaScheduler.ContinuousReviewKey) return false;
-        if (key.StartsWith("database:backup:", StringComparison.Ordinal))
-        {
-            if (!string.Equals(key, _databaseBackupKey,
-                StringComparison.Ordinal) ||
-                _databaseBackupCancellation is not
-                    { IsCancellationRequested: false } backup)
-                return false;
-            try { await backup.CancelAsync(); }
-            catch (ObjectDisposedException) { return false; }
-            _scheduler.NotifyTaskViewChanged();
-            return true;
-        }
-
         // Delete applies to BOTH waiting and explicitly held imports.
         // It removes the persistent queue intent, never the catalog or
         // committed first-pass receipts. A later explicit scan can resume

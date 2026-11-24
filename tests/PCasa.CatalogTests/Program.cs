@@ -107,6 +107,8 @@ internal static class Program
             FirstPassDirectorySurvivesJobs, failures);
         Run("Catalog-owned import reconciles changed and missing files across job identities",
             CatalogOwnedDirectoryReconciliation, failures);
+        Run("Database maintenance drains catalog work without enqueuing a job",
+            DatabaseMaintenancePauseDrainsCatalogWork, failures);
         Run("Gallery presentation does not yield or block a catalog job",
             GalleryPresentationDoesNotCompeteWithCatalogJobs, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
@@ -2747,6 +2749,48 @@ internal static class Program
                 release.TrySetResult();
             }
             await running.WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void DatabaseMaintenancePauseDrainsCatalogWork()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var scan = scheduler.EnqueueAsync("test:maintenance-scan",
+                SchedulerPriority.Background, async token =>
+                {
+                    if (Interlocked.Increment(ref attempts) == 1)
+                    {
+                        entered.TrySetResult();
+                        try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                        finally { yielded.TrySetResult(); }
+                    }
+                    else resumed.TrySetResult();
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using (await scheduler.AcquireMaintenancePauseAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5)))
+            {
+                if (!yielded.Task.IsCompleted || resumed.Task.IsCompleted)
+                    throw new Exception("Maintenance overlapped or restarted a catalog scan.");
+                await scheduler.EnqueueAsync("test:maintenance-gallery",
+                    SchedulerPriority.Interactive, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.BrowseRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                if (resumed.Task.IsCompleted ||
+                    scheduler.Snapshot().Any(job =>
+                        job.WorkKind == SchedulerWorkKind.DatabaseBackup))
+                    throw new Exception("Maintenance blocked gallery or appeared as a scheduler job.");
+            }
+            await scan.WaitAsync(TimeSpan.FromSeconds(5));
+            if (attempts != 2 || !resumed.Task.IsCompleted)
+                throw new Exception("Original scan did not resume after maintenance.");
         }
         Check().GetAwaiter().GetResult();
     }
