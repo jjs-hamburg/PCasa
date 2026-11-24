@@ -21,6 +21,21 @@ internal static class TaskManagerFlow
         TaskCompletionSource? releaseStagedJob = null;
         try
         {
+            // The exit review must resolve all affected sources from
+            // accepted recipes without opening any original image.
+            var targetReader = typeof(PCasa.App.MainWindow).GetMethod(
+                "ShutdownRecipeTargets",
+                System.Reflection.BindingFlags.Static |
+                System.Reflection.BindingFlags.NonPublic)!;
+            var targets = ((HashSet<long> Ids, HashSet<string> Paths))
+                targetReader.Invoke(null, new object[] { """
+                    {"ImageIds":[17,23,17],"Items":[{"ImageId":41,"Path":"C:\\Photo.jpg"}],
+                     "Sources":["S:\\NAS\\source.jpg","s:\\nas\\SOURCE.jpg"],
+                     "Destination":"C:\\Copy","FolderId":999}
+                    """ })!;
+            if (!targets.Ids.SetEquals(new long[] { 17, 23, 41 }) ||
+                !targets.Paths.SetEquals(new[] { @"C:\Photo.jpg", @"S:\\NAS\\source.jpg" }))
+                throw new Exception("Exit review lost sources or included a destination.");
             var app = new PCasa.App.App();
             app.InitializeComponent();
             app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
