@@ -101,6 +101,22 @@ public sealed class DurablePackageJournal
     // transfer or other file mutation must never reappear as a runnable job
     // after the PCasa process has ended. Keep its history and last error;
     // do NOT delete the DB record or imply that a partial file write finished.
+    // Existing persisted numeric 0/3/4 values remain compatible with
+    // older libraries. Only legacy intermediate user ranks are migrated.
+    public void NormalizeLegacyJobPriorities()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_packages
+               SET priority=0,
+                   queue_order=CASE WHEN queue_order<0 THEN queue_order ELSE -sequence END
+             WHERE priority IN (1,2)
+               AND state IN ('queued','running','deferred','paused');
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
     public static bool SurvivesSession(string type) => type is
         "manual-folder-scan-v1" or "manual-scan-all-v1" or "import-error-retry-v1";
 
