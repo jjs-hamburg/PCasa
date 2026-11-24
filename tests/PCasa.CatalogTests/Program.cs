@@ -1889,9 +1889,9 @@ internal static class Program
         var persisted = reopened.GetPendingAutomaticChanges();
         // Interruption or late publication resolves the newest accepted
         // revision without changing the original FIFO rank.
-        var resumed = reopened.GetPendingAutomaticChange("first");
-        if (resumed is null || resumed.Revision != latest.Revision ||
-            resumed.Order != accepted.Order || !resumed.Change.ForceExifRefresh ||
+        var resumedReceipt = reopened.GetPendingAutomaticChange("first");
+        if (resumedReceipt is null || resumedReceipt.Revision != latest.Revision ||
+            resumedReceipt.Order != accepted.Order || !resumedReceipt.Change.ForceExifRefresh ||
             reopened.GetPendingAutomaticChange("nonexistent") is not null)
             throw new Exception("Watcher retry did not resolve the current accepted receipt.");
         if (persisted.Count != 2 || persisted[0].Key != "first" ||
