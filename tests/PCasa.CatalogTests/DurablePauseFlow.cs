@@ -18,6 +18,7 @@ internal static class DurablePauseFlow
             ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
             ExerciseSessionFileJobLifetime(dir).GetAwaiter().GetResult();
+            ExerciseRetirementBeforeBlockedRead(dir).GetAwaiter().GetResult();
             ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
             ExerciseSharedUserAcceptanceOrder(dir);
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
@@ -154,6 +155,61 @@ internal static class DurablePauseFlow
         if (Convert.ToInt32(cmd.ExecuteScalar()) != 2)
             throw new Exception("Session retirement lost the terminal audit records.");
         Console.WriteLine("PASS: File jobs end with the session; scan receipts survive.");
+    }
+
+    private static async Task ExerciseRetirementBeforeBlockedRead(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shutdown-blocked-read.db"));
+        database.Initialize();
+        var folders = new FolderRepository(database);
+        var source = Path.Combine(dir, "shutdown-tag-source");
+        Directory.CreateDirectory(source);
+        folders.Add(source);
+        var folderId = folders.GetAll().Single().Id;
+        long imageId;
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            cmd.CommandText = """
+                INSERT INTO images(folder_id,local_path,canonical_path,file_name,
+                    extension,file_size,modified_utc_ticks,width,height,
+                    thumbnail_path,indexed_utc)
+                VALUES($folder,$path,$path,'offline.jpg','.jpg',100,1,10,10,'','2026-01-01')
+                RETURNING id;
+                """;
+            cmd.Parameters.AddWithValue("$folder", folderId);
+            cmd.Parameters.AddWithValue("$path", Path.Combine(source, "offline.jpg"));
+            imageId = Convert.ToInt64(cmd.ExecuteScalar());
+        }
+        var journal = new DurablePackageJournal(database);
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+        var tags = new ImageTagRepository(database);
+        tags.QueueTagEdit(new[] { imageId }, "unfinished", false);
+        journal.Put("shutdown:staged-tags", "tag-edit-v2", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.Catalog);
+        journal.SetState("shutdown:staged-tags", "running", 1);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var read = scheduler.EnqueueAsync("shutdown:blocked-read",
+            SchedulerPriority.Interactive, async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }, workKind: SchedulerWorkKind.BrowseRead);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await scheduler.PrepareGracefulShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            if (read.IsCompleted || journal.Pending().Any(row => row.Key == "shutdown:staged-tags") ||
+                !new OriginalWriteFailureRepository(database).IsParked(
+                    OriginalWriteFailureRepository.Tags, imageId) ||
+                tags.PendingEditsForImage(imageId).Count != 1)
+                throw new Exception("Shutdown did not park staged tag intents before blocked read disposal.");
+        }
+        finally { release.TrySetResult(); }
+        await read.WaitAsync(TimeSpan.FromSeconds(5));
+        Console.WriteLine("PASS: Session file retirement and tag review survive blocked background reads.");
     }
 
     private static async Task ExerciseImageEditFailureLifecycle(string dir)
