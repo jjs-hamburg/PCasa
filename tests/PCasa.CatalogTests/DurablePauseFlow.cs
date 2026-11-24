@@ -18,6 +18,7 @@ internal static class DurablePauseFlow
             ExerciseInitialImportStartupRelease(dir);
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
             ExerciseSessionFileJobLifetime(dir).GetAwaiter().GetResult();
+            ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -30,6 +31,55 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static async Task ExerciseYieldDuringShutdown(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shutdown-yield.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishBoundary = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const string key = "shutdown:write";
+        SchedulerTaskPackage Build(string identity, string payload)
+        {
+            var package = new SchedulerTaskPackage(identity);
+            package.AddStep(async token =>
+            {
+                started.TrySetResult();
+                using var registration = token.Register(() => yielded.TrySetResult());
+                await finishBoundary.Task;
+                token.ThrowIfCancellationRequested();
+            });
+            return package;
+        }
+        await using var scheduler = new PCasaScheduler();
+        scheduler.EnableDurablePackages(database, retireFileJobsOnSessionEnd: true);
+        scheduler.RegisterDurablePackageType("gallery-delete-v1", Build);
+        var writing = scheduler.EnqueueDurableRecipeAsync(key,
+            "gallery-delete-v1", "{}", SchedulerPriority.Background,
+            SchedulerWorkKind.Catalog);
+        Task? higher = null;
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            higher = scheduler.EnqueueAsync("shutdown:higher",
+                SchedulerPriority.ManualAction, _ => Task.CompletedTask);
+            await yielded.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            var drain = scheduler.PrepareGracefulShutdownAsync();
+            finishBoundary.TrySetResult();
+            await drain.WaitAsync(TimeSpan.FromSeconds(8));
+            try { await writing.WaitAsync(TimeSpan.FromSeconds(8)); }
+            catch (OperationCanceledException) { }
+            if (journal.Pending().Any(row => row.Key == key) ||
+                scheduler.HasLiveExecution(key))
+                throw new Exception("Yielded file job reentered the frozen shutdown queue.");
+            if (higher.IsCompleted)
+                throw new Exception("Unrelated waiting work dispatched during shutdown.");
+        }
+        finally { finishBoundary.TrySetResult(); }
+        Console.WriteLine("PASS: Graceful shutdown does not requeue an interrupted file owner.");
     }
 
     private static async Task ExerciseSessionFileJobLifetime(string dir)
