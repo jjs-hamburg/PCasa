@@ -53,32 +53,16 @@ public partial class MainWindow
             _scheduler.MoveTaskGlobally(key, targetKey, allAcceptedKeys));
         if (!moved) return false;
 
-        // A parked original mutation may now be ahead of other jobs, but
-        // needs its actual deferred recipe restarted before it can run.
-        // Never implicitly replay an already completed write.
-        if (key.StartsWith("gps:edit:", StringComparison.Ordinal) ||
-            key.StartsWith("tags:", StringComparison.Ordinal))
+        // Both ends of a move can change which first import is next.
+        // The active import may have been selected before that move, or
+        // the pending-root lookup may still be running on a worker.
+        var movedImport = TryInitialTaskId(key, out var importId);
+        var targetedImport = TryInitialTaskId(targetKey, out _);
+        if (movedImport || targetedImport)
         {
-            // Already-queued steps were reordered inside the scheduler.
-            // Explicit Retry remains the way to unpark failed originals.
-        }
-
-        if (TryInitialTaskId(key, out var importId))
-        {
-            // Reordering an explicitly paused import changes only its rank.
-            // It must not silently resume the import: "Fortsetzen" and
-            // "Jetzt ausführen" are separate user commands.
-            var paused = _folderRepository.GetPendingFirstImportQueue()
-                .Any(item => item.FolderId == importId && item.Paused);
-            if (!paused)
-            {
+            if (movedImport)
                 _initialScanAttempted.Remove(importId);
-                if (_initialScanActive && _activeScanFolderId != importId &&
-                    _initialScanCancellation is
-                        { IsCancellationRequested: false } running)
-                    RequestTaskManagerYield(running);
-                QueuePendingInitialScans();
-            }
+            ReconsiderInitialImportOrder();
         }
 
         // Every automatic scan (including ScanFile/"Import file") belongs
@@ -165,10 +149,7 @@ public partial class MainWindow
         // The initial import owns the same confirmed scan cursor and key.
         if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
         _initialScanAttempted.Remove(folderId);
-        if (_initialScanActive && _activeScanFolderId != folderId &&
-            _initialScanCancellation is { IsCancellationRequested: false } other)
-            RequestTaskManagerYield(other);
-        QueuePendingInitialScans();
+        ReconsiderInitialImportOrder();
         _scheduler.NotifyTaskViewChanged();
         return Task.FromResult(true);
     }
