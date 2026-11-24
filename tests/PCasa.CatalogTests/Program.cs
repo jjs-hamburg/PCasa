@@ -1002,12 +1002,12 @@ internal static class Program
                     else idleResumed.TrySetResult();
                 }, workKind: SchedulerWorkKind.CatalogScan);
             await idleStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var higher = scheduler.EnqueueAsync("regression:foreground-read",
-                SchedulerPriority.Interactive, async token =>
+            var higher = scheduler.EnqueueAsync("regression:user-catalog-job",
+                SchedulerPriority.ManualAction, async token =>
                 {
                     higherStarted.TrySetResult();
                     await releaseHigher.Task.WaitAsync(token);
-                }, workKind: SchedulerWorkKind.CatalogRead);
+                }, workKind: SchedulerWorkKind.Catalog);
             try
             {
                 await higherStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -2712,14 +2712,16 @@ internal static class Program
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var readCompleted = false;
+                var competing = scheduler.EnqueueAsync("newer-user-job",
+                    SchedulerPriority.ManualAction, _ => Task.CompletedTask);
                 await scheduler.EnqueueAsync("gallery-catalog-read", SchedulerPriority.Interactive,
                     _ =>
                     {
                         readCompleted = true;
                         return Task.CompletedTask;
                     }, workKind: SchedulerWorkKind.CatalogRead).WaitAsync(TimeSpan.FromSeconds(5));
-                if (!readCompleted || scanner.IsCompleted)
-                    throw new Exception("UI catalog read waited behind a network scan.");
+                if (!readCompleted || scanner.IsCompleted || competing.IsCompleted)
+                    throw new Exception("UI catalog read waited behind a running or queued catalog job.");
             }
             finally
             {
@@ -2959,12 +2961,19 @@ internal static class Program
                 var thumbnail = scheduler.EnqueueAsync("test:visible-thumb",
                     SchedulerPriority.Idle, _ => Task.CompletedTask,
                     workKind: SchedulerWorkKind.ThumbnailRead);
-                await thumbnail.WaitAsync(TimeSpan.FromSeconds(5));
+                var catalogRead = scheduler.EnqueueAsync("test:visible-catalog",
+                    SchedulerPriority.Idle, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.CatalogRead);
+                var viewerRead = scheduler.EnqueueAsync("test:visible-original",
+                    SchedulerPriority.Idle, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.ViewerRead);
+                await Task.WhenAll(thumbnail, catalogRead, viewerRead)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
                 await Task.Delay(300);
                 if (attempts != 1 || scheduler.Snapshot().Any(x =>
                     x.Key == "test:review-gallery-independent" &&
                     x.State == SchedulerJobState.YieldRequested))
-                    throw new Exception("Gallery scrolling yielded the active inventory.");
+                    throw new Exception("Independent presentation or catalog reads yielded the active inventory.");
                 release.TrySetResult();
                 await review.WaitAsync(TimeSpan.FromSeconds(5));
                 await scheduler.EnqueueAsync("test:next-review", SchedulerPriority.Idle,
