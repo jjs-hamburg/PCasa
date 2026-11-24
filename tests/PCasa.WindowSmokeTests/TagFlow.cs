@@ -2335,6 +2335,34 @@ internal static class TagFlow
             Console.WriteLine(
                 "PASS: One Tag draft survives folder/selection changes, Cancel discards it, one OK writes distinct originals.");
 
+            // Single-image confirmation uses the same metadata writer but
+            // neither inserts a scheduler row nor creates a durable recipe.
+            Until(window, () => !activeScheduler.Snapshot().Any(job =>
+                job.Key.StartsWith("tags:package:", StringComparison.Ordinal) &&
+                job.State is SchedulerJobState.Queued or SchedulerJobState.Running or
+                    SchedulerJobState.YieldRequested),
+                "Cross-folder Tag job did not finish before single-image test.");
+            const string directTag = "Single Direct Tag";
+            SelectTagImages(otherImageId);
+            tagInput.Text = directTag;
+            addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));
+            var beforeDirect = activeScheduler.Snapshot().Count(job =>
+                job.Key.StartsWith("tags:package:", StringComparison.Ordinal));
+            tagOk.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, tagOk));
+            var directTaskField = typeof(PCasa.App.MainWindow).GetField(
+                "_directImageWriteTask", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!;
+            Until(window, () => directTaskField.GetValue(window) is Task { IsCompleted: true } &&
+                (ImageTagRepository.ReadKeywords(otherImagePath) ?? "").Contains(directTag),
+                "Single Tag edit did not finish in the original.");
+            if (activeScheduler.Snapshot().Count(job =>
+                    job.Key.StartsWith("tags:package:", StringComparison.Ordinal)) != beforeDirect ||
+                activeScheduler.Snapshot().Any(job =>
+                    job.Key.StartsWith("direct:tags:", StringComparison.Ordinal)) ||
+                !(new ImageTagRepository(db).GetKeywords(otherImageId) ?? "").Contains(directTag))
+                throw new Exception("Single-image Tag edit did not use the direct catalog/original path.");
+            Console.WriteLine("PASS: Single Tag edit commits directly without a scheduler job.");
+
             SelectTagImages(editorIds);
             tagInput.Text = editableTag;
             addTag.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, addTag));

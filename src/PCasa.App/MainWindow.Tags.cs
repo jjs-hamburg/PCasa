@@ -730,7 +730,9 @@ public partial class MainWindow
 
     private void StartPendingTagDrain()
     {
-        if (Dispatcher.HasShutdownStarted) return;
+        if (_shutdownStarted || Dispatcher.HasShutdownStarted ||
+            _directImageWriteProgress?.Key.StartsWith("direct:tags:",
+                StringComparison.Ordinal) == true) return;
         var parked = _originalWriteFailures.Unresolved()
             .Where(error => error.Kind == OriginalWriteFailureRepository.Tags)
             .Select(error => error.ImageId).ToHashSet();
@@ -917,7 +919,9 @@ public partial class MainWindow
         if (_tagWriteActive || !_tagDraft.HasChanges) return;
         var snapshot = _tagDraft.Snapshot();
         var ids = snapshot.Select(entry => entry.ImageId).ToArray();
-        var key = "tags:package:" + Guid.NewGuid().ToString("N");
+        var single = ids.Length == 1;
+        var key = (single ? "direct:tags:" : "tags:package:") +
+            Guid.NewGuid().ToString("N");
         var payload = System.Text.Json.JsonSerializer.Serialize(new DurableTagEdit(
             ids, Array.Empty<DurableTagChange>(),
             snapshot.Select(entry => new DurableTagImageEdit(entry.ImageId,
@@ -930,14 +934,20 @@ public partial class MainWindow
         {
             BeginVisibleManualOperation(key,
                 "Tags in Originaldateien schreiben", ids.Length);
-            var completion = _scheduler.EnqueueDurablePackageAsync(package,
-                "tag-edit-v2", payload, SchedulerPriority.ManualAction);
+            var completion = single
+                ? StartDirectImageWrite(key,
+                    UiLanguage.T("Tags in Originaldateien schreiben"),
+                    GetOriginalImagePath(ids[0]) ?? throw new IOException("Bild fehlt im Katalog."),
+                    package, folderId: 0, reindexOriginal: false)
+                : _scheduler.EnqueueDurablePackageAsync(package,
+                    "tag-edit-v2", payload, SchedulerPriority.ManualAction);
             _ = ObserveTagPackageAsync(completion, key);
             // The edit is accepted. The next manual action MUST be possible
             // immediately, even if this package later waits for slow I/O.
             _tagDraft.Clear();
             TagEntryBox.Clear();
-            StatusText.Text = UiLanguage.T("Tag-Paket P0 vorgemerkt · SQLite und Originaldateien folgen");
+            if (!single)
+                StatusText.Text = UiLanguage.T("Tag-Paket P0 vorgemerkt · SQLite und Originaldateien folgen");
         }
         catch (Exception ex)
         {
