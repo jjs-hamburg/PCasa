@@ -1078,14 +1078,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
          item.Kind is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan
              or SchedulerWorkKind.SourceProbe);
 
-    // Compatibility for the older same-priority journal Move API. The
-    // global Taskmanager ordering does not use this grouping.
-    private static bool SameLegacyMoveGroup(SchedulerPriority priority,
-        SchedulerWorkKind a, SchedulerWorkKind b) =>
-        a == b || (priority != SchedulerPriority.ManualAction &&
-                   a is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan &&
-                   b is SchedulerWorkKind.Catalog or SchedulerWorkKind.CatalogScan);
-
     private bool HasManualSourceProbeUnsafe()
         => _runningWork.Any(item => item.ExecutionClass == ExecutorManualSourceProbe) ||
             _pending.Any(item => item.Kind == SchedulerWorkKind.SourceProbe &&
@@ -1240,63 +1232,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 return Task.CompletedTask;
             }, isCurrent, cancellationToken, workKind, parentKey: parentKey);
         return result!;
-    }
-
-    // Taskmanager commands remain on the ONE scheduler owner. The journal
-    // persists ranks first; a promoted waiting task then preempts a running
-    // durable peer in its OWN worker lane at the next safe scan checkpoint.
-    // No second scheduler or duplicate scan recipe is created.
-    public bool MoveDurableTask(string key, int direction)
-    {
-        if (direction is not (-1 or 1))
-            throw new ArgumentOutOfRangeException(nameof(direction));
-        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
-        var all = journal.Pending();
-        var source = all.FirstOrDefault(row => row.Key == key);
-        if (source is null) return false;
-        var lane = all.Where(row =>
-                row.Priority == source.Priority &&
-                SameLegacyMoveGroup(source.Priority, row.WorkKind, source.WorkKind)).ToList();
-        var index = lane.FindIndex(row => row.Key == key);
-        if (index < 0 || index + direction < 0 || index + direction >= lane.Count)
-            return false;
-        return MoveDurableTaskTo(key, lane[index + direction].Key);
-    }
-
-    // Drag/drop and arrow buttons call the same atomic journal mutation.
-    // The drop target denotes the desired final slot in scheduler dispatch
-    // order; it can be the currently running, interruptible durable scan.
-    public bool MoveDurableTaskTo(string key, string targetKey)
-    {
-        var journal = _durableJournal ?? throw new InvalidOperationException("Kein Paketjournal.");
-        lock (_gate)
-        {
-            var rows = journal.Pending();
-            var source = rows.FirstOrDefault(row => row.Key == key);
-            var target = rows.FirstOrDefault(row => row.Key == targetKey);
-            if (source is null || target is null ||
-                source.Priority != target.Priority ||
-                !SameLegacyMoveGroup(source.Priority, source.WorkKind, target.WorkKind) ||
-                !_pending.Any(item => item.Key == key &&
-                    item.Priority == source.Priority))
-                return false; // never move the live executor or an absent row
-
-            var changed = journal.Reorder(key, targetKey);
-            if (changed is null || changed.Count == 0) return false;
-            foreach (var work in _pending)
-                if (changed.TryGetValue(work.Key, out var rank))
-                    work.QueueOrder = rank;
-            // The active work item is NOT in _pending. It still needs its
-            // new rank, both to detect that a queued peer outranks it and
-            // to resume in the correct position after cooperative yield.
-            foreach (var active in _runningWork)
-                if (changed.TryGetValue(active.Key, out var rank))
-                    active.QueueOrder = rank;
-
-            SignalController();
-        }
-
-        return true;
     }
 
     // No new retry queue: activate the same durable recipe through the
