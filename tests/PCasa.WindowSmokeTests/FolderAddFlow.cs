@@ -1091,8 +1091,9 @@ internal static class FolderAddFlow
             // registration. In particular, do not equate the durable
             // receipt of a real P4 review with a spurious startup scan.
             var unexpectedStartupScans = scanScheduler.Snapshot()
-                .Where(job => job.Key.StartsWith("background-scan:",
+                .Where(job => job.Key.StartsWith("automatic:",
                         StringComparison.Ordinal) &&
+                    job.WorkKind == SchedulerWorkKind.CatalogScan &&
                     job.Priority != SchedulerPriority.Idle &&
                     job.State is (SchedulerJobState.Queued or
                         SchedulerJobState.Running or SchedulerJobState.YieldRequested))
