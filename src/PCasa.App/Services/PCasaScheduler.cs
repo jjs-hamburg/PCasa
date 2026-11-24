@@ -4,6 +4,9 @@ using System.IO;
 
 namespace PCasa.App.Services;
 
+// Persisted logical job priorities: P0=ManualAction, P1=Background,
+// P2=Idle. Intermediate legacy values are retained for technical reads
+// until independent read admission is extracted from this service.
 public enum SchedulerPriority { ManualAction = 0, Interactive = 1, UserAction = 2, Background = 3, Idle = 4 }
 public enum SchedulerJobState { Queued, Running, YieldRequested, Completed, Canceled, Failed }
 public enum SchedulerWorkKind { Catalog, CatalogScan, CatalogRead, ViewerRead, ThumbnailRead, SourceProbe, InitialImport, DatabaseBackup, BrowseRead }
@@ -282,11 +285,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (_durableJournal is not null)
             throw new InvalidOperationException("Paketjournal bereits aktiviert.");
         _durableJournal = new DurablePackageJournal(database);
+        _durableJournal.NormalizeLegacyJobPriorities();
         _retireFileJobsOnSessionEnd = retireFileJobsOnSessionEnd;
         if (_retireFileJobsOnSessionEnd)
             _durableJournal.RetireUnfinishedFileJobs();
         _durableJournal.ReleaseStartupPauses();
         _taskOrderStore = new SchedulerTaskOrderStore(database);
+        _taskOrderStore.NormalizeLegacyJobPriorities();
         foreach (var key in _taskOrderStore.ReleaseStartupPauses())
             _releasedStartupExternalTasks.Add(key);
         foreach (var key in _taskOrderStore.ReadPaused())
