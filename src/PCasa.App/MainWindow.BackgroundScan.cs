@@ -11,12 +11,6 @@ public partial class MainWindow
 {
     private readonly Dictionary<string, PendingBackgroundScan> _backgroundPending =
         new(StringComparer.OrdinalIgnoreCase);
-    // The ONE background scan dispatcher uses the same durable P4 ranks
-    // that Taskmanager displays. No independent visual priority queue.
-    private readonly Dictionary<long, long> _backgroundReviewOrder = new();
-    // Explicit P2 promotions are persisted on scan_root_review, then
-    // mirrored here only while the one background dispatcher is active.
-    private readonly HashSet<long> _backgroundUrgentReviews = new();
     private bool _backgroundOrderChanged;
     // These are references into the already existing one-batch scan dispatcher;
     // they expose its real waiting tasks without spawning extra operations.
@@ -290,7 +284,7 @@ public partial class MainWindow
             // construction can block in the OS. Never do either on Dispatcher.
             var (folders, availability, exclusions, inclusions, pendingInitialIds,
                 interruptedInventories, dueRootReviews,
-                reconnectedFolderIds, urgentReviews) = await _scheduler.RunAsync(
+                reconnectedFolderIds) = await _scheduler.RunAsync(
                 $"background:monitor-probe:{Guid.NewGuid():N}",
                 SchedulerPriority.Background,
                 token =>
@@ -329,9 +323,8 @@ public partial class MainWindow
                     // Read dates while already on the scheduled probe lane.
                     // Never schedule a new review from a WPF timer alone.
                     var due = _folderRepository.GetDueRootReviewIds(DateTime.UtcNow);
-                    var urgent = _folderRepository.GetUrgentRootReviewIds();
                     return (roots, states, rules, includedRules, pending, inventories, due,
-                        reconnected, urgent);
+                        reconnected);
                 }, cancellationToken: _backgroundLifetime?.Token ?? default,
                 workKind: SchedulerWorkKind.SourceProbe);
 
@@ -340,11 +333,6 @@ public partial class MainWindow
                 return;
             }
 
-            // The order is owned by scan_root_review in SQLite. Capture
-            // its already committed sequence from the one monitor probe.
-            _backgroundReviewOrder.Clear();
-            for (var i = 0; i < dueRootReviews.Count; i++)
-                _backgroundReviewOrder[dueRootReviews[i]] = i + 1L;
             // A paused watcher request may have been queued but not yet
             // started when PCasa exited. Rebuild its SAME accepted identity
             // from the scheduler's persisted hold rather than losing the
@@ -372,21 +360,6 @@ public partial class MainWindow
                 QueueBackgroundChange(request);
                 _scheduler.AcknowledgeRecoveredExternalTask(pausedKey);
             }
-            _backgroundUrgentReviews.Clear();
-            foreach (var id in urgentReviews)
-                _backgroundUrgentReviews.Add(id);
-            // A user-moved review retains its global scheduler position
-            // after restart, even if the old idle review window has not
-            // elapsed. Reuse the existing monitor request and cursor.
-            foreach (var root in folders)
-            {
-                var visibleKey = $"automatic:{root.Id}:RescanRoot:{root.LocalPath}";
-                if (_scheduler.EffectiveTaskPlacement(
-                        visibleKey, SchedulerPriority.Idle, long.MaxValue)
-                    .Priority < SchedulerPriority.Idle)
-                    _backgroundUrgentReviews.Add(root.Id);
-            }
-
             // The initial-import retry guard is session-only. After a
             // confirmed reconnect it may be retried immediately; a
             // deliberately paused first import stays paused in SQLite.
@@ -842,12 +815,7 @@ public partial class MainWindow
                 progress,
                 paused ? "Angehalten" :
                     runningSnapshot is not null ? "Läuft" : "Wartet",
-                task.Kind == BackgroundFolderChangeKind.RescanRoot &&
-                    _backgroundUrgentReviews.Contains(task.MonitoredFolderId)
-                    ? 2 : AutomaticTaskPriority(task.Kind),
-                task.Kind == BackgroundFolderChangeKind.RescanRoot &&
-                _backgroundReviewOrder.TryGetValue(task.MonitoredFolderId, out var reviewRank)
-                    ? reviewRank : rank++,
+                AutomaticTaskPriority(task.Kind), rank++,
                 CanStop: !stopping,
                 CatalogDirectory: task.Kind == BackgroundFolderChangeKind.ScanDirectory
                     ? task.Path : null));
@@ -861,10 +829,6 @@ public partial class MainWindow
                     Add(inFlight[i], i == _backgroundInFlightIndex);
             foreach (var task in _backgroundPending.Values
                          .OrderBy(row => AutomaticTaskPriority(row.Kind))
-                         .ThenBy(row => row.Kind == BackgroundFolderChangeKind.RescanRoot
-                             ? _backgroundReviewOrder.GetValueOrDefault(
-                                 row.MonitoredFolderId, long.MaxValue)
-                             : long.MaxValue)
                          .ThenBy(row => row.Path, StringComparer.OrdinalIgnoreCase))
                 Add(task, false);
         }
@@ -1201,14 +1165,8 @@ public partial class MainWindow
             {
                 var defaultPriority = request.Kind ==
                     BackgroundFolderChangeKind.RescanRoot
-                    ? _backgroundUrgentReviews.Contains(request.MonitoredFolderId)
-                        ? SchedulerPriority.UserAction : SchedulerPriority.Idle
-                    : SchedulerPriority.Background;
-                var defaultOrder = request.Kind ==
-                    BackgroundFolderChangeKind.RescanRoot
-                    ? _backgroundReviewOrder.GetValueOrDefault(
-                        request.MonitoredFolderId, long.MaxValue)
-                    : request.Kind switch
+                    ? SchedulerPriority.Idle : SchedulerPriority.Background;
+                var defaultOrder = request.Kind switch
                     {
                         BackgroundFolderChangeKind.RemovePath => 0,
                         BackgroundFolderChangeKind.ScanFile => 1,
@@ -1644,10 +1602,6 @@ public partial class MainWindow
                     }
                     if (!request.NeedsFollowup)
                         _scheduler.CompleteTaskPromotion(taskKey);
-                    if (request.Kind == BackgroundFolderChangeKind.RescanRoot)
-                    {
-                        _backgroundUrgentReviews.Remove(request.MonitoredFolderId);
-                    }
                     scanResume.Dispose();
                     scanResume = null;
                     var followup = request.NeedsFollowup;

@@ -704,7 +704,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     if (durable is not null)
                     {
                         manualWaiting = durable.HasPendingEffectiveManualActions();
-                        nonIdleWaiting = durable.HasOutstandingNonIdleTasks();
+                        nonIdleWaiting = durable.HasRunnableNonIdleTasks();
                     }
                 }
                 catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException)
@@ -1657,8 +1657,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                     LaneManualScan or LaneUserAction or LaneSourceProbe))
             return null;
 
-        // P4 is pure idle work. All waiting/running P0-P3 requests exclude
-        // it, INCLUDING durable 'deferred' packages visible as Wartet in TM.
+        // Idle verification yields to runnable requests. Deferred or paused
+        // journal entries remain visible but do not reserve the worker.
         if (RankOwner(candidate).Priority == SchedulerPriority.Idle &&
             (durableNonIdlePending ||
              _pending.Any(other => !ReferenceEquals(other, candidate) &&

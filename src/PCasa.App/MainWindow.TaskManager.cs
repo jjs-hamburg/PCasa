@@ -21,19 +21,6 @@ public partial class MainWindow
             long.TryParse(key.AsSpan("initial:".Length), out folderId);
     }
 
-    private static bool TryRootReviewTaskId(string key, out long folderId)
-    {
-        folderId = 0;
-        if (!key.StartsWith("automatic:", StringComparison.Ordinal))
-            return false;
-        var rest = key.AsSpan("automatic:".Length);
-        var delimiter = rest.IndexOf(':');
-        return delimiter > 0 &&
-            long.TryParse(rest[..delimiter], out folderId) &&
-            rest[(delimiter + 1)..].StartsWith(
-                "RescanRoot:", StringComparison.Ordinal);
-    }
-
     // A UI reorder acknowledges the durable scheduler decision immediately.
     // Waiting for a NAS scanner's cancellation callbacks here kept the
     // Taskmanager's _acting flag raised and disabled EVERY action button,
@@ -51,24 +38,6 @@ public partial class MainWindow
                 TaskScheduler.Default);
         }
         catch (ObjectDisposedException) { }
-    }
-
-    private async Task ObserveTaskManagerOwnerUpdateAsync(Task<bool> action)
-    {
-        try
-        {
-            if (!await action && !Dispatcher.HasShutdownStarted)
-                StatusText.Text = UiLanguage.T(
-                    "Taskmanager: Auftrag konnte nicht aktiviert werden.");
-        }
-        catch (Exception ex)
-        {
-            PCasaDiagnostics.Write("Taskmanager.OwnerReorder", ex);
-            if (!Dispatcher.HasShutdownStarted)
-                StatusText.Text = UiLanguage.T(
-                    "Taskmanager: Auftrag konnte nicht aktiviert werden.") +
-                    " " + ex.Message;
-        }
     }
 
     // The ONE scheduler owns priority and relative dispatch order for
@@ -122,23 +91,6 @@ public partial class MainWindow
             targetKey.StartsWith("automatic:", StringComparison.Ordinal);
         if (changesAutomaticOrder)
         {
-            foreach (var item in allAcceptedKeys.Where(item =>
-                TryIsRootReview(item.Key)))
-            {
-                if (!TryRootReviewTaskId(item.Key, out var rootId)) continue;
-                var effective = _scheduler.EffectiveTaskPlacement(
-                    item.Key, item.Priority, long.MaxValue).Priority;
-                if (effective < SchedulerPriority.Idle)
-                    _backgroundUrgentReviews.Add(rootId);
-                else
-                    _backgroundUrgentReviews.Remove(rootId);
-            }
-            if (TryRootReviewTaskId(key, out _) &&
-                _scheduler.EffectiveTaskPlacement(
-                    key, SchedulerPriority.Idle, long.MaxValue).Priority <
-                    SchedulerPriority.Idle)
-                _ = ObserveTaskManagerOwnerUpdateAsync(
-                    StartAutomaticScanNowAsync(key));
             if (_backgroundInFlight is { Length: > 0 })
             {
                 _backgroundOrderChanged = true;
@@ -154,74 +106,9 @@ public partial class MainWindow
         return true;
     }
 
-    private static bool TryIsRootReview(string key)
-        => TryRootReviewTaskId(key, out _);
-
     private async Task<bool> MoveAutomaticScanAsync(
         string sourceKey, string targetKey)
     {
-        // The two Verify-catalog rows represent different monitored roots
-        // of the SAME P4 review queue. Persist their order in SQLite, and
-        // update the ONE existing background scan dispatcher immediately.
-        if (TryRootReviewTaskId(sourceKey, out var sourceRoot) &&
-            TryRootReviewTaskId(targetKey, out var targetRoot))
-        {
-            var (moved, ordered) = await _scheduler.RunAsync(
-                $"taskmanager:review-reorder:{Guid.NewGuid():N}",
-                SchedulerPriority.UserAction,
-                token =>
-                {
-                    token.ThrowIfCancellationRequested();
-                    var ok = _folderRepository.MoveRootReview(sourceRoot, targetRoot);
-                    return (ok, ok ? _folderRepository.GetRootReviewQueueOrder()
-                        : Array.Empty<long>());
-                }, workKind: SchedulerWorkKind.CatalogRead);
-            if (!moved) return false;
-
-            _backgroundReviewOrder.Clear();
-            for (var index = 0; index < ordered.Count; index++)
-                _backgroundReviewOrder[ordered[index]] = index + 1L;
-
-            if (_backgroundInFlight is { } inFlight &&
-                _backgroundInFlightIndex < inFlight.Length)
-            {
-                if (inFlight[_backgroundInFlightIndex].Kind ==
-                        BackgroundFolderChangeKind.RescanRoot)
-                {
-                    // The current review may be waiting in the scheduler
-                    // behind a manual scan. Cancel its queued attempt and
-                    // requeue ALL remaining requests with their confirmed
-                    // file/directory cursors, in the persisted new order.
-                    _backgroundOrderChanged = true;
-                    if (_backgroundCurrentScanCancellation is
-                        { IsCancellationRequested: false } active)
-                        try { await active.CancelAsync(); }
-                        catch (ObjectDisposedException) { }
-                }
-                else
-                {
-                    // A running P3 concrete discovery is untouchable.
-                    // Reorder only requests that have not been started.
-                    var start = _backgroundInFlightIndex + 1;
-                    var reordered = inFlight.Skip(start)
-                        .OrderBy(request => request.Kind ==
-                                BackgroundFolderChangeKind.RescanRoot ? 1 : 0)
-                        .ThenBy(request => request.Kind ==
-                                BackgroundFolderChangeKind.RescanRoot
-                                ? _backgroundReviewOrder.GetValueOrDefault(
-                                    request.MonitoredFolderId, long.MaxValue)
-                                : long.MaxValue)
-                        .ThenBy(request => request.Path,
-                            StringComparer.OrdinalIgnoreCase)
-                        .ToArray();
-                    Array.Copy(reordered, 0, inFlight, start, reordered.Length);
-                }
-            }
-            if (_backgroundPending.Count > 0 && !_backgroundWorkerRunning)
-                _backgroundDebounceTimer?.Start();
-            return true;
-        }
-
         if (!TryInitialTaskId(sourceKey, out var source) ||
             !TryInitialTaskId(targetKey, out var target))
             return false;
@@ -259,55 +146,6 @@ public partial class MainWindow
                 catch (ObjectDisposedException) { }
         }
         QueuePendingInitialScans();
-        return true;
-    }
-
-    // "Jetzt ausführen" promotes the ORIGINAL queued root review from P4
-    // to the scheduler's P2 user-action lane. P0 tag/GPS writes and manual
-    // scans still win; no second scanner or duplicate inventory is created.
-    private async Task<bool> StartAutomaticScanNowAsync(string key)
-    {
-        if (!TryRootReviewTaskId(key, out var rootId)) return false;
-        // This is a scheduler CONTROL-plane mutation. Waiting for an
-        // additional P2 worker here would defeat the user's attempt to
-        // move a P4 scan ahead of the currently busy work queue.
-        var promoted = await Task.Run(() =>
-            _scheduler.ChangeTaskIntent(() =>
-                _folderRepository.RequestRootReviewNow(rootId)));
-        if (!promoted) return false;
-        _backgroundUrgentReviews.Add(rootId);
-
-        // Reuse the SAME queued watcher intent and existing live iterator.
-        // Never create another task for an already queued or running review.
-        var queued = _backgroundPending.Values.Any(task =>
-            task.MonitoredFolderId == rootId &&
-            task.Kind == BackgroundFolderChangeKind.RescanRoot);
-        var inFlight = _backgroundInFlight is { } batch &&
-            batch.Skip(_backgroundInFlightIndex).Any(task =>
-                task.MonitoredFolderId == rootId &&
-                task.Kind == BackgroundFolderChangeKind.RescanRoot);
-        if (!queued && !inFlight)
-        {
-            var root = _folderRepository.GetAll()
-                .FirstOrDefault(item => item.Id == rootId);
-            if (root is not null)
-                QueueBackgroundChange(new BackgroundFolderChange(
-                    root.Id, root.LocalPath,
-                    BackgroundFolderChangeKind.RescanRoot, true));
-        }
-        if (inFlight)
-        {
-            // A different root currently owns the scan attempt. Yield it
-            // cooperatively and requeue its confirmed cursor behind the P2
-            // promotion; do not interrupt a completed file write.
-            _backgroundOrderChanged = true;
-            if (_backgroundCurrentScanCancellation is
-                { IsCancellationRequested: false } running)
-                RequestTaskManagerYield(running);
-        }
-        _backgroundDebounceTimer?.Stop();
-        _backgroundDebounceTimer?.Start();
-        _scheduler.NotifyTaskViewChanged();
         return true;
     }
 
@@ -358,8 +196,6 @@ public partial class MainWindow
             if (!key.StartsWith("automatic:", StringComparison.Ordinal))
                 return Task.FromResult(false);
             if (!_scheduler.PromoteTaskNow(key)) return Task.FromResult(false);
-            if (TryRootReviewTaskId(key, out _))
-                return StartPromotedRootReviewAsync(key);
             _backgroundOrderChanged = _backgroundInFlight is { Length: > 0 };
             if (_backgroundOrderChanged &&
                 _backgroundCurrentScanCancellation is
@@ -428,14 +264,6 @@ public partial class MainWindow
                 RefreshBackgroundMonitor();
         }
         return Task.FromResult(resumed);
-    }
-
-    private async Task<bool> StartPromotedRootReviewAsync(string key)
-    {
-        var accepted = await StartAutomaticScanNowAsync(key);
-        if (!accepted)
-            _scheduler.CompleteTaskPromotion(key);
-        return accepted;
     }
 
     private Task<bool> PauseTaskAsync(string key)

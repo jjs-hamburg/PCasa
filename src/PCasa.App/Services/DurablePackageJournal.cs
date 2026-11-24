@@ -504,12 +504,10 @@ public sealed class DurablePackageJournal
         return migrated;
     }
 
-    // The idle scheduler gate uses ALL outstanding non-idle packages,
-    // including temporarily deferred NAS packages. The Taskmanager must
-    // not display 'Wartet' for P0 while starting an unrelated P4 review.
-    // A deliberately canceled/completed/failed package is not outstanding.
-    // The persisted user priority override is authoritative.
-    public bool HasOutstandingNonIdleTasks()
+    // Only runnable packages may prevent the continuous inventory review.
+    // Deferred packages retain their identity and journal position, but
+    // cannot block an unrelated reachable source while awaiting retry.
+    public bool HasRunnableNonIdleTasks()
     {
         using var db = _database.OpenConnection();
         using var cmd = db.CreateCommand();
@@ -518,7 +516,7 @@ public sealed class DurablePackageJournal
                 SELECT 1 FROM scheduler_packages p
                 LEFT JOIN scheduler_task_order o ON o.task_key=p.package_key
                 WHERE COALESCE(o.priority_override,p.priority) < $idle
-                  AND p.state IN ('queued','running','deferred')
+                  AND p.state IN ('queued','running')
             );
             """;
         cmd.Parameters.AddWithValue("$idle", (int)SchedulerPriority.Idle);

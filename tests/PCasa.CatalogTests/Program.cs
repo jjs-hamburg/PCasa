@@ -91,8 +91,8 @@ internal static class Program
         Run("Running background job yields to user work and resumes", SchedulerYieldsToUserAndResumes, failures);
         Run("P4 catalog verify yields to every nonidle task and resumes after work", SchedulerIdleVerifyOnlyWhenOtherWorkFinished, failures);
         Run("Native drag interrupts background only through the central controller", NativeDragYieldIsControllerOwned, failures);
-        Run("P4 never starts while an accepted NAS P0 package remains deferred", DeferredP0BlocksP4Admission, failures);
-        Run("Newly deferred NAS P0 interrupts an already running P4 verification", DeferredP0PreemptsAlreadyRunningP4, failures);
+        Run("Deferred NAS P0 does not block reachable idle verification", DeferredP0AllowsP4Admission, failures);
+        Run("Newly deferred NAS P0 does not interrupt running verification", DeferredP0DoesNotPreemptP4, failures);
         Run("Manual P0 package may await nested read while older P0 is queued", NestedPackageCatalogReadDoesNotDeadlockLifo, failures);
         Run("Preempted manual scan waits for requested file mutation then resumes", ManualMutationOvertakesYieldingManualScan, failures);
         Run("Newest manual package runs first, older packages resume at their saved step", DynamicPackagesResumeLifo, failures);
@@ -833,7 +833,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void DeferredP0PreemptsAlreadyRunningP4()
+    private static void DeferredP0DoesNotPreemptP4()
     {
         static async Task Check()
         {
@@ -844,7 +844,7 @@ internal static class Program
             scheduler.EnableDurablePackages(db);
             var started = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            var resumed = new TaskCompletionSource(
+            var finish = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var attempts = 0;
             var idle = scheduler.EnqueueAsync("test:already-running-p4",
@@ -853,9 +853,8 @@ internal static class Program
                     if (Interlocked.Increment(ref attempts) == 1)
                     {
                         started.TrySetResult();
-                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                        await finish.Task.WaitAsync(token);
                     }
-                    else resumed.TrySetResult();
                 }, workKind: SchedulerWorkKind.CatalogScan);
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var journal = new DurablePackageJournal(db);
@@ -869,24 +868,20 @@ internal static class Program
             journal.Defer(p0, 0, "Quelle vorübergehend offline",
                 TimeSpan.FromMinutes(30));
             scheduler.RecoverDurablePackages();
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(8);
-            while (DateTime.UtcNow < deadline &&
-                   !scheduler.Snapshot().Any(x => x.Key == "test:already-running-p4"
-                       && x.State is SchedulerJobState.Queued or
-                           SchedulerJobState.YieldRequested))
-                await Task.Delay(30);
-            if (!scheduler.Snapshot().Any(x => x.Key == "test:already-running-p4"
-                 && x.State is SchedulerJobState.Queued or
-                     SchedulerJobState.YieldRequested))
-                throw new Exception("Deferred NAS P0 did not interrupt active P4.");
-            if (resumed.Task.IsCompleted)
-                throw new Exception("P4 resumed while deferred P0 was still waiting.");
-            if (!journal.Cancel(p0))
-                throw new Exception("Could not release the waiting NAS package.");
-            await resumed.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            try
+            {
+                await Task.Delay(500);
+                if (scheduler.Snapshot().Any(x => x.Key == "test:already-running-p4" &&
+                    x.State == SchedulerJobState.YieldRequested) || attempts != 1)
+                    throw new Exception("Deferred NAS work interrupted reachable verification.");
+                if (!journal.Pending().Any(x => x.Key == p0 && x.State == "deferred"))
+                    throw new Exception("Deferred task identity was lost.");
+            }
+            finally { finish.TrySetResult(); }
             await idle.WaitAsync(TimeSpan.FromSeconds(8));
-            if (attempts != 2)
-                throw new Exception("P4 lost its resumable job identity.");
+            if (attempts != 1)
+                throw new Exception("Unrelated deferred task forced an inventory restart.");
+            journal.Cancel(p0);
         }
         Check().GetAwaiter().GetResult();
     }
@@ -937,7 +932,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void DeferredP0BlocksP4Admission()
+    private static void DeferredP0AllowsP4Admission()
     {
         static async Task Check()
         {
@@ -954,8 +949,9 @@ internal static class Program
                 }), SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
             journal.Defer(key, 0, "Quelle vorübergehend offline",
                 TimeSpan.FromMinutes(30));
-            if (!journal.HasOutstandingNonIdleTasks())
-                throw new Exception("P0 deferred package vanished from scheduler's global list.");
+            if (journal.HasRunnableNonIdleTasks() ||
+                !journal.Pending().Any(x => x.Key == key && x.State == "deferred"))
+                throw new Exception("Deferred P0 must remain in the journal without blocking idle work.");
 
             await using var scheduler = new PCasaScheduler();
             scheduler.EnableDurablePackages(db);
@@ -967,20 +963,11 @@ internal static class Program
                     idleStarted.TrySetResult();
                     return Task.CompletedTask;
                 }, workKind: SchedulerWorkKind.CatalogScan);
-            await Task.Delay(200);
-            if (idleStarted.Task.IsCompleted)
-                throw new Exception("P4 started while NAS P0 was visibly waiting.");
-
-            if (!journal.Cancel(key))
-                throw new Exception("Could not dismiss deferred test package.");
-            // The next ordinary scheduler state change wakes ALL job lanes.
-            await scheduler.EnqueueAsync("test:interactive-event",
-                SchedulerPriority.Interactive, _ => Task.CompletedTask,
-                workKind: SchedulerWorkKind.CatalogRead)
-                .WaitAsync(TimeSpan.FromSeconds(5));
             await idle.WaitAsync(TimeSpan.FromSeconds(5));
-            if (!idleStarted.Task.IsCompleted)
-                throw new Exception("P4 stayed blocked after last nonidle job finished.");
+            if (!idleStarted.Task.IsCompleted ||
+                !journal.Pending().Any(x => x.Key == key && x.State == "deferred"))
+                throw new Exception("Idle verification blocked or discarded deferred NAS work.");
+            journal.Cancel(key);
         }
         Check().GetAwaiter().GetResult();
     }
