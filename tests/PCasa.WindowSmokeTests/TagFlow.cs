@@ -1439,7 +1439,12 @@ internal static class TagFlow
                         StringComparison.OrdinalIgnoreCase))
                     throw new Exception("Manual overlay did not restore the live NAS scan.");
 
-                scanPresentation.EndScanPhase(activeScanOwner);
+                if (scanPresentation.EndScanPhase(new object()) ||
+                    !scanPresentation.IsVisible ||
+                    count?.Text.Contains("13", StringComparison.OrdinalIgnoreCase) != true)
+                    throw new Exception("Unrelated scan cleanup claimed or erased the live presentation.");
+                if (!scanPresentation.EndScanPhase(activeScanOwner))
+                    throw new Exception("Scan owner could not retire its actual presentation.");
                 if (!scanPresentation.IsVisible ||
                     count?.Text != "4 / 20")
                     throw new Exception("Finished NAS scan did not restore actual cache progress.");

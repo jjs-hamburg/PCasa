@@ -252,8 +252,8 @@ public partial class MainWindow
         {
             if (progressWindow is not null)
             {
-                progressWindow.EndScanPhase(scanOwner);
-                RestoreWaitingManualPresentationAfterScan();
+                if (progressWindow.EndScanPhase(scanOwner))
+                    RestoreWaitingManualPresentationAfterScan();
                 ReleaseProgressPresenter(scanOwner);
             }
             if (ReferenceEquals(_activeScanCancellation, cancellation))

@@ -1720,8 +1720,11 @@ public partial class MainWindow
                     _backgroundLiveTaskKey = null;
                     _backgroundLiveChecked = 0;
                     acceptsScanProgress = false;
-                    activityWindow?.EndScanPhase(scanOwner);
-                    RestoreWaitingManualPresentationAfterScan();
+                    // A passive check has no presenter ownership. Likewise
+                    // a scan that never published cannot clear someone else's
+                    // preview or restore their waiting tag caption.
+                    if (activityWindow?.EndScanPhase(scanOwner) == true)
+                        RestoreWaitingManualPresentationAfterScan();
                     if (ReferenceEquals(_activeScanCancellation, scanCancellation))
                     {
                         _activeScanCancellation = null;

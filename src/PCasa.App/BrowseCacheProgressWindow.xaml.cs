@@ -575,10 +575,13 @@ public partial class BrowseCacheProgressWindow : Window
         RevealActiveProgress();
     }
 
-    public void EndScanPhase(object? scanOwner = null)
+    // True only when this caller actually retired its own scan phase.
+    // Other work (including passive inventory checks) must not restore a
+    // waiting manual overlay on top of a different producer's live preview.
+    public bool EndScanPhase(object? scanOwner = null)
     {
         if (!_scanPhaseActive ||
-            !ReferenceEquals(_activeScanOwner, scanOwner)) return;
+            !ReferenceEquals(_activeScanOwner, scanOwner)) return false;
         _scanPhaseActive = false;
         _activeScanOwner = null;
         _lastScanProgress = null;
@@ -586,9 +589,9 @@ public partial class BrowseCacheProgressWindow : Window
         if (_databaseBackupRunning)
         {
             ShowDatabaseBackupIfIdle();
-            return;
+            return true;
         }
-        if (_manualPresentationActive) return;
+        if (_manualPresentationActive) return true;
         if (_cachePhaseOwners.Count > 0 && _lastCacheProgress is { } cache)
         {
             ShowCacheProgress(cache);
@@ -597,6 +600,7 @@ public partial class BrowseCacheProgressWindow : Window
         }
         else
             ClearInactivePresentation();
+        return true;
     }
 
     private void ShowScanProgress(ScanProgress progress)
