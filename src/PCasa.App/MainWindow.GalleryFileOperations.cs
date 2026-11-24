@@ -718,9 +718,17 @@ public partial class MainWindow
                 move ? "Bilder verschieben" : "Bilder kopieren", requested.Length);
             var package = BuildDurableGalleryTransferPackage(
                 key, payload, recovered: false);
-            await _scheduler.EnqueueDurablePackageAsync(
-                package, "gallery-transfer-v1", payload,
-                SchedulerPriority.ManualAction);
+            if (requested.Length == 1 && !neverReplace)
+            {
+                await StartDirectImageWrite(key,
+                    UiLanguage.T(move ? "Bilder verschieben" : "Bilder kopieren"),
+                    requested[0], package, folderId: 0, reindexOriginal: false);
+                _durableGalleryTransfers.PruneDirectCompleted(key);
+            }
+            else
+                await _scheduler.EnqueueDurablePackageAsync(
+                    package, "gallery-transfer-v1", payload,
+                    SchedulerPriority.ManualAction);
             _durableGalleryTransfers.PruneCompleted();
         }
         catch (OperationCanceledException)

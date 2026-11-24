@@ -169,6 +169,21 @@ public sealed class DurableGalleryTransferJournal
     // A receipt must remain inspectable while the scheduler outcome is not
     // terminal. Only a confirmed, durable COMPLETED package may be pruned.
     // A crash between completion and this cleanup is harmless on next start.
+    // A session-only single-file action has no scheduler package row.
+    // Retire only terminal receipts; unresolved physical relocation evidence
+    // is preserved for catalog recovery, not for replaying a user action.
+    public void PruneDirectCompleted(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM gallery_transfer_receipts
+             WHERE package_key=$key AND phase IN ('indexed','skipped');
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        cmd.ExecuteNonQuery();
+    }
+
     public void PruneCompleted()
     {
         using var db = _database.OpenConnection();
