@@ -534,6 +534,14 @@ public sealed class FolderRepository
     // Only a fully successful enumeration with the original source fence
     // can advance the global order. A canceled check never calls this.
     public bool CompleteRootCheck(long folderId, long generation, long epoch)
+        => CompleteRootCheck(folderId, generation, epoch, []) is not null;
+
+    // The verified source fence, discovered requests and check sequence
+    // commit together. A crash cannot acknowledge a check while losing
+    // its newly detected changes.
+    public IReadOnlyList<AutomaticChangeJob>? CompleteRootCheck(
+        long folderId, long generation, long epoch,
+        IReadOnlyList<BackgroundFolderChange> changes)
     {
         using var db = _database.OpenConnection();
         using var tx = db.BeginTransaction();
@@ -556,10 +564,22 @@ public sealed class FolderRepository
         cmd.Parameters.AddWithValue("$generation", generation);
         cmd.Parameters.AddWithValue("$epoch", epoch);
         cmd.Parameters.AddWithValue("$now", DateTime.UtcNow.ToString("O"));
-        if (cmd.ExecuteNonQuery() != 1) return false;
+        if (cmd.ExecuteNonQuery() != 1) return null;
+        var accepted = new List<AutomaticChangeJob>(changes.Count);
+        foreach (var change in changes)
+        {
+            if (change.MonitoredFolderId != folderId ||
+                change.Kind is not (BackgroundFolderChangeKind.ScanFile or
+                    BackgroundFolderChangeKind.ScanDirectory or BackgroundFolderChangeKind.RemovePath))
+                throw new ArgumentException("Invalid inventory change.", nameof(changes));
+            var path = Path.GetFullPath(change.Path).Replace('/', '\\');
+            var normalized = change with { Path = path };
+            accepted.Add(AcceptAutomaticChange(db, tx,
+                $"automatic:{folderId}:{change.Kind}:{path}", normalized));
+        }
         AdvanceCheckSequence(db, tx, folderId);
         tx.Commit();
-        return true;
+        return accepted;
     }
 
     // Stable order of the one existing P4 root-review dispatcher. This
@@ -837,7 +857,15 @@ public sealed class FolderRepository
         BackgroundFolderChange change)
     {
         using var db = _database.OpenConnection();
+        return AcceptAutomaticChange(db, null, key, change);
+    }
+
+    private static AutomaticChangeJob AcceptAutomaticChange(
+        SqliteConnection db, SqliteTransaction? tx, string key,
+        BackgroundFolderChange change)
+    {
         using var cmd = db.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO automatic_change_jobs
                 (task_key,monitored_folder_id,local_path,kind,recursive,
