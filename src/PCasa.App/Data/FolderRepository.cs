@@ -909,6 +909,26 @@ public sealed class FolderRepository
         return result;
     }
 
+    // A worker interruption is not a new watcher notification. Resolve the
+    // current durable receipt without allocating a replacement revision.
+    public AutomaticChangeJob? GetPendingAutomaticChange(string key)
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            SELECT task_key,queue_order,revision,monitored_folder_id,local_path,
+                   kind,recursive,force_exif_refresh
+              FROM automatic_change_jobs WHERE task_key=$key;
+            """;
+        cmd.Parameters.AddWithValue("$key", key);
+        using var row = cmd.ExecuteReader();
+        return row.Read() ? new AutomaticChangeJob(row.GetString(0),
+            row.GetInt64(1), row.GetString(2), new BackgroundFolderChange(
+                row.GetInt64(3), row.GetString(4),
+                (BackgroundFolderChangeKind)row.GetInt32(5),
+                row.GetBoolean(6), row.GetBoolean(7))) : null;
+    }
+
     public bool RetireAutomaticChange(string key, string? revision = null)
     {
         using var db = _database.OpenConnection();
