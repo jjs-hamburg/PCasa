@@ -144,7 +144,8 @@ public sealed class SchedulerTaskView
                                 ? UiLanguage.Format("{0:N0} Bilder",
                                     scanProgress.CountCataloguedInDirectory(directory))
                                 : scan.Progress, scan.Status,
-                        null, scan.Priority, first?.QueueOrder ?? scan.Order,
+                        null, first is not null ? (int)SchedulerPriority.ManualAction : scan.Priority,
+                        first?.QueueOrder ?? scan.Order,
                         false, _canMoveAutomatic &&
                             ((first is not null) ||
                              (scan.Priority == 4 && IsRootReview(scan.Key) &&
@@ -167,7 +168,7 @@ public sealed class SchedulerTaskView
                     rows.Add(new SchedulerTaskViewItem(key, UiLanguage.T("Bilder einlesen"),
                         first.Directory, UiLanguage.Format("{0:N0} Bilder", first.CataloguedCount),
                         first.Paused ? "Angehalten" : "Wartet",
-                        null, 2, first.QueueOrder,
+                        null, (int)SchedulerPriority.ManualAction, first.QueueOrder,
                         false, _canMoveAutomatic,
                         first.Paused && _canResumeAutomatic,
                         _canStopAutomatic));
