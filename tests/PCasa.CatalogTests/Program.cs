@@ -1956,7 +1956,7 @@ internal static class Program
         var lastRootCompleted = verified.GetLastCompletedRootReview(
             firstImportPending.Id) ?? throw new Exception(
                 "Last root did not persist its completed timestamp.");
-        var beforeCooldown = lastRootCompleted.AddDays(30).AddTicks(-1);
+        var beforeCooldown = lastRootCompleted.AddDays(30).AddSeconds(-1);
         var beforeRound = verified.GetDueRootReviewIds(beforeCooldown);
         if (beforeRound.Count != 0 ||
             verified.GetReviewRoundStatus(beforeCooldown).Round != 1)
@@ -1970,9 +1970,35 @@ internal static class Program
             throw new Exception(
                 "Restart discarded the completed round's 30-day cooldown.");
 
+        // Upgrade regression: Alpha.62 could already advance a global
+        // review round with no cooldown at all. The old 30,000-file cycle
+        // must NOT resume after Alpha.63 startup until its previously
+        // completed root is at least 30 days old. Do not delete checkpoints.
+        using (var connection = db.OpenConnection())
+        using (var premature = connection.CreateCommand())
+        {
+            premature.CommandText = "UPDATE scan_review_cycle SET current_cycle=2 WHERE id=1;";
+            if (premature.ExecuteNonQuery() != 1)
+                throw new Exception("Failed to simulate prematurely advanced old round.");
+        }
+        if (verified.GetDueRootReviewIds(DateTime.UtcNow).Count != 0)
+            throw new Exception(
+                "Alpha.62's premature new round restarted an already verified root.");
+        db.Initialize();
+        if (new FolderRepository(db).GetDueRootReviewIds(DateTime.UtcNow).Count != 0)
+            throw new Exception(
+                "Startup resumed a premature root review despite the saved last-check date.");
+        using (var connection = db.OpenConnection())
+        using (var restore = connection.CreateCommand())
+        {
+            restore.CommandText = "UPDATE scan_review_cycle SET current_cycle=1 WHERE id=1;";
+            if (restore.ExecuteNonQuery() != 1)
+                throw new Exception("Failed to restore first-round fixture.");
+        }
+
         // At the boundary, the pending set is created once, durably, not
         // every time the monitor's 30-second probe is called.
-        var nextRoundStart = lastRootCompleted.AddDays(30).AddTicks(1);
+        var nextRoundStart = lastRootCompleted.AddDays(30).AddSeconds(1);
         var nextRound = verified.GetDueRootReviewIds(nextRoundStart);
         if (!nextRound.Contains(root.Id) ||
             !nextRound.Contains(other.Id) ||
