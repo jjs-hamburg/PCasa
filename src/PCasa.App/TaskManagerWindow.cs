@@ -27,12 +27,11 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<IReadOnlyList<AutomaticScanTask>>? _automaticScans;
     private readonly Func<string, Task<bool>>? _stopAutomaticScan;
     private readonly Func<string>? _idleScanStatus;
-    private readonly Func<string,string,Task<bool>>? _moveAutomaticScan;
     private readonly Func<string,Task<bool>>? _resumeAutomaticScan;
     private readonly Func<string,Task<bool>>? _startAutomaticNow;
     private readonly Func<string,Task<bool>>? _pauseInitialImport;
     private readonly Func<string,Task<bool>>? _resumePausedTask;
-    private readonly Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
+    private readonly Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>
         _moveGlobalTask;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
     private readonly DataGrid _list = new();
@@ -69,7 +68,7 @@ public sealed class TaskManagerWindow : Window
     {
         _scheduler = scheduler;
         _taskView = scheduler.CreateTaskView(database,
-            moveAutomaticScan is not null, resumeAutomaticScan is not null,
+            true, resumeAutomaticScan is not null,
             stopAutomaticScan is not null, retryFailedFile is not null,
             discardFailedFile is not null);
         _retryFailedFile = retryFailedFile;
@@ -77,12 +76,12 @@ public sealed class TaskManagerWindow : Window
         _automaticScans = automaticScans;
         _stopAutomaticScan = stopAutomaticScan;
         _idleScanStatus = idleScanStatus;
-        _moveAutomaticScan = moveAutomaticScan;
         _resumeAutomaticScan = resumeAutomaticScan;
         _startAutomaticNow = startAutomaticNow;
         _pauseInitialImport = pauseInitialImport;
         _resumePausedTask = resumePausedTask;
-        _moveGlobalTask = moveGlobalTask;
+        _moveGlobalTask = moveGlobalTask ?? ((key, target, accepted) =>
+            Task.Run(() => scheduler.MoveTaskGlobally(key, target, accepted)));
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
         Width = 940; Height = 465;
         MinWidth = 760; MinHeight = 330;
@@ -379,11 +378,7 @@ public sealed class TaskManagerWindow : Window
         var row = TaskAt(e.OriginalSource as DependencyObject);
         _dragOrigin = row is not null && !InformationalExternal(row) &&
             !IsContinuousReview(row) &&
-            row.Status != "Abgeschlossen" &&
-            ( _moveGlobalTask is not null ||
-              (row.Movable && HasReorderPeer(row) &&
-               (row.Durable || IsInitialImport(row.Key) ||
-                IsRootReview(row.Key))) )
+            row.Status != "Abgeschlossen"
             ? e.GetPosition(_list) : null;
         _dragKey = _dragOrigin is not null ? row?.Key : null;
     }
@@ -429,15 +424,7 @@ public sealed class TaskManagerWindow : Window
             !IsContinuousReview(source) && !IsContinuousReview(target) &&
             target is not null && source.Key != target.Key &&
             source.Status != "Abgeschlossen" &&
-            target.Status != "Abgeschlossen" &&
-            (_moveGlobalTask is not null ||
-             (source.Movable && target.Priority == source.Priority &&
-              ((source.Durable && target.Durable &&
-                SameSchedulerLane(source, target)) ||
-               (IsInitialImport(source.Key) && IsInitialImport(target.Key) &&
-                _moveAutomaticScan is not null) ||
-               (IsRootReview(source.Key) && IsRootReview(target.Key) &&
-                _moveAutomaticScan is not null))))
+            target.Status != "Abgeschlossen"
                 ? DragDropEffects.Move : DragDropEffects.None;
         e.Handled = true;
     }
@@ -450,28 +437,15 @@ public sealed class TaskManagerWindow : Window
         var target = TaskAt(e.OriginalSource as DependencyObject);
         if (key is null || target is null) return;
         var targetKey = target.Key;
-        if (_moveGlobalTask is not null)
-        {
-            var ordered = _all.Where(row => row.Status != "Abgeschlossen" &&
-                !InformationalExternal(row) && !IsContinuousReview(row))
-                .Select(row => new SchedulerTaskOrderItem(
-                    row.Key, (SchedulerPriority)row.Priority)).ToArray();
-            _ = PerformAsync(key, () => _moveGlobalTask(key, targetKey, ordered));
-            return;
-        }
-        if ((IsInitialImport(key) || IsRootReview(key)) &&
-            _moveAutomaticScan is not null)
-            _ = PerformAsync(key, () => _moveAutomaticScan(key, targetKey));
-        else
-            _ = PerformAsync(key, () => Task.Run(() =>
-            {
-                if (!_scheduler.MoveDurableTaskTo(key, targetKey))
-                    throw new InvalidOperationException(
-                        "Die Reihenfolge konnte nicht geändert werden. " +
-                        "Der Auftrag ist nicht mehr wartend oder gehört zu einer anderen Ausführungsgruppe.");
-                return true;
-            }));
+        var ordered = AcceptedOrder();
+        _ = PerformAsync(key, () => _moveGlobalTask(key, targetKey, ordered));
     }
+
+    private SchedulerTaskOrderItem[] AcceptedOrder() =>
+        _all.Where(row => row.Status != "Abgeschlossen" &&
+                !InformationalExternal(row) && !IsContinuousReview(row))
+            .Select(row => new SchedulerTaskOrderItem(
+                row.Key, (SchedulerPriority)row.Priority)).ToArray();
 
     private static bool InformationalExternal(TaskRow? row)
         => row is not null &&
@@ -485,79 +459,21 @@ public sealed class TaskManagerWindow : Window
     private static bool IsInitialImport(string key)
         => key.StartsWith("initial:", StringComparison.Ordinal);
 
-    private static bool IsRootReview(string key)
-        => key.StartsWith("automatic:", StringComparison.Ordinal) &&
-           key.Contains(":RescanRoot:", StringComparison.Ordinal);
-
-    // A task can move only inside the execution lane where its scheduler
-    // owner can actually change dispatch order. Independent lanes cannot
-    // be represented as an editable single serial queue.
-    private static bool SameSchedulerLane(TaskRow source, TaskRow target)
-    {
-        if (source.Priority != target.Priority) return false;
-        static string Lane(SchedulerWorkKind kind) => kind switch
-        {
-            SchedulerWorkKind.CatalogRead => "read",
-            SchedulerWorkKind.ViewerRead => "viewer",
-            SchedulerWorkKind.ThumbnailRead => "thumbnail",
-            SchedulerWorkKind.SourceProbe => "source-probe",
-            SchedulerWorkKind.InitialImport => "initial",
-            _ => "work"
-        };
-        return Lane(source.WorkKind) == Lane(target.WorkKind);
-    }
-
-    private TaskRow[] ReorderLane(TaskRow row)
-    {
-        if (IsInitialImport(row.Key))
-            return _all.Where(other => IsInitialImport(other.Key) &&
-                    other.Priority == row.Priority)
-                .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
-        if (IsRootReview(row.Key))
-            return _all.Where(other => IsRootReview(other.Key) &&
-                    other.Priority == row.Priority &&
-                    other.Status == "Wartet")
-                .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
-        if (row.Durable)
-            return _all.Where(other => other.Durable &&
-                    other.Status is "Läuft" or "Wartet" &&
-                    SameSchedulerLane(row, other))
-                .OrderBy(other => other.Order).ThenBy(other => other.Key).ToArray();
-        return [];
-    }
-
-    private bool HasReorderPeer(TaskRow row)
-        => ReorderLane(row).Length > 1;
-
     private bool CanMove(TaskRow row, int direction)
     {
-        if (InformationalExternal(row) || IsContinuousReview(row)) return false;
-        if (_moveGlobalTask is not null)
-        {
-            if (row.Status == "Abgeschlossen") return false;
-            // Buttons operate on the FILTERED visible neighbors, not on
-            // hidden task rows. The scheduler still receives the complete
-            // unfiltered accepted order so invisible tasks keep their rank.
-            var visible = _visible.Where(item =>
-                item.Status != "Abgeschlossen" &&
-                !InformationalExternal(item) && !IsContinuousReview(item)).ToArray();
-            var globalIndex = Array.FindIndex(
-                visible, item => item.Key == row.Key);
-            return globalIndex >= 0 && globalIndex + direction >= 0 &&
-                globalIndex + direction < visible.Length;
-        }
-        if (!row.Movable || row.Status is "Läuft" or "Fehler" or "Abgeschlossen")
-            return false;
-        var lane = ReorderLane(row);
-        var index = Array.FindIndex(lane, other => other.Key == row.Key);
-        if (index >= 0 && index + direction >= 0 &&
-            index + direction < lane.Length) return true;
-        // At the top of its own P4 queue, an explicit Up gesture promotes
-        // the SAME review to P2. P0 manual writing remains protected.
-        return direction == -1 && IsRootReview(row.Key) &&
-            row.Priority == 4 && _startAutomaticNow is not null &&
-            index == 0;
+        if (InformationalExternal(row) || IsContinuousReview(row) ||
+            row.Status == "Abgeschlossen") return false;
+        // Visible neighbors determine the target, but the full accepted
+        // sequence is always sent to the scheduler.
+        var visible = MovableVisibleRows();
+        var index = Array.FindIndex(visible, item => item.Key == row.Key);
+        return index >= 0 && index + direction >= 0 &&
+            index + direction < visible.Length;
     }
+
+    private TaskRow[] MovableVisibleRows() => _visible.Where(item =>
+        item.Status != "Abgeschlossen" &&
+        !InformationalExternal(item) && !IsContinuousReview(item)).ToArray();
 
     private TaskRow? Selection => _list.SelectedItem as TaskRow;
 
@@ -634,9 +550,7 @@ public sealed class TaskManagerWindow : Window
         const string moveInfo =
             "Aufträge frei verschieben. Die neue Reihenfolge wird im Scheduler gespeichert; " +
             "laufende Dateischreibvorgänge geben ihren Platz am nächsten sicheren Schritt frei.";
-        _up.ToolTip = _down.ToolTip = UiLanguage.T(
-            _moveGlobalTask is not null ? moveInfo :
-            "Verschieben ist nur zwischen Aufträgen derselben Ausführungsgruppe möglich.");
+        _up.ToolTip = _down.ToolTip = UiLanguage.T(moveInfo);
         ToolTipService.SetShowOnDisabled(_up, true);
         ToolTipService.SetShowOnDisabled(_down, true);
         _detail.Text = row is null
@@ -645,24 +559,9 @@ public sealed class TaskManagerWindow : Window
             ? UiLanguage.T("Fehler") + ": " + row.Error
             : row.Status == "Abgeschlossen"
                 ? UiLanguage.T("Abgeschlossen")
-                : _moveGlobalTask is not null
-                    // A global move is always available for non-edge rows.
-                    // The old lane-specific explanation is not applicable
-                    // when the single scheduler owns every task position.
-                    ? row.Status == "Läuft"
-                        ? UiLanguage.T("Läuft; Änderungen der Reihenfolge werden am nächsten sicheren Übergabepunkt wirksam.")
-                        : row.Directory
                 : row.Status == "Läuft"
-                    ? UiLanguage.T("Dieser Auftrag läuft bereits; laufende Arbeit wird nicht durch Verschieben unterbrochen.")
-                : row.Movable && !HasReorderPeer(row) &&
-                    IsRootReview(row.Key) && row.Priority == 4 &&
-                    _startAutomaticNow is not null
-                    ? UiLanguage.T("Mit „Jetzt ausführen“ oder „Nach oben“ diese Prüfung bei nächster Gelegenheit vorziehen.")
-                : row.Movable && !HasReorderPeer(row)
-                    ? UiLanguage.T("Keine zweite Aufgabe in derselben Prioritäts- und Ausführungsgruppe zum Verschieben vorhanden.")
-                : !row.Movable && row.Status is "Wartet" or "Angehalten"
-                    ? UiLanguage.T("Dieser Auftrag wird von einem anderen Scheduler-Bereich verwaltet und lässt sich hier nicht verschieben.")
-                : row.Directory;
+                    ? UiLanguage.T("Läuft; Änderungen der Reihenfolge werden am nächsten sicheren Übergabepunkt wirksam.")
+                    : row.Directory;
         _detail.ToolTip = row is null ? null :
             _detail.Text + Environment.NewLine + row.Directory;
     }
@@ -717,46 +616,12 @@ public sealed class TaskManagerWindow : Window
     {
         var row = Selection;
         if (row is null || !CanMove(row, direction)) return;
-        if (_moveGlobalTask is not null)
-        {
-            var visible = _visible.Where(item =>
-                item.Status != "Abgeschlossen" &&
-                !InformationalExternal(item) && !IsContinuousReview(item)).ToArray();
-            var index = Array.FindIndex(visible, item => item.Key == row.Key);
-            var neighbor = visible[index + direction];
-            var accepted = _all.Where(item => item.Status != "Abgeschlossen" &&
-                    !InformationalExternal(item) && !IsContinuousReview(item))
-                .Select(item => new SchedulerTaskOrderItem(
-                    item.Key, (SchedulerPriority)item.Priority)).ToArray();
-            _ = PerformAsync(row.Key, () =>
-                _moveGlobalTask(row.Key, neighbor.Key, accepted));
-            return;
-        }
-        if (direction == -1 && IsRootReview(row.Key) &&
-            ReorderLane(row).FirstOrDefault()?.Key == row.Key &&
-            row.Priority == 4 && _startAutomaticNow is not null)
-        {
-            _ = PerformAsync(row.Key, () => _startAutomaticNow(row.Key));
-            return;
-        }
-        if ((IsInitialImport(row.Key) || IsRootReview(row.Key)) &&
-            _moveAutomaticScan is not null)
-        {
-            var lane = ReorderLane(row);
-            var index = Array.FindIndex(lane, other => other.Key == row.Key);
-            if (index < 0 || index + direction < 0 ||
-                index + direction >= lane.Length) return;
-            _ = PerformAsync(row.Key, () =>
-                _moveAutomaticScan(row.Key, lane[index + direction].Key));
-            return;
-        }
-        _ = PerformAsync(row.Key, () => Task.Run(() =>
-        {
-            if (!_scheduler.MoveDurableTask(row.Key, direction))
-                throw new InvalidOperationException(
-                    "Innerhalb dieser Prioritätsstufe ist kein weiterer Platz verfügbar.");
-            return true;
-        }));
+        var visible = MovableVisibleRows();
+        var index = Array.FindIndex(visible, item => item.Key == row.Key);
+        var neighbor = visible[index + direction];
+        var accepted = AcceptedOrder();
+        _ = PerformAsync(row.Key, () =>
+            _moveGlobalTask(row.Key, neighbor.Key, accepted));
     }
 
     private void Restart()
