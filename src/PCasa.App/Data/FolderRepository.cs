@@ -442,6 +442,14 @@ public sealed class FolderRepository
     // AFTER every eligible root has completed (or been removed). A failed
     // or disconnected root is still unfinished and never silently skipped.
     //
+    // Avoid a perpetual 30,000-photo review loop: the NEXT full-library
+    // inventory may begin no sooner than 30 days after the LAST root
+    // successfully finished the previous round. A partially completed
+    // round is never restarted on a timer; watcher events remain P3.
+    // All timestamps and round membership are stored in the same SQLite DB,
+    // so app restarts, upgrades and NAS reconnects cannot restart the clock.
+    private static readonly TimeSpan RootReviewCooldown = TimeSpan.FromDays(30);
+
     // The caller probes availability separately; this read never accesses
     // NAS files and cannot consume a file cursor. The DB transaction makes
     // round advancement atomic across restarts and concurrent completions.
@@ -461,6 +469,7 @@ public sealed class FolderRepository
 
         long outstanding;
         long eligible;
+        DateTime? lastRootFinishedUtc = null;
         using (var scan = db.CreateCommand())
         {
             scan.Transaction = tx;
@@ -470,7 +479,8 @@ public sealed class FolderRepository
                            r.monitored_folder_id IS NULL OR
                            r.source_generation != s.generation OR
                            r.completed_cycle < $round
-                           THEN 1 ELSE 0 END),0)
+                           THEN 1 ELSE 0 END),0),
+                       MAX(r.last_completed_utc)
                   FROM monitored_folders m
                   JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
                   LEFT JOIN scan_root_review r ON r.monitored_folder_id=m.id
@@ -481,6 +491,12 @@ public sealed class FolderRepository
             reader.Read();
             eligible = reader.GetInt64(0);
             outstanding = reader.GetInt64(1);
+            if (!reader.IsDBNull(2) &&
+                DateTime.TryParse(reader.GetString(2),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out var lastCompleted))
+                lastRootFinishedUtc = lastCompleted.ToUniversalTime();
         }
 
         // An offline, unfinished first import may not prevent verification
@@ -500,11 +516,14 @@ public sealed class FolderRepository
             pendingFirstImports = Convert.ToInt64(pending.ExecuteScalar());
         }
 
-        if (eligible > 0 && outstanding == 0 && pendingFirstImports == 0)
+        if (eligible > 0 && outstanding == 0 && pendingFirstImports == 0 &&
+            lastRootFinishedUtc is DateTime lastFinished &&
+            utcNow.ToUniversalTime() - lastFinished >= RootReviewCooldown)
         {
-            // A COMPLETED round has an end. Advance once (persistently)
-            // rather than starting at the first root while another remains
-            // unfinished. No 30-day wall-clock condition is involved.
+            // Every root must have finished, AND the 30-day cooldown has
+            // elapsed since the latest completion in that round. Merely
+            // reopening PCasa, polling the monitor or replacing a watcher
+            // must not manufacture a new full inventory.
             using var advance = db.CreateCommand();
             advance.Transaction = tx;
             advance.CommandText = """
