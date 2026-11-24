@@ -553,6 +553,16 @@ public sealed class FolderRepository
                     OR r.source_generation != s.generation
                     OR r.retry_after_utc IS NULL
                     OR r.retry_after_utc <= $now)
+               -- Alpha.62 could already have advanced the round prematurely.
+               -- Keep every root's saved progress but do not resume that
+               -- unnecessary next sweep until its last successful review is
+               -- at least 30 days old. Explicit P2 requests and a changed
+               -- source generation are always eligible immediately.
+               AND (r.monitored_folder_id IS NULL
+                    OR r.source_generation != s.generation
+                    OR r.last_completed_utc IS NULL
+                    OR r.requested_priority=2
+                    OR julianday($now)-julianday(r.last_completed_utc)>=30)
              ORDER BY COALESCE(r.requested_priority,4) ASC,
                       CASE WHEN COALESCE(r.queue_order,0)>0 THEN 0 ELSE 1 END,
                       r.queue_order ASC,
