@@ -27,6 +27,28 @@ public sealed class LocalDatabase
         return connection;
     }
 
+    // One persistent acceptance sequence for all user jobs, including
+    // monitored-root admission. Values above the legacy sequence range
+    // ensure new LIFO requests precede all previously accepted defaults.
+    internal static long NextSchedulerAcceptanceSequence(
+        SqliteConnection connection, SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS scheduler_acceptance_sequence (
+                id INTEGER PRIMARY KEY CHECK(id=1), last_value INTEGER NOT NULL);
+            INSERT OR IGNORE INTO scheduler_acceptance_sequence(id,last_value)
+                VALUES (1,1000000000000);
+            """;
+        command.ExecuteNonQuery();
+        command.CommandText = """
+            UPDATE scheduler_acceptance_sequence SET last_value=last_value+1
+            WHERE id=1 RETURNING last_value;
+            """;
+        return Convert.ToInt64(command.ExecuteScalar());
+    }
+
     public void Initialize()
     {
         using var connection = OpenConnection();
