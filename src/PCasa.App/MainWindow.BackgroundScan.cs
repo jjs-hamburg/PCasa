@@ -537,7 +537,14 @@ public partial class MainWindow
                 var restored = interruptedInventories
                     .Where(receipt => receipt.MonitoredFolderId == folder.Id)
                     .Select(TryRecoverAutomaticInventory)
-                    .Where(request => request is not null)
+                    .Where(request => request is not null &&
+                        // Old Alpha.62 may have begun another full review
+                        // before the previously agreed 30-day quiet period.
+                        // Preserve its durable SQLite file cursor, but DO
+                        // NOT restart that unnecessary inventory on launch.
+                        // Specific watcher directories and files still resume.
+                        (request.Kind != BackgroundFolderChangeKind.RescanRoot ||
+                         dueRootReviews.Contains(folder.Id)))
                     .Cast<BackgroundFolderChange>()
                     .ToArray();
 
