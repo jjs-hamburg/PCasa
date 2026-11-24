@@ -10,6 +10,9 @@ public partial class MainWindow
     // This set only avoids repeating failed attempts endlessly in one session.
     private readonly HashSet<long> _initialScanAttempted = new();
     private bool _initialScanPumpRunning;
+    // Dispatcher-owned revision of the accepted import order. A read already
+    // in flight must not start a root selected before the last reorder.
+    private long _initialScanOrderVersion;
     private bool _initialScanActive;
     // The source's pending-first-import marker lives in SQLite. These are
     // only live presentation/cancellation details of its ONE scanner job;
@@ -23,10 +26,19 @@ public partial class MainWindow
     private bool _initialScanResumeAfterExternalEdit;
     private CancellationTokenSource? _initialScanCancellation;
 
+    private void ReconsiderInitialImportOrder()
+    {
+        _initialScanOrderVersion++;
+        if (_initialScanActive && !_initialScanStopRequested &&
+            _initialScanCancellation is { IsCancellationRequested: false } active)
+            RequestTaskManagerYield(active);
+        QueuePendingInitialScans();
+    }
+
     private void QueuePendingInitialScans()
     {
         _scheduler.NotifyTaskViewChanged();
-        if (!_updateDownloadActive && !_folderManagerOpen && !_initialScanPumpRunning &&
+        if (!_shutdownStarted && !_updateDownloadActive && !_folderManagerOpen && !_initialScanPumpRunning &&
             !_externalEditPauseActive &&
             !_manualFileTransferActive && !Dispatcher.HasShutdownStarted)
             _ = ProcessPendingInitialScansAsync();
@@ -39,7 +51,7 @@ public partial class MainWindow
         var processedAny = false;
         try
         {
-            while (!_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
+            while (!_shutdownStarted && !_updateDownloadActive && !Dispatcher.HasShutdownStarted && !_folderRemovalPending &&
                    !_externalEditPauseActive && !_folderManagerOpen && !_manualFileTransferActive)
             {
                 // A manual scan already in progress owns the foreground job.
@@ -52,6 +64,7 @@ public partial class MainWindow
                 // Read it through the scheduler, never synchronously on the
                 // UI dispatcher while another operation holds SQLite.
                 var attempted = _initialScanAttempted.ToHashSet();
+                var orderVersion = _initialScanOrderVersion;
                 var next = await _scheduler.RunAsync(
                     $"catalog:pending-first-import:{Guid.NewGuid():N}",
                     SchedulerPriority.Background,
@@ -77,9 +90,12 @@ public partial class MainWindow
                             .ThenBy(x => x.Folder.Id)
                             .FirstOrDefault();
                     }, workKind: SchedulerWorkKind.CatalogRead);
-                if (_folderRemovalPending || _folderManagerOpen ||
-                    _manualFileTransferActive || Dispatcher.HasShutdownStarted)
+                if (_shutdownStarted || _folderRemovalPending || _folderManagerOpen ||
+                    _manualFileTransferActive || _externalEditPauseActive ||
+                    Dispatcher.HasShutdownStarted)
                     return;
+                if (orderVersion != _initialScanOrderVersion)
+                    continue; // select again from the newly committed global order
                 if (next is null) break;
                 processedAny = true;
                 _initialScanAttempted.Add(next.Folder.Id);
