@@ -19,6 +19,7 @@ internal static class DurablePauseFlow
             ExerciseImageEditFailureLifecycle(dir).GetAwaiter().GetResult();
             ExerciseSessionFileJobLifetime(dir).GetAwaiter().GetResult();
             ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
+            ExerciseSharedUserAcceptanceOrder(dir);
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -31,6 +32,36 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static void ExerciseSharedUserAcceptanceOrder(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "shared-user-order.db"));
+        database.Initialize();
+        var journal = new DurablePackageJournal(database);
+        var folders = new FolderRepository(database);
+        var first = journal.Put("before:import", "manual-scan-all-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        var source = Path.Combine(dir, "shared-order-source");
+        Directory.CreateDirectory(source);
+        folders.Add(source);
+        var initial = folders.GetPendingFirstImportQueue().Single();
+        var latest = journal.Put("after:import", "manual-folder-scan-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        if (!(latest.QueueOrder < initial.QueueOrder && initial.QueueOrder < first.QueueOrder))
+            throw new Exception("Imports and durable user packages have different LIFO sequences.");
+        database.Initialize();
+        folders.Add(source); // selecting the existing root is not a new acceptance
+        if (new FolderRepository(database).GetPendingFirstImportQueue().Single().QueueOrder
+                != initial.QueueOrder ||
+            new DurablePackageJournal(database).Pending().Single(row => row.Key == latest.Key)
+                .QueueOrder != latest.QueueOrder)
+            throw new Exception("Restart or duplicate acceptance changed a user job's rank.");
+        var next = journal.Put("after:restart", "manual-scan-all-v1", "{}",
+            SchedulerPriority.ManualAction, SchedulerWorkKind.CatalogScan);
+        if (next.QueueOrder >= latest.QueueOrder)
+            throw new Exception("Shared acceptance sequence was reset by migration.");
+        Console.WriteLine("PASS: Initial imports and explicit user packages share durable LIFO admission.");
     }
 
     private static async Task ExerciseYieldDuringShutdown(string dir)
