@@ -88,6 +88,24 @@ public sealed class SchedulerTaskOrderStore
         }
     }
 
+    // The old P1/P2 user/interactive ranks are no longer logical
+    // priority classes. Preserve the accepted order and promotion history
+    // while mapping the affected user jobs to P0.
+    public void NormalizeLegacyJobPriorities()
+    {
+        using var db = _database.OpenConnection();
+        using var cmd = db.CreateCommand();
+        cmd.CommandText = """
+            UPDATE scheduler_task_order
+               SET priority_override=CASE WHEN priority_override IN (1,2)
+                       THEN 0 ELSE priority_override END,
+                   previous_priority=CASE WHEN previous_priority IN (1,2)
+                       THEN 0 ELSE previous_priority END
+             WHERE priority_override IN (1,2) OR previous_priority IN (1,2);
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
     // Release ordinary automatic requests on restart, returning their
     // identities for reconstruction by the watcher owner. Old per-root
     // review holds are migrated to the permanent review identity.
