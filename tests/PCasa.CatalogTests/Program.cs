@@ -116,15 +116,15 @@ internal static class Program
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
         Run("Canceled source-lock waiter releases its scheduler lane", SourceLockWaitCanYield, failures);
         Run("Two-endpoint source locks serialize opposite transfers", PairedSourceLocksAreOrdered, failures);
-        Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveDoesNotWaitForBlockedBackground, failures);
+        Run("Interactive work starts while noninterruptible background blocks", SchedulerInteractiveWaitsForSafeBoundary, failures);
         Run("Visible originals and Explorer enumeration survive blocked durable P0",
             ForegroundUiReadsIgnoreSchedulerBlock, failures);
         Run("Viewer work does not wait for blocked catalog", SchedulerViewerReadIsIndependent, failures);
         Run("Catalog reads do not wait behind blocked background scans", SchedulerCatalogReadIsIndependent, failures);
         Run("Startup browse projection is visible beside blocked or deferred durable P0 without admitting P4",
             StartupBrowseReadSurvivesDurableP0, failures);
-        Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanDoesNotWaitForBlockedBackground, failures);
-        Run("Explicit manual scan overtakes blocked initial import", SchedulerManualOvertakesBlockedInitialImport, failures);
+        Run("User scan can start despite uninterruptible background I/O", SchedulerManualScanWaitsForSafeBoundary, failures);
+        Run("Explicit manual scan waits for initial import safe boundary", SchedulerManualWaitsForInitialImportBoundary, failures);
         Run("Running durable first import yields to manual Tag P0 and resumes", InitialImportYieldsToManualTag, failures);
         Run("Scheduler announces a running manual write before any file callback", SchedulerPublishesRunningManualState, failures);
         Run("Manual and interactive source probes bypass blocked background probes", SchedulerManualBypassesBlockedSourceProbe, failures);
@@ -132,7 +132,7 @@ internal static class Program
         Run("Canceled all-folders toggle immediately retires queued scheduler probe", CanceledAllFoldersScopeRetiresQueuedProbe, failures);
         Run("Manual folder creation preempts and safely resumes network scan", SchedulerManualFolderCreateYieldsScan, failures);
         Run("Canceled queued thumbnail page is re-requestable", CanceledQueuedThumbnailPageCanBeReloaded, failures);
-        Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalBypassesBlockedBackground, failures);
+        Run("Root removal proceeds despite noninterruptible scan work", FolderRemovalWaitsForSafeBoundary, failures);
         Run("Source locks serialize one photo without globally blocking other photos", SourceFileLocksAreScoped, failures);
         Run("Running user work yields to interactive work", SchedulerInteractivePreemptsUserWork, failures);
         Run("Enqueue does not synchronously check source validity on UI thread", SchedulerEnqueueDoesNotProbeSource, failures);
@@ -2567,7 +2567,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void SchedulerInteractiveDoesNotWaitForBlockedBackground()
+    private static void SchedulerInteractiveWaitsForSafeBoundary()
     {
         static async Task Check()
         {
@@ -2580,11 +2580,16 @@ internal static class Program
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 var ran = false;
-                await scheduler.EnqueueAsync("remove-folder", SchedulerPriority.Interactive,
-                    _ => { ran = true; return Task.CompletedTask; })
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!ran || worker.IsCompleted)
-                    throw new Exception("Interactive catalog lane was blocked by background work.");
+                var next = scheduler.EnqueueAsync("remove-folder",
+                    SchedulerPriority.Interactive,
+                    _ => { ran = true; return Task.CompletedTask; });
+                await Task.Delay(400);
+                if (ran || next.IsCompleted || worker.IsCompleted)
+                    throw new Exception("A second catalog owner bypassed a noninterruptible safe boundary.");
+                release.TrySetResult();
+                await next.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran)
+                    throw new Exception("Higher priority catalog operation did not run after the boundary.");
             }
             finally
             {
@@ -2956,7 +2961,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void SchedulerManualScanDoesNotWaitForBlockedBackground()
+    private static void SchedulerManualScanWaitsForSafeBoundary()
     {
         static async Task Check()
         {
@@ -2969,13 +2974,17 @@ internal static class Program
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                var manualRan = false;
-                await scheduler.EnqueueAsync("manual-folder-scan",
+                var ran = false;
+                var next = scheduler.EnqueueAsync("manual-folder-scan",
                     SchedulerPriority.UserAction,
-                    _ => { manualRan = true; return Task.CompletedTask; })
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!manualRan || background.IsCompleted)
-                    throw new Exception("Manual scan waited behind non-cancelable background IO.");
+                    _ => { ran = true; return Task.CompletedTask; });
+                await Task.Delay(400);
+                if (ran || next.IsCompleted || background.IsCompleted)
+                    throw new Exception("A second catalog owner bypassed a noninterruptible safe boundary.");
+                release.TrySetResult();
+                await next.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran)
+                    throw new Exception("Higher priority catalog operation did not run after the boundary.");
             }
             finally
             {
@@ -2986,7 +2995,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void SchedulerManualOvertakesBlockedInitialImport()
+    private static void SchedulerManualWaitsForInitialImportBoundary()
     {
         static async Task Check()
         {
@@ -2999,13 +3008,17 @@ internal static class Program
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                var executed = false;
-                await scheduler.EnqueueAsync("manual:chosen-directory",
+                var ran = false;
+                var next = scheduler.EnqueueAsync("manual:chosen-directory",
                     SchedulerPriority.ManualAction,
-                    _ => { executed = true; return Task.CompletedTask; })
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                if (!executed || initial.IsCompleted)
-                    throw new Exception("Manual scan waited for blocked initial import.");
+                    _ => { ran = true; return Task.CompletedTask; });
+                await Task.Delay(400);
+                if (ran || next.IsCompleted || initial.IsCompleted)
+                    throw new Exception("A second catalog owner bypassed a noninterruptible safe boundary.");
+                release.TrySetResult();
+                await next.WaitAsync(TimeSpan.FromSeconds(5));
+                if (!ran)
+                    throw new Exception("Higher priority catalog operation did not run after the boundary.");
             }
             finally
             {
@@ -3323,7 +3336,7 @@ internal static class Program
         Check().GetAwaiter().GetResult();
     }
 
-    private static void FolderRemovalBypassesBlockedBackground()
+    private static void FolderRemovalWaitsForSafeBoundary()
     {
         static async Task Check()
         {
@@ -3342,17 +3355,21 @@ internal static class Program
             try
             {
                 await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                await scheduler.EnqueueAsync("remove-root", SchedulerPriority.Interactive,
+                var remove = scheduler.EnqueueAsync("remove-root", SchedulerPriority.Interactive,
                     _ =>
                     {
                         new FolderRepository(db).Remove(root.Id);
                         return Task.CompletedTask;
-                    }).WaitAsync(TimeSpan.FromSeconds(5));
+                    });
+                await Task.Delay(400);
+                if (remove.IsCompleted)
+                    throw new Exception("Removal overlapped an active catalog owner.");
+                Require(db, 1);
+                release.TrySetResult();
+                await remove.WaitAsync(TimeSpan.FromSeconds(5));
                 Require(db, 0);
                 if (!File.Exists(imagePath))
                     throw new Exception("Removing monitored folder touched original file.");
-                if (background.IsCompleted)
-                    throw new Exception("Test background operation was not actually blocked.");
             }
             finally
             {

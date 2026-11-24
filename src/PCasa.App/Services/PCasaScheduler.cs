@@ -845,7 +845,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 _runningManualSourceProbe = item;
                             }
                             CancellationTokenSource? yieldRequest = null;
-                            if (lane <= LaneManual ||
+                            if (lane <= LaneInteractive ||
                                 lane is LaneInitialImport or LaneManualScan or LaneManualBackup)
                             {
                                 yieldRequest = new CancellationTokenSource();
@@ -1701,8 +1701,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
     private static bool IsSerialCatalogJob(WorkItem item)
     {
         var owner = RankOwner(item);
-        return owner.DurableJob ||
-            owner.Kind is SchedulerWorkKind.CatalogScan or SchedulerWorkKind.InitialImport;
+        return owner.DurableJob || IsCatalogMutation(owner);
     }
 
     // Called under _gate. A new P0 requests a yield from the older owner;
@@ -1730,6 +1729,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 SchedulerWorkKind.ThumbnailRead or SchedulerWorkKind.ViewerRead or
                 SchedulerWorkKind.CatalogRead or SchedulerWorkKind.SourceProbe) &&
             _runningWork.Any(active => IsSerialCatalogJob(active) &&
+                IsCatalogMutation(active) &&
                 !ReferenceEquals(RankOwner(active), RankOwner(candidate))))
             return null;
 
@@ -1906,7 +1906,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             // Wake each pending lane once; the scheduler will
                             // choose the next ranked job, never the worker.
                             WakePendingWorkersUnsafe();
-                            if ((lane <= LaneManual || lane is LaneInitialImport or LaneManualScan or LaneManualBackup) &&
+                            if ((lane <= LaneInteractive || lane is LaneInitialImport or LaneManualScan or LaneManualBackup) &&
                                 ReferenceEquals(_runningPriorityJobs[lane], item))
                             {
                                 _runningPriorityJobs[lane] = null;
