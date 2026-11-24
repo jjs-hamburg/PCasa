@@ -333,7 +333,8 @@ public partial class MainWindow
         long? expectedMonitoredFolderId = null,
         bool requirePendingInitialImport = false,
         string? operationKey = null,
-        bool acknowledgeTargetedPending = false)
+        bool acknowledgeTargetedPending = false,
+        long? queueOrder = null)
     {
         var key = operationKey ?? $"catalog:complete-scan:{Guid.NewGuid():N}:{directory}";
         var schedulerProgress = new ScanJobProgress(_scheduler, key, progress);
@@ -359,10 +360,10 @@ public partial class MainWindow
         {
             await _scheduler.EnqueueAsync(key, priority, step.ExecuteAsync,
                 cancellationToken: cancellationToken,
-                workKind: requirePendingInitialImport &&
-                    priority == SchedulerPriority.Background
+                workKind: requirePendingInitialImport
                     ? SchedulerWorkKind.InitialImport
-                    : SchedulerWorkKind.CatalogScan);
+                    : SchedulerWorkKind.CatalogScan,
+                queueOrder: queueOrder);
         }
         return step.Result ?? throw new OperationCanceledException();
     }
