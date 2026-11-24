@@ -134,12 +134,30 @@ public sealed class PCasaScheduler : IAsyncDisposable
             ?? new HashSet<string>(StringComparer.Ordinal);
         Task[] writing;
         lock (_gate)
-            writing = _runningWork
-                .Where(item => fileKeys.Contains(item.Key))
-                .Select(item => item.Completion.Task).ToArray();
+        {
+            // Waiting file jobs must never be dispatched or leave callers
+            // blocked on a frozen queue. Scan requests retain their journal.
+            if (_retireFileJobsOnSessionEnd)
+                foreach (var item in _pending.Where(item => fileKeys.Contains(item.Key)).ToArray())
+                {
+                    _pending.Remove(item);
+                    SetStateUnsafe(item, SchedulerJobState.Canceled);
+                    item.Completion.TrySetCanceled();
+                }
+            var active = _runningWork.Where(item => fileKeys.Contains(item.Key)).ToArray();
+            writing = active.Select(item =>
+                _durableActiveTasks.GetValueOrDefault(item.Key, item.Completion.Task))
+                .ToArray();
+        }
         try { await Task.WhenAll(writing).ConfigureAwait(false); }
         catch (OperationCanceledException) { /* written checkpoint is durable */ }
         catch (Exception ex) { PCasaDiagnostics.Write("Scheduler.GracefulDrain", ex); }
+        // Retire before disposal awaits potentially noninterruptible NAS
+        // reads. The window is allowed to close without waiting for those.
+        // Late journal callbacks cannot reopen terminal rows.
+        if (_retireFileJobsOnSessionEnd)
+            _durableJournal?.RetireUnfinishedFileJobs();
+        NotifyTaskViewChanged();
     }
     private long _nextId;
     private bool _disposed;
@@ -1489,6 +1507,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            // A recipe factory may finish constructing after shutdown
+            // froze dispatch. Never leave it waiting on a frozen queue.
+            if (_gracefulShutdownRequested && durableJob)
+                return Task.FromCanceled(new CancellationToken(true));
             var identity = key;
             var existing = _pending.FirstOrDefault(x =>
                 x.Kind == workKind && x.Key == key &&
