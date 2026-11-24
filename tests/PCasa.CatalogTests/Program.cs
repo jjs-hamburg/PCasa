@@ -2004,7 +2004,7 @@ internal static class Program
             throw new Exception("NAS retry was not deferred before reconnect.");
         var currentRound = verified.GetReviewRoundStatus(testFutureNow);
         if (!verified.ReleaseRootReviewRetryOnReconnect(root.Id) ||
-            !verified.GetDueRootReviewIds(now.AddHours(1)).Contains(root.Id))
+            !verified.GetDueRootReviewIds(testFutureNow.AddHours(1)).Contains(root.Id))
             throw new Exception("Confirmed NAS return did not release the old retry deadline.");
         var reconnectedRound = verified.GetReviewRoundStatus(testFutureNow);
         if (reconnectedRound.Round != currentRound.Round ||
