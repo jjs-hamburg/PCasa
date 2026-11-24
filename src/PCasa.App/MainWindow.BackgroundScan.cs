@@ -1558,6 +1558,7 @@ public partial class MainWindow
                     }
                     ScanResult? scanResult = null;
                     CatalogInventoryCheckResult? inventoryResult = null;
+                    IReadOnlyList<FolderRepository.AutomaticChangeJob>? acceptedReviewChanges = null;
                     var reviewEpoch = _folderRepository.GetScanEpoch(folder.CanonicalPath);
                     // One confirmed count belongs to the original
                     // directory-inventory receipt, not to a newly allocated
@@ -1620,8 +1621,10 @@ public partial class MainWindow
                                     (count, path) => scanProgress.Report(
                                         new ScanProgress(count, 0, count, 0, path)));
                                 token.ThrowIfCancellationRequested();
-                                if (!_folderRepository.CompleteRootCheck(folder.Id,
-                                    sourceState.Value.Generation, reviewEpoch))
+                                acceptedReviewChanges = _folderRepository.CompleteRootCheck(
+                                    folder.Id, sourceState.Value.Generation, reviewEpoch,
+                                    inventoryResult.Changes);
+                                if (acceptedReviewChanges is null)
                                     throw new OperationCanceledException("Review source changed.");
                                 scanResult = new ScanResult(inventoryResult.CheckedFiles, 0,
                                     inventoryResult.CheckedFiles, 0);
@@ -1648,8 +1651,8 @@ public partial class MainWindow
                     {
                         _backgroundActiveScanKind = null;
                         reviewCompleted = true;
-                        foreach (var change in inventoryResult.Changes)
-                            QueueBackgroundChange(change);
+                        foreach (var accepted in acceptedReviewChanges!)
+                            QueueBackgroundChange(accepted.Change, persisted: accepted);
                     }
                     CompleteAutomaticChange(request);
                     if (!request.NeedsFollowup)
