@@ -51,8 +51,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         new(StringComparer.Ordinal);
     private readonly Dictionary<string,SchedulerPriority> _userPriorityOverrides =
         new(StringComparer.Ordinal);
-    private readonly Dictionary<string,string> _taskAliases =
-        new(StringComparer.Ordinal);
     // The owner of external source intents listens and reorders its
     // EXISTING scan cursor. No parallel queue or cloned scan work.
     public event Action? TaskOrderChanged;
@@ -321,7 +319,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
             }
             foreach (var item in _pending.Concat(_runningWork))
             {
-                var identity = TaskIdentityUnsafe(item.Key);
+                var identity = item.Key;
                 if (!_userDispatchOrder.TryGetValue(identity, out var order))
                     continue;
                 var effective = _userPriorityOverrides.GetValueOrDefault(
@@ -466,21 +464,6 @@ public sealed class PCasaScheduler : IAsyncDisposable
         }
     }
 
-    public void RegisterTaskAlias(string executorKey, string visibleTaskKey)
-    {
-        lock (_gate)
-            _taskAliases[executorKey] = visibleTaskKey;
-    }
-
-    public void UnregisterTaskAlias(string executorKey)
-    {
-        lock (_gate) _taskAliases.Remove(executorKey);
-    }
-
-    private string TaskIdentityUnsafe(string executorKey) =>
-        _taskAliases.TryGetValue(executorKey, out var identity)
-            ? identity : executorKey;
-
     // No job-type, original-priority or lane restriction. The list must
     // contain all ACTIVE accepted tasks, including ones hidden by filters.
     // The store is the only durable place for user-selected dispatch order.
@@ -510,10 +493,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
             foreach (var work in _pending)
             {
                 if (!_userDispatchOrder.TryGetValue(
-                    TaskIdentityUnsafe(work.Key), out var position))
+                    work.Key, out var position))
                     continue;
                 if (_userPriorityOverrides.TryGetValue(
-                        TaskIdentityUnsafe(work.Key), out var chosen))
+                        work.Key, out var chosen))
                     work.Priority = chosen;
                 work.QueueOrder = position;
                 SetStateUnsafe(work, SchedulerJobState.Queued);
@@ -523,10 +506,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
             // must reenter the same global position after its safe checkpoint.
             foreach (var active in _runningWork)
             {
-                if (!_userDispatchOrder.TryGetValue(TaskIdentityUnsafe(active.Key),
+                if (!_userDispatchOrder.TryGetValue(active.Key,
                         out var position)) continue;
                 if (_userPriorityOverrides.TryGetValue(
-                        TaskIdentityUnsafe(active.Key), out var chosen))
+                        active.Key, out var chosen))
                     active.Priority = chosen;
                 active.QueueOrder = position;
                 SetStateUnsafe(active, active.YieldRequested
@@ -1456,7 +1439,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var identity = TaskIdentityUnsafe(key);
+            var identity = key;
             var existing = _pending.FirstOrDefault(x =>
                 x.Kind == workKind && x.Key == key &&
                 !x.CancellationToken.IsCancellationRequested);
