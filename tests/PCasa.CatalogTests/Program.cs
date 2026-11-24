@@ -100,7 +100,7 @@ internal static class Program
         Run("Canceled scanner resumes enumeration instead of starting again", ScannerCheckpointRetainsEnumeration, failures);
         Run("Durable first-import checkpoints survive restart without unsafe pruning", DurableInitialImportRestartSafe, failures);
         Run("Restart resumes within unfinished directory after last committed image", DurableFileCursorRestartSafe, failures);
-        Run("Unreadable photo is skipped; cursor advances and no automatic re-scan is scheduled", SkippedImageAdvancesDurableCursor, failures);
+        Run("Unreadable photo is catalogued; cursor advances and no automatic re-scan is scheduled", SkippedImageAdvancesDurableCursor, failures);
         Run("All ordinary scans resume inside a directory after a process restart",
             RegularScanRestartSafe, failures);
         Run("Manual scans retain a first-pass cursor per directory across separate jobs while background checks changes",
@@ -1748,7 +1748,8 @@ internal static class Program
         using var stop = new CancellationTokenSource();
         var callback = new InlineProgress<ScanProgress>(p =>
         {
-            if (p.DiscoveredPhotoFolderId is not null)
+            if (p.DiscoveredPhotoFolderId is not null &&
+                p.CurrentFile?.EndsWith("b-good.jpg", StringComparison.OrdinalIgnoreCase) == true)
                 stop.Cancel(); // after committing the next valid photo
         });
         try
@@ -1779,8 +1780,8 @@ internal static class Program
         var finished = restarted.ScanDirectory(root, root.LocalPath,
             recursive:true, durableScanKey:key);
         if (finished.ImageFilesSeen != 3 || finished.Failed != 0 ||
-            new ImageCatalogRepository(db).CountAll() != 2)
-            throw new Exception("Restart retried skipped photo or lost confirmed good images.");
+            new ImageCatalogRepository(db).CountAll() != 3)
+            throw new Exception("Restart retried skipped photo or lost confirmed catalog records.");
         using var connection = db.OpenConnection();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM scan_resume_jobs WHERE scan_key=$key;";
@@ -3875,16 +3876,32 @@ internal static class Program
         var result = scanner.Scan(root);
         if (result.Failed != 1 || result.Removed != 1)
             throw new Exception($"Failed-image reconciliation: failed={result.Failed}, removed={result.Removed}");
-        Require(db, 1);
+        Require(db, 2);
         using var conn = db.OpenConnection();
         using var query = conn.CreateCommand();
-        query.CommandText = "SELECT local_path FROM images";
+        query.CommandText = "SELECT local_path FROM images WHERE import_error IS NULL";
         if (!string.Equals(query.ExecuteScalar() as string, retained,
             StringComparison.OrdinalIgnoreCase))
             throw new Exception("Old name survived despite complete directory inventory.");
         if (new BrowseCacheRepository(db).GetIndex(96).Any(entry =>
             string.Equals(entry.FileName, "renamed-original.jpg", StringComparison.OrdinalIgnoreCase)))
             throw new Exception("Old name survived in browse index.");
+        query.CommandText = "SELECT thumbnail_path FROM images WHERE import_error IS NOT NULL";
+        if (query.ExecuteScalar() is not string placeholder || !File.Exists(placeholder))
+            throw new Exception("Failed file has no durable placeholder.");
+        var unchanged = scanner.ScanDirectory(root, root.LocalPath, true,
+            catalogOwnedProgress: true);
+        if (unchanged.Failed != 0 || unchanged.Updated != 0)
+            throw new Exception("Unchanged import error was retried.");
+        var inventory = new CatalogInventoryCheck(db).Check(root, [], [],
+            CancellationToken.None);
+        if (inventory.Changes.Count != 0)
+            throw new Exception("Passive inventory repeatedly requested failed image.");
+        WriteJpeg(broken);
+        var repaired = scanner.ScanFile(root, broken, forceExifRefresh: true);
+        query.CommandText = "SELECT COUNT(*) FROM images WHERE import_error IS NOT NULL";
+        if (repaired.Updated != 1 || Convert.ToInt32(query.ExecuteScalar()) != 0)
+            throw new Exception("Successful reread did not clear persistent import error.");
     }
 
     private static void ExcludedSubtreeIsRemoved()

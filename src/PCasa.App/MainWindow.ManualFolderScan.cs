@@ -468,7 +468,8 @@ public partial class MainWindow
                     folder, directory, recursive: true, progress, token, _resume,
                     durableInitialImport: requirePendingInitialImport,
                     durableScanKey: requirePendingInitialImport ? null : durableScanKey,
-                    catalogOwnedProgress: true);
+                    catalogOwnedProgress: true,
+                    retryFailedFiles: !requirePendingInitialImport);
                 owner._scheduler.SourceAvailability.ConfirmAvailable(directory);
             }
             catch (IOException)

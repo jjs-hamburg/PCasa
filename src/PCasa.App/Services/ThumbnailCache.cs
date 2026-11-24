@@ -107,6 +107,49 @@ public sealed class ThumbnailCache
         }
     }
 
+    // A per-file local thumbnail, deliberately distinct from any successful
+    // decode cache identity. A high-contrast cross is visible without color.
+    public ThumbnailResult CreateImportErrorPlaceholder(string canonicalPath,
+        long fileSize, long modifiedUtcTicks, CancellationToken token)
+    {
+        const int size = 256;
+        var path = GetCachePath(canonicalPath + "\nimport-error-v1",
+            fileSize, modifiedUtcTicks, false, false);
+        if (File.Exists(path)) return new ThumbnailResult(path, size, size);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".ppm";
+        var jpeg = temporary + ".jpg";
+        try
+        {
+            using (var output = File.Create(temporary))
+            {
+                output.Write(Encoding.ASCII.GetBytes($"P6\n{size} {size}\n255\n"));
+                var pixels = new byte[size * size * 3];
+                for (var y = 0; y < size; y++)
+                for (var x = 0; x < size; x++)
+                {
+                    var offset = (y * size + x) * 3;
+                    var cross = x > 48 && x < 208 && y > 48 && y < 208 &&
+                        (Math.Abs(x - y) < 12 || Math.Abs(x + y - size) < 12);
+                    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] =
+                        cross ? (byte)240 : (byte)45;
+                }
+                output.Write(pixels);
+            }
+            token.ThrowIfCancellationRequested();
+            using (var image = Image.NewFromFile(temporary))
+                image.Jpegsave(jpeg, q: 85);
+            token.ThrowIfCancellationRequested();
+            File.Move(jpeg, path, overwrite: true);
+            return new ThumbnailResult(path, size, size);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+            if (File.Exists(jpeg)) File.Delete(jpeg);
+        }
+    }
+
     // Read-only compatibility with catalogs restored by the historical
     // path-flattening bug. No SQLite mutation and no original-file access.
     // The existing thumbnail writer already uses the first two SHA-256

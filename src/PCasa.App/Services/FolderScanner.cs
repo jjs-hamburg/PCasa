@@ -143,13 +143,15 @@ public sealed class FolderScanner
         bool durableInitialImport = false,
         string? durableScanKey = null,
         bool preferFirstPass = false,
-        bool catalogOwnedProgress = false)
+        bool catalogOwnedProgress = false,
+        bool retryFailedFiles = false)
     {
         return ScanDirectoryLocked(
             folder, localDirectory, recursive, progress, cancellationToken,
             resume: resume, durableInitialImport: durableInitialImport,
             durableScanKey: durableScanKey, preferFirstPass: preferFirstPass,
-            catalogOwnedProgress: catalogOwnedProgress);
+            catalogOwnedProgress: catalogOwnedProgress,
+            retryFailedFiles: retryFailedFiles);
     }
 
     public ScanResult ScanFile(
@@ -182,7 +184,8 @@ public sealed class FolderScanner
         string? durableScanKey = null,
         bool forceExifRefresh = false,
         bool preferFirstPass = false,
-        bool catalogOwnedProgress = false)
+        bool catalogOwnedProgress = false,
+        bool retryFailedFiles = false)
     {
         var scanRoot = Path.GetFullPath(localDirectory).Replace('/', '\\');
         EnsureInsideMonitoredFolder(folder, scanRoot);
@@ -449,6 +452,8 @@ public sealed class FolderScanner
                 // Only local cache paths belong in the progress preview.
                 // Never ask the progress dialog to decode an SMB original.
                 string? currentThumbnailPath = null;
+                CatalogImageData? decodeIdentity = null;
+                bool firstFolderFile = false;
 
                 try
                 {
@@ -496,7 +501,14 @@ public sealed class FolderScanner
                     }
 
                     var existing = scanSession.GetState(canonicalPath);
+                    var unchangedError = !retryFailedFiles && !forceExifRefresh &&
+                        existing?.ImportError is not null &&
+                        existing.FileSize == fileLength &&
+                        existing.ModifiedUtcTicks == modifiedUtcTicks &&
+                        (folder.IsNetwork || existing.CreatedUtcTicks == createdUtcTicks);
+                    firstFolderFile = firstFileInThisScanFolder;
                     var currentIndex = existing is not null &&
+                        existing.ImportError is null &&
                         existing.FileSize == fileLength &&
                         existing.ModifiedUtcTicks == modifiedUtcTicks &&
                         File.Exists(existing.ThumbnailPath) &&
@@ -506,14 +518,21 @@ public sealed class FolderScanner
                     // Publish the actual pending operation BEFORE slow EXIF
                     // or thumbnail work, not after it has finished. Emit the
                     // extra UI callback only on a phase transition.
-                    var nextReadingNew = !currentIndex;
+                    var nextReadingNew = !currentIndex && !unchangedError;
                     if (readingNew != nextReadingNew)
                     {
                         readingNew = nextReadingNew;
                         ReportProgress(localPath, force: true,
                             previewCommitted: false);
                     }
-                    if (currentIndex)
+                    if (unchangedError)
+                    {
+                        // Known permanent error with an identical stamp:
+                        // neither decode the original nor queue another retry.
+                        currentThumbnailPath = existing!.ThumbnailPath;
+                        unchanged++;
+                    }
+                    else if (currentIndex)
                     {
                         if (existing.PhotoFolderId != photoFolderId ||
                             !string.Equals(existing.LocalPath, localPath, StringComparison.OrdinalIgnoreCase))
@@ -558,6 +577,9 @@ public sealed class FolderScanner
                         cancellationToken.ThrowIfCancellationRequested();
 
                         scanSession.FlushPending();
+                        decodeIdentity = new CatalogImageData(folder.Id, photoFolderId,
+                            localPath, canonicalPath, file.Name, extension.ToLowerInvariant(),
+                            fileLength, modifiedUtcTicks, 256, 256, "", createdUtcTicks);
                         var renderPath = VideoFormats.IsVideo(localPath)
                             ? VideoThumbnailSource.Resolve(localPath, cancellationToken)
                             : RawImageSource.Resolve(localPath, cancellationToken);
@@ -590,6 +612,9 @@ public sealed class FolderScanner
                                 renderPath, new BrowseThumbnailProfile(largeTiers),
                                 cancellationToken, originalSourcePath: localPath)
                             : Array.Empty<PackedThumbnailStore.PreparedThumbnailTier>();
+                        // Only source decode failures qualify as permanent
+                        // import errors; do not mislabel database/write faults.
+                        decodeIdentity = null;
                         var keywords = ImageTagRepository.ReadKeywords(localPath);
                         var exif = exifReader.Read(localPath, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
@@ -656,7 +681,62 @@ public sealed class FolderScanner
                         throw;
                     scanSession.RollbackPending();
                     failed++;
-                    failedDirectories.Add(Path.GetDirectoryName(localPath) ?? scanRoot);
+                    if (decodeIdentity is { } identity && ex is NetVips.VipsException)
+                    {
+                        using var sourceLock = SourceFileLocks.Enter(localPath, cancellationToken);
+                        // Verify access and the same file identity again. A
+                        // disappearing/locked NAS source is not a corrupt file.
+                        using (var accessible = File.Open(localPath, FileMode.Open,
+                            FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        {
+                            var now = new FileInfo(localPath);
+                            if (accessible.Length != identity.FileSize ||
+                                now.LastWriteTimeUtc.Ticks != identity.ModifiedUtcTicks ||
+                                (!folder.IsNetwork && now.CreationTimeUtc.Ticks != identity.CreatedUtcTicks))
+                                throw new IOException("Source changed during import: " + localPath);
+                            _ = accessible.ReadByte();
+                        }
+                        var placeholder = _thumbnailCache.CreateImportErrorPlaceholder(
+                            identity.CanonicalPath, identity.FileSize,
+                            identity.ModifiedUtcTicks, cancellationToken);
+                        using var store = new PackedThumbnailStore();
+                        var prepared = store.PrepareTiers(placeholder.Path, profile,
+                            cancellationToken);
+                        lock (CatalogRemovalService.CacheLock)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var locations = store.AppendPrepared(prepared, cancellationToken);
+                            scanSession.Upsert(identity with
+                            {
+                                ThumbnailPath = placeholder.Path,
+                                ImportError = ex.Message
+                            });
+                            scanSession.SaveBrowseLocations(identity.CanonicalPath,
+                                identity.ModifiedUtcTicks, locations, profile.Tiers.Count);
+                            scanSession.FlushPending();
+                        }
+                        currentThumbnailPath = placeholder.Path;
+                        updated++;
+                        if (firstFolderFile)
+                        {
+                            discoveredFolderId = identity.PhotoFolderId;
+                            discoveredFolderPath = Path.GetDirectoryName(localPath);
+                        }
+                        if (publishCatalogChange)
+                        {
+                            CatalogChanges.PublishImageIndexed(identity.CanonicalPath,
+                                identity.PhotoFolderId);
+                            CatalogChanges.PublishImageCommitted();
+                        }
+                    }
+                    else
+                    {
+                        // Transient source errors cannot acknowledge a
+                        // complete directory or permanently suppress retry.
+                        if (ex is IOException or UnauthorizedAccessException)
+                            throw;
+                        failedDirectories.Add(Path.GetDirectoryName(localPath) ?? scanRoot);
+                    }
                     PCasaDiagnostics.WriteMessage("Scan.FileSkipped",
                         $"File={localPath}; {ex.GetType().Name}: {ex.Message}");
                     if (firstFailure is null)

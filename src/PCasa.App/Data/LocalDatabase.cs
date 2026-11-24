@@ -140,6 +140,8 @@ public sealed class LocalDatabase
         // Existing images are enriched on their next ordinary scan. Never
         // pretend that indexed_utc is the source file's creation timestamp.
         EnsureColumn(connection, "images", "created_utc_ticks", "INTEGER NULL");
+        EnsureColumn(connection, "images", "import_error", "TEXT NULL");
+        EnsureColumn(connection, "images", "import_attempt_utc", "TEXT NULL");
 
         // One metadata row per photo, deleted by the existing image FK.
         // The complete EXIF JSON is kept alongside indexed camera/GPS fields.
