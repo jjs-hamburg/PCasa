@@ -620,13 +620,20 @@ internal static class FolderAddFlow
             var incomingPhoto = Path.Combine(initialRoot, "incoming-during-import.jpg");
             WriteJpeg(incomingTemp);
             File.Move(incomingTemp, incomingPhoto);
+            // The notification must be accepted immediately, but it cannot
+            // execute as a second catalog job while first import owns the
+            // worker. The gallery remains independent during this wait.
             Until(window, () =>
-                    new ImageCatalogRepository(db).CountAll() == 3 &&
-                    roots.GetPendingInitialScans().Any(root =>
-                        SamePath(root.LocalPath, afterRestart)),
-                "Live file-system notification was blocked by a different pending first import.");
+                ((IReadOnlyList<AutomaticScanTask>)typeof(PCasa.App.MainWindow)
+                    .GetMethod("SnapshotAutomaticScans", BindingFlags.Instance |
+                        BindingFlags.NonPublic)!.Invoke(window, null)!)
+                    .Any(task => task.Key.Contains("incoming-during-import.jpg",
+                        StringComparison.OrdinalIgnoreCase)),
+                "Live file-system notification was not accepted during first import.");
+            if (new ImageCatalogRepository(db).CountAll() != 2)
+                throw new Exception("A second catalog job executed during blocked first import.");
             Console.WriteLine(
-                "PASS: New file notifications are indexed while a separate first import is blocked.");
+                "PASS: Watcher notification accepted without overlapping the active first import.");
 
             releaseRestartPhoto.Set();
             blockedRestart.GetAwaiter().GetResult();
@@ -637,7 +644,7 @@ internal static class FolderAddFlow
             Until(window, () =>
                 new ImageCatalogRepository(db).CountAll() == 5,
                 "Deferred root reconciliation lost the file created while monitoring was disabled.");
-            Console.WriteLine("PASS: Live discovery runs before durable first-import completion; deferred root reconciliation catches offline changes afterwards.");
+            Console.WriteLine("PASS: Accepted live discovery and continuous reconciliation complete after the active import releases its safe boundary.");
 
             // Explorer Ansicht is an in-place expansion of FoldersTree,
             // not a replacement control. Even hidden and unindexed folders

@@ -719,7 +719,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 {
                     if (_disposed) break;
                     // Global rank, not per-lane callbacks, decides preemption.
-                    var highest = _pending.OrderBy(p => RankOwner(p).Priority)
+                    var highest = _pending.Where(p => !IsGalleryPresentation(p))
+                        .OrderBy(p => RankOwner(p).Priority)
                         .ThenBy(p => RankOwner(p).QueueOrder)
                         .ThenBy(p => RankOwner(p).Id).FirstOrDefault();
                     for (var lane = 0; lane < _runningPriorityJobs.Length; lane++)
@@ -736,6 +737,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                             continue;
                         if (!((RankOwner(running).Priority == SchedulerPriority.Idle &&
                                (nonIdleWaiting || _pending.Any(p =>
+                                   !IsGalleryPresentation(p) &&
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               ((_nativeDragInteractionCount > 0 &&
                                 lane is LaneBackground or LaneInitialImport or
@@ -1009,7 +1011,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 queueOrder: record.QueueOrder,
                 isCurrent: () => journal.Pending().Any(item =>
                     item.Key == record.Key &&
-                    item.State is "queued" or "running")).ConfigureAwait(false);
+                    item.State is "queued" or "running"),
+                durableJob: true).ConfigureAwait(false);
             // Recovery may originate from the WPF dispatcher. Journal state
             // must be committed by the scheduler continuation even if the
             // UI thread is blocked or the process is beginning to close.
@@ -1117,12 +1120,13 @@ public sealed class PCasaScheduler : IAsyncDisposable
     public Task EnqueuePackageAsync(SchedulerTaskPackage package,
         SchedulerPriority priority, CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
-        long? queueOrder = null, Func<bool>? isCurrent = null)
+        long? queueOrder = null, Func<bool>? isCurrent = null,
+        bool durableJob = false)
     {
         ArgumentNullException.ThrowIfNull(package);
         return EnqueueAsync(package.Key, priority, package.ExecuteAsync,
             isCurrent: isCurrent, cancellationToken: cancellationToken,
-            workKind: workKind, queueOrder: queueOrder);
+            workKind: workKind, queueOrder: queueOrder, durableJob: durableJob);
     }
 
     // A dismissed read-only projection must leave no queued scheduler work.
@@ -1541,7 +1545,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
         Func<bool>? isCurrent = null,
         CancellationToken cancellationToken = default,
         SchedulerWorkKind workKind = SchedulerWorkKind.Catalog,
-        long? queueOrder = null, string? parentKey = null)
+        long? queueOrder = null, string? parentKey = null,
+        bool durableJob = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(operation);
@@ -1570,6 +1575,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 var item = new WorkItem(++_nextId, key, priority, workKind,
                     operation, isCurrent, cancellationToken)
                 {
+                    DurableJob = durableJob,
                     // Ephemeral manual preflight (e.g. GPS eligibility)
                     // must never be buried behind the old durable ledger's
                     // large historical sequence values. Durable ranks remain
@@ -1628,11 +1634,22 @@ public sealed class PCasaScheduler : IAsyncDisposable
                  (a.QueueOrder == b.QueueOrder && a.Id < b.Id)));
     }
 
-    // Called under _gate. This is the ONE business decision about which
-    // accepted job may start. The physical lane is only an execution-capacity
-    // constraint. A new P0 outranks an older P0 on another blocked SMB lane.
-    // It may start on a free worker while that older worker reaches a safe
-    // interruption boundary. No task's priority is derived from its lane.
+    private static bool IsGalleryPresentation(WorkItem item) =>
+        item.Kind is SchedulerWorkKind.BrowseRead or SchedulerWorkKind.ThumbnailRead;
+
+    // Durable mutation packages and catalog inventories are logical jobs.
+    // A worker lane is not permission to overlap a second logical job.
+    // Owned dependent steps are part of the same job, never a second owner.
+    private static bool IsSerialCatalogJob(WorkItem item)
+    {
+        var owner = RankOwner(item);
+        return owner.DurableJob ||
+            owner.Kind is SchedulerWorkKind.CatalogScan or SchedulerWorkKind.InitialImport;
+    }
+
+    // Called under _gate. A new P0 requests a yield from the older owner;
+    // admission follows only after that owner reaches a safe boundary.
+    // Source probes and view presentation are technical operations.
     private WorkItem? SelectNextJobUnsafe(int lane,
         bool durableManualPending, bool durableNonIdlePending)
     {
@@ -1643,6 +1660,14 @@ public sealed class PCasaScheduler : IAsyncDisposable
             .ThenBy(x => RankOwner(x).Id)
             .FirstOrDefault();
         if (candidate is null) return null;
+
+        if (IsSerialCatalogJob(candidate) &&
+            candidate.Kind is not (SchedulerWorkKind.BrowseRead or
+                SchedulerWorkKind.ThumbnailRead or SchedulerWorkKind.ViewerRead or
+                SchedulerWorkKind.CatalogRead or SchedulerWorkKind.SourceProbe) &&
+            _runningWork.Any(active => IsSerialCatalogJob(active) &&
+                !ReferenceEquals(RankOwner(active), RankOwner(candidate))))
+            return null;
 
         // Restore the saved journal/order before allowing any restored P0
         // worker to start. Existing packages are NOT recreated.
@@ -1662,8 +1687,10 @@ public sealed class PCasaScheduler : IAsyncDisposable
         if (RankOwner(candidate).Priority == SchedulerPriority.Idle &&
             (durableNonIdlePending ||
              _pending.Any(other => !ReferenceEquals(other, candidate) &&
+                 !IsGalleryPresentation(other) &&
                  RankOwner(other).Priority < SchedulerPriority.Idle) ||
-             _runningWork.Any(other => RankOwner(other).Priority < SchedulerPriority.Idle)))
+             _runningWork.Any(other => !IsGalleryPresentation(other) &&
+                 RankOwner(other).Priority < SchedulerPriority.Idle)))
             return null;
 
         // The read-only browse projection is a technical view operation,
@@ -1673,21 +1700,23 @@ public sealed class PCasaScheduler : IAsyncDisposable
         // folder tree and gallery blank on startup.
         var independentBrowseRead =
             candidate.Kind is SchedulerWorkKind.BrowseRead or
-                SchedulerWorkKind.ThumbnailRead;
+                SchedulerWorkKind.ThumbnailRead or SchedulerWorkKind.ViewerRead;
         // One package owns its dependent operations. They must never wait
         // behind an unrelated queued P0 while the owner awaits them.
         var childOfRunningPackage = candidate.Parent is { } parent &&
             _runningWork.Contains(parent);
         if (!childOfRunningPackage && !independentBrowseRead &&
             _pending.Any(other => !ReferenceEquals(other, candidate) &&
-                Precedes(other, candidate)))
+                !IsGalleryPresentation(other) && Precedes(other, candidate)))
             return null;
         // Manual P0 packages form an actual LIFO interruption stack.
         // P1-P3 may run on independent read/executor capacity while an
         // older higher-priority operation is already in flight. P4 is
         // explicitly stricter and was checked above against ALL running jobs.
-        if (RankOwner(candidate).Priority == SchedulerPriority.ManualAction &&
+        if (!childOfRunningPackage && !independentBrowseRead &&
+            RankOwner(candidate).Priority == SchedulerPriority.ManualAction &&
             _runningWork.Any(active =>
+                !IsGalleryPresentation(active) &&
                 RankOwner(active).Priority == SchedulerPriority.ManualAction &&
                 Precedes(active, candidate)))
             return null;
@@ -1952,6 +1981,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
         public string Key { get; } = key;
         public long QueueOrder { get; set; }
         public WorkItem? Parent { get; set; }
+        public bool DurableJob { get; init; }
         public CancellationTokenSource UserCancellation { get; } = new();
         public SchedulerPriority Priority { get; set; } = priority;
         public SchedulerWorkKind Kind { get; } = kind;

@@ -227,7 +227,7 @@ internal static class GlobalTaskOrderFlow
                         string.Join(" -> ", executed));
             }
             AssertDefaultP0AndBackgroundSafety(root);
-            AssertBlockedManualScanCannotStarveGps(root);
+            AssertManualScanYieldsBeforeGps(root);
             AssertOwnedMetadataChangeStaysInItsPackage(root);
             AssertReorderNeverWaitsForNetworkCancellation();
             Console.WriteLine("PASS: GPS accepted before eligibility, visible in TM; " +
@@ -333,7 +333,7 @@ internal static class GlobalTaskOrderFlow
     // accepted P0 original-file mutation must begin on its own scheduler
     // capacity WITHOUT waiting for that inventory's cancellation callback.
     // Both requests still belong to the same scheduler and durable journal.
-    private static void AssertBlockedManualScanCannotStarveGps(string parent)
+    private static void AssertManualScanYieldsBeforeGps(string parent)
     {
         var database = new LocalDatabase(Path.Combine(parent, "blocked-manual-scan.db"));
         database.Initialize();
@@ -379,15 +379,18 @@ internal static class GlobalTaskOrderFlow
             var gps = engine.EnqueueDurableRecipeAsync(
                 "gps:edit:regression-blocked-nas", "gps-edit-v2", "{}",
                 SchedulerPriority.ManualAction);
-            AwaitWithPump(() => gpsStarted.Task.IsCompleted || gps.IsFaulted,
-                "New GPS P0 package is starved by an uninterruptible manual NAS scan.");
-            if (gps.IsFaulted) gps.GetAwaiter().GetResult();
-            if (!gpsStarted.Task.IsCompleted || scan.IsCompleted)
-                throw new Exception("GPS did not run independently of the blocked scan.");
+            AwaitWithPump(() => engine.Snapshot().Any(x =>
+                x.Key == "catalog:scan:regression-blocked-manual-nas" &&
+                x.State == SchedulerJobState.YieldRequested),
+                "New GPS P0 did not request a safe yield from the running scan.");
+            if (gpsStarted.Task.IsCompleted || scan.IsCompleted)
+                throw new Exception("Two durable jobs executed before the scan released its safe boundary.");
             releaseScan.TrySetResult();
             AwaitWithPump(() => Task.WhenAll(scan, gps).IsCompleted,
                 "Manual NAS scan did not finish after release.");
             Task.WhenAll(scan, gps).GetAwaiter().GetResult();
+            if (!gpsStarted.Task.IsCompleted)
+                throw new Exception("GPS did not run after the scan reached its safe boundary.");
         }
         finally
         {

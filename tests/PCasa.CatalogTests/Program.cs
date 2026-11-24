@@ -107,6 +107,8 @@ internal static class Program
             FirstPassDirectorySurvivesJobs, failures);
         Run("Catalog-owned import reconciles changed and missing files across job identities",
             CatalogOwnedDirectoryReconciliation, failures);
+        Run("Gallery presentation does not yield or block a catalog job",
+            GalleryPresentationDoesNotCompeteWithCatalogJobs, failures);
         Run("Changed monitoring invalidates old scan without implicit restart", SourceChangeRejectsOldScanCheckpoint, failures);
         Run("Yield while waiting for image lock does not count same file twice", ScannerYieldBeforeSourceLockDoesNotDoubleCount, failures);
         Run("Newer scans preserve older checkpoints without stale pruning", ScanEpochSupersessionRetainsCursor, failures);
@@ -2745,6 +2747,54 @@ internal static class Program
                 release.TrySetResult();
             }
             await running.WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        Check().GetAwaiter().GetResult();
+    }
+
+    private static void GalleryPresentationDoesNotCompeteWithCatalogJobs()
+    {
+        static async Task Check()
+        {
+            await using var scheduler = new PCasaScheduler();
+            var running = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var galleryRunning = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var galleryRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = 0;
+            var review = scheduler.EnqueueAsync("test:review-gallery-independent",
+                SchedulerPriority.Idle, async token =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    running.TrySetResult();
+                    await release.Task.WaitAsync(token);
+                }, workKind: SchedulerWorkKind.CatalogScan);
+            try
+            {
+                await running.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                var gallery = scheduler.EnqueueAsync("test:independent-gallery",
+                    SchedulerPriority.Interactive, async token =>
+                    {
+                        galleryRunning.TrySetResult();
+                        await galleryRelease.Task.WaitAsync(token);
+                    }, workKind: SchedulerWorkKind.BrowseRead);
+                await galleryRunning.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await scheduler.EnqueueAsync("test:visible-thumb",
+                    SchedulerPriority.UserAction, _ => Task.CompletedTask,
+                    workKind: SchedulerWorkKind.ThumbnailRead).WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.Delay(300);
+                if (attempts != 1 || scheduler.Snapshot().Any(x =>
+                    x.Key == "test:review-gallery-independent" &&
+                    x.State == SchedulerJobState.YieldRequested))
+                    throw new Exception("Gallery scrolling yielded the active inventory.");
+                release.TrySetResult();
+                await review.WaitAsync(TimeSpan.FromSeconds(5));
+                await scheduler.EnqueueAsync("test:next-review", SchedulerPriority.Idle,
+                    _ => Task.CompletedTask, workKind: SchedulerWorkKind.CatalogScan)
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+                galleryRelease.TrySetResult();
+                await gallery.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            finally { release.TrySetResult(); galleryRelease.TrySetResult(); }
         }
         Check().GetAwaiter().GetResult();
     }
