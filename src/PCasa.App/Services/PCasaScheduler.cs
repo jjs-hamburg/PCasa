@@ -709,26 +709,35 @@ public sealed class PCasaScheduler : IAsyncDisposable
                     }
                 }
                 var durable = _durableJournal;
-                bool manualWaiting = false, nonIdleWaiting = false;
+                IReadOnlyList<(string Key, SchedulerPriority Priority, long Order)> accepted = [];
+                bool journalUnavailable = false;
                 try
                 {
                     if (durable is not null)
                     {
-                        manualWaiting = durable.HasPendingEffectiveManualActions();
-                        nonIdleWaiting = durable.HasRunnableNonIdleTasks();
+                        accepted = durable.RunnablePlacements();
                     }
                 }
                 catch (Exception ex) when (ex is IOException or Microsoft.Data.Sqlite.SqliteException)
                 {
                     PCasaDiagnostics.Write("Scheduler.ControlRead", ex);
                     // Never admit P4 on an unverified journal snapshot.
-                    nonIdleWaiting = true;
+                    journalUnavailable = true;
                 }
                 var cancel = new List<CancellationTokenSource>();
                 var viewChanged = false;
                 lock (_gate)
                 {
                     if (_disposed) break;
+                    // Include accepted recipes even if their factory has not
+                    // yet constructed the executable work item. Ignore journal
+                    // rows already represented by a live owner.
+                    var represented = _pending.Concat(_runningWork)
+                        .Select(item => RankOwner(item).Key).ToHashSet(StringComparer.Ordinal);
+                    var preparing = accepted.Where(row => !represented.Contains(row.Key))
+                        .ToArray();
+                    var nonIdleWaiting = journalUnavailable ||
+                        accepted.Any(row => row.Priority < SchedulerPriority.Idle);
                     // Global rank, not per-lane callbacks, decides preemption.
                     var highest = _pending.Where(p => !IsIndependentReadItem(p))
                         .OrderBy(p => RankOwner(p).Priority)
@@ -746,6 +755,8 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                    !IsIndependentReadItem(p) &&
                                    RankOwner(p).Priority < SchedulerPriority.Idle))) ||
                               IsBlockedByInteraction(running) ||
+                              (IsCatalogMutation(running) &&
+                               preparing.Any(row => AcceptedPrecedes(row, running))) ||
                               (highest is not null && Precedes(highest, running))))
                             continue;
                         running.YieldRequested = true;
@@ -770,7 +781,7 @@ public sealed class PCasaScheduler : IAsyncDisposable
                                 _runningWork.Count(work => work.ExecutionClass == executor) >=
                                     ReadCapacity[executor]) continue;
                             var item = SelectNextJobUnsafe(executor,
-                                manualWaiting, nonIdleWaiting);
+                                preparing, nonIdleWaiting);
                             if (item is null) continue;
                             StartExecutionUnsafe(item, executor);
                             viewChanged = true;
@@ -1639,8 +1650,18 @@ public sealed class PCasaScheduler : IAsyncDisposable
     // Called under _gate. A new P0 requests a yield from the older owner;
     // admission follows only after that owner reaches a safe boundary.
     // Source probes and view presentation are technical operations.
+    private static bool AcceptedPrecedes(
+        (string Key, SchedulerPriority Priority, long Order) accepted, WorkItem item)
+    {
+        var owner = RankOwner(item);
+        return accepted.Key != owner.Key &&
+            (accepted.Priority < owner.Priority ||
+             (accepted.Priority == owner.Priority && accepted.Order < owner.QueueOrder));
+    }
+
     private WorkItem? SelectNextJobUnsafe(int executor,
-        bool durableManualPending, bool durableNonIdlePending)
+        IReadOnlyList<(string Key, SchedulerPriority Priority, long Order)> preparing,
+        bool durableNonIdlePending)
     {
         var candidates = _pending
             .Where(x => ExecutorFor(x.Priority, x.Kind) == executor);
@@ -1708,11 +1729,11 @@ public sealed class PCasaScheduler : IAsyncDisposable
                 Precedes(active, candidate)))
             return null;
 
-        // Journal recovery may have an accepted P0 package not yet copied
-        // into the in-memory run queue. It still wins over P2-P4 execution.
-        if (!childOfRunningPackage &&
-            durableManualPending &&
-            RankOwner(candidate).Priority > SchedulerPriority.ManualAction)
+        // Accepted-but-not-yet-constructed packages reserve their real
+        // rank, not merely a broad P0-versus-background flag. A newer
+        // accepted P0 may therefore overtake an older runnable P0.
+        if (!childOfRunningPackage && IsCatalogMutation(candidate) &&
+            preparing.Any(row => AcceptedPrecedes(row, candidate)))
             return null;
 
         // Source preflight retains its existing protection while it is
