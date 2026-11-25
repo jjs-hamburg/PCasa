@@ -14,9 +14,7 @@ public sealed class PackedThumbnailBytes : IDisposable
 
     public PackedThumbnailBytes(string? cacheRoot = null)
     {
-        _cacheRoot = cacheRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PCasa",
+        _cacheRoot = cacheRoot ?? Path.Combine(PcasaDataPaths.SharedDataRoot,
             "browse-cache");
     }
 

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/release-windows.yml'
+      - 'PCasa.Version.props'
   push:
     branches: [main]
   workflow_dispatch:
