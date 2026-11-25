@@ -92,6 +92,17 @@ public static class GalleryFolderOrdering
         return options.Descending ? -Math.Sign(order) : Math.Sign(order);
     }
 
+    public static bool MatchesCaptureDate(BrowseThumbnailIndexEntry item,
+        DateTime? from, DateTime? until)
+    {
+        if (from is null && until is null) return true;
+        var ticks = CaptureTime(item);
+        if (ticks <= 0 || ticks > DateTime.MaxValue.Ticks) return false;
+        var day = new DateTime(ticks).Date;
+        return (!from.HasValue || day >= from.Value.Date) &&
+            (!until.HasValue || day <= until.Value.Date);
+    }
+
     private static long CaptureTime(BrowseThumbnailIndexEntry item)
         // EXIF missing: source creation; if unavailable: modification.
         => item.TakenUtcTicks ?? CreatedTime(item);

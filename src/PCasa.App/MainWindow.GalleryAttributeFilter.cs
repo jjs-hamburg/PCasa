@@ -35,6 +35,7 @@ public partial class MainWindow
     private void SyncGalleryAttributeFilterUi()
     {
         if (GalleryAttributeFilterLabel is null) return;
+        SyncGalleryDateFilterUi();
         var filter = CurrentAttributeFilter;
         var inverse = _appearance.GalleryAttributeFilterInverted;
         GalleryAttributeFilterLabel.Text = UiLanguage.T(filter switch

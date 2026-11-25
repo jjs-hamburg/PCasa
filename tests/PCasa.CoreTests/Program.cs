@@ -68,6 +68,17 @@ try
             throw new Exception("Portable scheduler did not preserve LIFO and durable completion.");
     }
 
+    var dateImage = new BrowseThumbnailIndexEntry(1, 1, 96, "", 0, 0, 1, 1,
+        TakenUtcTicks: new DateTime(1985, 12, 31, 23, 59, 59).Ticks,
+        CreatedUtcTicks: new DateTime(2026, 1, 1).Ticks);
+    if (!GalleryFolderOrdering.MatchesCaptureDate(dateImage,
+            new DateTime(1985, 1, 1), new DateTime(1985, 12, 31)) ||
+        GalleryFolderOrdering.MatchesCaptureDate(dateImage,
+            new DateTime(1986, 1, 1), null) ||
+        !GalleryFolderOrdering.MatchesCaptureDate(dateImage with { TakenUtcTicks = null },
+            new DateTime(2026, 1, 1), null))
+        throw new Exception("Gallery date filtering lost inclusive days or capture-date precedence.");
+
     // The inventory must recognize images without loading a decoder.
     var media = Path.Combine(directory, "photos");
     Directory.CreateDirectory(media);
