@@ -12,6 +12,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../PCasa.Core/PCasa.Core.csproj" />
+    <Compile Remove="Data/LocalDatabase.cs;Data/OriginalWriteFailureRepository.cs;Services/PcasaDataPaths.cs;Services/PCasaDiagnostics.cs;Services/SourceAvailabilityGate.cs;Services/SchedulerTaskPackage.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="CefSharp.Wpf.NETCore" />
     <PackageReference Include="NetVips" />
