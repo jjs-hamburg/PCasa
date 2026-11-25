@@ -881,7 +881,7 @@ public partial class MainWindow
             var job = snapshots.LastOrDefault(snapshot =>
                 snapshot.Key == initialKey &&
                 snapshot.WorkKind == SchedulerWorkKind.InitialImport);
-            var active = job?.State == SchedulerJobState.Running ||
+            var active = job?.State is SchedulerJobState.Running or SchedulerJobState.YieldRequested ||
                 (job is null && _initialScanWorkerStarted);
             var current = job?.CurrentPath is { Length: > 0 } file
                 ? file : _initialScanTaskCurrentFile;
@@ -900,7 +900,8 @@ public partial class MainWindow
                     ? UiLanguage.T("Abbruch angefordert")
                     : UiLanguage.Format("{0:N0} geprüft", checkedCount),
                 active ? "Läuft" : "Wartet",
-                2, -1, CanStop: !stopping));
+                (int)SchedulerPriority.ManualAction, _initialScanTaskQueueOrder,
+                CanStop: !stopping));
         }
         return rows;
     }
