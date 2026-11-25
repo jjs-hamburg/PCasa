@@ -150,9 +150,10 @@ public partial class MainWindow
                 "paused" => "Angehalten",
                 _ => "Wartet"
             };
-            // An already staged tag transaction is protected by the same
-            // scheduler cancellation rules as in Taskmanager.
-            var protectedTag = record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
+            // Current tag jobs support targeted cancellation; legacy
+            // recovery jobs still require manual reconciliation.
+            var protectedTag = record.Type != "tag-edit-v2" &&
+                record.Type.StartsWith("tag-", StringComparison.Ordinal) &&
                 (record.CompletedSteps > 0 || record.State == "running" ||
                  record.Type.StartsWith("tag-recovery-", StringComparison.Ordinal));
             result.Add(new ShutdownPendingOperation(record.Key,
@@ -289,7 +290,15 @@ public partial class MainWindow
         }
         if (new DurablePackageJournal(_database).Pending()
             .Any(record => record.Key == item.Key))
-            return await _scheduler.DeleteDurableTaskAsync(item.Key);
+        {
+            var canceled = await _scheduler.DeleteDurableTaskAsync(item.Key);
+            if (canceled && item.Key.StartsWith("tags:", StringComparison.Ordinal))
+            {
+                await RefreshTagSidebarAsync();
+                await RefreshPendingTagDotsAsync();
+            }
+            return canceled;
+        }
         return await _scheduler.CancelActiveTaskAsync(item.Key);
     }
 }
