@@ -265,8 +265,10 @@ public sealed class FolderRepository
         using var cmd = db.CreateCommand();
         cmd.CommandText = """
             SELECT m.id,m.local_path,
-                   -(CASE WHEN m.initial_scan_queue_order > 0
-                        THEN m.initial_scan_queue_order ELSE m.id END),
+                   CASE WHEN m.initial_scan_queue_order >= 1000000000000
+                        THEN -m.initial_scan_queue_order
+                        WHEN m.initial_scan_queue_order > 0
+                        THEN m.initial_scan_queue_order ELSE m.id END,
                    m.initial_scan_paused,
                    (SELECT COUNT(*) FROM images i WHERE i.folder_id=m.id)
               FROM monitored_folders m
@@ -381,8 +383,10 @@ public sealed class FolderRepository
                 JOIN scheduler_sources s ON s.canonical_path=m.canonical_path
                 WHERE m.initial_scan_pending=1
                   AND m.initial_scan_deleted=0 AND s.desired_present=1
-                ORDER BY CASE WHEN m.initial_scan_queue_order>0
-                         THEN m.initial_scan_queue_order ELSE m.id END DESC,m.id DESC;
+                ORDER BY CASE WHEN m.initial_scan_queue_order>=1000000000000
+                         THEN -m.initial_scan_queue_order
+                         WHEN m.initial_scan_queue_order>0
+                         THEN m.initial_scan_queue_order ELSE m.id END ASC,m.id ASC;
                 """;
             using var reader = cmd.ExecuteReader();
             while (reader.Read()) ordered.Add(reader.GetInt64(0));
@@ -403,7 +407,7 @@ public sealed class FolderRepository
         for (var i = 0; i < ordered.Count; i++)
         {
             idParam.Value = ordered[i];
-            rankParam.Value = ordered.Count - (long)i;
+            rankParam.Value = i + 1L;
             if (update.ExecuteNonQuery() != 1)
                 throw new IOException("First-import queue changed during reorder.");
         }
