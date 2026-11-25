@@ -19,6 +19,10 @@
     <Compile Include="../PCasa.App/Services/PCasaDiagnostics.cs" Link="Services/PCasaDiagnostics.cs" />
     <Compile Include="../PCasa.App/Services/SourceAvailabilityGate.cs" Link="Services/SourceAvailabilityGate.cs" />
     <Compile Include="../PCasa.App/Services/SchedulerTaskPackage.cs" Link="Services/SchedulerTaskPackage.cs" />
+    <Compile Include="../PCasa.App/Services/PCasaScheduler.cs" Link="Services/PCasaScheduler.cs" />
+    <Compile Include="../PCasa.App/Services/DurablePackageJournal.cs" Link="Services/DurablePackageJournal.cs" />
+    <Compile Include="../PCasa.App/Services/SchedulerTaskOrderStore.cs" Link="Services/SchedulerTaskOrderStore.cs" />
+    <Compile Include="../PCasa.App/Services/DurableGalleryTransferJournal.cs" Link="Services/DurableGalleryTransferJournal.cs" />
   </ItemGroup>
   <Import Project="../../PCasa.Version.props" />
 </Project>

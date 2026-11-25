@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PCasa.App", "src\PCasa.App\PCasa.App.csproj", "{D45385AD-87BA-4BC6-B2EA-C70C81DBB75B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PCasa.Core", "src\PCasa.Core\PCasa.Core.csproj", "{5EB00A36-57D7-4D64-B301-114A13F8CF8D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -14,5 +16,9 @@ Global
 		{D45385AD-87BA-4BC6-B2EA-C70C81DBB75B}.Debug|x64.Build.0 = Debug|x64
 		{D45385AD-87BA-4BC6-B2EA-C70C81DBB75B}.Release|x64.ActiveCfg = Release|x64
 		{D45385AD-87BA-4BC6-B2EA-C70C81DBB75B}.Release|x64.Build.0 = Release|x64
+		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Debug|x64.Build.0 = Debug|Any CPU
+		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Release|x64.ActiveCfg = Release|Any CPU
+		{5EB00A36-57D7-4D64-B301-114A13F8CF8D}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

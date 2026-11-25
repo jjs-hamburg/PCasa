@@ -24,6 +24,17 @@ public sealed record SchedulerTaskViewResult(
     List<SchedulerTaskViewItem> Rows,
     Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> Failed);
 
+// Presentation adapter remains in the host. The portable coordinator has
+// no dependency on translated UI rows or the Windows application assembly.
+public static class SchedulerTaskViewExtensions
+{
+    public static SchedulerTaskView CreateTaskView(this PCasaScheduler scheduler,
+        LocalDatabase database, bool canMoveAutomatic, bool canResumeAutomatic,
+        bool canStopAutomatic, bool canRetryFailed, bool canDiscardFailed)
+        => new(scheduler, database, canMoveAutomatic, canResumeAutomatic,
+            canStopAutomatic, canRetryFailed, canDiscardFailed);
+}
+
 public sealed class SchedulerTaskView
 {
     private readonly PCasaScheduler _scheduler;

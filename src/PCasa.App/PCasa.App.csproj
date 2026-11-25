@@ -13,7 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../PCasa.Core/PCasa.Core.csproj" />
-    <Compile Remove="Data/LocalDatabase.cs;Data/OriginalWriteFailureRepository.cs;Services/PcasaDataPaths.cs;Services/PCasaDiagnostics.cs;Services/SourceAvailabilityGate.cs;Services/SchedulerTaskPackage.cs" />
+    <Compile Remove="Data/LocalDatabase.cs;Data/OriginalWriteFailureRepository.cs;Services/PcasaDataPaths.cs;Services/PCasaDiagnostics.cs;Services/SourceAvailabilityGate.cs;Services/SchedulerTaskPackage.cs;Services/PCasaScheduler.cs;Services/DurablePackageJournal.cs;Services/SchedulerTaskOrderStore.cs;Services/DurableGalleryTransferJournal.cs" />
   </ItemGroup>
 
   <ItemGroup>
