@@ -1219,20 +1219,13 @@ public partial class MainWindow
         if (_externalEditPauseActive) return;
         _backgroundDebounceTimer?.Stop();
 
-        var urgentQueued = _backgroundPending.Values.Any(request =>
-            IsRunnableBackgroundRequest(request) &&
-            _scheduler.EffectiveTaskPlacement(AutomaticTaskKey(request),
-                request.Kind == BackgroundFolderChangeKind.RescanRoot
-                    ? SchedulerPriority.Idle : SchedulerPriority.Background,
-                long.MaxValue).Priority <= SchedulerPriority.UserAction);
-        if (_updateDownloadActive || _backgroundWorkerRunning ||
-            _folderRemovalPending ||
-            _backgroundScanSettings?.Enabled != true ||
-            !_browseInitialized ||
-            _browseCacheBuilding ||
-            // P2 can queue behind P0, but cannot execute before it.
-            (!urgentQueued && (_manualFileTransferActive ||
-                _manualContextScanActive || _manualScanAllActive)))
+        // Accepted watcher jobs enter the same scheduler arbitration as
+        // manual scans and first imports. Only actual foreground/exclusive
+        // interactions, not the presence of another queued scan, gate admission.
+        if (_shutdownStarted || _backgroundMonitorClosing ||
+            _updateDownloadActive || _backgroundWorkerRunning ||
+            _folderRemovalPending || _manualFileTransferActive ||
+            _backgroundScanSettings?.Enabled != true || !_browseInitialized)
         {
             if (!_folderRemovalPending && _backgroundScanSettings?.Enabled == true &&
                 HasRunnableBackgroundRequests())
@@ -1254,9 +1247,6 @@ public partial class MainWindow
         // A paused-only queue must not spin the debounce timer.
         if (!HasRunnableBackgroundRequests())
             return;
-        var pausedRequests = _backgroundPending
-            .Where(entry => !IsRunnableBackgroundRequest(entry.Value))
-            .ToArray();
         var requests = _backgroundPending.Values
             .Where(IsRunnableBackgroundRequest)
             .Select(request =>
@@ -1274,10 +1264,13 @@ public partial class MainWindow
             .ThenBy(item => item.Request.Path,
                 StringComparer.OrdinalIgnoreCase)
             .Select(item => item.Request)
+            .Take(1)
             .ToArray();
-        _backgroundPending.Clear();
-        foreach (var pausedRequest in pausedRequests)
-            _backgroundPending[pausedRequest.Key] = pausedRequest.Value;
+        // Keep every other accepted request in the authoritative waiting
+        // collection. Re-evaluate the global order at every safe boundary,
+        // rather than draining a previously sorted private batch.
+        foreach (var selected in requests)
+            _backgroundPending.Remove(AutomaticTaskKey(selected));
         _backgroundInFlight = requests;
         _backgroundInFlightIndex = 0;
         RefreshFolderStatusVisuals();
@@ -1362,14 +1355,8 @@ public partial class MainWindow
                 FolderScanner.ScanResumeState? scanResume = request.Resume;
                 var resumeGeneration = request.ResumeGeneration;
                 _backgroundLifetime.Token.ThrowIfCancellationRequested();
-                if ((_manualContextScanActive || _manualScanAllActive ||
-                     _manualFileTransferActive) &&
-                    _scheduler.EffectiveTaskPlacement(taskKey,
-                        request.Kind == BackgroundFolderChangeKind.RescanRoot
-                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
-                        long.MaxValue).Priority > SchedulerPriority.UserAction ||
-                    _folderRemovalPending)
-                    throw new OperationCanceledException("User-requested folder operation has priority.");
+                if (_manualFileTransferActive || _folderRemovalPending)
+                    throw new OperationCanceledException("Exclusive folder operation has priority.");
 
                 var folder = _folderRepository.GetAll()
                     .FirstOrDefault(candidate => candidate.Id == request.MonitoredFolderId);
@@ -1514,17 +1501,8 @@ public partial class MainWindow
                 if (_backgroundOrderChanged)
                     throw new OperationCanceledException(
                         "Taskmanager changed the pending root-review order.");
-                // Directory.Exists can outlive cancellation on a dead NAS.
-                // A manual request that arrived during the probe must still
-                // supersede this background request before it gets scheduled.
-                if (((_manualContextScanActive || _manualScanAllActive ||
-                    _manualFileTransferActive) &&
-                    _scheduler.EffectiveTaskPlacement(taskKey,
-                        request.Kind == BackgroundFolderChangeKind.RescanRoot
-                            ? SchedulerPriority.Idle : SchedulerPriority.Background,
-                        request.QueueOrder).Priority > SchedulerPriority.ManualAction) ||
-                    _folderRemovalPending)
-                    throw new OperationCanceledException("Manual folder action has priority.");
+                if (_manualFileTransferActive || _folderRemovalPending)
+                    throw new OperationCanceledException("Exclusive folder operation has priority.");
 
                 TrackFolderActivity(
                     request.Kind == BackgroundFolderChangeKind.ScanFile
@@ -1805,8 +1783,8 @@ public partial class MainWindow
                             : scanPath, "Pending", request.Recursive);
                     RefreshFolderStatusVisuals();
                     if (_backgroundLifetime.IsCancellationRequested ||
-                        _manualContextScanActive || _manualScanAllActive ||
-                        _manualFileTransferActive || _folderRemovalPending)
+                        _manualFileTransferActive || _folderRemovalPending ||
+                        _externalEditPauseActive)
                     {
                         throw;
                     }
@@ -1936,8 +1914,8 @@ public partial class MainWindow
 
             // A manual scan preempts background work at a cancellation boundary.
             // Never lose deferred SMB notifications when yielding priority.
-            if (reordered || _manualContextScanActive || _manualScanAllActive ||
-                _manualFileTransferActive || _folderRemovalPending || _externalEditPauseActive)
+            if (reordered || _manualFileTransferActive ||
+                _folderRemovalPending || _externalEditPauseActive)
             {
                 foreach (var remaining in requests.Skip(nextRequestIndex))
                 {
