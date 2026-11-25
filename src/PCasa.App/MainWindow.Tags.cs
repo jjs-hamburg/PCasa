@@ -874,7 +874,7 @@ public partial class MainWindow
             // ONE atomic SQLite intent/projection commit for the entire
             // multi-selection draft. Only then begin per-original write steps.
             var count = new ImageTagRepository(_database)
-                .QueueTagEdits(perImage);
+                .QueueTagEdits(perImage, ownerKey: key);
             _scheduler.ReportProgress(key, "Tags lokal gesichert", 0,
                 request.ImageIds.Length);
             if (!Dispatcher.HasShutdownStarted)
