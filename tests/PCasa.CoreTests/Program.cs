@@ -107,6 +107,43 @@ try
     if (unchanged.Unchanged != 1 || unchanged.Updated != 0 || importMedia.Decodes != 1)
         throw new Exception("Portable scanner decoded an unchanged image again.");
 
+    // Real tag intent and search transactions must work without WPF or
+    // any source-file access. No native write is needed for the projection.
+    var photoId = catalog.GetImageId(jpg)!.Value;
+    var tagOperations = new TagCatalogOperations(database);
+    if (tagOperations.QueueTagEdit(new[] { photoId }, "portable tag", false) != 1 ||
+        tagOperations.GetKeywords(photoId) != "portable tag" ||
+        !tagOperations.SearchImageIds("portable tag").Contains(photoId) ||
+        tagOperations.QueueTagEdit(new[] { photoId }, "portable tag", true) != 1 ||
+        tagOperations.SearchImageIds("portable tag").Contains(photoId))
+        throw new Exception("Portable tag projection or search failed.");
+
+    // RAW GPS edits are catalog-only, including on non-Windows hosts.
+    var rawPath = Path.Combine(media, "portable.arw");
+    var originalRaw = new byte[] { 3, 1, 4, 1, 5 };
+    File.WriteAllBytes(rawPath, originalRaw);
+    var rawStamp = File.GetLastWriteTimeUtc(rawPath);
+    var rawImport = scanner.ScanFile(root, rawPath);
+    var rawId = catalog.GetImageId(rawPath);
+    if (rawImport.Updated != 1 || rawId is null)
+        throw new Exception("RAW test fixture was not indexed.");
+    var gpsOperations = new GpsCatalogOperations(database);
+    gpsOperations.Apply(rawId.Value, 48.5, -9.25,
+        GpsCatalogOperations.EditMode.Replace, CancellationToken.None);
+    using (var connection = database.OpenConnection())
+    using (var command = connection.CreateCommand())
+    {
+        command.CommandText = "SELECT gps_latitude,gps_longitude FROM raw_gps_overrides WHERE image_id=$id";
+        command.Parameters.AddWithValue("$id", rawId.Value);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read() || reader.GetDouble(0) != 48.5 || reader.GetDouble(1) != -9.25)
+            throw new Exception("RAW GPS override was not persisted.");
+    }
+    if (!File.ReadAllBytes(rawPath).SequenceEqual(originalRaw) ||
+        File.GetLastWriteTimeUtc(rawPath) != rawStamp ||
+        Directory.EnumerateFiles(media).Any(path => Path.GetExtension(path) == ".xmp"))
+        throw new Exception("RAW GPS unexpectedly modified the original or created a sidecar.");
+
     // Test the real video cache lifecycle with a codec-independent adapter.
     var video = Path.Combine(directory, "clip.mp4");
     File.WriteAllBytes(video, new byte[] { 1, 2, 3 });
@@ -183,6 +220,8 @@ try
         typeof(SchedulerTaskPackage).Assembly != assembly ||
         typeof(PCasaScheduler).Assembly != assembly ||
         typeof(FolderScanner).Assembly != assembly ||
+        typeof(TagCatalogOperations).Assembly != assembly ||
+        typeof(GpsCatalogOperations).Assembly != assembly ||
         typeof(DurablePackageJournal).Assembly != assembly ||
         typeof(SchedulerTaskOrderStore).Assembly != assembly ||
         typeof(DurableGalleryTransferJournal).Assembly != assembly ||
