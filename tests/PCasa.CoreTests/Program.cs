@@ -260,6 +260,8 @@ try
     // Exercise the actual PSD decoder with no Windows bitmap or native library.
     // The asymmetric portrait fixture detects swapped dimensions/channels.
     PortablePsdRegression.Run(directory);
+    if (args.Contains("--native-imaging", StringComparer.Ordinal))
+        PortableNativeImagingRegression.Run(directory);
 
     // Real packed-cache append and offsets are platform-independent, even
     // without an installed native decoder. Exercise the actual store.

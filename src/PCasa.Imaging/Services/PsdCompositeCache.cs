@@ -12,11 +12,12 @@ public static class PsdCompositeCache
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PCasa", "psd-composites");
 
-    public static string Resolve(string psd, CancellationToken token = default)
-        => Resolve(psd, WritePng, token);
+    public static string Resolve(string psd, CancellationToken token = default,
+        string? cacheRoot = null)
+        => Resolve(psd, WritePng, token, cacheRoot);
 
     public static string Resolve(string psd, Action<string, PsdCompositePixels, CancellationToken> encode,
-        CancellationToken token = default)
+        CancellationToken token = default, string? cacheRoot = null)
     {
         token.ThrowIfCancellationRequested();
         var info = new FileInfo(psd);
@@ -25,7 +26,7 @@ public static class PsdCompositeCache
             info.LastWriteTimeUtc.Ticks + "\nmerged-v1";
         var key = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(signature))).ToLowerInvariant();
-        var destination = Path.Combine(PreviewRoot, key[..2], key + ".png");
+        var destination = Path.Combine(cacheRoot ?? PreviewRoot, key[..2], key + ".png");
         using var lease = SourceFileLocks.Enter(psd, token);
         if (File.Exists(destination) && new FileInfo(destination).Length > 64)
             return destination;
