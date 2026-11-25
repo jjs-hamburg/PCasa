@@ -31,6 +31,7 @@ public sealed class TaskManagerWindow : Window
     private readonly Func<string,Task<bool>>? _startAutomaticNow;
     private readonly Func<string,Task<bool>>? _pauseInitialImport;
     private readonly Func<string,Task<bool>>? _resumePausedTask;
+    private readonly Func<string,Task<bool>> _deleteDurableTask;
     private readonly Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>
         _moveGlobalTask;
     private Dictionary<string, IReadOnlyList<OriginalWriteFailureRepository.FailedFile>> _failedRows = new();
@@ -64,7 +65,8 @@ public sealed class TaskManagerWindow : Window
         Func<string,Task<bool>>? pauseInitialImport = null,
         Func<string,Task<bool>>? resumePausedTask = null,
         Func<string,string,IReadOnlyList<SchedulerTaskOrderItem>,Task<bool>>?
-            moveGlobalTask = null)
+            moveGlobalTask = null,
+        Func<string,Task<bool>>? deleteDurableTask = null)
     {
         _scheduler = scheduler;
         _taskView = scheduler.CreateTaskView(database,
@@ -80,6 +82,8 @@ public sealed class TaskManagerWindow : Window
         _startAutomaticNow = startAutomaticNow;
         _pauseInitialImport = pauseInitialImport;
         _resumePausedTask = resumePausedTask;
+        _deleteDurableTask = deleteDurableTask ??
+            (key => Task.Run(() => scheduler.DeleteDurableTaskAsync(key)));
         _moveGlobalTask = moveGlobalTask ?? ((key, target, accepted) =>
             Task.Run(() => scheduler.MoveTaskGlobally(key, target, accepted)));
         Title = "PCasa – " + UiLanguage.T("Taskmanager");
@@ -706,7 +710,7 @@ public sealed class TaskManagerWindow : Window
         else if (!row.Durable && _stopAutomaticScan is not null)
             _ = PerformAsync(row.Key, () => _stopAutomaticScan(row.Key));
         else
-            _ = PerformAsync(row.Key, () => Task.Run(() => _scheduler.DeleteDurableTaskAsync(row.Key)));
+            _ = PerformAsync(row.Key, () => _deleteDurableTask(row.Key));
     }
 
     private async Task PerformAsync(string key, Func<Task<bool>> action)
