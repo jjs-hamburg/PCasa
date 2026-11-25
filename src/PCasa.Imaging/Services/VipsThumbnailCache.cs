@@ -13,6 +13,9 @@ public class VipsThumbnailCache
     private const int ThumbnailSize = 512;
     private readonly string _cacheRoot;
 
+    public VipsThumbnailCache(string? cacheRoot = null)
+        : this(PsdCompositeDecoder.GetDimensions, WritePortablePlaceholder, cacheRoot) { }
+
     public VipsThumbnailCache(Func<string, (int Width, int Height)> psdDimensions,
         Action<string, byte[], int, CancellationToken> writePlaceholder,
         string? cacheRoot = null)
@@ -145,6 +148,17 @@ public class VipsThumbnailCache
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
+    }
+
+    private static void WritePortablePlaceholder(string temporary, byte[] pixels,
+        int size, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        NativeImageCachePolicy.EnsureConfigured();
+        using var image = Image.NewFromMemory(pixels, size, size, 3, Enums.BandFormat.Uchar);
+        using var srgb = image.Copy(interpretation: Enums.Interpretation.Srgb);
+        srgb.SetProgress(new Progress<int>(_ => { }), token);
+        srgb.Jpegsave(temporary, q: 85, keep: Enums.ForeignKeep.None);
     }
 
     // Read-only compatibility with catalogs restored by the historical

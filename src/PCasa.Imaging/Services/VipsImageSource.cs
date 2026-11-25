@@ -55,6 +55,7 @@ public static class VipsImageSource
 
     public static string Resolve(string path, CancellationToken cancellationToken = default)
     {
+        if (IsPsdPath(path)) return PsdCompositeCache.Resolve(path, cancellationToken);
         if (!IsRawPath(path)) return path;
         cancellationToken.ThrowIfCancellationRequested();
         NativeImageCachePolicy.EnsureConfigured();
