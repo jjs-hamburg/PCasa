@@ -21,6 +21,7 @@ internal static class DurablePauseFlow
             ExerciseRetirementBeforeBlockedRead(dir).GetAwaiter().GetResult();
             ExerciseYieldDuringShutdown(dir).GetAwaiter().GetResult();
             ExerciseSharedUserAcceptanceOrder(dir);
+            ExerciseLegacyFirstImportOrder(dir);
             Console.WriteLine("DURABLE / AUTOMATIC PAUSE, RESUME, PRIORITY PASS");
             return 0;
         }
@@ -33,6 +34,52 @@ internal static class DurablePauseFlow
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    private static void ExerciseLegacyFirstImportOrder(string dir)
+    {
+        var database = new LocalDatabase(Path.Combine(dir, "legacy-import-order.db"));
+        database.Initialize();
+        var folders = new FolderRepository(database);
+        var paths = new[] { "legacy-import-a", "legacy-import-b", "legacy-import-c" }
+            .Select(name => Path.Combine(dir, name)).ToArray();
+        foreach (var path in paths)
+        {
+            Directory.CreateDirectory(path);
+            folders.Add(path);
+        }
+        var roots = folders.GetAll().ToDictionary(root => root.LocalPath,
+            StringComparer.OrdinalIgnoreCase);
+        using (var db = database.OpenConnection())
+        using (var cmd = db.CreateCommand())
+        {
+            // Deliberately use a legacy user-defined order different from
+            // folder identity and insertion order.
+            cmd.CommandText = """
+                UPDATE monitored_folders
+                SET initial_scan_queue_order=CASE id
+                    WHEN $a THEN 30 WHEN $b THEN 10 WHEN $c THEN 20 END;
+                """;
+            cmd.Parameters.AddWithValue("$a", roots[paths[0]].Id);
+            cmd.Parameters.AddWithValue("$b", roots[paths[1]].Id);
+            cmd.Parameters.AddWithValue("$c", roots[paths[2]].Id);
+            cmd.ExecuteNonQuery();
+        }
+        database.Initialize();
+        var legacy = folders.GetPendingFirstImportQueue();
+        var expected = new[] { roots[paths[1]].Id, roots[paths[2]].Id, roots[paths[0]].Id };
+        if (!legacy.Select(row => row.FolderId).SequenceEqual(expected))
+            throw new Exception("Upgrade reversed legacy first-import positions.");
+        var added = Path.Combine(dir, "legacy-import-new");
+        Directory.CreateDirectory(added);
+        folders.Add(added);
+        var newId = folders.GetAll().Single(root =>
+            string.Equals(root.LocalPath, added, StringComparison.OrdinalIgnoreCase)).Id;
+        database.Initialize();
+        if (!folders.GetPendingFirstImportQueue().Select(row => row.FolderId)
+                .SequenceEqual(new[] { newId }.Concat(expected)))
+            throw new Exception("A new import did not precede the preserved legacy queue.");
+        Console.WriteLine("PASS: Legacy import order survives upgrade and new LIFO admission.");
     }
 
     private static void ExerciseSharedUserAcceptanceOrder(string dir)
