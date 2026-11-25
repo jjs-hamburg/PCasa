@@ -919,7 +919,7 @@ public partial class MainWindow
         {
             _initialScanAttempted.Add(initialFolderId);
             if (_initialScanActive &&
-                _activeScanFolderId == initialFolderId &&
+                _initialScanTaskKey == key &&
                 _initialScanCancellation is
                     { IsCancellationRequested: false } activeImport)
             {
