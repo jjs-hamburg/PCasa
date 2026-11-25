@@ -228,7 +228,19 @@ public partial class MainWindow
             startAutomaticNow: StartTaskNowAsync,
             pauseInitialImport: PauseTaskAsync,
             resumePausedTask: ResumePausedTaskAsync,
-            moveGlobalTask: MoveGlobalTaskAsync)
+            moveGlobalTask: MoveGlobalTaskAsync,
+            deleteDurableTask: async key =>
+            {
+                var canceled = await _scheduler.DeleteDurableTaskAsync(key);
+                if (canceled && key.StartsWith("tags:", StringComparison.Ordinal))
+                {
+                    await RefreshTagSidebarAsync();
+                    await RefreshPendingTagDotsAsync();
+                    if (!string.IsNullOrWhiteSpace(TagSearchBox.Text))
+                        await ApplyTagFilterAsync();
+                }
+                return canceled;
+            })
         {
             Owner = this
         };
